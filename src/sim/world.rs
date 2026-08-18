@@ -69,6 +69,27 @@ impl World {
         }
     }
 
+    /// The world the app and the server open with.
+    ///
+    /// A blinker at the origin and a glider two chunks away travelling off in
+    /// the other direction. The blinker is the point: a glider leaves, so a
+    /// client joining a server that has been up a while would arrive at an
+    /// empty view and have nothing to tell a working join from a broken one.
+    pub fn demo() -> Self {
+        let mut w = Self::infinite_empty();
+        // Blinker, centred on the camera's starting position.
+        let mid = (CHUNK_N / 2) as i32;
+        for d in -1..=1 {
+            w.set_cell((0, 0), (mid as usize, (mid + d) as usize), Cell::alive(PlayerId(1)));
+        }
+        // Glider, far enough away that the two never interact.
+        let mut glider = Chunk::dead();
+        seed_glider(&mut glider, 2, 2, PlayerId(2));
+        w.put_chunk((2, 2), glider);
+        w.generation = 0;
+        w
+    }
+
     pub fn infinite() -> Self {
         let mut chunk = Chunk::dead();
         seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));

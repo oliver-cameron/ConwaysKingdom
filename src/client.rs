@@ -19,12 +19,23 @@ use crate::net::{ClientMessage, ServerMessage};
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
 
-/// Where the camera looks, in cells, as (x, y) — that is, (col, row).
-const VIEW_CENTRE: (f32, f32) = (CHUNK_N as f32 / 2.0, CHUNK_N as f32 / 2.0);
+/// Where the camera starts looking, in cells, as (x, y) — that is, (col, row).
+const START_CENTRE: (f32, f32) = (CHUNK_N as f32 / 2.0, CHUNK_N as f32 / 2.0);
 
-/// Screen pixels per cell. Never below 1: point sampling drops sparse cells
-/// under that.
-const VIEW_ZOOM: f32 = 16.0;
+/// Screen pixels per cell at startup.
+const START_ZOOM: f32 = 16.0;
+
+/// Zoom is clamped to this. Never below 1: point sampling drops sparse cells
+/// under one pixel per cell, so they would flicker out rather than shrink.
+const ZOOM_RANGE: (f32, f32) = (1.0, 64.0);
+
+/// Cells per second when panning with the keyboard, at one pixel per cell.
+/// Divided by the zoom, so a keypress moves the same distance on screen
+/// whatever the zoom is.
+const PAN_SPEED: f32 = 600.0;
+
+/// A press that moves further than this many pixels was a drag, not a click.
+const DRAG_SLOP: f64 = 3.0;
 
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
@@ -67,6 +78,15 @@ pub struct BattleApp {
     camera_buffer: wgpu::Buffer,
     chunks: ChunkStore,
     world: World,
+    /// Camera centre, in cells, as (x, y).
+    camera: (f32, f32),
+    /// Screen pixels per cell.
+    zoom: f32,
+    /// Left button held, and whether it has moved far enough to be a drag.
+    dragging: bool,
+    drag_moved: bool,
+    /// Held pan keys: left, right, up, down.
+    pan: [bool; 4],
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
     /// Our own player number, once the server has issued one.
@@ -89,10 +109,10 @@ impl BattleApp {
     /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
     fn write_camera(&self, gpu: &GpuState) {
         let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
-        let zoom = VIEW_ZOOM;
+        let zoom = self.zoom;
         let origin = [
-            VIEW_CENTRE.0 - vw / (2.0 * zoom),
-            VIEW_CENTRE.1 - vh / (2.0 * zoom),
+            self.camera.0 - vw / (2.0 * zoom),
+            self.camera.1 - vh / (2.0 * zoom),
         ];
 
         gpu.queue.write_buffer(
@@ -113,16 +133,30 @@ impl BattleApp {
     fn cell_under_cursor(&self, gpu: &GpuState, (px, py): (f64, f64)) -> (i32, i32) {
         let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
         let origin = (
-            VIEW_CENTRE.0 - vw / (2.0 * VIEW_ZOOM),
-            VIEW_CENTRE.1 - vh / (2.0 * VIEW_ZOOM),
+            self.camera.0 - vw / (2.0 * self.zoom),
+            self.camera.1 - vh / (2.0 * self.zoom),
         );
-        let x = origin.0 + px as f32 / VIEW_ZOOM;
-        let y = origin.1 + py as f32 / VIEW_ZOOM;
+        let x = origin.0 + px as f32 / self.zoom;
+        let y = origin.1 + py as f32 / self.zoom;
         (y.floor() as i32, x.floor() as i32) // (row, col)
     }
 }
 
 impl BattleApp {
+    /// Move the camera for whatever pan keys are held. Returns whether it
+    /// moved, so the uniform is only rewritten when it needs to be.
+    fn apply_pan(&mut self, dt: f32) -> bool {
+        let x = (self.pan[1] as i32 - self.pan[0] as i32) as f32;
+        let y = (self.pan[3] as i32 - self.pan[2] as i32) as f32;
+        if x == 0.0 && y == 0.0 {
+            return self.dragging;
+        }
+        let step = PAN_SPEED * dt / self.zoom;
+        self.camera.0 += x * step;
+        self.camera.1 += y * step;
+        true
+    }
+
     /// Drain the socket and fold what arrived into the local world.
     fn pump_link(&mut self, gpu: &GpuState) {
         let Some(link) = &mut self.link else { return };
@@ -182,14 +216,14 @@ impl BattleApp {
     /// viewport so panning needs no new code.
     fn subscribe_to_view(&mut self, gpu: &GpuState) {
         let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
-        let half = (vw / (2.0 * VIEW_ZOOM), vh / (2.0 * VIEW_ZOOM));
+        let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
         let min = (
-            (VIEW_CENTRE.1 - half.1).floor() as i32 - VIEW_MARGIN,
-            (VIEW_CENTRE.0 - half.0).floor() as i32 - VIEW_MARGIN,
+            (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
+            (self.camera.0 - half.0).floor() as i32 - VIEW_MARGIN,
         );
         let max = (
-            (VIEW_CENTRE.1 + half.1).ceil() as i32 + VIEW_MARGIN,
-            (VIEW_CENTRE.0 + half.0).ceil() as i32 + VIEW_MARGIN,
+            (self.camera.1 + half.1).ceil() as i32 + VIEW_MARGIN,
+            (self.camera.0 + half.0).ceil() as i32 + VIEW_MARGIN,
         );
 
         let wanted: Vec<_> = World::chunks_covering(min, max)
@@ -216,7 +250,7 @@ impl App for BattleApp {
             World::infinite_empty()
         } else {
             match WORLD {
-                WorldMode::Infinite => World::infinite(),
+                WorldMode::Infinite => World::demo(),
                 WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
             }
         };
@@ -266,6 +300,11 @@ impl App for BattleApp {
             camera_buffer,
             chunks,
             world,
+            camera: START_CENTRE,
+            zoom: START_ZOOM,
+            dragging: false,
+            drag_moved: false,
+            pan: [false; 4],
             me: None,
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
@@ -284,6 +323,8 @@ impl App for BattleApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        let moved = self.apply_pan(dt);
+
         if self.link.is_some() {
             self.pump_link(gpu);
         }
@@ -300,6 +341,10 @@ impl App for BattleApp {
         if self.world.dirty {
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS);
             self.world.dirty = false;
+        }
+        // The camera no longer depends on the world, only on where it is
+        // pointed, so it is rewritten when it moves and not otherwise.
+        if moved {
             self.write_camera(gpu);
         }
     }
@@ -318,16 +363,59 @@ impl App for BattleApp {
     }
 
     fn on_cursor(&mut self, x: f64, y: f64) {
+        let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
         self.cursor = (x, y);
+        if self.dragging {
+            if dx.abs() > DRAG_SLOP || dy.abs() > DRAG_SLOP {
+                self.drag_moved = true;
+            }
+            // Dragging pulls the world with the pointer, so the camera moves
+            // the other way. Divided by zoom, because the drag is in pixels
+            // and the camera lives in cells.
+            self.camera.0 -= dx as f32 / self.zoom;
+            self.camera.1 -= dy as f32 / self.zoom;
+        }
+    }
+
+    fn on_key(&mut self, code: winit::keyboard::KeyCode, pressed: bool) {
+        use winit::keyboard::KeyCode as K;
+        let slot = match code {
+            K::ArrowLeft | K::KeyA => 0,
+            K::ArrowRight | K::KeyD => 1,
+            K::ArrowUp | K::KeyW => 2,
+            K::ArrowDown | K::KeyS => 3,
+            _ => return,
+        };
+        self.pan[slot] = pressed;
+    }
+
+    fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
+        use winit::event::MouseScrollDelta as D;
+        // A line of wheel and a pixel of trackpad are wildly different
+        // magnitudes, so normalise before using either.
+        let steps = match delta {
+            D::LineDelta(_, y) => y,
+            D::PixelDelta(p) => p.y as f32 / 50.0,
+        };
+        self.zoom = (self.zoom * 1.15f32.powf(steps)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
     }
 
     /// Clicks are received and resolved to a cell, but deliberately do nothing
     /// yet. This is where a `net::Action` will be built and sent.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
-        if !pressed {
+        if button != winit::event::MouseButton::Left {
             return;
         }
-        let _ = button;
+        if pressed {
+            self.dragging = true;
+            self.drag_moved = false;
+            return;
+        }
+        self.dragging = false;
+        // A press that moved was a pan, not a click on a cell.
+        if self.drag_moved {
+            return;
+        }
         // `gpu` is not passed to input callbacks, so resolve on the next frame
         // instead of guessing the viewport here.
         self.pending_click = Some(self.cursor);
