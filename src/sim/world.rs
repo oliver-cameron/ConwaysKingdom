@@ -1,52 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::dir::Dir;
+use super::player::PlayerId;
 
 /// Never advance more than this many generations in a single frame.
 const MAX_CATCHUP_STEPS: u32 = 8;
 
 /// Chunk coordinate, (row, col). Row increases south, column increases east.
 pub type Coord = (i32, i32);
-
-/// The eight neighbours of a chunk.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Dir {
-    N,
-    Ne,
-    E,
-    Se,
-    S,
-    Sw,
-    W,
-    Nw,
-}
-
-impl Dir {
-    pub const ALL: [Dir; 8] = [
-        Dir::N,
-        Dir::Ne,
-        Dir::E,
-        Dir::Se,
-        Dir::S,
-        Dir::Sw,
-        Dir::W,
-        Dir::Nw,
-    ];
-
-    #[inline]
-    pub const fn delta(self) -> (i32, i32) {
-        match self {
-            Dir::N => (-1, 0),
-            Dir::Ne => (-1, 1),
-            Dir::E => (0, 1),
-            Dir::Se => (1, 1),
-            Dir::S => (1, 0),
-            Dir::Sw => (1, -1),
-            Dir::W => (0, -1),
-            Dir::Nw => (-1, -1),
-        }
-    }
-}
 
 #[inline]
 fn offset((row, col): Coord, dir: Dir) -> Coord {
@@ -90,9 +52,26 @@ pub struct World {
 }
 
 impl World {
+    /// An unbounded plane with nothing in it. Loading a saved world starts
+    /// here and fills the chunks back in.
+    pub fn infinite_empty() -> Self {
+        Self::new(Storage::Infinite(HashMap::new()))
+    }
+
+    /// Put a chunk at a coordinate wholesale, creating it if need be. Used when
+    /// restoring a save or accepting one from the server.
+    pub fn put_chunk(&mut self, coord: Coord, chunk: Chunk) {
+        let coord = self.canonical(coord);
+        self.ensure(coord);
+        if let Some(slot) = self.chunk_at_mut(coord) {
+            *slot = chunk;
+            self.dirty = true;
+        }
+    }
+
     pub fn infinite() -> Self {
         let mut chunk = Chunk::dead();
-        seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, 1);
+        seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
         let mut chunks = HashMap::new();
         chunks.insert((0, 0), chunk);
         Self::new(Storage::Infinite(chunks))
@@ -105,7 +84,7 @@ impl World {
     pub fn toroidal(rows: i32, cols: i32) -> Self {
         assert!(rows > 0 && cols > 0, "a torus needs at least one chunk");
         let mut chunks = vec![Chunk::dead(); (rows * cols) as usize].into_boxed_slice();
-        seed_glider(&mut chunks[0], CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, 1);
+        seed_glider(&mut chunks[0], CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
         Self::new(Storage::Toroidal { rows, cols, chunks })
     }
 
@@ -163,6 +142,20 @@ impl World {
         }
     }
 
+    /// Write one cell, creating the chunk if an infinite world does not yet
+    /// hold it. Bringing a cell to life in empty space is exactly how a player
+    /// action reaches the world, so this must be able to grow it.
+    pub fn set_cell(&mut self, chunk: Coord, (row, col): (usize, usize), cell: Cell) {
+        let chunk = self.canonical(chunk);
+        if cell.is_alive() {
+            self.ensure(chunk);
+        }
+        if let Some(c) = self.chunk_at_mut(chunk) {
+            c[(row, col)] = cell;
+            self.dirty = true;
+        }
+    }
+
     /// Make sure a coordinate has storage. A no-op on a torus, where every
     /// chunk is allocated up front and never removed.
     fn ensure(&mut self, coord: Coord) {
@@ -207,6 +200,11 @@ impl World {
         }
         self.active.clear();
         self.active.extend(set);
+        // A HashSet iterates in an order that varies between processes. The
+        // outcome does not currently depend on it -- every halo is gathered
+        // before any is written -- but a client and server must not diverge
+        // because of a future change here, so pin the order now.
+        self.active.sort_unstable();
     }
 
     pub fn active_count(&self) -> usize {
@@ -250,8 +248,14 @@ impl World {
 
         for (i, &coord) in active.iter().enumerate() {
             let halo = self.scratch[i];
+            // Seeded by generation and chunk, so a birth's owner is chosen the
+            // same way on every peer without exchanging a random number.
+            let seed = super::rule::mix(
+                super::rule::mix(0x0C01_1FE0, self.generation),
+                (coord.0 as u32 as u64) << 32 | coord.1 as u32 as u64,
+            );
             if let Some(chunk) = self.chunk_at_mut(coord) {
-                halo.step_into(chunk);
+                halo.step_into(chunk, seed);
             }
         }
 
@@ -298,6 +302,50 @@ impl World {
         if let Storage::Infinite(map) = &mut self.storage {
             map.retain(|_, chunk| !chunk.is_empty());
         }
+    }
+
+    /// A digest of the whole world state, for spotting a client/server desync
+    /// cheaply. Order-independent inputs only: chunks are folded in sorted
+    /// coordinate order, and every byte of every stored chunk contributes, so
+    /// two worlds agreeing here agree on player and age as well as liveness.
+    ///
+    /// FNV-1a rather than `DefaultHasher`, whose output is explicitly not
+    /// guaranteed stable across Rust versions -- which would make a digest
+    /// compare fail between a server and client built at different times.
+    pub fn digest(&self) -> u64 {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut chunks = self.stored();
+        chunks.sort_unstable_by_key(|&(coord, _)| coord);
+
+        let mut h = OFFSET;
+        let eat = |bytes: &[u8], h: &mut u64| {
+            for &b in bytes {
+                *h ^= b as u64;
+                *h = h.wrapping_mul(PRIME);
+            }
+        };
+        for (coord, chunk) in chunks {
+            // An empty chunk is indistinguishable from an absent one, so skip
+            // it: an infinite and a toroidal world holding the same life agree.
+            if chunk.is_empty() {
+                continue;
+            }
+            eat(&coord.0.to_le_bytes(), &mut h);
+            eat(&coord.1.to_le_bytes(), &mut h);
+            eat(chunk.as_bytes(), &mut h);
+        }
+        h
+    }
+
+    /// Replace one chunk's contents. Test-only: real edits arrive as actions.
+    #[cfg(test)]
+    fn with_chunk_for_test(mut self, coord: Coord, chunk: Chunk) -> Self {
+        if let Some(slot) = self.chunk_at_mut(coord) {
+            *slot = chunk;
+        }
+        self
     }
 
     /// Live cells in absolute cell coordinates, sorted.
@@ -366,7 +414,7 @@ fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
 /// . . #
 /// # # #
 /// ```
-fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: u8) {
+fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: PlayerId) {
     for (dr, dc) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
         chunk[(row + dr, col + dc)] = Cell::alive(player);
     }
@@ -517,6 +565,48 @@ mod tests {
             assert_eq!(w.stored_count(), (rows * cols) as usize);
             assert_eq!(w.kind(), WorldKind::Toroidal { rows, cols });
         }
+    }
+
+    /// Client-side prediction rests on this: the same start plus the same
+    /// inputs must give byte-identical results, in any process, every time.
+    #[test]
+    fn stepping_is_deterministic() {
+        let mut a = World::infinite();
+        let mut b = World::infinite();
+        assert_eq!(a.digest(), b.digest());
+        for g in 0..400 {
+            a.step();
+            b.step();
+            assert_eq!(a.digest(), b.digest(), "diverged at generation {g}");
+        }
+        assert_eq!(a.live_cells(), b.live_cells());
+    }
+
+    /// The digest must notice a difference the live-cell list would miss.
+    #[test]
+    fn the_digest_covers_more_than_liveness() {
+        let mut a = World::infinite();
+        let mut b = World::infinite();
+        for _ in 0..40 {
+            a.step();
+            b.step();
+        }
+        assert_eq!(a.digest(), b.digest());
+
+        // Same cells alive, different owner.
+        let coord = b.stored()[0].0;
+        let mut edited = *b.chunk_at(coord).unwrap();
+        'outer: for row in 0..CHUNK_N {
+            for col in 0..CHUNK_N {
+                if edited[(row, col)].is_alive() {
+                    edited[(row, col)] = edited[(row, col)].with_player(PlayerId(2));
+                    break 'outer;
+                }
+            }
+        }
+        let b2 = b.with_chunk_for_test(coord, edited);
+        assert_eq!(a.live_cells(), b2.live_cells(), "liveness is unchanged");
+        assert_ne!(a.digest(), b2.digest(), "but the digest must differ");
     }
 
     #[test]

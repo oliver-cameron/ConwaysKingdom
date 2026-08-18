@@ -1,4 +1,4 @@
-use crate::gpu::GpuState;
+use crate::render::context::GpuState;
 
 /// Everything needed to build a `wgpu::RenderPipeline` from a WGSL
 /// source string. Deliberately generic — it doesn't know anything

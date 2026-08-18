@@ -1,6 +1,16 @@
-// One instanced quad per visible chunk. Cells come from an Rgba8Uint array
+// One instanced quad per visible chunk. Cells come from an R16Uint array
 // texture read with textureLoad, so scaling is nearest-neighbour by
 // construction and there is no sampler to configure.
+
+// MUST MATCH `sim::cell::bits`. The shader cannot read Rust constants, so this
+// block is the one thing kept in step by hand; changing the split means
+// changing both.
+//
+//  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+// |   player    |      metadata / flags      | A |
+const ALIVE_BIT:    u32 = 1u;
+const META_SHIFT:   u32 = 1u;   const META_MASK: u32 = 1023u;
+const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 
 struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
@@ -43,9 +53,9 @@ fn vs_main(
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(floor(in.local));
-    let cell = textureLoad(chunks, coord, i32(in.layer), 0);
-    // R = kind (0 is dead), G = player, B = age, A = flags.
-    if cell.r == 0u {
+    let cell = textureLoad(chunks, coord, i32(in.layer), 0).r;
+
+    if (cell & ALIVE_BIT) == 0u {
         // Tint the outermost ring of dead cells so chunk boundaries are
         // visible: that is what makes chunk loading something you can watch.
         let n = cam.chunk_n;

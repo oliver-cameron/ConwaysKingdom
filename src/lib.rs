@@ -1,28 +1,44 @@
-mod app;
-mod cell;
-mod chunk_texture;
-mod frame;
-mod game;
-mod gpu;
-mod pipeline;
-mod world;
+//! Conway's game of life, weaponised.
+//!
+//! Three modules, split by who needs them:
+//!
+//! - [`sim`] — the deterministic simulation. Client **and** server.
+//! - [`net`] — wire types. Client **and** server.
+//! - [`render`] — GPU and windowing. Client only.
+//!
+//! [`client`] wires all three together into the app that runs today.
 
-pub use app::{run, App};
-pub use cell::{Cell, Chunk, Halo, CHUNK_CELLS, CHUNK_N, HALO_N};
-pub use chunk_texture::ChunkTexture;
-pub use frame::{Draw, DrawCall, Frame, FrameAcquire, IndexBufferBinding};
-pub use game::{
-    chunk_instance_layout, world_bind_group_layout, BattleApp, Instance, GENERATION_SPAN,
-    SHADER_SOURCE,
+pub mod net;
+pub mod server;
+#[cfg(feature = "render")]
+pub mod render;
+pub mod sim;
+
+#[cfg(feature = "render")]
+pub mod client;
+
+#[cfg(feature = "render")]
+pub use client::BattleApp;
+#[cfg(feature = "render")]
+pub use render::run;
+
+// Re-exported so tests and downstream code need not spell out the module path.
+pub use net::{Action, ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
+#[cfg(feature = "render")]
+pub use render::{
+    chunk_instance_layout, create_pipeline, create_pipeline_with, world_bind_group_layout, App,
+    ChunkStore, ChunkTexture, Draw, DrawCall, Frame, FrameAcquire, GpuState, IndexBufferBinding,
+    PipelineDescriptor, SHADER_SOURCE,
 };
-pub use gpu::GpuState;
-pub use pipeline::{create_pipeline, create_pipeline_with, PipelineDescriptor};
-pub use world::{Coord, Dir, World, WorldKind};
+pub use sim::{
+    bits, Cell, Chunk, Coord, Dir, Halo, Player, PlayerId, World, WorldKind, CHUNK_CELLS,
+    CHUNK_N, HALO_N,
+};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "render"))]
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "render"))]
 #[wasm_bindgen(start)]
 pub fn wasm_main() {
     console_error_panic_hook::set_once();
