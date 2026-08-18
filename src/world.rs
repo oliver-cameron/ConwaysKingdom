@@ -509,6 +509,16 @@ mod tests {
         }
     }
 
+    /// Dimensions are chunks, and any size works down to a single chunk.
+    #[test]
+    fn a_torus_takes_its_dimensions_in_chunks() {
+        for (rows, cols) in [(1, 1), (1, 5), (5, 1), (4, 7)] {
+            let w = World::toroidal(rows, cols);
+            assert_eq!(w.stored_count(), (rows * cols) as usize);
+            assert_eq!(w.kind(), WorldKind::Toroidal { rows, cols });
+        }
+    }
+
     #[test]
     fn an_infinite_world_never_folds_coordinates() {
         let w = World::infinite();

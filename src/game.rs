@@ -23,6 +23,20 @@ const VIEW_PADDING: f32 = 24.0;
 /// so the tiling can be seen tiling. Ignored for infinite worlds.
 const TORUS_REPEATS: i32 = 1;
 
+/// Which world the app runs.
+const WORLD: WorldMode = WorldMode::Infinite;
+
+/// A toroidal world's size, as (chunks high, chunks wide).
+const TORUS_CHUNKS: (i32, i32) = (16, 16);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+// `WORLD` is a const, so whichever arm is not selected reads as dead.
+#[allow(dead_code)]
+pub enum WorldMode {
+    Infinite,
+    Torus,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CameraUniform {
@@ -228,7 +242,10 @@ impl BattleApp {
 
 impl App for BattleApp {
     fn init(gpu: &GpuState) -> Self {
-        let world = World::infinite();
+        let world = match WORLD {
+            WorldMode::Infinite => World::infinite(),
+            WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
+        };
         let chunks = ChunkTexture::new(&gpu.device, ChunkTexture::LAYER_BUDGET);
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
