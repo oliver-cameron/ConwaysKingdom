@@ -415,7 +415,7 @@ fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
 /// . . #
 /// # # #
 /// ```
-fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: u8) {
+fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: u16) {
     for (dr, dc) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
         chunk[(row + dr, col + dc)] = Cell::alive(player);
     }
@@ -600,7 +600,7 @@ mod tests {
         'outer: for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 if edited[(row, col)].is_alive() {
-                    edited[(row, col)].player ^= 1;
+                    edited[(row, col)] = edited[(row, col)].with_player(2);
                     break 'outer;
                 }
             }
