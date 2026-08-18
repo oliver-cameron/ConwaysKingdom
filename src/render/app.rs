@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use winit::{event::*, event_loop::{ControlFlow, EventLoop}, window::WindowBuilder};
 
-use crate::frame::{DrawCall, Frame, FrameAcquire};
-use crate::gpu::GpuState;
+use crate::render::context::{DrawCall, Frame, FrameAcquire};
+use crate::render::context::GpuState;
 
 /// Implement this to plug your own resources/pipelines into the event
 /// loop. The core knows nothing about what you draw — it just calls

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, CHUNK_N};
 
 /// Never advance more than this many generations in a single frame.
 const MAX_CATCHUP_STEPS: u32 = 8;
@@ -207,6 +207,11 @@ impl World {
         }
         self.active.clear();
         self.active.extend(set);
+        // A HashSet iterates in an order that varies between processes. The
+        // outcome does not currently depend on it -- every halo is gathered
+        // before any is written -- but a client and server must not diverge
+        // because of a future change here, so pin the order now.
+        self.active.sort_unstable();
     }
 
     pub fn active_count(&self) -> usize {
@@ -298,6 +303,50 @@ impl World {
         if let Storage::Infinite(map) = &mut self.storage {
             map.retain(|_, chunk| !chunk.is_empty());
         }
+    }
+
+    /// A digest of the whole world state, for spotting a client/server desync
+    /// cheaply. Order-independent inputs only: chunks are folded in sorted
+    /// coordinate order, and every byte of every stored chunk contributes, so
+    /// two worlds agreeing here agree on player and age as well as liveness.
+    ///
+    /// FNV-1a rather than `DefaultHasher`, whose output is explicitly not
+    /// guaranteed stable across Rust versions -- which would make a digest
+    /// compare fail between a server and client built at different times.
+    pub fn digest(&self) -> u64 {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut chunks = self.stored();
+        chunks.sort_unstable_by_key(|&(coord, _)| coord);
+
+        let mut h = OFFSET;
+        let eat = |bytes: &[u8], h: &mut u64| {
+            for &b in bytes {
+                *h ^= b as u64;
+                *h = h.wrapping_mul(PRIME);
+            }
+        };
+        for (coord, chunk) in chunks {
+            // An empty chunk is indistinguishable from an absent one, so skip
+            // it: an infinite and a toroidal world holding the same life agree.
+            if chunk.is_empty() {
+                continue;
+            }
+            eat(&coord.0.to_le_bytes(), &mut h);
+            eat(&coord.1.to_le_bytes(), &mut h);
+            eat(chunk.as_bytes(), &mut h);
+        }
+        h
+    }
+
+    /// Replace one chunk's contents. Test-only: real edits arrive as actions.
+    #[cfg(test)]
+    fn with_chunk_for_test(mut self, coord: Coord, chunk: Chunk) -> Self {
+        if let Some(slot) = self.chunk_at_mut(coord) {
+            *slot = chunk;
+        }
+        self
     }
 
     /// Live cells in absolute cell coordinates, sorted.
@@ -517,6 +566,48 @@ mod tests {
             assert_eq!(w.stored_count(), (rows * cols) as usize);
             assert_eq!(w.kind(), WorldKind::Toroidal { rows, cols });
         }
+    }
+
+    /// Client-side prediction rests on this: the same start plus the same
+    /// inputs must give byte-identical results, in any process, every time.
+    #[test]
+    fn stepping_is_deterministic() {
+        let mut a = World::infinite();
+        let mut b = World::infinite();
+        assert_eq!(a.digest(), b.digest());
+        for g in 0..400 {
+            a.step();
+            b.step();
+            assert_eq!(a.digest(), b.digest(), "diverged at generation {g}");
+        }
+        assert_eq!(a.live_cells(), b.live_cells());
+    }
+
+    /// The digest must notice a difference the live-cell list would miss.
+    #[test]
+    fn the_digest_covers_more_than_liveness() {
+        let mut a = World::infinite();
+        let mut b = World::infinite();
+        for _ in 0..40 {
+            a.step();
+            b.step();
+        }
+        assert_eq!(a.digest(), b.digest());
+
+        // Same cells alive, different owner.
+        let coord = b.stored()[0].0;
+        let mut edited = *b.chunk_at(coord).unwrap();
+        'outer: for row in 0..CHUNK_N {
+            for col in 0..CHUNK_N {
+                if edited[(row, col)].is_alive() {
+                    edited[(row, col)].player ^= 1;
+                    break 'outer;
+                }
+            }
+        }
+        let b2 = b.with_chunk_for_test(coord, edited);
+        assert_eq!(a.live_cells(), b2.live_cells(), "liveness is unchanged");
+        assert_ne!(a.digest(), b2.digest(), "but the digest must differ");
     }
 
     #[test]
