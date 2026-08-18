@@ -248,8 +248,14 @@ impl World {
 
         for (i, &coord) in active.iter().enumerate() {
             let halo = self.scratch[i];
+            // Seeded by generation and chunk, so a birth's owner is chosen the
+            // same way on every peer without exchanging a random number.
+            let seed = super::rule::mix(
+                super::rule::mix(0x0C01_1FE0, self.generation),
+                (coord.0 as u32 as u64) << 32 | coord.1 as u32 as u64,
+            );
             if let Some(chunk) = self.chunk_at_mut(coord) {
-                halo.step_into(chunk);
+                halo.step_into(chunk, seed);
             }
         }
 
