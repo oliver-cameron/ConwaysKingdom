@@ -1,17 +1,20 @@
 mod app;
 mod cell;
-mod conwayHandler;
+mod chunk_texture;
 mod frame;
 mod game;
 mod gpu;
 mod pipeline;
-pub use app::{App, run};
-pub use frame::{Draw, DrawCall, Frame, FrameAcquire, IndexBufferBinding};
-pub use gpu::GpuState;
-pub use pipeline::{PipelineDescriptor, create_pipeline};
+mod world;
 
-// Swap this for your own `App` impl once you've moved past the demo.
-pub use game::BattleApp;
+pub use app::{run, App};
+pub use cell::{Cell, Chunk, CHUNK_CELLS, CHUNK_N};
+pub use chunk_texture::ChunkTexture;
+pub use frame::{Draw, DrawCall, Frame, FrameAcquire, IndexBufferBinding};
+pub use game::{BattleApp, GENERATION_SPAN};
+pub use gpu::GpuState;
+pub use pipeline::{create_pipeline, PipelineDescriptor};
+pub use world::World;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -21,5 +24,5 @@ use wasm_bindgen::prelude::*;
 pub fn wasm_main() {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Info).expect("could not init logger");
-    wasm_bindgen_futures::spawn_local(run::<TriangleApp>());
+    wasm_bindgen_futures::spawn_local(run::<BattleApp>());
 }
