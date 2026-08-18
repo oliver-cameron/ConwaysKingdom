@@ -17,7 +17,7 @@ pub use game::{
 };
 pub use gpu::GpuState;
 pub use pipeline::{create_pipeline, create_pipeline_with, PipelineDescriptor};
-pub use world::{ChunkId, Dir, Links, Neighbour, World, WorldKind};
+pub use world::{Coord, Dir, World, WorldKind};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
