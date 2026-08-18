@@ -39,7 +39,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let server = Server::load_or_new(&world_path, World::infinite)?;
+    let server = Server::load_or_new(&world_path, World::demo)?;
     log::info!(
         "world at tick {}, {} chunks, {} players",
         server.tick(),
