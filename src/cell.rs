@@ -45,6 +45,18 @@ impl Chunk {
         bytemuck::zeroed_box()
     }
 
+    /// Every cell dead and unowned, by value. Cheap at this chunk size; use
+    /// `zeroed` once a chunk is too large to build on the stack.
+    pub fn dead() -> Self {
+        Self { cells: [Cell::DEAD; CHUNK_CELLS] }
+    }
+
+    /// No live cells anywhere. An empty chunk contributes nothing to any
+    /// neighbour, so it need be neither stored nor stepped.
+    pub fn is_empty(&self) -> bool {
+        self.cells.iter().all(|c| !c.is_alive())
+    }
+
     /// Exactly the `&[u8]` `Queue::write_texture` wants. No conversion.
     pub fn as_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)

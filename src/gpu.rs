@@ -89,7 +89,10 @@ impl GpuState {
             format,
             width,
             height,
-            present_mode: surface_caps.present_modes[0],
+            // Fifo is the only mode guaranteed to exist, and it is the one
+            // that paces to the display instead of spinning. `present_modes[0]`
+            // was whatever the driver happened to list first.
+            present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
