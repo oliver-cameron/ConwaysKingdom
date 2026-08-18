@@ -40,15 +40,23 @@ impl<'a> Default for PipelineDescriptor<'a> {
 /// the surface's current format. Call this once per pipeline at setup
 /// time (it's not cheap enough to call per-frame).
 pub fn create_pipeline(gpu: &GpuState, desc: &PipelineDescriptor) -> wgpu::RenderPipeline {
-    let shader = gpu
-        .device
+    create_pipeline_with(&gpu.device, gpu.config.format, desc)
+}
+
+/// Same, but without a `GpuState` — so a headless test (no window, no surface)
+/// can build the real pipeline from the real descriptor.
+pub fn create_pipeline_with(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    desc: &PipelineDescriptor,
+) -> wgpu::RenderPipeline {
+    let shader = device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(desc.label),
             source: wgpu::ShaderSource::Wgsl(desc.shader_source.into()),
         });
 
-    let layout = gpu
-        .device
+    let layout = device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(desc.label),
             bind_group_layouts: desc.bind_group_layouts,
@@ -64,7 +72,7 @@ pub fn create_pipeline(gpu: &GpuState, desc: &PipelineDescriptor) -> wgpu::Rende
         .map(|l| Some(l.clone()))
         .collect();
 
-    gpu.device
+    device
         .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(desc.label),
             layout: Some(&layout),
@@ -78,7 +86,7 @@ pub fn create_pipeline(gpu: &GpuState, desc: &PipelineDescriptor) -> wgpu::Rende
                 module: &shader,
                 entry_point: Some(desc.fs_entry),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: gpu.config.format,
+                    format,
                     blend: desc.blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
