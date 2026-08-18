@@ -26,25 +26,6 @@ pub type ChunkId = Coord;
 /// so both sides apply it at the same point in the sequence.
 pub type Tick = u64;
 
-/// A connected player.
-///
-/// The id is the same number a cell stores, so a cell's owner is looked up
-/// without translation — which also means the world can only distinguish
-/// [`PlayerId::MAX`] of them at once.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Player {
-    pub id: PlayerId,
-    pub name: String,
-    /// Tick this player was last heard from, for timing out a dead connection.
-    pub last_seen: Tick,
-}
-
-impl Player {
-    pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
-        Self { id, name: name.into(), last_seen: 0 }
-    }
-}
-
 /// Something a player did. Deliberately not raw keystrokes: input is resolved
 /// to a world effect before it goes on the wire, so the server validates an
 /// intent rather than replaying a keyboard.
