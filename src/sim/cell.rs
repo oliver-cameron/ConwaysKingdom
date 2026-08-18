@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 
 use super::dir::Dir;
 use super::player::PlayerId;
-use super::rule::{next_cell, Neighbours};
+use super::rule::{mix, next_cell, Neighbours};
 use std::ops::{Index, IndexMut};
 
 pub const CHUNK_N: usize = 16;
@@ -181,7 +181,7 @@ impl Chunk {
     pub fn step(&self, next: &mut Chunk) {
         let mut halo = Halo::dead();
         halo.set_centre(self);
-        halo.step_into(next);
+        halo.step_into(next, 0);
     }
 }
 
@@ -222,11 +222,16 @@ impl Halo {
         }
     }
 
-    pub fn step_into(&self, next: &mut Chunk) {
+    /// Step every cell. `seed` identifies this chunk at this tick; each cell
+    /// mixes its own position in, so the pseudo-randomness a birth uses is the
+    /// same on every peer without any of them exchanging a number.
+    pub fn step_into(&self, next: &mut Chunk, seed: u64) {
         for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 let (hr, hc) = (row + 1, col + 1);
-                next[(row, col)] = next_cell(self.get(hr, hc), &self.neighbours(hr, hc));
+                let cell_seed = mix(seed, (row as u64) << 32 | col as u64);
+                next[(row, col)] =
+                    next_cell(self.get(hr, hc), &self.neighbours(hr, hc), cell_seed);
             }
         }
     }
