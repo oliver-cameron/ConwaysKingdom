@@ -4,50 +4,69 @@ use std::ops::{Index, IndexMut};
 pub const CHUNK_N: usize = 16;
 pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 
-/// One cell: sixteen bits you carve up as you like.
-///
-/// Stored as two explicit little-endian bytes rather than a `u16` field, so the
-/// in-memory order is ours rather than the host's. The texture is `R16Uint`,
-/// which GPUs read little-endian, so the assertion below is what keeps the two
-/// agreeing — it fires at compile time on a big-endian target rather than
-/// producing quietly scrambled cells.
-///
-/// `kind == 0` means dead, so zeroed memory is a valid empty world. Never give
-/// kind 0 a live meaning; `Chunk::zeroed` depends on it.
+/// A player's number. Zero means unowned, so a zeroed cell is dead and
+/// unclaimed. The cell only has five bits for this, hence [`PlayerId::MAX`].
 #[repr(transparent)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
-pub struct Cell(pub [u8; 2]);
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable)]
+pub struct PlayerId(pub u8);
 
-/// The bit layout, as (offset, width). Adjust here and in the matching block at
-/// the top of `render/shaders/grid.wgsl` — the shader cannot read these, so
-/// they are the one thing that must be kept in step by hand.
+impl PlayerId {
+    pub const UNOWNED: Self = Self(0);
+    /// Five bits in the cell, so 1..=31 are real players.
+    pub const MAX: u8 = (1 << bits::PLAYER_WIDTH) - 1;
+
+    pub const fn is_owned(self) -> bool {
+        self.0 != 0
+    }
+}
+
+/// One cell: sixteen bits, little-endian.
 ///
 /// ```text
 ///  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-/// | flags |    age    |  player   |     kind       |
+/// |   player    |      metadata / flags      | A |
 /// ```
-pub mod bits {
-    pub const KIND: (u16, u16) = (0, 6); // 63 live kinds, 0 = dead
-    pub const PLAYER: (u16, u16) = (6, 4); // 15 players, 0 = unowned
-    pub const AGE: (u16, u16) = (10, 4); // saturates at 15
-    pub const FLAGS: (u16, u16) = (14, 2);
+///
+/// Bit 0 is alive. The ten above it are yours. The top five are the player,
+/// and being the top field means the number extracts with a single shift and
+/// no mask, and that comparing two raw cells orders them by player first.
+///
+/// Stored as two explicit little-endian bytes rather than a `u16` field, so the
+/// in-memory order is ours rather than the host's. The texture is `R16Uint`,
+/// which GPUs read little-endian, so the assertion below fires at compile time
+/// on a big-endian target rather than producing quietly scrambled cells.
+///
+/// A zeroed cell is dead and unowned, which is what makes zeroed memory a valid
+/// empty world. Never give bit 0 clear a live meaning.
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+pub struct Cell(pub [u8; 2]);
 
-    pub const fn mask((_, width): (u16, u16)) -> u16 {
-        (1u16 << width) - 1
-    }
-    pub const fn max((_, width): (u16, u16)) -> u16 {
-        (1u16 << width) - 1
-    }
+/// The bit layout. Adjust here and in the matching block at the top of
+/// `render/shaders/grid.wgsl` — the shader cannot read Rust constants, so those
+/// are the one thing kept in step by hand.
+pub mod bits {
+    /// Bit 0: alive or dead.
+    pub const ALIVE: u16 = 1;
+
+    /// Bits 1..11: metadata and flags, undivided. Carve as needed.
+    pub const META_SHIFT: u16 = 1;
+    pub const META_WIDTH: u16 = 10;
+    pub const META_MASK: u16 = (1 << META_WIDTH) - 1;
+
+    /// Bits 11..16: player number, at the top of the word.
+    pub const PLAYER_SHIFT: u16 = 11;
+    pub const PLAYER_WIDTH: u16 = 5;
+    pub const PLAYER_MASK: u16 = (1 << PLAYER_WIDTH) - 1;
 }
 
 const _: () = {
     assert!(size_of::<Cell>() == 2 && align_of::<Cell>() == 1);
-    // The fields must tile the 16 bits exactly, with no overlap and no gap.
-    assert!(bits::KIND.0 == 0);
-    assert!(bits::PLAYER.0 == bits::KIND.0 + bits::KIND.1);
-    assert!(bits::AGE.0 == bits::PLAYER.0 + bits::PLAYER.1);
-    assert!(bits::FLAGS.0 == bits::AGE.0 + bits::AGE.1);
-    assert!(bits::FLAGS.0 + bits::FLAGS.1 == 16);
+    // The fields must tile all sixteen bits with no overlap and no gap.
+    assert!(bits::ALIVE == 1);
+    assert!(bits::META_SHIFT == 1);
+    assert!(bits::PLAYER_SHIFT == bits::META_SHIFT + bits::META_WIDTH);
+    assert!(bits::PLAYER_SHIFT + bits::PLAYER_WIDTH == 16);
     // R16Uint is read little-endian by the GPU.
     assert!(cfg!(target_endian = "little"));
 };
@@ -65,76 +84,55 @@ impl Cell {
         u16::from_le_bytes(self.0)
     }
 
-    #[inline]
-    const fn get(self, field: (u16, u16)) -> u16 {
-        (self.bits() >> field.0) & bits::mask(field)
-    }
-
-    #[inline]
-    const fn with(self, field: (u16, u16), value: u16) -> Self {
-        let cleared = self.bits() & !(bits::mask(field) << field.0);
-        Self::from_bits(cleared | ((value & bits::mask(field)) << field.0))
-    }
-
-    pub const fn alive(player: u16) -> Self {
-        Self::DEAD.with(bits::KIND, 1).with(bits::PLAYER, player)
-    }
-
-    #[inline]
-    pub const fn kind(self) -> u16 {
-        self.get(bits::KIND)
-    }
-    #[inline]
-    pub const fn player(self) -> u16 {
-        self.get(bits::PLAYER)
-    }
-    #[inline]
-    pub const fn age(self) -> u16 {
-        self.get(bits::AGE)
-    }
-    #[inline]
-    pub const fn flags(self) -> u16 {
-        self.get(bits::FLAGS)
-    }
-
-    #[inline]
-    pub const fn with_kind(self, v: u16) -> Self {
-        self.with(bits::KIND, v)
-    }
-    #[inline]
-    pub const fn with_player(self, v: u16) -> Self {
-        self.with(bits::PLAYER, v)
-    }
-    #[inline]
-    pub const fn with_flags(self, v: u16) -> Self {
-        self.with(bits::FLAGS, v)
-    }
-
-    /// Age one generation, stopping at the field's maximum rather than
-    /// wrapping round to newborn.
-    #[inline]
-    pub const fn aged(self) -> Self {
-        let a = self.age();
-        if a >= bits::max(bits::AGE) {
-            self
-        } else {
-            self.with(bits::AGE, a + 1)
-        }
+    pub const fn alive(player: PlayerId) -> Self {
+        Self::from_bits(bits::ALIVE).with_player(player)
     }
 
     #[inline]
     pub const fn is_alive(self) -> bool {
-        self.kind() != 0
+        self.bits() & bits::ALIVE != 0
+    }
+
+    /// The player field is the top of the word, so this is a shift with no
+    /// mask — and arithmetic on the result is ordinary arithmetic.
+    #[inline]
+    pub const fn player(self) -> PlayerId {
+        PlayerId((self.bits() >> bits::PLAYER_SHIFT) as u8)
+    }
+
+    #[inline]
+    pub const fn meta(self) -> u16 {
+        (self.bits() >> bits::META_SHIFT) & bits::META_MASK
+    }
+
+    #[inline]
+    pub const fn with_alive(self, alive: bool) -> Self {
+        if alive {
+            Self::from_bits(self.bits() | bits::ALIVE)
+        } else {
+            Self::from_bits(self.bits() & !bits::ALIVE)
+        }
+    }
+
+    #[inline]
+    pub const fn with_player(self, player: PlayerId) -> Self {
+        let cleared = self.bits() & !(bits::PLAYER_MASK << bits::PLAYER_SHIFT);
+        Self::from_bits(cleared | ((player.0 as u16 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT))
+    }
+
+    #[inline]
+    pub const fn with_meta(self, meta: u16) -> Self {
+        let cleared = self.bits() & !(bits::META_MASK << bits::META_SHIFT);
+        Self::from_bits(cleared | ((meta & bits::META_MASK) << bits::META_SHIFT))
     }
 }
 
 impl core::fmt::Debug for Cell {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Cell")
-            .field("kind", &self.kind())
-            .field("player", &self.player())
-            .field("age", &self.age())
-            .field("flags", &self.flags())
+            .field("alive", &self.is_alive())
+            .field("meta", &self.meta())
+            .field("player", &self.player().0)
             .finish()
     }
 }
@@ -232,8 +230,8 @@ impl Halo {
 
     /// The player holding a majority of the live cells around a halo position.
     /// Only consulted on a birth, so the tally is not paid for per cell.
-    fn dominant_player(&self, hr: usize, hc: usize) -> u16 {
-        let mut tally = [0u16; 1 << bits::PLAYER.1];
+    fn dominant_player(&self, hr: usize, hc: usize) -> PlayerId {
+        let mut tally = [0u16; (PlayerId::MAX as usize) + 1];
         for dr in 0..3 {
             for dc in 0..3 {
                 if dr == 1 && dc == 1 {
@@ -241,7 +239,7 @@ impl Halo {
                 }
                 let n = self.get(hr + dr - 1, hc + dc - 1);
                 if n.is_alive() {
-                    tally[n.player() as usize] += 1;
+                    tally[n.player().0 as usize] += 1;
                 }
             }
         }
@@ -249,8 +247,8 @@ impl Halo {
             .iter()
             .enumerate()
             .max_by_key(|&(player, &count)| (count, std::cmp::Reverse(player)))
-            .map(|(player, _)| player as u16)
-            .unwrap_or(0)
+            .map(|(player, _)| PlayerId(player as u8))
+            .unwrap_or(PlayerId::UNOWNED)
     }
 
     pub fn step_into(&self, next: &mut Chunk) {
@@ -272,7 +270,7 @@ impl Halo {
                 }
 
                 next[(row, col)] = match (cur.is_alive(), alive) {
-                    (true, 2) | (true, 3) => cur.aged(),
+                    (true, 2) | (true, 3) => cur,
                     (false, 3) => Cell::alive(self.dominant_player(hr, hc)),
                     _ => Cell::DEAD,
                 };
@@ -307,7 +305,7 @@ mod tests {
     fn seed(cells: &[(usize, usize)]) -> Box<Chunk> {
         let mut c = Chunk::zeroed();
         for &(r, k) in cells {
-            c[(r, k)] = Cell::alive(1);
+            c[(r, k)] = Cell::alive(PlayerId(1));
         }
         c
     }
@@ -331,10 +329,10 @@ mod tests {
         let n = CHUNK_N - 1;
         let mut c = Chunk::zeroed();
         for i in 0..CHUNK_N {
-            c[(0, i)] = Cell::alive(1);
-            c[(n, i)] = Cell::alive(1);
-            c[(i, 0)] = Cell::alive(1);
-            c[(i, n)] = Cell::alive(1);
+            c[(0, i)] = Cell::alive(PlayerId(1));
+            c[(n, i)] = Cell::alive(PlayerId(1));
+            c[(i, 0)] = Cell::alive(PlayerId(1));
+            c[(i, n)] = Cell::alive(PlayerId(1));
         }
         let mut next = Chunk::zeroed();
         c.step(&mut next);
@@ -353,26 +351,30 @@ mod tests {
         assert!(!next[(0, 0)].is_alive());
     }
 
-    /// Every field must round-trip, and no field may disturb another.
+    /// Each field must round-trip, and none may disturb another.
     #[test]
     fn the_bit_fields_are_independent() {
-        let fields: [(&str, fn(Cell, u16) -> Cell, fn(Cell) -> u16, u16); 3] = [
-            ("kind", Cell::with_kind, Cell::kind, bits::max(bits::KIND)),
-            ("player", Cell::with_player, Cell::player, bits::max(bits::PLAYER)),
-            ("flags", Cell::with_flags, Cell::flags, bits::max(bits::FLAGS)),
-        ];
-        for &(name, set, get, max) in &fields {
-            for v in 0..=max {
-                assert_eq!(get(set(Cell::DEAD, v)), v, "{name} = {v}");
-            }
-            // Overflow is masked, not smeared into the neighbouring field.
-            let c = set(Cell::DEAD, max + 1);
-            for &(other, _, other_get, _) in &fields {
-                if other != name {
-                    assert_eq!(other_get(c), 0, "{name} overflow leaked into {other}");
-                }
+        for meta in [0, 1, 511, bits::META_MASK] {
+            for p in 0..=PlayerId::MAX {
+                let c = Cell::DEAD
+                    .with_alive(true)
+                    .with_meta(meta)
+                    .with_player(PlayerId(p));
+                assert!(c.is_alive());
+                assert_eq!(c.meta(), meta);
+                assert_eq!(c.player(), PlayerId(p));
+                // Clearing alive must leave the other two alone.
+                let d = c.with_alive(false);
+                assert!(!d.is_alive());
+                assert_eq!(d.meta(), meta);
+                assert_eq!(d.player(), PlayerId(p));
             }
         }
+        // Overflow is masked, not smeared into a neighbouring field.
+        let c = Cell::DEAD.with_meta(bits::META_MASK + 1);
+        assert_eq!(c.meta(), 0);
+        assert_eq!(c.player(), PlayerId::UNOWNED);
+        assert!(!c.is_alive());
     }
 
     #[test]
@@ -384,15 +386,26 @@ mod tests {
         assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 2);
     }
 
+    /// The player sits at the top of the word, so extracting it is a shift with
+    /// no mask, and raw cell values order by player before anything else.
     #[test]
-    fn age_saturates_rather_than_wrapping_to_newborn() {
-        let mut c = Cell::alive(1);
-        for _ in 0..100 {
-            c = c.aged();
-        }
-        assert_eq!(c.age(), bits::max(bits::AGE));
-        assert!(c.is_alive(), "ageing must not clear kind");
-        assert_eq!(c.player(), 1, "nor player");
+    fn the_player_occupies_the_high_bits() {
+        let c = Cell::alive(PlayerId(5));
+        assert_eq!(c.bits() >> bits::PLAYER_SHIFT, 5);
+        assert_eq!(c.player(), PlayerId(5));
+
+        let low = Cell::alive(PlayerId(1)).with_meta(bits::META_MASK);
+        let high = Cell::alive(PlayerId(2));
+        assert!(high.bits() > low.bits(), "player dominates the ordering");
+    }
+
+    #[test]
+    fn a_zeroed_cell_is_dead_and_unowned() {
+        let c = Cell::default();
+        assert_eq!(c, Cell::DEAD);
+        assert!(!c.is_alive());
+        assert_eq!(c.player(), PlayerId::UNOWNED);
+        assert_eq!(c.meta(), 0);
     }
 
     #[test]
@@ -430,12 +443,12 @@ mod tests {
     #[test]
     fn a_birth_is_attributed_to_the_majority_owner() {
         let mut c = Chunk::zeroed();
-        c[(4, 5)] = Cell::alive(3);
-        c[(5, 4)] = Cell::alive(3);
-        c[(5, 6)] = Cell::alive(7);
+        c[(4, 5)] = Cell::alive(PlayerId(3));
+        c[(5, 4)] = Cell::alive(PlayerId(3));
+        c[(5, 6)] = Cell::alive(PlayerId(7));
         let mut next = Chunk::zeroed();
         c.step(&mut next);
         assert!(next[(5, 5)].is_alive());
-        assert_eq!(next[(5, 5)].player(), 3);
+        assert_eq!(next[(5, 5)].player(), PlayerId(3));
     }
 }

@@ -9,15 +9,26 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "native"
 path = "src/bin/native.rs"
+required-features = ["render"]
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[features]
+default = ["render"]
+# Everything that touches the GPU or a window. Off, the server builds with
+# neither wgpu nor winit compiled at all.
+render = ["dep:wgpu", "dep:winit"]
 
 [dependencies]
-wgpu = "30"
-winit = "0.29"
+wgpu = { version = "30", optional = true }
+winit = { version = "0.29", optional = true }
 bytemuck = { version = "1.16", features = ["derive", "extern_crate_alloc", "min_const_generics"] }
 log = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { version = "30", features = ["webgl"] }
+wgpu = { version = "30", features = ["webgl"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Document", "Element", "Window", "HtmlCanvasElement", "Performance"] }

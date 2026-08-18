@@ -9,27 +9,36 @@
 //! [`client`] wires all three together into the app that runs today.
 
 pub mod net;
+pub mod server;
+#[cfg(feature = "render")]
 pub mod render;
 pub mod sim;
 
+#[cfg(feature = "render")]
 mod client;
 
+#[cfg(feature = "render")]
 pub use client::BattleApp;
+#[cfg(feature = "render")]
 pub use render::run;
 
 // Re-exported so tests and downstream code need not spell out the module path.
-pub use net::{Action, ChunkId, ClientMessage, PlayerId, ServerMessage, Stamped, Tick};
+pub use net::{Action, ChunkId, ClientMessage, Player, ServerMessage, Stamped, Tick};
+#[cfg(feature = "render")]
 pub use render::{
     chunk_instance_layout, create_pipeline, create_pipeline_with, world_bind_group_layout, App,
     ChunkStore, ChunkTexture, Draw, DrawCall, Frame, FrameAcquire, GpuState, IndexBufferBinding,
     PipelineDescriptor, SHADER_SOURCE,
 };
-pub use sim::{Cell, Chunk, Coord, Dir, Halo, World, WorldKind, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use sim::{
+    bits, Cell, Chunk, Coord, Dir, Halo, PlayerId, World, WorldKind, CHUNK_CELLS, CHUNK_N,
+    HALO_N,
+};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "render"))]
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "render"))]
 #[wasm_bindgen(start)]
 pub fn wasm_main() {
     console_error_panic_hook::set_once();

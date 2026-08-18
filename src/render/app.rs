@@ -30,6 +30,12 @@ pub trait App: 'static {
 
     fn on_key(&mut self, _code: winit::keyboard::KeyCode, _pressed: bool) {}
     fn on_scroll(&mut self, _delta: MouseScrollDelta) {}
+
+    /// Cursor moved, in physical pixels from the top-left of the surface.
+    fn on_cursor(&mut self, _x: f64, _y: f64) {}
+
+    /// A mouse button went down or up, at the last reported cursor position.
+    fn on_click(&mut self, _button: MouseButton, _pressed: bool) {}
 }
 
 pub async fn run<A: App>() {
@@ -92,6 +98,12 @@ pub async fn run<A: App>() {
                         ..
                     } => app.on_key(code, state == ElementState::Pressed),
                     WindowEvent::MouseWheel { delta, .. } => app.on_scroll(delta),
+                    WindowEvent::CursorMoved { position, .. } => {
+                        app.on_cursor(position.x, position.y)
+                    }
+                    WindowEvent::MouseInput { button, state, .. } => {
+                        app.on_click(button, state == ElementState::Pressed)
+                    }
                     WindowEvent::RedrawRequested => {
                         let now = now_secs();
                         let dt = (now - last_frame).max(0.0) as f32;
