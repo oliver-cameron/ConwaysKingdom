@@ -16,8 +16,12 @@ use crate::sim::{World, CHUNK_N};
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
 
-/// Cells of empty space to keep around the live pattern when framing.
-const VIEW_PADDING: f32 = 24.0;
+/// Where the camera looks, in cells, as (x, y) — that is, (col, row).
+const VIEW_CENTRE: (f32, f32) = (CHUNK_N as f32 / 2.0, CHUNK_N as f32 / 2.0);
+
+/// Screen pixels per cell. Never below 1: point sampling drops sparse cells
+/// under that.
+const VIEW_ZOOM: f32 = 16.0;
 
 /// How many copies of a toroidal world to draw either side of the original, so
 /// the tiling can be seen tiling. Ignored for infinite worlds.
@@ -44,35 +48,25 @@ pub struct BattleApp {
     camera_buffer: wgpu::Buffer,
     chunks: ChunkStore,
     world: World,
+    /// Last reported cursor position, in physical pixels.
+    cursor: (f64, f64),
+    /// A click waiting to be resolved to a cell. Input callbacks are not given
+    /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
+    /// the next `update` rather than guessed here.
+    pending_click: Option<(f64, f64)>,
 }
 
 impl BattleApp {
-    /// Frame the live pattern, so the view follows it rather than shrinking
-    /// towards nothing as the world grows.
+    /// A fixed camera. Autoscrolling is gone: the view no longer chases the
+    /// live pattern, so what is on screen is whatever `VIEW_CENTRE` and
+    /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
     fn write_camera(&self, gpu: &GpuState) {
         let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
-
-        let live = self.world.live_cells();
-        let (min_row, min_col, max_row, max_col) = if live.is_empty() {
-            (0.0, 0.0, CHUNK_N as f32, CHUNK_N as f32)
-        } else {
-            let (mut r0, mut c0, mut r1, mut c1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-            for &(r, c) in &live {
-                r0 = r0.min(r as f32);
-                c0 = c0.min(c as f32);
-                r1 = r1.max(r as f32 + 1.0);
-                c1 = c1.max(c as f32 + 1.0);
-            }
-            (r0, c0, r1, c1)
-        };
-
-        let span_x = (max_col - min_col) + 2.0 * VIEW_PADDING;
-        let span_y = (max_row - min_row) + 2.0 * VIEW_PADDING;
-        // Never below one pixel per cell: point sampling drops sparse cells.
-        let zoom = (vw / span_x).min(vh / span_y).clamp(1.0, 64.0);
-
-        let centre = ((min_col + max_col) * 0.5, (min_row + max_row) * 0.5);
-        let origin = [centre.0 - vw / (2.0 * zoom), centre.1 - vh / (2.0 * zoom)];
+        let zoom = VIEW_ZOOM;
+        let origin = [
+            VIEW_CENTRE.0 - vw / (2.0 * zoom),
+            VIEW_CENTRE.1 - vh / (2.0 * zoom),
+        ];
 
         gpu.queue.write_buffer(
             &self.camera_buffer,
@@ -85,6 +79,19 @@ impl BattleApp {
                 _pad: [0.0; 2],
             }),
         );
+    }
+
+    /// Where a screen position lands in the world, in absolute cell
+    /// coordinates. The inverse of what the vertex shader does.
+    fn cell_under_cursor(&self, gpu: &GpuState, (px, py): (f64, f64)) -> (i32, i32) {
+        let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
+        let origin = (
+            VIEW_CENTRE.0 - vw / (2.0 * VIEW_ZOOM),
+            VIEW_CENTRE.1 - vh / (2.0 * VIEW_ZOOM),
+        );
+        let x = origin.0 + px as f32 / VIEW_ZOOM;
+        let y = origin.1 + py as f32 / VIEW_ZOOM;
+        (y.floor() as i32, x.floor() as i32) // (row, col)
     }
 }
 
@@ -140,6 +147,8 @@ impl App for BattleApp {
             camera_buffer,
             chunks,
             world,
+            cursor: (0.0, 0.0),
+            pending_click: None,
         };
         app.world.dirty = false;
         app.write_camera(gpu);
@@ -151,6 +160,13 @@ impl App for BattleApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        if let Some(at) = self.pending_click.take() {
+            let (row, col) = self.cell_under_cursor(gpu, at);
+            // Received, resolved, and deliberately ignored. A net::Action is
+            // built here once there is somewhere to send it.
+            log::info!("click at cell ({row}, {col})");
+        }
+
         self.world.update(dt, GENERATION_SPAN);
         if self.world.dirty {
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS);
@@ -170,6 +186,22 @@ impl App for BattleApp {
                 instances: 0..self.chunks.instance_count(),
             },
         }]
+    }
+
+    fn on_cursor(&mut self, x: f64, y: f64) {
+        self.cursor = (x, y);
+    }
+
+    /// Clicks are received and resolved to a cell, but deliberately do nothing
+    /// yet. This is where a `net::Action` will be built and sent.
+    fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
+        if !pressed {
+            return;
+        }
+        let _ = button;
+        // `gpu` is not passed to input callbacks, so resolve on the next frame
+        // instead of guessing the viewport here.
+        self.pending_click = Some(self.cursor);
     }
 
     fn clear_color(&self) -> Option<wgpu::Color> {

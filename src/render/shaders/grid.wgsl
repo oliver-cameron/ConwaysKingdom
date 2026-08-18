@@ -7,11 +7,10 @@
 // changing both.
 //
 //  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-// | flags |    age    |  player   |     kind       |
-const KIND_SHIFT:   u32 = 0u;   const KIND_MASK:   u32 = 63u;
-const PLAYER_SHIFT: u32 = 6u;   const PLAYER_MASK: u32 = 15u;
-const AGE_SHIFT:    u32 = 10u;  const AGE_MASK:    u32 = 15u;
-const FLAGS_SHIFT:  u32 = 14u;  const FLAGS_MASK:  u32 = 3u;
+// |   player    |      metadata / flags      | A |
+const ALIVE_BIT:    u32 = 1u;
+const META_SHIFT:   u32 = 1u;   const META_MASK: u32 = 1023u;
+const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 
 struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
@@ -56,8 +55,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(floor(in.local));
     let cell = textureLoad(chunks, coord, i32(in.layer), 0).r;
 
-    let kind = (cell >> KIND_SHIFT) & KIND_MASK;
-    if kind == 0u {
+    if (cell & ALIVE_BIT) == 0u {
         // Tint the outermost ring of dead cells so chunk boundaries are
         // visible: that is what makes chunk loading something you can watch.
         let n = cam.chunk_n;
