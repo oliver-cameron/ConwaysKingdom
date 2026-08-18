@@ -14,18 +14,28 @@ required-features = ["render"]
 [[bin]]
 name = "server"
 path = "src/bin/server.rs"
+required-features = ["server"]
 
 [features]
 default = ["render"]
 # Everything that touches the GPU or a window. Off, the server builds with
 # neither wgpu nor winit compiled at all.
 render = ["dep:wgpu", "dep:winit"]
+# The websocket server. Native only.
+server = ["dep:axum", "dep:tower-http"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
 winit = { version = "0.29", optional = true }
 bytemuck = { version = "1.16", features = ["derive", "extern_crate_alloc", "min_const_generics"] }
 log = "0.4"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1.1", features = ["alloc"] }
+
+# Server transport. Optional so the client, and a wasm build, pull none of it.
+axum = { version = "0.8", features = ["ws"], optional = true }
+
+tower-http = { version = "0.6", features = ["fs"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "30", features = ["webgl"], optional = true }
@@ -38,6 +48,12 @@ console_log = "1.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11"
 pollster = "0.3"
+# Transport, for both the server and the native client. Native only: a browser
+# has no sockets to give tokio, so the wasm client will use the browser's own
+# WebSocket instead.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
 
 [profile.release]
 opt-level = "s"

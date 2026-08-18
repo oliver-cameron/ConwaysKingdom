@@ -15,7 +15,7 @@ pub mod render;
 pub mod sim;
 
 #[cfg(feature = "render")]
-mod client;
+pub mod client;
 
 #[cfg(feature = "render")]
 pub use client::BattleApp;

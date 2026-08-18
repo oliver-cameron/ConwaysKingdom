@@ -13,6 +13,11 @@ use crate::render::context::{Draw, DrawCall, GpuState};
 use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
 use crate::sim::{World, CHUNK_N};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::net::link::Link;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::net::ClientMessage;
+
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
 
@@ -41,6 +46,18 @@ pub enum WorldMode {
     Torus,
 }
 
+/// Set before the event loop starts, because `App::init` takes no arguments
+/// of its own. A one-shot rather than a config store: it is read once.
+#[cfg(not(target_arch = "wasm32"))]
+static CONNECTION: std::sync::Mutex<Option<(Option<String>, String)>> =
+    std::sync::Mutex::new(None);
+
+/// Point the client at a server before launching it. `None` runs offline.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_connection(url: Option<String>, name: String) {
+    *CONNECTION.lock().unwrap() = Some((url, name));
+}
+
 pub struct BattleApp {
     pipeline: wgpu::RenderPipeline,
     bind_groups: Vec<wgpu::BindGroup>,
@@ -50,6 +67,11 @@ pub struct BattleApp {
     world: World,
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
+    /// The server connection, if there is one. A client with no link still
+    /// simulates: the rules are deterministic, so offline is a game of one
+    /// rather than a broken game.
+    #[cfg(not(target_arch = "wasm32"))]
+    link: Option<Link>,
     /// A click waiting to be resolved to a cell. Input callbacks are not given
     /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
     /// the next `update` rather than guessed here.
@@ -149,6 +171,8 @@ impl App for BattleApp {
             world,
             cursor: (0.0, 0.0),
             pending_click: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            link: connect_from_args(),
         };
         app.world.dirty = false;
         app.write_camera(gpu);
@@ -160,6 +184,19 @@ impl App for BattleApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(link) = &mut self.link {
+            for msg in link.drain() {
+                // Received and logged. Applying them needs the client to
+                // hold a tick of its own, which is the next step.
+                log::info!("server: {msg:?}");
+            }
+            if link.is_closed() {
+                log::warn!("link closed; continuing offline");
+                self.link = None;
+            }
+        }
+
         if let Some(at) = self.pending_click.take() {
             let (row, col) = self.cell_under_cursor(gpu, at);
             // Received, resolved, and deliberately ignored. A net::Action is
@@ -207,4 +244,13 @@ impl App for BattleApp {
     fn clear_color(&self) -> Option<wgpu::Color> {
         Some(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 })
     }
+}
+
+/// Open the link the launcher asked for, and announce ourselves.
+#[cfg(not(target_arch = "wasm32"))]
+fn connect_from_args() -> Option<Link> {
+    let (url, name) = CONNECTION.lock().unwrap().take()?;
+    let link = Link::connect(url?);
+    link.send(ClientMessage::Join { name });
+    Some(link)
 }

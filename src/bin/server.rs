@@ -1,54 +1,61 @@
 //! Headless authoritative server.
 //!
-//!     cargo run --bin server --no-default-features -- [generations]
+//!     cargo run --no-default-features --features server --bin server -- [OPTIONS]
 //!
-//! `--no-default-features` turns off `render`, so neither wgpu nor winit is
-//! compiled. There is no transport yet; this steps the world and reports it.
+//!     --addr  ADDR   listen address           (default 0.0.0.0:8080)
+//!     --world PATH   save file                (default world.ckw)
+//!     --serve DIR    static files at /        (default: none)
+//!     --span  MS     milliseconds per generation (default 250)
+//!
+//! With `--serve .` the browser client and the socket come from one origin, so
+//! no separate static-file server is needed.
 
-use conwayskingdom::net::{Action, ClientMessage, Stamped};
-use conwayskingdom::server::Server;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use conwayskingdom::server::{ws, Server};
 use conwayskingdom::sim::World;
 
-fn main() {
-    let gens: u64 = std::env::args()
-        .nth(1)
-        .and_then(|a| a.parse().ok())
-        .unwrap_or(200);
+fn main() -> std::io::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let mut server = Server::new(World::infinite());
-    let alice = server.join("alice").expect("first player");
-    let bob = server.join("bob").expect("second player");
-    println!("alice = {alice:?}, bob = {bob:?}");
+    let mut addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
+    let mut world_path = PathBuf::from("world.ckw");
+    let mut static_dir: Option<PathBuf> = None;
+    let mut span = Duration::from_millis(250);
 
-    // Stand-in for input arriving over a socket: a blinker each, well apart.
-    for (who, origin) in [(alice, (100, 100)), (bob, (-60, -60))] {
-        server.handle(
-            Some(who),
-            ClientMessage::Act(Stamped {
-                tick: server.tick(),
-                player: who,
-                action: Action::Paint {
-                    cells: (0..3).map(|i| (origin.0, origin.1 + i)).collect(),
-                },
-            }),
-        );
-    }
-
-    println!("{:>6} {:>7} {:>5} {:>18}", "tick", "chunks", "live", "digest");
-    for _ in 0..gens {
-        let out = server.step();
-        if !out.is_empty() {
-            println!("  -> {} message(s) to broadcast", out.len());
-        }
-        if server.tick() % (gens / 10).max(1) == 0 {
-            println!(
-                "{:>6} {:>7} {:>5} {:>18x}",
-                server.tick(),
-                server.world().stored_count(),
-                server.world().live_cells().len(),
-                server.world().digest(),
-            );
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--addr" => addr = args.next().expect("--addr needs a value").parse().expect("bad addr"),
+            "--world" => world_path = args.next().expect("--world needs a path").into(),
+            "--serve" => static_dir = Some(args.next().expect("--serve needs a directory").into()),
+            "--span" => {
+                let ms: u64 = args.next().expect("--span needs milliseconds").parse().expect("bad span");
+                span = Duration::from_millis(ms);
+            }
+            other => panic!("unknown argument {other}"),
         }
     }
-    println!("{} players connected", server.player_count());
+
+    let server = Server::load_or_new(&world_path, World::infinite)?;
+    log::info!(
+        "world at tick {}, {} chunks, {} players",
+        server.tick(),
+        server.world().stored_count(),
+        server.player_count()
+    );
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(ws::serve(
+        server,
+        ws::Config {
+            addr,
+            static_dir,
+            save_path: Some(world_path),
+            save_every: Duration::from_secs(30),
+            generation_span: span,
+        },
+    ))
 }

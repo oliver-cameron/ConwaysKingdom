@@ -14,6 +14,12 @@
 //!
 //! Nothing here may depend on [`crate::render`].
 
+pub mod codec;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod link;
+
+use serde::{Deserialize, Serialize};
+
 use crate::sim::{Coord, PlayerId};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
@@ -29,7 +35,7 @@ pub type Tick = u64;
 /// Something a player did. Deliberately not raw keystrokes: input is resolved
 /// to a world effect before it goes on the wire, so the server validates an
 /// intent rather than replaying a keyboard.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     /// Bring cells to life for this player, at absolute cell coordinates.
     Paint { cells: Vec<(i32, i32)> },
@@ -39,14 +45,14 @@ pub enum Action {
 
 /// An action stamped with who did it and when, which is what makes replay on
 /// another peer produce the same result.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamped {
     pub tick: Tick,
     pub player: PlayerId,
     pub action: Action,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
     Join { name: String },
     /// What this player did, and when they believe it happened.
@@ -59,7 +65,7 @@ pub enum ClientMessage {
     Checkpoint { tick: Tick, digest: u64 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// Accepted, and here is the number your cells will carry.
     Welcome { you: PlayerId, tick: Tick },
