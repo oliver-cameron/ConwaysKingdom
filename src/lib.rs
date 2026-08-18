@@ -23,7 +23,7 @@ pub use client::BattleApp;
 pub use render::run;
 
 // Re-exported so tests and downstream code need not spell out the module path.
-pub use net::{Action, ChunkId, ClientMessage, Player, ServerMessage, Stamped, Tick};
+pub use net::{Action, ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
 #[cfg(feature = "render")]
 pub use render::{
     chunk_instance_layout, create_pipeline, create_pipeline_with, world_bind_group_layout, App,
@@ -31,8 +31,8 @@ pub use render::{
     PipelineDescriptor, SHADER_SOURCE,
 };
 pub use sim::{
-    bits, Cell, Chunk, Coord, Dir, Halo, PlayerId, World, WorldKind, CHUNK_CELLS, CHUNK_N,
-    HALO_N,
+    bits, Cell, Chunk, Coord, Dir, Halo, Player, PlayerId, World, WorldKind, CHUNK_CELLS,
+    CHUNK_N, HALO_N,
 };
 
 #[cfg(all(target_arch = "wasm32", feature = "render"))]

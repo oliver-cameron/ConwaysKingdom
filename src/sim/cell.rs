@@ -1,24 +1,10 @@
 use bytemuck::{Pod, Zeroable};
+
+pub(crate) use super::player::PlayerId;
 use std::ops::{Index, IndexMut};
 
 pub const CHUNK_N: usize = 16;
 pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
-
-/// A player's number. Zero means unowned, so a zeroed cell is dead and
-/// unclaimed. The cell only has five bits for this, hence [`PlayerId::MAX`].
-#[repr(transparent)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable)]
-pub struct PlayerId(pub u8);
-
-impl PlayerId {
-    pub const UNOWNED: Self = Self(0);
-    /// Five bits in the cell, so 1..=31 are real players.
-    pub const MAX: u8 = (1 << bits::PLAYER_WIDTH) - 1;
-
-    pub const fn is_owned(self) -> bool {
-        self.0 != 0
-    }
-}
 
 /// One cell: sixteen bits, little-endian.
 ///

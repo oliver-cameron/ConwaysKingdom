@@ -20,7 +20,9 @@
 //! Nothing in [`crate::render`] may be referenced from here.
 
 mod cell;
+mod player;
 mod world;
 
-pub use cell::{bits, Cell, Chunk, Halo, PlayerId, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use cell::{bits, Cell, Chunk, Halo, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use player::{Player, PlayerId};
 pub use world::{Coord, Dir, World, WorldKind};
