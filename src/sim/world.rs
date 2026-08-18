@@ -99,6 +99,21 @@ impl World {
         }
     }
 
+    /// Adopt a generation number. A birth's owner is seeded from it, so a
+    /// client that simulated at a different tick from the server would make
+    /// different choices even from identical cells.
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
+    /// Chunk coordinates covering a rectangle of cells, inclusive.
+    pub fn chunks_covering(min: (i32, i32), max: (i32, i32)) -> Vec<Coord> {
+        let n = CHUNK_N as i32;
+        let (r0, c0) = (min.0.div_euclid(n), min.1.div_euclid(n));
+        let (r1, c1) = (max.0.div_euclid(n), max.1.div_euclid(n));
+        (r0..=r1).flat_map(|r| (c0..=c1).map(move |c| (r, c))).collect()
+    }
+
     pub fn kind(&self) -> WorldKind {
         match &self.storage {
             Storage::Infinite(_) => WorldKind::Infinite,
