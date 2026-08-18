@@ -13,7 +13,7 @@ path = "src/bin/native.rs"
 [dependencies]
 wgpu = "30"
 winit = "0.29"
-bytemuck = { version = "1.16", features = ["derive"] }
+bytemuck = { version = "1.16", features = ["derive", "extern_crate_alloc", "min_const_generics"] }
 log = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

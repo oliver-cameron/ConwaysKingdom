@@ -117,29 +117,3 @@ impl GpuState {
         self.surface.configure(&self.device, &self.config);
     }
 }
-
-pub struct SizedTexture<const W: u32, const H: u32> {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
-}
-impl<const W: u32, const H: u32> SizedTexture<W, H> {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let size = wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SizedTexture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view;
-        Self { texture, view }
-    }
-}
