@@ -137,17 +137,25 @@ impl Server {
                 }
                 Vec::new()
             }
-            ClientMessage::Checkpoint { tick, digest } => {
-                // Only meaningful for the tick the server is actually on; an
-                // older digest would need a history to compare against.
-                if tick == self.tick && digest != self.world.digest() {
-                    let chunks = from
-                        .and_then(|id| self.subscriptions.get(&id))
-                        .cloned()
-                        .unwrap_or_default();
-                    return vec![ServerMessage::Resync { tick, chunks }];
+            ClientMessage::Checkpoint { tick, chunks } => {
+                // Only meaningful for the tick the server is on; an older one
+                // would need a history of past states to compare against.
+                if tick != self.tick {
+                    return Vec::new();
                 }
-                Vec::new()
+                // Answer with the chunks that disagree, and with any the client
+                // claims to hold that the server no longer does -- an emptied
+                // chunk is dropped here but may still be on the client.
+                let wrong: Vec<_> = chunks
+                    .into_iter()
+                    .filter(|&(coord, digest)| self.world.chunk_digest(coord) != Some(digest))
+                    .map(|(coord, _)| coord)
+                    .collect();
+                if wrong.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![ServerMessage::Resync { tick, chunks: wrong }]
+                }
             }
         }
     }
@@ -292,11 +300,25 @@ mod tests {
     fn a_matching_digest_asks_for_no_resync() {
         let mut s = Server::new(World::infinite());
         let me = s.join("me").unwrap();
-        let digest = s.world().digest();
+        let held: Vec<_> = s
+            .world()
+            .stored()
+            .iter()
+            .map(|&(coord, _)| (coord, s.world().chunk_digest(coord).unwrap()))
+            .collect();
         assert!(s
-            .handle(Some(me), ClientMessage::Checkpoint { tick: 0, digest })
+            .handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: held.clone() })
             .is_empty());
-        let replies = s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, digest: !digest });
-        assert!(matches!(replies.as_slice(), [ServerMessage::Resync { .. }]));
+
+        // One chunk wrong: only that one comes back.
+        let mut bad = held.clone();
+        bad[0].1 = !bad[0].1;
+        let replies = s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: bad });
+        match replies.as_slice() {
+            [ServerMessage::Resync { chunks, .. }] => {
+                assert_eq!(chunks, &[held[0].0], "only the disagreeing chunk");
+            }
+            other => panic!("expected one Resync, got {other:?}"),
+        }
     }
 }
