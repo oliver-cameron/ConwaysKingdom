@@ -17,10 +17,14 @@
 pub mod codec;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
+#[cfg(target_arch = "wasm32")]
+pub mod link_web;
+#[cfg(target_arch = "wasm32")]
+pub use link_web as link;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{Coord, PlayerId};
+use crate::sim::{Cell, Coord, PlayerId, World};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
@@ -61,8 +65,10 @@ pub enum ClientMessage {
     Subscribe { chunks: Vec<ChunkId> },
     /// Chunks the client has dropped and no longer wants updates for.
     Unsubscribe { chunks: Vec<ChunkId> },
-    /// The client's digest at a tick, so the server can spot a desync.
-    Checkpoint { tick: Tick, digest: u64 },
+    /// Per-chunk digests of what the client holds, so the server can spot a
+    /// desync. Per chunk rather than whole-world: a client holds only what its
+    /// viewport covers, so a world digest would always disagree.
+    Checkpoint { tick: Tick, chunks: Vec<(ChunkId, u64)> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,4 +83,21 @@ pub enum ServerMessage {
     ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
     /// The client's copy of these chunks is wrong; here they are again.
     Resync { tick: Tick, chunks: Vec<ChunkId> },
+}
+
+/// Apply an action to a world.
+///
+/// Shared deliberately: the client predicts by applying actions locally and the
+/// server applies the same ones authoritatively, so two implementations of this
+/// would be two ways to disagree.
+pub fn apply(world: &mut World, stamped: &Stamped) {
+    let cells: &[(i32, i32)] = match &stamped.action {
+        Action::Paint { cells } | Action::Erase { cells } => cells,
+    };
+    let alive = matches!(stamped.action, Action::Paint { .. });
+    let value = if alive { Cell::alive(stamped.player) } else { Cell::DEAD };
+
+    for &(row, col) in cells {
+        world.set_cell_at(row, col, value);
+    }
 }
