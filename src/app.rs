@@ -62,9 +62,18 @@ pub async fn run<A: App>() {
     let mut app = A::init(&gpu);
     let mut last_frame = now_secs();
 
+    // Kick off the redraw chain. From here each frame asks for the next one,
+    // so the loop is paced by exactly one scheduler.
+    window.request_redraw();
+
     event_loop
         .run(move |event, elwt| {
-            elwt.set_control_flow(ControlFlow::Poll);
+            // Wait, not Poll. `request_redraw` already maps to
+            // requestAnimationFrame on the web, whereas Poll schedules a
+            // second loop through requestIdleCallback -- which winit's own
+            // docs note "might be affected by browser throttling". Running
+            // both means two schedulers competing to drive one renderer.
+            elwt.set_control_flow(ControlFlow::Wait);
 
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
@@ -104,10 +113,12 @@ pub async fn run<A: App>() {
                                 elwt.exit();
                             }
                         }
+
+                        // Ask for the next frame now that this one is done.
+                        window.request_redraw();
                     }
                     _ => {}
                 },
-                Event::AboutToWait => window.request_redraw(),
                 _ => {}
             }
         })

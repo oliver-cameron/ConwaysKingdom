@@ -30,11 +30,11 @@ pub enum Draw {
 pub struct DrawCall<'a> {
     pub pipeline: &'a wgpu::RenderPipeline,
     /// Bind group `i` in this slice is bound at `@group(i)`.
-    pub bind_groups: &'a [&'a wgpu::BindGroup],
+    pub bind_groups: &'a [wgpu::BindGroup],
     /// Vertex buffer `i` in this slice is bound at slot `i`, matching
     /// the order of `PipelineDescriptor::vertex_buffers` used to build
     /// `pipeline`.
-    pub vertex_buffers: &'a [&'a wgpu::Buffer],
+    pub vertex_buffers: &'a [wgpu::Buffer],
     pub index_buffer: Option<IndexBufferBinding<'a>>,
     pub draw: Draw,
 }
@@ -123,7 +123,7 @@ impl Frame {
                 pass.set_pipeline(call.pipeline);
 
                 for (i, bind_group) in call.bind_groups.iter().enumerate() {
-                    pass.set_bind_group(i as u32, *bind_group, &[]);
+                    pass.set_bind_group(i as u32, bind_group, &[]);
                 }
                 for (i, buffer) in call.vertex_buffers.iter().enumerate() {
                     pass.set_vertex_buffer(i as u32, buffer.slice(..));
