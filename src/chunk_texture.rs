@@ -14,7 +14,22 @@ pub struct ChunkTexture {
 impl ChunkTexture {
     pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Uint;
 
+    /// Layers to allocate. This is the guaranteed floor for
+    /// `max_texture_array_layers`, and it is allocated up front because an
+    /// array texture cannot be resized. Residency management arrives with
+    /// chunk loading; for now only layer 0 is used.
+    ///
+    /// It must be greater than 1. The GL backend picks its texture target from
+    /// the *texture* descriptor, not the view: `depth_or_array_layers == 1`
+    /// makes it a `TEXTURE_2D`, and a `D2Array` view over that fails with
+    /// "wgpu-hal heuristics assumed that the view dimension will be equal to
+    /// `D2` rather than `D2Array`". See wgpu-hal `gles/mod.rs`,
+    /// `get_info_from_desc`.
+    pub const LAYER_BUDGET: u32 = 256;
+
     pub fn new(device: &wgpu::Device, layers: u32) -> Self {
+        let layers = layers
+            .clamp(2, device.limits().max_texture_array_layers.max(2));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("chunk store"),
             size: wgpu::Extent3d {

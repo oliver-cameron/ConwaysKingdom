@@ -20,7 +20,7 @@ log = "0.4"
 wgpu = { version = "30", features = ["webgl"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "Window", "HtmlCanvasElement", "Performance"] }
+web-sys = { version = "0.3", features = ["Document", "Element", "Window", "HtmlCanvasElement", "Performance"] }
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 
@@ -32,3 +32,6 @@ pollster = "0.3"
 opt-level = "s"
 lto = true
 panic = "abort"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
