@@ -8,7 +8,7 @@ mod pipeline;
 mod world;
 
 pub use app::{run, App};
-pub use cell::{Cell, Chunk, CHUNK_CELLS, CHUNK_N};
+pub use cell::{Cell, Chunk, Halo, CHUNK_CELLS, CHUNK_N, HALO_N};
 pub use chunk_texture::ChunkTexture;
 pub use frame::{Draw, DrawCall, Frame, FrameAcquire, IndexBufferBinding};
 pub use game::{
@@ -17,7 +17,7 @@ pub use game::{
 };
 pub use gpu::GpuState;
 pub use pipeline::{create_pipeline, create_pipeline_with, PipelineDescriptor};
-pub use world::World;
+pub use world::{ChunkId, Dir, Links, Neighbour, World, WorldKind};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

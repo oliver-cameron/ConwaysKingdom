@@ -1,20 +1,28 @@
+use std::collections::HashMap;
+
 use bytemuck::{Pod, Zeroable};
 
 use crate::app::App;
-use crate::cell::CHUNK_N;
+use crate::cell::{Chunk, CHUNK_N};
 use crate::chunk_texture::ChunkTexture;
 use crate::frame::{Draw, DrawCall};
 use crate::gpu::GpuState;
 use crate::pipeline::{create_pipeline, PipelineDescriptor};
-use crate::world::World;
+use crate::world::{ChunkId, Neighbour, World};
 
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
 
-/// Fraction of the shorter viewport axis the chunk should occupy. Fixed for
-/// now — pan and zoom are handled by the camera uniform but not yet driven by
-/// input.
-const FIT_MARGIN: f32 = 0.8;
+/// Upper bound on chunks drawn in one frame. Sizes the instance buffer.
+const MAX_INSTANCES: usize = 1024;
+
+/// Cells of empty space to keep around the live pattern when framing.
+const VIEW_PADDING: f32 = 24.0;
+
+/// Layer 0 is permanently zeroed and shared by every chunk with no cells, so
+/// Idle slots can be drawn (showing the world's structure) without each one
+/// consuming a layer of its own.
+const DEAD_LAYER: u32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -22,7 +30,8 @@ struct CameraUniform {
     origin: [f32; 2],
     viewport: [f32; 2],
     zoom: f32,
-    _pad: [f32; 3],
+    chunk_n: f32,
+    _pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -104,35 +113,120 @@ pub struct BattleApp {
     camera_buffer: wgpu::Buffer,
     chunks: ChunkTexture,
     world: World,
-    instance_count: u32,
+    /// Slot id -> array layer. Assigned on first sight and kept; eviction
+    /// arrives with a residency cache, once worlds outgrow the layer budget.
+    layers: HashMap<ChunkId, u32>,
+    next_layer: u32,
+    instances: Vec<Instance>,
 }
 
 impl BattleApp {
-    /// Centre the single chunk in the viewport at a zoom that fits it.
+    /// Frame the live pattern, so the view follows it as it travels rather
+    /// than shrinking towards nothing as the world grows.
     fn write_camera(&self, gpu: &GpuState) {
-        let (w, h) = (gpu.size.0 as f32, gpu.size.1 as f32);
-        let span = CHUNK_N as f32;
-        let zoom = (FIT_MARGIN * w.min(h) / span).max(1.0);
-        // Put the chunk's centre at the viewport's centre.
-        let origin = [span * 0.5 - w / (2.0 * zoom), span * 0.5 - h / (2.0 * zoom)];
+        let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
+
+        let live = self.world.live_cells();
+        let (min_row, min_col, max_row, max_col) = if live.is_empty() {
+            (0.0, 0.0, CHUNK_N as f32, CHUNK_N as f32)
+        } else {
+            let (mut r0, mut c0, mut r1, mut c1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for &(r, c) in &live {
+                r0 = r0.min(r as f32);
+                c0 = c0.min(c as f32);
+                r1 = r1.max(r as f32 + 1.0);
+                c1 = c1.max(c as f32 + 1.0);
+            }
+            (r0, c0, r1, c1)
+        };
+
+        let span_x = (max_col - min_col) + 2.0 * VIEW_PADDING;
+        let span_y = (max_row - min_row) + 2.0 * VIEW_PADDING;
+        // Never below one pixel per cell: point sampling drops sparse cells
+        // under that, which is the aliasing floor the design settles on.
+        let zoom = (vw / span_x).min(vh / span_y).clamp(1.0, 64.0);
+
+        let centre = ((min_col + max_col) * 0.5, (min_row + max_row) * 0.5);
+        let origin = [
+            centre.0 - vw / (2.0 * zoom),
+            centre.1 - vh / (2.0 * zoom),
+        ];
 
         gpu.queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::bytes_of(&CameraUniform {
                 origin,
-                viewport: [w, h],
+                viewport: [vw, vh],
                 zoom,
-                _pad: [0.0; 3],
+                chunk_n: CHUNK_N as f32,
+                _pad: [0.0; 2],
             }),
+        );
+    }
+
+    /// Push every chunk the world currently holds to the GPU and rebuild the
+    /// instance list. Called only when the world reports itself dirty.
+    fn sync_world(&mut self, gpu: &GpuState) {
+        self.instances.clear();
+
+        for id in 0..self.world.slot_count() {
+            let slot = self.world.slot(id);
+            let (row, col) = self.world.loc(id);
+
+            let layer = match slot {
+                // Placeholders have no position worth drawing.
+                Neighbour::Unloaded => continue,
+                Neighbour::Idle { .. } => DEAD_LAYER,
+                Neighbour::CellChunk { cells, .. } => {
+                    let layer = match self.layers.get(&id) {
+                        Some(&l) => l,
+                        None => {
+                            if self.next_layer >= self.chunks.layers {
+                                log::warn!("layer budget exhausted; chunk {id} not drawn");
+                                continue;
+                            }
+                            let l = self.next_layer;
+                            self.next_layer += 1;
+                            self.layers.insert(id, l);
+                            l
+                        }
+                    };
+                    self.chunks.upload(&gpu.queue, layer, cells);
+                    layer
+                }
+            };
+
+            if self.instances.len() == MAX_INSTANCES {
+                log::warn!("instance budget exhausted; some chunks not drawn");
+                break;
+            }
+            self.instances.push(Instance {
+                rect: [
+                    (col * CHUNK_N as i32) as f32,
+                    (row * CHUNK_N as i32) as f32,
+                    CHUNK_N as f32,
+                    CHUNK_N as f32,
+                ],
+                meta: [layer, 0, 0, 0],
+            });
+        }
+
+        gpu.queue.write_buffer(
+            &self.vertex_buffers[0],
+            0,
+            bytemuck::cast_slice(&self.instances),
         );
     }
 }
 
 impl App for BattleApp {
     fn init(gpu: &GpuState) -> Self {
-        let world = World::new();
+        let world = World::infinite();
         let chunks = ChunkTexture::new(&gpu.device, ChunkTexture::LAYER_BUDGET);
+
+        // Layer 0 stays zeroed for the lifetime of the app.
+        chunks.upload(&gpu.queue, DEAD_LAYER, &Chunk::zeroed());
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
@@ -158,45 +252,39 @@ impl App for BattleApp {
             ],
         });
 
-        // One instance: the single chunk, occupying cells [0, 16) on both axes.
-        let instances = [Instance {
-            rect: [0.0, 0.0, CHUNK_N as f32, CHUNK_N as f32],
-            meta: [0, 0, 0, 0],
-        }];
         let instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("chunk instances"),
-            size: size_of_val(&instances) as u64,
+            size: (MAX_INSTANCES * size_of::<Instance>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        gpu.queue
-            .write_buffer(&instance_buffer, 0, bytemuck::cast_slice(&instances));
-
-        let instance_layout = chunk_instance_layout();
 
         let pipeline = create_pipeline(
             gpu,
             &PipelineDescriptor {
                 label: "chunk pipeline",
                 shader_source: SHADER_SOURCE,
-                vertex_buffers: &[instance_layout],
+                vertex_buffers: &[chunk_instance_layout()],
                 bind_group_layouts: &[Some(&bgl)],
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
         );
 
-        let app = Self {
+        let mut app = Self {
             pipeline,
             bind_groups: vec![bind_group],
             vertex_buffers: vec![instance_buffer],
             camera_buffer,
             chunks,
             world,
-            instance_count: instances.len() as u32,
+            layers: HashMap::new(),
+            next_layer: DEAD_LAYER + 1,
+            instances: Vec::with_capacity(MAX_INSTANCES),
         };
+        app.sync_world(gpu);
+        app.world.dirty = false;
         app.write_camera(gpu);
-        app.chunks.upload(&gpu.queue, 0, app.world.chunk());
         app
     }
 
@@ -207,8 +295,9 @@ impl App for BattleApp {
     fn update(&mut self, gpu: &GpuState, dt: f32) {
         self.world.update(dt, GENERATION_SPAN);
         if self.world.dirty {
-            self.chunks.upload(&gpu.queue, 0, self.world.chunk());
+            self.sync_world(gpu);
             self.world.dirty = false;
+            self.write_camera(gpu);
         }
     }
 
@@ -220,7 +309,7 @@ impl App for BattleApp {
             index_buffer: None,
             draw: Draw::Vertices {
                 vertices: 0..4,
-                instances: 0..self.instance_count,
+                instances: 0..self.instances.len() as u32,
             },
         }]
     }
