@@ -1,6 +1,8 @@
 use bytemuck::{Pod, Zeroable};
 
-pub(crate) use super::player::PlayerId;
+use super::dir::Dir;
+use super::player::PlayerId;
+use super::rule::{next_cell, Neighbours};
 use std::ops::{Index, IndexMut};
 
 pub const CHUNK_N: usize = 16;
@@ -70,7 +72,13 @@ impl Cell {
         u16::from_le_bytes(self.0)
     }
 
+    /// A live cell belonging to `player`.
+    ///
+    /// Player zero means unowned, and unowned life would have nobody to
+    /// attribute a birth to, so the invariant is checked here rather than
+    /// discovered later as a cell nobody can claim.
     pub const fn alive(player: PlayerId) -> Self {
+        assert!(player.is_owned(), "a live cell must have a non-zero player");
         Self::from_bits(bits::ALIVE).with_player(player)
     }
 
@@ -214,54 +222,27 @@ impl Halo {
         }
     }
 
-    /// The player holding a majority of the live cells around a halo position.
-    /// Only consulted on a birth, so the tally is not paid for per cell.
-    fn dominant_player(&self, hr: usize, hc: usize) -> PlayerId {
-        let mut tally = [0u16; (PlayerId::MAX as usize) + 1];
-        for dr in 0..3 {
-            for dc in 0..3 {
-                if dr == 1 && dc == 1 {
-                    continue;
-                }
-                let n = self.get(hr + dr - 1, hc + dc - 1);
-                if n.is_alive() {
-                    tally[n.player().0 as usize] += 1;
-                }
-            }
-        }
-        tally
-            .iter()
-            .enumerate()
-            .max_by_key(|&(player, &count)| (count, std::cmp::Reverse(player)))
-            .map(|(player, _)| PlayerId(player as u8))
-            .unwrap_or(PlayerId::UNOWNED)
-    }
-
     pub fn step_into(&self, next: &mut Chunk) {
         for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 let (hr, hc) = (row + 1, col + 1);
-                let cur = self.get(hr, hc);
-
-                let mut alive = 0u32;
-                for dr in 0..3 {
-                    for dc in 0..3 {
-                        if dr == 1 && dc == 1 {
-                            continue;
-                        }
-                        if self.get(hr + dr - 1, hc + dc - 1).is_alive() {
-                            alive += 1;
-                        }
-                    }
-                }
-
-                next[(row, col)] = match (cur.is_alive(), alive) {
-                    (true, 2) | (true, 3) => cur,
-                    (false, 3) => Cell::alive(self.dominant_player(hr, hc)),
-                    _ => Cell::DEAD,
-                };
+                next[(row, col)] = next_cell(self.get(hr, hc), &self.neighbours(hr, hc));
             }
         }
+    }
+
+    /// The eight cells around a halo position, in `Dir::ALL` order.
+    #[inline]
+    fn neighbours(&self, hr: usize, hc: usize) -> Neighbours {
+        let mut out = [Cell::DEAD; 8];
+        for (i, dir) in Dir::ALL.iter().enumerate() {
+            let (dr, dc) = dir.delta();
+            out[i] = self.get(
+                (hr as i32 + dr) as usize,
+                (hc as i32 + dc) as usize,
+            );
+        }
+        out
     }
 }
 
