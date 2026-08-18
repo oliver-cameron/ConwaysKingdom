@@ -44,27 +44,49 @@ pub const fn mix(seed: u64, value: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Conway's rules.
-///
-/// Survival and death change the alive bit and nothing else. A birth also sets
-/// the owner, because it has none to keep and a live cell must have one.
+impl Cell {
+    /// Advance this cell one generation.
+    ///
+    /// The outer match is where behaviour that varies by cell type belongs: add
+    /// an arm that inspects [`Cell::meta`] and the default falls through to
+    /// Conway, so a new type costs one arm and disturbs nothing else.
+    #[inline]
+    pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
+        match self.meta() {
+            // No special types yet; everything follows the ordinary rules.
+            _ => self.conway(neighbours, seed),
+        }
+    }
+
+    /// Conway's rules.
+    ///
+    /// Survival and death change the alive bit and nothing else. A birth also
+    /// sets the owner, because it has none to keep and a live cell must have
+    /// one.
+    #[inline]
+    pub fn conway(self, neighbours: &Neighbours, seed: u64) -> Cell {
+        debug_assert!(
+            !self.is_alive() || self.player().is_owned(),
+            "a live cell must have a non-zero player"
+        );
+
+        let live = neighbours.iter().filter(|n| n.is_alive()).count();
+
+        match (self.is_alive(), live) {
+            // Survives. Only the alive bit is in play, and it is already set.
+            (true, 2 | 3) => self,
+            // Born. Keeps whatever metadata was left behind, gains an owner.
+            (false, 3) => self.with_alive(true).with_player(parent(neighbours, seed)),
+            // Dies, or stays dead. Owner and metadata are left as they were.
+            _ => self.with_alive(false),
+        }
+    }
+}
+
+/// Free-function form, so [`RuleFn`] can point at the default rule.
 #[inline]
 pub fn next_cell(cell: Cell, neighbours: &Neighbours, seed: u64) -> Cell {
-    debug_assert!(
-        !cell.is_alive() || cell.player().is_owned(),
-        "a live cell must have a non-zero player"
-    );
-
-    let live = neighbours.iter().filter(|n| n.is_alive()).count();
-
-    match (cell.is_alive(), live) {
-        // Survives. Only the alive bit is in play, and it is already set.
-        (true, 2) | (true, 3) => cell,
-        // Born. Keeps whatever metadata was left behind, gains an owner.
-        (false, 3) => cell.with_alive(true).with_player(parent(neighbours, seed)),
-        // Dies, or stays dead. Owner and metadata are left as they were.
-        _ => cell.with_alive(false),
-    }
+    cell.update(neighbours, seed)
 }
 
 /// Pick one of the three parents to own the birth.

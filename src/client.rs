@@ -13,9 +13,7 @@ use crate::render::context::{Draw, DrawCall, GpuState};
 use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
 use crate::sim::{World, CHUNK_N};
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::net::link::Link;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::net::ClientMessage;
 
 /// Seconds of wall clock per generation.
@@ -70,7 +68,6 @@ pub struct BattleApp {
     /// The server connection, if there is one. A client with no link still
     /// simulates: the rules are deterministic, so offline is a game of one
     /// rather than a broken game.
-    #[cfg(not(target_arch = "wasm32"))]
     link: Option<Link>,
     /// A click waiting to be resolved to a cell. Input callbacks are not given
     /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
@@ -171,8 +168,7 @@ impl App for BattleApp {
             world,
             cursor: (0.0, 0.0),
             pending_click: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            link: connect_from_args(),
+            link: open_link(),
         };
         app.world.dirty = false;
         app.write_camera(gpu);
@@ -184,7 +180,6 @@ impl App for BattleApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(link) = &mut self.link {
             for msg in link.drain() {
                 // Received and logged. Applying them needs the client to
@@ -246,9 +241,21 @@ impl App for BattleApp {
     }
 }
 
-/// Open the link the launcher asked for, and announce ourselves.
+/// Open a connection, if there is one to open.
+///
+/// On the web this needs no configuration: the page came from the server, so
+/// the server is wherever the page came from. `wss` when the page is `https`,
+/// or the browser blocks it as mixed content.
+#[cfg(target_arch = "wasm32")]
+fn open_link() -> Option<Link> {
+    let link = Link::connect_to_origin("/ws")?;
+    link.send(ClientMessage::Join { name: "web".into() });
+    Some(link)
+}
+
+/// On native there is no page to have come from, so the URL is an argument.
 #[cfg(not(target_arch = "wasm32"))]
-fn connect_from_args() -> Option<Link> {
+fn open_link() -> Option<Link> {
     let (url, name) = CONNECTION.lock().unwrap().take()?;
     let link = Link::connect(url?);
     link.send(ClientMessage::Join { name });
