@@ -64,33 +64,64 @@ impl Chunk {
         self[(row as usize, col as usize)]
     }
 
-    fn live_neighbours(&self, row: usize, col: usize) -> u32 {
-        let mut n = 0;
-        for dr in -1..=1i32 {
-            for dc in -1..=1i32 {
-                if dr == 0 && dc == 0 {
-                    continue;
-                }
-                if self.get(row as i32 + dr, col as i32 + dc).is_alive() {
-                    n += 1;
-                }
-            }
-        }
-        n
+    /// Conway's rules for an isolated chunk: every neighbour unloaded, so the
+    /// border reads as dead. Equivalent to stepping a halo with a dead border.
+    pub fn step(&self, next: &mut Chunk) {
+        let mut halo = Halo::dead();
+        halo.set_centre(self);
+        halo.step_into(next);
+    }
+}
+
+pub const HALO_N: usize = CHUNK_N + 2;
+
+/// A chunk plus a one-cell border copied from its eight neighbours.
+///
+/// Gathering into this first means the generation step reads one flat grid
+/// with no bounds checks and no knowledge of chunk topology — and it sidesteps
+/// the borrow problem, since the halo is owned data built from shared borrows
+/// before anything is mutated.
+#[derive(Clone, Copy)]
+pub struct Halo {
+    cells: [Cell; HALO_N * HALO_N],
+}
+
+impl Halo {
+    pub fn dead() -> Self {
+        Self { cells: [Cell::DEAD; HALO_N * HALO_N] }
     }
 
-    /// The player owning a majority of this cell's live neighbours. Used to
-    /// attribute a birth; ties go to the lowest player id.
-    fn dominant_player(&self, row: usize, col: usize) -> u8 {
-        let mut tally = [0u8; 256];
-        for dr in -1..=1i32 {
-            for dc in -1..=1i32 {
-                if dr == 0 && dc == 0 {
+    #[inline]
+    pub fn get(&self, row: usize, col: usize) -> Cell {
+        self.cells[row * HALO_N + col]
+    }
+
+    #[inline]
+    pub fn set(&mut self, row: usize, col: usize, cell: Cell) {
+        self.cells[row * HALO_N + col] = cell;
+    }
+
+    /// Copy a chunk's cells into the halo's interior, leaving the border alone.
+    pub fn set_centre(&mut self, chunk: &Chunk) {
+        for row in 0..CHUNK_N {
+            for col in 0..CHUNK_N {
+                self.set(row + 1, col + 1, chunk[(row, col)]);
+            }
+        }
+    }
+
+    /// The player holding a majority of the live cells around a halo position.
+    /// Only consulted on a birth, so the tally is not paid for per cell.
+    fn dominant_player(&self, hr: usize, hc: usize) -> u8 {
+        let mut tally = [0u16; 256];
+        for dr in 0..3 {
+            for dc in 0..3 {
+                if dr == 1 && dc == 1 {
                     continue;
                 }
-                let c = self.get(row as i32 + dr, col as i32 + dc);
-                if c.is_alive() {
-                    tally[c.player as usize] += 1;
+                let n = self.get(hr + dr - 1, hc + dc - 1);
+                if n.is_alive() {
+                    tally[n.player as usize] += 1;
                 }
             }
         }
@@ -102,16 +133,27 @@ impl Chunk {
             .unwrap_or(0)
     }
 
-    /// Conway's rules, writing into `next`. Reads only `self`, so the two
-    /// buffers never alias.
-    pub fn step(&self, next: &mut Chunk) {
+    pub fn step_into(&self, next: &mut Chunk) {
         for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
-                let cur = self[(row, col)];
-                let n = self.live_neighbours(row, col);
-                next[(row, col)] = match (cur.is_alive(), n) {
+                let (hr, hc) = (row + 1, col + 1);
+                let cur = self.get(hr, hc);
+
+                let mut alive = 0u32;
+                for dr in 0..3 {
+                    for dc in 0..3 {
+                        if dr == 1 && dc == 1 {
+                            continue;
+                        }
+                        if self.get(hr + dr - 1, hc + dc - 1).is_alive() {
+                            alive += 1;
+                        }
+                    }
+                }
+
+                next[(row, col)] = match (cur.is_alive(), alive) {
                     (true, 2) | (true, 3) => Cell { age: cur.age.saturating_add(1), ..cur },
-                    (false, 3) => Cell::alive(self.dominant_player(row, col)),
+                    (false, 3) => Cell::alive(self.dominant_player(hr, hc)),
                     _ => Cell::DEAD,
                 };
             }
@@ -164,13 +206,19 @@ mod tests {
     }
 
     #[test]
-    fn edges_and_corners_do_not_panic() {
-        let c = Chunk::zeroed();
-        for r in 0..CHUNK_N {
-            for k in 0..CHUNK_N {
-                assert_eq!(c.live_neighbours(r, k), 0);
-            }
+    fn every_edge_and_corner_steps_without_panicking() {
+        // Life on all four edges and all four corners: the cases the old
+        // match-on-(dx, dy, x, y) fell through to an out-of-bounds index.
+        let n = CHUNK_N - 1;
+        let mut c = Chunk::zeroed();
+        for i in 0..CHUNK_N {
+            c[(0, i)] = Cell::alive(1);
+            c[(n, i)] = Cell::alive(1);
+            c[(i, 0)] = Cell::alive(1);
+            c[(i, n)] = Cell::alive(1);
         }
+        let mut next = Chunk::zeroed();
+        c.step(&mut next);
     }
 
     #[test]
@@ -178,7 +226,12 @@ mod tests {
         let c = seed(&[(0, 0)]);
         assert_eq!(c.get(-1, -1), Cell::DEAD);
         assert_eq!(c.get(CHUNK_N as i32, 5), Cell::DEAD);
-        assert_eq!(c.live_neighbours(0, 0), 0);
+
+        // A lone corner cell has no live neighbours, so it dies. If the border
+        // read as anything but dead this would survive.
+        let mut next = Chunk::zeroed();
+        c.step(&mut next);
+        assert!(!next[(0, 0)].is_alive());
     }
 
     #[test]

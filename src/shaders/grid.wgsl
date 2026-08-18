@@ -6,8 +6,8 @@ struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
     viewport: vec2<f32>,   // framebuffer size in physical pixels
     zoom:     f32,         // screen pixels per cell
-    _pad0:    f32,
-    _pad1:    vec2<f32>,
+    chunk_n:  f32,         // cells per chunk edge
+    _pad:     vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
@@ -46,6 +46,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let cell = textureLoad(chunks, coord, i32(in.layer), 0);
     // R = kind (0 is dead), G = player, B = age, A = flags.
     if cell.r == 0u {
+        // Tint the outermost ring of dead cells so chunk boundaries are
+        // visible: that is what makes chunk loading something you can watch.
+        let n = cam.chunk_n;
+        if in.local.x < 1.0 || in.local.y < 1.0
+            || in.local.x >= n - 1.0 || in.local.y >= n - 1.0 {
+            return vec4<f32>(0.06, 0.06, 0.09, 1.0);     // chunk grid
+        }
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);            // dead: black
     }
     return vec4<f32>(1.0, 0.85, 0.1, 1.0);               // alive: yellow
