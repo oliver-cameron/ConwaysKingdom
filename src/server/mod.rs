@@ -9,6 +9,8 @@
 //! bytes is somebody else's problem.
 
 pub mod persist;
+#[cfg(feature = "server")]
+pub mod ws;
 
 use std::collections::HashMap;
 use std::path::Path;

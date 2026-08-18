@@ -5,13 +5,17 @@
 //! The network layer names players, it does not define them.
 
 use bytemuck::{Pod, Zeroable};
+use serde::{Deserialize, Serialize};
 
 use super::cell::bits;
 
 /// A player's number. Zero means unowned, so a zeroed cell is dead and
 /// unclaimed. The cell only has five bits for this, hence [`PlayerId::MAX`].
 #[repr(transparent)]
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable)]
+#[derive(
+    Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable, Serialize,
+    Deserialize,
+)]
 pub struct PlayerId(pub u8);
 
 impl PlayerId {
@@ -29,7 +33,7 @@ impl PlayerId {
 /// The id is the same number a cell stores, so a cell's owner is looked up
 /// without translation — which also means the world can only distinguish
 /// [`PlayerId::MAX`] of them at once.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Player {
     pub id: PlayerId,
     pub name: String,
