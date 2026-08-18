@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 
-use crate::net::{Action, ChunkId, ClientMessage, Player, ServerMessage, Stamped, Tick};
-use crate::sim::{Cell, PlayerId, World, CHUNK_N};
+use crate::net::{Action, ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
+use crate::sim::{Cell, Player, PlayerId, World, CHUNK_N};
 
 pub struct Server {
     world: World,

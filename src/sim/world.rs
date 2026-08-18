@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use super::cell::{Cell, Chunk, Halo, PlayerId, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::player::PlayerId;
 
 /// Never advance more than this many generations in a single frame.
 const MAX_CATCHUP_STEPS: u32 = 8;
