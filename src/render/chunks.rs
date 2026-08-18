@@ -18,9 +18,12 @@ pub const MAX_INSTANCES: usize = 1024;
 
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
-/// `Rgba8Uint` rather than a narrower format because it is the narrowest that
-/// is also storage-capable, so moving the simulation to a compute shader later
-/// stays a format change rather than a storage rewrite.
+/// `R16Uint`: one 16-bit integer per cell, matching `Cell`'s bit layout, so the
+/// shader unpacks fields with shifts rather than reading channels.
+///
+/// Note this is *not* storage-capable — no 1- or 2-byte format is; the smallest
+/// are `Rgba8Uint` and `R32Uint`. Moving the simulation to a compute shader
+/// would therefore mean widening the cell, not just changing a constant.
 pub struct ChunkTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -28,7 +31,7 @@ pub struct ChunkTexture {
 }
 
 impl ChunkTexture {
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Uint;
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Uint;
 
     /// Layers to allocate, the guaranteed floor for `max_texture_array_layers`.
     /// Allocated up front because an array texture cannot be resized.
