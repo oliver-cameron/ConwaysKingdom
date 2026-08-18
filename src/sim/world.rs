@@ -411,6 +411,19 @@ impl World {
         Some(h)
     }
 
+    /// Bounding box of all live cells, in absolute cell coordinates, or None
+    /// if nothing is alive. Answers "is there anything here, and where".
+    pub fn live_bounds(&self) -> Option<((i32, i32), (i32, i32))> {
+        let mut it = self.live_cells().into_iter();
+        let first = it.next()?;
+        let (mut lo, mut hi) = (first, first);
+        for (r, c) in it {
+            lo = (lo.0.min(r), lo.1.min(c));
+            hi = (hi.0.max(r), hi.1.max(c));
+        }
+        Some((lo, hi))
+    }
+
     /// Live cells in absolute cell coordinates, sorted.
     pub fn live_cells(&self) -> Vec<(i32, i32)> {
         let mut out = Vec::new();
