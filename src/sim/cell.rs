@@ -255,6 +255,10 @@ impl Index<(usize, usize)> for Chunk {
     type Output = Cell;
     #[inline]
     fn index(&self, (row, col): (usize, usize)) -> &Cell {
+        // Without this, a column past the edge lands in the next row instead
+        // of panicking: row * CHUNK_N + col stays inside the array, so the
+        // write silently aliases another cell.
+        debug_assert!(row < CHUNK_N && col < CHUNK_N, "({row}, {col}) is outside the chunk");
         &self.cells[row * CHUNK_N + col]
     }
 }
@@ -262,6 +266,7 @@ impl Index<(usize, usize)> for Chunk {
 impl IndexMut<(usize, usize)> for Chunk {
     #[inline]
     fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut Cell {
+        debug_assert!(row < CHUNK_N && col < CHUNK_N, "({row}, {col}) is outside the chunk");
         &mut self.cells[row * CHUNK_N + col]
     }
 }

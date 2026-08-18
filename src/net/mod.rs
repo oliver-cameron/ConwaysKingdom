@@ -24,7 +24,7 @@ pub use link_web as link;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{Cell, Coord, PlayerId, World, CHUNK_N};
+use crate::sim::{Cell, Coord, PlayerId, World};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
@@ -65,8 +65,10 @@ pub enum ClientMessage {
     Subscribe { chunks: Vec<ChunkId> },
     /// Chunks the client has dropped and no longer wants updates for.
     Unsubscribe { chunks: Vec<ChunkId> },
-    /// The client's digest at a tick, so the server can spot a desync.
-    Checkpoint { tick: Tick, digest: u64 },
+    /// Per-chunk digests of what the client holds, so the server can spot a
+    /// desync. Per chunk rather than whole-world: a client holds only what its
+    /// viewport covers, so a world digest would always disagree.
+    Checkpoint { tick: Tick, chunks: Vec<(ChunkId, u64)> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,10 +97,7 @@ pub fn apply(world: &mut World, stamped: &Stamped) {
     let alive = matches!(stamped.action, Action::Paint { .. });
     let value = if alive { Cell::alive(stamped.player) } else { Cell::DEAD };
 
-    let n = CHUNK_N as i32;
     for &(row, col) in cells {
-        let chunk = (row.div_euclid(n), col.div_euclid(n));
-        let local = (row.rem_euclid(n) as usize, col.rem_euclid(n) as usize);
-        world.set_cell(chunk, local, value);
+        world.set_cell_at(row, col, value);
     }
 }

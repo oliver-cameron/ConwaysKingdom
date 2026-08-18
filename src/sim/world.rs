@@ -71,21 +71,20 @@ impl World {
 
     /// The world the app and the server open with.
     ///
-    /// A blinker at the origin and a glider two chunks away travelling off in
-    /// the other direction. The blinker is the point: a glider leaves, so a
-    /// client joining a server that has been up a while would arrive at an
-    /// empty view and have nothing to tell a working join from a broken one.
+    /// A Gosper glider gun at the origin. It stays put, so there is always
+    /// something to join to, and it emits a glider every thirty generations,
+    /// so the trail of them says how long the server has been up.
+    ///
+    /// That second property is the point. A still life or an oscillator looks
+    /// identical whether it arrived from the server or the client regenerated
+    /// it locally, so it cannot tell a working join from a broken one. The
+    /// length of the glider trail is not something a client starting from
+    /// nothing can invent.
     pub fn demo() -> Self {
         let mut w = Self::infinite_empty();
-        // Blinker, centred on the camera's starting position.
-        let mid = (CHUNK_N / 2) as i32;
-        for d in -1..=1 {
-            w.set_cell((0, 0), (mid as usize, (mid + d) as usize), Cell::alive(PlayerId(1)));
+        for (row, col) in GOSPER_GUN {
+            w.set_cell_at(row, col, Cell::alive(PlayerId(1)));
         }
-        // Glider, far enough away that the two never interact.
-        let mut glider = Chunk::dead();
-        seed_glider(&mut glider, 2, 2, PlayerId(2));
-        w.put_chunk((2, 2), glider);
         w.generation = 0;
         w
     }
@@ -190,6 +189,17 @@ impl World {
             c[(row, col)] = cell;
             self.dirty = true;
         }
+    }
+
+    /// Write one cell addressed in absolute cell coordinates, splitting it
+    /// into chunk and offset. Callers dealing in world positions should use
+    /// this rather than doing the arithmetic themselves — getting it wrong
+    /// puts the cell in the wrong place rather than failing.
+    pub fn set_cell_at(&mut self, row: i32, col: i32, cell: Cell) {
+        let n = CHUNK_N as i32;
+        let chunk = (row.div_euclid(n), col.div_euclid(n));
+        let local = (row.rem_euclid(n) as usize, col.rem_euclid(n) as usize);
+        self.set_cell(chunk, local, cell);
     }
 
     /// Make sure a coordinate has storage. A no-op on a torus, where every
@@ -384,6 +394,23 @@ impl World {
         self
     }
 
+    /// A digest of one chunk, for comparing a partial view against the server.
+    ///
+    /// A whole-world digest is useless to a client, which holds only what its
+    /// viewport covers and would therefore always disagree. Per chunk, a
+    /// client can check exactly what it has.
+    pub fn chunk_digest(&self, coord: Coord) -> Option<u64> {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        let chunk = self.chunk_at(coord)?;
+        let mut h = OFFSET;
+        for &b in chunk.as_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(PRIME);
+        }
+        Some(h)
+    }
+
     /// Live cells in absolute cell coordinates, sorted.
     pub fn live_cells(&self) -> Vec<(i32, i32)> {
         let mut out = Vec::new();
@@ -442,6 +469,21 @@ fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
         Dir::Se => chunk[(last, last)].is_alive(),
     }
 }
+
+/// Gosper's glider gun: 36 cells, period 30, stationary, emitting a glider
+/// south-east every cycle. Rows and columns are chunk-local, and it is 36 wide
+/// so it straddles chunk boundaries at any sane chunk size.
+const GOSPER_GUN: [(i32, i32); 36] = [
+    (0, 24),
+    (1, 22), (1, 24),
+    (2, 12), (2, 13), (2, 20), (2, 21), (2, 34), (2, 35),
+    (3, 11), (3, 15), (3, 20), (3, 21), (3, 34), (3, 35),
+    (4, 0), (4, 1), (4, 10), (4, 16), (4, 20), (4, 21),
+    (5, 0), (5, 1), (5, 10), (5, 14), (5, 16), (5, 17), (5, 22), (5, 24),
+    (6, 10), (6, 16), (6, 24),
+    (7, 11), (7, 15),
+    (8, 12), (8, 13),
+];
 
 /// The standard glider, travelling south-east.
 ///
