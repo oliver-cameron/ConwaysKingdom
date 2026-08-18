@@ -20,9 +20,13 @@
 //! Nothing in [`crate::render`] may be referenced from here.
 
 mod cell;
+mod dir;
 mod player;
+mod rule;
 mod world;
 
 pub use cell::{bits, Cell, Chunk, Halo, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use dir::Dir;
 pub use player::{Player, PlayerId};
-pub use world::{Coord, Dir, World, WorldKind};
+pub use rule::{next_cell, Neighbours, RuleFn};
+pub use world::{Coord, World, WorldKind};
