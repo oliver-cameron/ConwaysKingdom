@@ -22,5 +22,5 @@
 mod cell;
 mod world;
 
-pub use cell::{Cell, Chunk, Halo, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use cell::{bits, Cell, Chunk, Halo, PlayerId, CHUNK_CELLS, CHUNK_N, HALO_N};
 pub use world::{Coord, Dir, World, WorldKind};

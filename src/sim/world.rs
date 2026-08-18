@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, PlayerId, CHUNK_N};
 
 /// Never advance more than this many generations in a single frame.
 const MAX_CATCHUP_STEPS: u32 = 8;
@@ -92,7 +92,7 @@ pub struct World {
 impl World {
     pub fn infinite() -> Self {
         let mut chunk = Chunk::dead();
-        seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, 1);
+        seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
         let mut chunks = HashMap::new();
         chunks.insert((0, 0), chunk);
         Self::new(Storage::Infinite(chunks))
@@ -105,7 +105,7 @@ impl World {
     pub fn toroidal(rows: i32, cols: i32) -> Self {
         assert!(rows > 0 && cols > 0, "a torus needs at least one chunk");
         let mut chunks = vec![Chunk::dead(); (rows * cols) as usize].into_boxed_slice();
-        seed_glider(&mut chunks[0], CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, 1);
+        seed_glider(&mut chunks[0], CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
         Self::new(Storage::Toroidal { rows, cols, chunks })
     }
 
@@ -160,6 +160,20 @@ impl World {
             Storage::Toroidal { cols, chunks, .. } => {
                 Some(&mut chunks[(coord.0 * *cols + coord.1) as usize])
             }
+        }
+    }
+
+    /// Write one cell, creating the chunk if an infinite world does not yet
+    /// hold it. Bringing a cell to life in empty space is exactly how a player
+    /// action reaches the world, so this must be able to grow it.
+    pub fn set_cell(&mut self, chunk: Coord, (row, col): (usize, usize), cell: Cell) {
+        let chunk = self.canonical(chunk);
+        if cell.is_alive() {
+            self.ensure(chunk);
+        }
+        if let Some(c) = self.chunk_at_mut(chunk) {
+            c[(row, col)] = cell;
+            self.dirty = true;
         }
     }
 
@@ -415,7 +429,7 @@ fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
 /// . . #
 /// # # #
 /// ```
-fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: u16) {
+fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: PlayerId) {
     for (dr, dc) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
         chunk[(row + dr, col + dc)] = Cell::alive(player);
     }
@@ -600,7 +614,7 @@ mod tests {
         'outer: for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 if edited[(row, col)].is_alive() {
-                    edited[(row, col)] = edited[(row, col)].with_player(2);
+                    edited[(row, col)] = edited[(row, col)].with_player(PlayerId(2));
                     break 'outer;
                 }
             }

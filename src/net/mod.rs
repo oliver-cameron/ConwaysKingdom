@@ -1,7 +1,7 @@
 //! Wire types shared by client and server.
 //!
-//! Scaffolding only: the shapes are here so the seams exist, but no transport,
-//! encoding, or session handling is implemented yet.
+//! Scaffolding: the shapes are here so the seams exist, but no transport,
+//! encoding or session handling is implemented yet.
 //!
 //! The model this is shaped for: both sides hold a copy of the world and run
 //! the same deterministic step from [`crate::sim`]. The client holds less of it
@@ -14,7 +14,7 @@
 //!
 //! Nothing here may depend on [`crate::render`].
 
-use crate::sim::Coord;
+use crate::sim::{Coord, PlayerId};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
@@ -26,17 +26,33 @@ pub type ChunkId = Coord;
 /// so both sides apply it at the same point in the sequence.
 pub type Tick = u64;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct PlayerId(pub u16);
+/// A connected player.
+///
+/// The id is the same number a cell stores, so a cell's owner is looked up
+/// without translation — which also means the world can only distinguish
+/// [`PlayerId::MAX`] of them at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Player {
+    pub id: PlayerId,
+    pub name: String,
+    /// Tick this player was last heard from, for timing out a dead connection.
+    pub last_seen: Tick,
+}
+
+impl Player {
+    pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
+        Self { id, name: name.into(), last_seen: 0 }
+    }
+}
 
 /// Something a player did. Deliberately not raw keystrokes: input is resolved
 /// to a world effect before it goes on the wire, so the server validates an
 /// intent rather than replaying a keyboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Set cells at absolute cell coordinates.
-    Paint { cells: Vec<(i32, i32)>, kind: u8 },
-    /// Clear cells at absolute cell coordinates.
+    /// Bring cells to life for this player, at absolute cell coordinates.
+    Paint { cells: Vec<(i32, i32)> },
+    /// Kill cells at absolute cell coordinates.
     Erase { cells: Vec<(i32, i32)> },
 }
 
@@ -51,10 +67,10 @@ pub struct Stamped {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientMessage {
+    Join { name: String },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
-    /// The chunks the client now needs, because its viewport moved. The server
-    /// answers with `ChunkData` for any it is not already sending.
+    /// The chunks the client now needs, because its viewport moved.
     Subscribe { chunks: Vec<ChunkId> },
     /// Chunks the client has dropped and no longer wants updates for.
     Unsubscribe { chunks: Vec<ChunkId> },
@@ -64,18 +80,14 @@ pub enum ClientMessage {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerMessage {
+    /// Accepted, and here is the number your cells will carry.
+    Welcome { you: PlayerId, tick: Tick },
+    Rejected { reason: String },
     /// Actions by other players, to be applied at the tick they carry.
     Actions(Vec<Stamped>),
-    /// Full contents of a chunk, for one the client does not hold. Bytes are a
-    /// chunk's cells exactly as `Chunk::as_bytes` produces them.
-    ChunkData {
-        tick: Tick,
-        chunk: ChunkId,
-        cells: Vec<u8>,
-    },
+    /// Full contents of a chunk the client does not hold. Bytes are a chunk's
+    /// cells exactly as `Chunk::as_bytes` produces them.
+    ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
     /// The client's copy of these chunks is wrong; here they are again.
-    Resync {
-        tick: Tick,
-        chunks: Vec<ChunkId>,
-    },
+    Resync { tick: Tick, chunks: Vec<ChunkId> },
 }
