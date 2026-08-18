@@ -52,6 +52,23 @@ pub struct World {
 }
 
 impl World {
+    /// An unbounded plane with nothing in it. Loading a saved world starts
+    /// here and fills the chunks back in.
+    pub fn infinite_empty() -> Self {
+        Self::new(Storage::Infinite(HashMap::new()))
+    }
+
+    /// Put a chunk at a coordinate wholesale, creating it if need be. Used when
+    /// restoring a save or accepting one from the server.
+    pub fn put_chunk(&mut self, coord: Coord, chunk: Chunk) {
+        let coord = self.canonical(coord);
+        self.ensure(coord);
+        if let Some(slot) = self.chunk_at_mut(coord) {
+            *slot = chunk;
+            self.dirty = true;
+        }
+    }
+
     pub fn infinite() -> Self {
         let mut chunk = Chunk::dead();
         seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));

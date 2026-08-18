@@ -8,7 +8,10 @@
 //! decoded [`ClientMessage`] and returns the replies, so whatever carries the
 //! bytes is somebody else's problem.
 
+pub mod persist;
+
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::net::{Action, ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
 use crate::sim::{Cell, Player, PlayerId, World, CHUNK_N};
@@ -66,6 +69,30 @@ impl Server {
         player.last_seen = self.tick;
         self.players.insert(id, player);
         Ok(id)
+    }
+
+    /// Restore from a save, or start a fresh world if there is no file yet.
+    /// Anything else -- a corrupt file, a mismatched cell width -- is an error
+    /// rather than a silent reset, because silently discarding a world is the
+    /// worst possible response to a bad read.
+    pub fn load_or_new(path: &Path, fresh: impl FnOnce() -> World) -> std::io::Result<Self> {
+        match persist::load(path) {
+            Ok(snap) => {
+                let mut s = Self::new(snap.world);
+                s.tick = snap.tick;
+                for p in snap.players {
+                    s.players.insert(p.id, p);
+                }
+                Ok(s)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new(fresh())),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        let players: Vec<_> = self.players.values().cloned().collect();
+        persist::save(path, &self.world, &players, self.tick)
     }
 
     pub fn leave(&mut self, id: PlayerId) {
@@ -218,6 +245,62 @@ mod tests {
             .map(|c| c[((99 % CHUNK_N as i32) as usize, (101 % CHUNK_N as i32) as usize)])
             .unwrap();
         assert_eq!(owner.player(), me, "live cells carry the painter's number");
+    }
+
+    #[test]
+    fn a_world_survives_a_save_and_load() {
+        let dir = std::env::temp_dir().join("ck-persist-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("world.ckw");
+
+        let mut s = Server::new(World::infinite());
+        let me = s.join("alice").unwrap();
+        s.handle(
+            Some(me),
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: me,
+                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)] },
+            }),
+        );
+        for _ in 0..25 {
+            s.step();
+        }
+        s.save(&path).unwrap();
+
+        let back = Server::load_or_new(&path, World::infinite).unwrap();
+        assert_eq!(back.tick(), s.tick(), "tick is restored");
+        assert_eq!(back.world().digest(), s.world().digest(), "world is restored");
+        assert_eq!(back.world().live_cells(), s.world().live_cells());
+        assert_eq!(back.player_count(), 1, "players are restored");
+        assert_eq!(back.players().next().unwrap().name, "alice");
+
+        // And it keeps stepping identically from there -- the whole point.
+        let (mut a, mut b) = (s, back);
+        for g in 0..50 {
+            a.step();
+            b.step();
+            assert_eq!(a.world().digest(), b.world().digest(), "diverged at {g}");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_missing_file_starts_fresh_but_a_corrupt_one_does_not() {
+        let dir = std::env::temp_dir().join("ck-persist-test");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let missing = dir.join("does-not-exist.ckw");
+        let _ = std::fs::remove_file(&missing);
+        assert!(Server::load_or_new(&missing, World::infinite).is_ok());
+
+        let corrupt = dir.join("corrupt.ckw");
+        std::fs::write(&corrupt, b"not a world file at all").unwrap();
+        assert!(
+            Server::load_or_new(&corrupt, World::infinite).is_err(),
+            "a bad file must not be silently replaced with an empty world"
+        );
+        let _ = std::fs::remove_file(&corrupt);
     }
 
     #[test]
