@@ -15,8 +15,8 @@ pub mod ws;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::net::{Action, ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
-use crate::sim::{Cell, Player, PlayerId, World, CHUNK_N};
+use crate::net::{ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
+use crate::sim::{Player, PlayerId, World};
 
 pub struct Server {
     world: World,
@@ -178,32 +178,15 @@ impl Server {
     }
 
     fn apply(&mut self, stamped: &Stamped) {
-        match &stamped.action {
-            Action::Paint { cells } => {
-                for &(row, col) in cells {
-                    self.set(row, col, Cell::alive(stamped.player));
-                }
-            }
-            Action::Erase { cells } => {
-                for &(row, col) in cells {
-                    self.set(row, col, Cell::DEAD);
-                }
-            }
-        }
-    }
-
-    /// Write one cell, addressed in absolute cell coordinates.
-    fn set(&mut self, row: i32, col: i32, cell: Cell) {
-        let n = CHUNK_N as i32;
-        let chunk = (row.div_euclid(n), col.div_euclid(n));
-        let local = (row.rem_euclid(n) as usize, col.rem_euclid(n) as usize);
-        self.world.set_cell(chunk, local, cell);
+        crate::net::apply(&mut self.world, stamped);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Action;
+    use crate::sim::CHUNK_N;
 
     #[test]
     fn player_numbers_start_at_one_and_are_reused() {
