@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::dir::Dir;
 use super::player::PlayerId;
 
 /// Never advance more than this many generations in a single frame.
@@ -8,46 +9,6 @@ const MAX_CATCHUP_STEPS: u32 = 8;
 
 /// Chunk coordinate, (row, col). Row increases south, column increases east.
 pub type Coord = (i32, i32);
-
-/// The eight neighbours of a chunk.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Dir {
-    N,
-    Ne,
-    E,
-    Se,
-    S,
-    Sw,
-    W,
-    Nw,
-}
-
-impl Dir {
-    pub const ALL: [Dir; 8] = [
-        Dir::N,
-        Dir::Ne,
-        Dir::E,
-        Dir::Se,
-        Dir::S,
-        Dir::Sw,
-        Dir::W,
-        Dir::Nw,
-    ];
-
-    #[inline]
-    pub const fn delta(self) -> (i32, i32) {
-        match self {
-            Dir::N => (-1, 0),
-            Dir::Ne => (-1, 1),
-            Dir::E => (0, 1),
-            Dir::Se => (1, 1),
-            Dir::S => (1, 0),
-            Dir::Sw => (1, -1),
-            Dir::W => (0, -1),
-            Dir::Nw => (-1, -1),
-        }
-    }
-}
 
 #[inline]
 fn offset((row, col): Coord, dir: Dir) -> Coord {
