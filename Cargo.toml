@@ -41,7 +41,11 @@ tower-http = { version = "0.6", features = ["fs"], optional = true }
 wgpu = { version = "30", features = ["webgl"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "Element", "Window", "HtmlCanvasElement", "Performance"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Document", "Element", "Window", "HtmlCanvasElement", "Performance",
+    "WebSocket", "MessageEvent", "BinaryType", "Location", "CloseEvent", "Event",
+] }
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 

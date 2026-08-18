@@ -17,6 +17,10 @@
 pub mod codec;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
+#[cfg(target_arch = "wasm32")]
+pub mod link_web;
+#[cfg(target_arch = "wasm32")]
+pub use link_web as link;
 
 use serde::{Deserialize, Serialize};
 
