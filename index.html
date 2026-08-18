@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title>mini-renderer</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #0d0d12;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      outline: none;
+    }
+  </style>
+</head>
+
+<body>
+  <script type="module">
+    import init from "./pkg/game.js";
+    init();
+  </script>
+</body>
+
+</html
