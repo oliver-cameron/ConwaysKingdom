@@ -149,6 +149,7 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl In
 }
 
 async fn connection(socket: WebSocket, state: AppState) {
+    log::info!("connection opened");
     let (mut sink, mut stream) = socket.split();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut subscribed = state.broadcast.subscribe();
@@ -199,8 +200,11 @@ async fn connection(socket: WebSocket, state: AppState) {
         }
     }
 
-    if let Some(id) = me {
-        let _ = state.to_sim.send(ToSim::Left(id));
+    match me {
+        Some(id) => {
+            let _ = state.to_sim.send(ToSim::Left(id));
+        }
+        None => log::info!("connection closed before joining"),
     }
 }
 

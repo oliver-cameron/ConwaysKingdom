@@ -65,10 +65,19 @@ impl Server {
 
     pub fn join(&mut self, name: impl Into<String>) -> Result<PlayerId, String> {
         let Some(id) = self.next_player_id() else {
+            let name = name.into();
+            log::warn!("refused \"{name}\": server full at {} players", PlayerId::MAX);
             return Err(format!("server full ({} players)", PlayerId::MAX));
         };
         let mut player = Player::new(id, name);
         player.last_seen = self.tick;
+        log::info!(
+            "join: {:?} \"{}\" at tick {} ({} online)",
+            id,
+            player.name,
+            self.tick,
+            self.players.len() + 1
+        );
         self.players.insert(id, player);
         Ok(id)
     }
@@ -98,7 +107,15 @@ impl Server {
     }
 
     pub fn leave(&mut self, id: PlayerId) {
-        self.players.remove(&id);
+        if let Some(p) = self.players.remove(&id) {
+            log::info!(
+                "leave: {:?} \"{}\" after {} ticks ({} online)",
+                id,
+                p.name,
+                self.tick.saturating_sub(p.last_seen),
+                self.players.len()
+            );
+        }
         self.subscriptions.remove(&id);
     }
 
@@ -126,6 +143,12 @@ impl Server {
                     .iter()
                     .filter_map(|&chunk| self.chunk_message(chunk))
                     .collect();
+                log::info!(
+                    "subscribe: {:?} asked for {} chunks, sending {} that hold life",
+                    from,
+                    chunks.len(),
+                    out.len()
+                );
                 if let Some(id) = from {
                     self.subscriptions.entry(id).or_default().extend(chunks);
                 }
@@ -154,6 +177,7 @@ impl Server {
                 if wrong.is_empty() {
                     Vec::new()
                 } else {
+                    log::warn!("desync: {:?} disagrees on {} chunks at tick {tick}", from, wrong.len());
                     vec![ServerMessage::Resync { tick, chunks: wrong }]
                 }
             }

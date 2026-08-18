@@ -166,8 +166,12 @@ impl BattleApp {
         for msg in messages {
             match msg {
                 ServerMessage::Welcome { you, tick } => {
-                    log::info!("joined as {you:?} at tick {tick}");
+                    log::info!("joined as {you:?} at tick {tick}; adopting the server's world");
                     self.me = Some(you);
+                    // Now, and only now, drop the local world. Until Welcome
+                    // arrives there is nothing authoritative to replace it
+                    // with, and an empty screen is worse than a local game.
+                    self.world = World::infinite_empty();
                     // A birth's owner is seeded from the generation, so a
                     // client simulating at a different tick would make
                     // different choices from identical cells.
@@ -243,16 +247,15 @@ impl BattleApp {
 impl App for BattleApp {
     fn init(gpu: &GpuState) -> Self {
         let link = open_link();
-        // A connected client starts empty and adopts what the server sends.
-        // Seeding a glider here would put a second, invented world on screen
-        // and make every join look like a fresh game.
-        let world = if link.is_some() {
-            World::infinite_empty()
-        } else {
-            match WORLD {
-                WorldMode::Infinite => World::demo(),
-                WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
-            }
+        // Always start with something on screen. Holding an empty world until
+        // the server answers means a client that never connects -- wrong port,
+        // server down, a page served from somewhere else -- shows nothing at
+        // all and looks broken. A socket object exists long before it
+        // connects, and may never connect, so its mere existence is no reason
+        // to blank the view. `Welcome` is what replaces this.
+        let world = match WORLD {
+            WorldMode::Infinite => World::demo(),
+            WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
         };
         let mut chunks = ChunkStore::new(&gpu.device);
         chunks.sync(&gpu.queue, &world, TORUS_REPEATS);
@@ -433,7 +436,9 @@ impl App for BattleApp {
 /// or the browser blocks it as mixed content.
 #[cfg(target_arch = "wasm32")]
 fn open_link() -> Option<Link> {
-    let link = Link::connect_to_origin("/ws")?;
+    let url = Link::origin_url("/ws")?;
+    log::info!("connecting to {url}");
+    let link = Link::connect(&url)?;
     link.send(ClientMessage::Join { name: "web".into() });
     Some(link)
 }

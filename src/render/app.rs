@@ -38,10 +38,10 @@ pub trait App: 'static {
     fn on_click(&mut self, _button: MouseButton, _pressed: bool) {}
 }
 
+/// Run the event loop. Logging is the caller's business: initialising it here
+/// as well as in `main` panics with `SetLoggerError`, since a logger can only
+/// be installed once.
 pub async fn run<A: App>() {
-    #[cfg(not(target_arch = "wasm32"))]
-    env_logger::init();
-
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let window = Arc::new(
         WindowBuilder::new()
@@ -62,6 +62,17 @@ pub async fn run<A: App>() {
                 Some(())
             })
             .expect("couldn't append canvas to document body");
+
+        // winit leaves the canvas at the HTML default of 300x150, and
+        // `inner_size` reads the element, so the surface would be configured
+        // at 300x150 and stretched across the viewport by the CSS -- correct
+        // but a blurry fraction of the real resolution.
+        use winit::dpi::PhysicalSize;
+        if let Some(win) = web_sys::window() {
+            let w = win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
+            let h = win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
+            let _ = window.request_inner_size(PhysicalSize::new(w as u32, h as u32));
+        }
     }
 
     let mut gpu = GpuState::new(window.clone()).await;
