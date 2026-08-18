@@ -3,13 +3,13 @@
 
 <head>
   <meta charset="utf-8" />
-  <title>mini-renderer</title>
+  <title>ConwaysKingdom</title>
   <style>
     html,
     body {
       margin: 0;
       height: 100%;
-      background: #0d0d12;
+      background: #000;
       overflow: hidden;
     }
 
@@ -19,14 +19,36 @@
       height: 100vh;
       outline: none;
     }
+
+    #error {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      padding: 1rem;
+      color: #f66;
+      font: 12px/1.5 ui-monospace, monospace;
+      white-space: pre-wrap;
+      background: #000;
+    }
   </style>
 </head>
 
 <body>
   <script type="module">
-    import init from "./pkg/game.js";
-    init();
+    // wasm-pack names its output after the crate, so this is pkg/<crate>.js —
+    // `conwayskingdom`, per the `name` in Cargo.toml. Rename here if the crate
+    // is ever renamed, or the browser gets the server's 404 page and refuses
+    // it as "disallowed MIME type (text/html)".
+    import init from "./pkg/conwayskingdom.js";
+
+    init().catch((e) => {
+      const pre = document.createElement("pre");
+      pre.id = "error";
+      pre.textContent = String(e && e.stack ? e.stack : e);
+      document.body.appendChild(pre);
+      console.error(e);
+    });
   </script>
 </body>
 
-</html
+</html>
