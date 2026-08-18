@@ -115,7 +115,24 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
     let app = app.with_state(state);
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
-    log::info!("listening on ws://{}/ws", config.addr);
+
+    // Say what is actually reachable, and where. One line that only mentioned
+    // the socket left the HTTP server looking like it was not running.
+    let host = if config.addr.ip().is_unspecified() {
+        format!("localhost:{}", config.addr.port())
+    } else {
+        config.addr.to_string()
+    };
+    match &config.static_dir {
+        Some(dir) => log::info!("http://{host}/  serving {}", dir.display()),
+        None => log::warn!(
+            "no --serve DIR, so http://{host}/ will 404; only the socket is up"
+        ),
+    }
+    log::info!("ws://{host}/ws  websocket");
+    if config.addr.ip().is_unspecified() {
+        log::info!("bound to {} — reachable from other machines", config.addr);
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
@@ -132,6 +149,7 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl In
 }
 
 async fn connection(socket: WebSocket, state: AppState) {
+    log::info!("connection opened");
     let (mut sink, mut stream) = socket.split();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut subscribed = state.broadcast.subscribe();
@@ -182,8 +200,11 @@ async fn connection(socket: WebSocket, state: AppState) {
         }
     }
 
-    if let Some(id) = me {
-        let _ = state.to_sim.send(ToSim::Left(id));
+    match me {
+        Some(id) => {
+            let _ = state.to_sim.send(ToSim::Left(id));
+        }
+        None => log::info!("connection closed before joining"),
     }
 }
 

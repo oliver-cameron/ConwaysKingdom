@@ -523,6 +523,7 @@ dependencies = [
  "console_log",
  "env_logger",
  "futures-util",
+ "js-sys",
  "log",
  "pollster",
  "postcard",

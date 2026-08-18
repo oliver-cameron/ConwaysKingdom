@@ -64,7 +64,7 @@ mod tests {
             }),
             ClientMessage::Subscribe { chunks: vec![(0, 0), (-1, 5)] },
             ClientMessage::Unsubscribe { chunks: vec![(9, 9)] },
-            ClientMessage::Checkpoint { tick: 100, digest: 0xDEAD_BEEF_CAFE_F00D },
+            ClientMessage::Checkpoint { tick: 100, chunks: vec![((0, 0), 0xDEAD_BEEF), ((-1, 4), 7)] },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();

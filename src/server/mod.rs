@@ -15,8 +15,8 @@ pub mod ws;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::net::{Action, ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
-use crate::sim::{Cell, Player, PlayerId, World, CHUNK_N};
+use crate::net::{ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
+use crate::sim::{Player, PlayerId, World};
 
 pub struct Server {
     world: World,
@@ -65,10 +65,19 @@ impl Server {
 
     pub fn join(&mut self, name: impl Into<String>) -> Result<PlayerId, String> {
         let Some(id) = self.next_player_id() else {
+            let name = name.into();
+            log::warn!("refused \"{name}\": server full at {} players", PlayerId::MAX);
             return Err(format!("server full ({} players)", PlayerId::MAX));
         };
         let mut player = Player::new(id, name);
         player.last_seen = self.tick;
+        log::info!(
+            "join: {:?} \"{}\" at tick {} ({} online)",
+            id,
+            player.name,
+            self.tick,
+            self.players.len() + 1
+        );
         self.players.insert(id, player);
         Ok(id)
     }
@@ -98,7 +107,15 @@ impl Server {
     }
 
     pub fn leave(&mut self, id: PlayerId) {
-        self.players.remove(&id);
+        if let Some(p) = self.players.remove(&id) {
+            log::info!(
+                "leave: {:?} \"{}\" after {} ticks ({} online)",
+                id,
+                p.name,
+                self.tick.saturating_sub(p.last_seen),
+                self.players.len()
+            );
+        }
         self.subscriptions.remove(&id);
     }
 
@@ -126,6 +143,12 @@ impl Server {
                     .iter()
                     .filter_map(|&chunk| self.chunk_message(chunk))
                     .collect();
+                log::info!(
+                    "subscribe: {:?} asked for {} chunks, sending {} that hold life",
+                    from,
+                    chunks.len(),
+                    out.len()
+                );
                 if let Some(id) = from {
                     self.subscriptions.entry(id).or_default().extend(chunks);
                 }
@@ -137,17 +160,26 @@ impl Server {
                 }
                 Vec::new()
             }
-            ClientMessage::Checkpoint { tick, digest } => {
-                // Only meaningful for the tick the server is actually on; an
-                // older digest would need a history to compare against.
-                if tick == self.tick && digest != self.world.digest() {
-                    let chunks = from
-                        .and_then(|id| self.subscriptions.get(&id))
-                        .cloned()
-                        .unwrap_or_default();
-                    return vec![ServerMessage::Resync { tick, chunks }];
+            ClientMessage::Checkpoint { tick, chunks } => {
+                // Only meaningful for the tick the server is on; an older one
+                // would need a history of past states to compare against.
+                if tick != self.tick {
+                    return Vec::new();
                 }
-                Vec::new()
+                // Answer with the chunks that disagree, and with any the client
+                // claims to hold that the server no longer does -- an emptied
+                // chunk is dropped here but may still be on the client.
+                let wrong: Vec<_> = chunks
+                    .into_iter()
+                    .filter(|&(coord, digest)| self.world.chunk_digest(coord) != Some(digest))
+                    .map(|(coord, _)| coord)
+                    .collect();
+                if wrong.is_empty() {
+                    Vec::new()
+                } else {
+                    log::warn!("desync: {:?} disagrees on {} chunks at tick {tick}", from, wrong.len());
+                    vec![ServerMessage::Resync { tick, chunks: wrong }]
+                }
             }
         }
     }
@@ -178,32 +210,15 @@ impl Server {
     }
 
     fn apply(&mut self, stamped: &Stamped) {
-        match &stamped.action {
-            Action::Paint { cells } => {
-                for &(row, col) in cells {
-                    self.set(row, col, Cell::alive(stamped.player));
-                }
-            }
-            Action::Erase { cells } => {
-                for &(row, col) in cells {
-                    self.set(row, col, Cell::DEAD);
-                }
-            }
-        }
-    }
-
-    /// Write one cell, addressed in absolute cell coordinates.
-    fn set(&mut self, row: i32, col: i32, cell: Cell) {
-        let n = CHUNK_N as i32;
-        let chunk = (row.div_euclid(n), col.div_euclid(n));
-        let local = (row.rem_euclid(n) as usize, col.rem_euclid(n) as usize);
-        self.world.set_cell(chunk, local, cell);
+        crate::net::apply(&mut self.world, stamped);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::Action;
+    use crate::sim::CHUNK_N;
 
     #[test]
     fn player_numbers_start_at_one_and_are_reused() {
@@ -309,11 +324,25 @@ mod tests {
     fn a_matching_digest_asks_for_no_resync() {
         let mut s = Server::new(World::infinite());
         let me = s.join("me").unwrap();
-        let digest = s.world().digest();
+        let held: Vec<_> = s
+            .world()
+            .stored()
+            .iter()
+            .map(|&(coord, _)| (coord, s.world().chunk_digest(coord).unwrap()))
+            .collect();
         assert!(s
-            .handle(Some(me), ClientMessage::Checkpoint { tick: 0, digest })
+            .handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: held.clone() })
             .is_empty());
-        let replies = s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, digest: !digest });
-        assert!(matches!(replies.as_slice(), [ServerMessage::Resync { .. }]));
+
+        // One chunk wrong: only that one comes back.
+        let mut bad = held.clone();
+        bad[0].1 = !bad[0].1;
+        let replies = s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: bad });
+        match replies.as_slice() {
+            [ServerMessage::Resync { chunks, .. }] => {
+                assert_eq!(chunks, &[held[0].0], "only the disagreeing chunk");
+            }
+            other => panic!("expected one Resync, got {other:?}"),
+        }
     }
 }
