@@ -27,11 +27,11 @@ struct CameraUniform {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Instance {
+pub struct Instance {
     /// x, y, w, h in world cells.
-    rect: [f32; 4],
+    pub rect: [f32; 4],
     /// x = array layer; the rest is reserved.
-    meta: [u32; 4],
+    pub meta: [u32; 4],
 }
 
 // These must match the `Camera` struct and the instance attribute offsets in
@@ -41,6 +41,61 @@ const _: () = {
     assert!(size_of::<CameraUniform>() == 32);
     assert!(size_of::<Instance>() == 32);
 };
+
+
+/// The WGSL both entry points live in.
+pub const SHADER_SOURCE: &str = include_str!("shaders/grid.wgsl");
+
+/// Binding 0 is the camera uniform, binding 1 the chunk array texture.
+/// Shared with the tests so a regression here fails a test, not a demo.
+pub fn world_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("world"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+const INSTANCE_ATTRS: [wgpu::VertexAttribute; 2] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Uint32x4,
+        offset: 16,
+        shader_location: 1,
+    },
+];
+
+pub fn chunk_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<Instance>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &INSTANCE_ATTRS,
+    }
+}
 
 pub struct BattleApp {
     pipeline: wgpu::RenderPipeline,
@@ -77,7 +132,7 @@ impl BattleApp {
 impl App for BattleApp {
     fn init(gpu: &GpuState) -> Self {
         let world = World::new();
-        let chunks = ChunkTexture::new(&gpu.device, 1);
+        let chunks = ChunkTexture::new(&gpu.device, ChunkTexture::LAYER_BUDGET);
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
@@ -86,33 +141,7 @@ impl App for BattleApp {
             mapped_at_creation: false,
         });
 
-        let bgl = gpu
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("world"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Uint,
-                            view_dimension: wgpu::TextureViewDimension::D2Array,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+        let bgl = world_bind_group_layout(&gpu.device);
 
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("world"),
@@ -143,28 +172,13 @@ impl App for BattleApp {
         gpu.queue
             .write_buffer(&instance_buffer, 0, bytemuck::cast_slice(&instances));
 
-        let instance_layout = wgpu::VertexBufferLayout {
-            array_stride: size_of::<Instance>() as u64,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Uint32x4,
-                    offset: 16,
-                    shader_location: 1,
-                },
-            ],
-        };
+        let instance_layout = chunk_instance_layout();
 
         let pipeline = create_pipeline(
             gpu,
             &PipelineDescriptor {
                 label: "chunk pipeline",
-                shader_source: include_str!("shaders/grid.wgsl"),
+                shader_source: SHADER_SOURCE,
                 vertex_buffers: &[instance_layout],
                 bind_group_layouts: &[Some(&bgl)],
                 topology: wgpu::PrimitiveTopology::TriangleStrip,

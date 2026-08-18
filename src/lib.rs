@@ -11,9 +11,12 @@ pub use app::{run, App};
 pub use cell::{Cell, Chunk, CHUNK_CELLS, CHUNK_N};
 pub use chunk_texture::ChunkTexture;
 pub use frame::{Draw, DrawCall, Frame, FrameAcquire, IndexBufferBinding};
-pub use game::{BattleApp, GENERATION_SPAN};
+pub use game::{
+    chunk_instance_layout, world_bind_group_layout, BattleApp, Instance, GENERATION_SPAN,
+    SHADER_SOURCE,
+};
 pub use gpu::GpuState;
-pub use pipeline::{create_pipeline, PipelineDescriptor};
+pub use pipeline::{create_pipeline, create_pipeline_with, PipelineDescriptor};
 pub use world::World;
 
 #[cfg(target_arch = "wasm32")]
