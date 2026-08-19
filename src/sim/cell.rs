@@ -12,23 +12,29 @@ pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 ///
 /// ```text
 ///  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-/// |   player    |      metadata / flags      | A |
+/// |   player    |F |G |       kind        | A |
 /// ```
 ///
-/// Bit 0 is alive. The ten above it are yours. The top five are the player,
+/// Bit 0 is alive, bits 1..9 the kind, bits 9..11 flags. The top five are the
+/// player,
 /// and being the top field means the number extracts with a single shift and
 /// no mask, and that comparing two raw cells orders them by player first.
 ///
-/// Stored as two explicit little-endian bytes rather than a `u16` field, so the
-/// in-memory order is ours rather than the host's. The texture is `R16Uint`,
-/// which GPUs read little-endian, so the assertion below fires at compile time
-/// on a big-endian target rather than producing quietly scrambled cells.
+/// Four bytes per cell, uploaded as `Rgba8Uint`: the sixteen bits above in R
+/// and G, then **U and V in B and A** — the tile this cell shows from its
+/// sprite sheet. A sheet is a 16x16 grid of 16x16 tiles, so a `u8` each is
+/// ample, and a structure spanning several cells gives each one a different
+/// tile so the parts line up.
+///
+/// Stored as explicit bytes rather than a `u16` and two `u8`s, so the order is
+/// ours rather than the host's, and so alignment stays 1 — which is what lets a
+/// chunk be cast straight out of a save file or a wire frame at any offset.
 ///
 /// A zeroed cell is dead and unowned, which is what makes zeroed memory a valid
 /// empty world. Never give bit 0 clear a live meaning.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-pub struct Cell(pub [u8; 2]);
+pub struct Cell(pub [u8; 4]);
 
 /// The bit layout. Adjust here and in the matching block at the top of
 /// `render/shaders/grid.wgsl` — the shader cannot read Rust constants, so those
@@ -37,10 +43,21 @@ pub mod bits {
     /// Bit 0: alive or dead.
     pub const ALIVE: u16 = 1;
 
-    /// Bits 1..11: metadata and flags, undivided. Carve as needed.
-    pub const META_SHIFT: u16 = 1;
-    pub const META_WIDTH: u16 = 10;
-    pub const META_MASK: u16 = (1 << META_WIDTH) - 1;
+    /// Bits 1..9: what kind of cell this is. Also the index of its sprite, so
+    /// every kind necessarily has art — see `render::atlas`.
+    pub const KIND_SHIFT: u16 = 1;
+    pub const KIND_WIDTH: u16 = 8;
+    pub const KIND_MASK: u16 = (1 << KIND_WIDTH) - 1;
+
+    /// Bits 9..11: flags.
+    pub const FLAG_SHIFT: u16 = 9;
+    pub const FLAG_WIDTH: u16 = 2;
+    pub const FLAG_MASK: u16 = (1 << FLAG_WIDTH) - 1;
+
+    /// A pane covers this cell. Independent of `ALIVE`: a cell may be alive,
+    /// glassed, both, or neither. Glass freezes what it covers, so the rule
+    /// returns such a cell unchanged.
+    pub const FLAG_GLASS: u16 = 1 << 9;
 
     /// Bits 11..16: player number, at the top of the word.
     pub const PLAYER_SHIFT: u16 = 11;
@@ -49,27 +66,50 @@ pub mod bits {
 }
 
 const _: () = {
-    assert!(size_of::<Cell>() == 2 && align_of::<Cell>() == 1);
+    assert!(size_of::<Cell>() == 4 && align_of::<Cell>() == 1);
     // The fields must tile all sixteen bits with no overlap and no gap.
     assert!(bits::ALIVE == 1);
-    assert!(bits::META_SHIFT == 1);
-    assert!(bits::PLAYER_SHIFT == bits::META_SHIFT + bits::META_WIDTH);
+    assert!(bits::KIND_SHIFT == 1);
+    assert!(bits::FLAG_SHIFT == bits::KIND_SHIFT + bits::KIND_WIDTH);
+    assert!(bits::PLAYER_SHIFT == bits::FLAG_SHIFT + bits::FLAG_WIDTH);
+    assert!(bits::FLAG_GLASS == 1 << bits::FLAG_SHIFT);
     assert!(bits::PLAYER_SHIFT + bits::PLAYER_WIDTH == 16);
     // R16Uint is read little-endian by the GPU.
     assert!(cfg!(target_endian = "little"));
 };
 
 impl Cell {
-    pub const DEAD: Self = Self([0, 0]);
+    pub const DEAD: Self = Self([0, 0, 0, 0]);
 
+    /// Keeps the UV: changing what a cell *is* should not move which tile it
+    /// draws, or a pane would scramble its picture every generation.
     #[inline]
     pub const fn from_bits(bits: u16) -> Self {
-        Self(bits.to_le_bytes())
+        let [lo, hi] = bits.to_le_bytes();
+        Self([lo, hi, 0, 0])
     }
 
     #[inline]
     pub const fn bits(self) -> u16 {
-        u16::from_le_bytes(self.0)
+        u16::from_le_bytes([self.0[0], self.0[1]])
+    }
+
+    /// Replace the sixteen bits, keeping the UV.
+    #[inline]
+    const fn set_bits(self, bits: u16) -> Self {
+        let [lo, hi] = bits.to_le_bytes();
+        Self([lo, hi, self.0[2], self.0[3]])
+    }
+
+    /// Which tile of its sheet this cell draws, as (u, v).
+    #[inline]
+    pub const fn uv(self) -> (u8, u8) {
+        (self.0[2], self.0[3])
+    }
+
+    #[inline]
+    pub const fn with_uv(self, u: u8, v: u8) -> Self {
+        Self([self.0[0], self.0[1], u, v])
     }
 
     /// A live cell belonging to `player`.
@@ -79,7 +119,7 @@ impl Cell {
     /// discovered later as a cell nobody can claim.
     pub const fn alive(player: PlayerId) -> Self {
         assert!(player.is_owned(), "a live cell must have a non-zero player");
-        Self::from_bits(bits::ALIVE).with_player(player)
+        Self::DEAD.set_bits(bits::ALIVE).with_player(player)
     }
 
     #[inline]
@@ -94,30 +134,52 @@ impl Cell {
         PlayerId((self.bits() >> bits::PLAYER_SHIFT) as u8)
     }
 
+    /// What kind of cell this is, which is also its sprite index.
     #[inline]
-    pub const fn meta(self) -> u16 {
-        (self.bits() >> bits::META_SHIFT) & bits::META_MASK
+    pub const fn kind(self) -> Kind {
+        Kind(((self.bits() >> bits::KIND_SHIFT) & bits::KIND_MASK) as u8)
+    }
+
+    #[inline]
+    pub const fn flags(self) -> u16 {
+        (self.bits() >> bits::FLAG_SHIFT) & bits::FLAG_MASK
+    }
+
+    /// Under glass, and therefore not updating: a pane stops time inside
+    /// itself. Says nothing about whether the cell is alive.
+    #[inline]
+    pub const fn is_glass(self) -> bool {
+        self.bits() & bits::FLAG_GLASS != 0
     }
 
     #[inline]
     pub const fn with_alive(self, alive: bool) -> Self {
         if alive {
-            Self::from_bits(self.bits() | bits::ALIVE)
+            self.set_bits(self.bits() | bits::ALIVE)
         } else {
-            Self::from_bits(self.bits() & !bits::ALIVE)
+            self.set_bits(self.bits() & !bits::ALIVE)
         }
     }
 
     #[inline]
     pub const fn with_player(self, player: PlayerId) -> Self {
         let cleared = self.bits() & !(bits::PLAYER_MASK << bits::PLAYER_SHIFT);
-        Self::from_bits(cleared | ((player.0 as u16 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT))
+        self.set_bits(cleared | ((player.0 as u16 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT))
     }
 
     #[inline]
-    pub const fn with_meta(self, meta: u16) -> Self {
-        let cleared = self.bits() & !(bits::META_MASK << bits::META_SHIFT);
-        Self::from_bits(cleared | ((meta & bits::META_MASK) << bits::META_SHIFT))
+    pub const fn with_kind(self, kind: Kind) -> Self {
+        let cleared = self.bits() & !(bits::KIND_MASK << bits::KIND_SHIFT);
+        self.set_bits(cleared | ((kind.0 as u16 & bits::KIND_MASK) << bits::KIND_SHIFT))
+    }
+
+    #[inline]
+    pub const fn with_glass(self, glass: bool) -> Self {
+        if glass {
+            self.set_bits(self.bits() | bits::FLAG_GLASS)
+        } else {
+            self.set_bits(self.bits() & !bits::FLAG_GLASS)
+        }
     }
 }
 
@@ -125,10 +187,27 @@ impl core::fmt::Debug for Cell {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Cell")
             .field("alive", &self.is_alive())
-            .field("meta", &self.meta())
+            .field("kind", &self.kind().0)
+            .field("glass", &self.is_glass())
+            .field("uv", &self.uv())
             .field("player", &self.player().0)
             .finish()
     }
+}
+
+/// What a cell is. The number is also the index of the cell's sprite, so a
+/// kind cannot exist without art — `render::atlas` asserts every one is drawn.
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable)]
+pub struct Kind(pub u8);
+
+impl Kind {
+    /// An ordinary living cell.
+    pub const NORMAL: Self = Self(0);
+    /// Every kind. Each must have art at its own index in `render::atlas`;
+    /// extend this and the sprite list beside it, or it will not compile.
+    pub const ALL: [Self; 1] = [Self::NORMAL];
+    pub const COUNT: usize = Self::ALL.len();
 }
 
 /// A chunk's cells, row-major. The first index is the texture's Y, the second
@@ -151,10 +230,19 @@ impl Chunk {
         Self { cells: [Cell::DEAD; CHUNK_CELLS] }
     }
 
-    /// No live cells anywhere. An empty chunk contributes nothing to any
-    /// neighbour, so it need be neither stored nor stepped.
+    /// Nothing here worth keeping: no life, and no structure either.
+    ///
+    /// Not simply "nothing alive". A chunk holding only panes still holds
+    /// something, and dropping it would destroy them for good, since a
+    /// recreated chunk comes back zeroed.
+    ///
+    /// Nor is it "every cell exactly `DEAD`". A cell keeps its owner when it
+    /// dies, so a chunk life has passed through is full of non-zero corpses.
+    /// Those are inert -- nothing counts a dead cell, and a birth takes its
+    /// owner from live neighbours -- so discarding them changes nothing, and
+    /// refusing to would let an infinite world grow without bound again.
     pub fn is_empty(&self) -> bool {
-        self.cells.iter().all(|c| !c.is_alive())
+        self.cells.iter().all(|c| !c.is_alive() && !c.is_glass())
     }
 
     /// Exactly the `&[u8]` `Queue::write_texture` wants. No conversion.
@@ -331,36 +419,61 @@ mod tests {
     /// Each field must round-trip, and none may disturb another.
     #[test]
     fn the_bit_fields_are_independent() {
-        for meta in [0, 1, 511, bits::META_MASK] {
+        for kind in [0u8, 1, 200, 255] {
             for p in 0..=PlayerId::MAX {
-                let c = Cell::DEAD
-                    .with_alive(true)
-                    .with_meta(meta)
-                    .with_player(PlayerId(p));
-                assert!(c.is_alive());
-                assert_eq!(c.meta(), meta);
-                assert_eq!(c.player(), PlayerId(p));
-                // Clearing alive must leave the other two alone.
-                let d = c.with_alive(false);
-                assert!(!d.is_alive());
-                assert_eq!(d.meta(), meta);
-                assert_eq!(d.player(), PlayerId(p));
+                for glass in [false, true] {
+                    let c = Cell::DEAD
+                        .with_alive(true)
+                        .with_kind(Kind(kind))
+                        .with_glass(glass)
+                        .with_player(PlayerId(p));
+                    assert!(c.is_alive());
+                    assert_eq!(c.kind(), Kind(kind));
+                    assert_eq!(c.is_glass(), glass);
+                    assert_eq!(c.player(), PlayerId(p));
+                    // Clearing alive must leave the others alone.
+                    let d = c.with_alive(false);
+                    assert!(!d.is_alive());
+                    assert_eq!(d.kind(), Kind(kind));
+                    assert_eq!(d.is_glass(), glass);
+                    assert_eq!(d.player(), PlayerId(p));
+                }
             }
         }
-        // Overflow is masked, not smeared into a neighbouring field.
-        let c = Cell::DEAD.with_meta(bits::META_MASK + 1);
-        assert_eq!(c.meta(), 0);
+        // A kind uses all eight of its bits without touching the flags.
+        let c = Cell::DEAD.with_kind(Kind(255));
+        assert_eq!(c.kind(), Kind(255));
+        assert_eq!(c.flags(), 0);
         assert_eq!(c.player(), PlayerId::UNOWNED);
         assert!(!c.is_alive());
     }
 
     #[test]
-    fn a_cell_is_two_bytes_little_endian() {
-        assert_eq!(size_of::<Cell>(), 2);
-        let c = Cell::from_bits(0xABCD);
-        assert_eq!(c.0, [0xCD, 0xAB], "low byte first, whatever the host");
+    fn a_cell_is_four_bytes_little_endian() {
+        assert_eq!(size_of::<Cell>(), 4);
+        let c = Cell::from_bits(0xABCD).with_uv(7, 9);
+        assert_eq!(c.0, [0xCD, 0xAB, 7, 9], "low byte first, then u and v");
         assert_eq!(c.bits(), 0xABCD);
-        assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 2);
+        assert_eq!(c.uv(), (7, 9));
+        assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 4);
+    }
+
+    /// A cell's tile must survive everything the rules do to it, or a pane
+    /// would scramble its picture every generation.
+    #[test]
+    fn the_uv_survives_every_change() {
+        let c = Cell::alive(PlayerId(3)).with_uv(11, 4);
+        assert_eq!(c.uv(), (11, 4));
+        for changed in [
+            c.with_alive(false),
+            c.with_alive(true),
+            c.with_player(PlayerId(9)),
+            c.with_kind(Kind(200)),
+            c.with_glass(true),
+            c.with_glass(false),
+        ] {
+            assert_eq!(changed.uv(), (11, 4), "the tile moved");
+        }
     }
 
     /// The player sits at the top of the word, so extracting it is a shift with
@@ -371,7 +484,7 @@ mod tests {
         assert_eq!(c.bits() >> bits::PLAYER_SHIFT, 5);
         assert_eq!(c.player(), PlayerId(5));
 
-        let low = Cell::alive(PlayerId(1)).with_meta(bits::META_MASK);
+        let low = Cell::alive(PlayerId(1)).with_kind(Kind(255)).with_glass(true);
         let high = Cell::alive(PlayerId(2));
         assert!(high.bits() > low.bits(), "player dominates the ordering");
     }
@@ -382,7 +495,7 @@ mod tests {
         assert_eq!(c, Cell::DEAD);
         assert!(!c.is_alive());
         assert_eq!(c.player(), PlayerId::UNOWNED);
-        assert_eq!(c.meta(), 0);
+        assert_eq!(c.kind(), Kind::NORMAL);
     }
 
     #[test]

@@ -20,17 +20,23 @@ required-features = ["server"]
 default = ["render"]
 # Everything that touches the GPU or a window. Off, the server builds with
 # neither wgpu nor winit compiled at all.
-render = ["dep:wgpu", "dep:winit"]
+render = ["dep:wgpu", "dep:winit", "dep:egui", "dep:egui-wgpu"]
 # The websocket server. Native only.
 server = ["dep:axum", "dep:tower-http"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
-winit = { version = "0.29", optional = true }
+winit = { version = "0.30.13", optional = true }
+# UI. egui-wgpu tracks wgpu 30, and egui-winit tracks winit 0.30 -- which is why
+# winit moved up: the two must share one window and one wgpu.
+egui = { version = "0.36", optional = true }
+egui-wgpu = { version = "0.36", optional = true }
 bytemuck = { version = "1.16", features = ["derive", "extern_crate_alloc", "min_const_generics"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1.1", features = ["alloc"] }
+# Decoding an atlas sheet. Tiny, pure Rust, and builds for wasm.
+png = "0.18"
 
 # Server transport. Optional so the client, and a wasm build, pull none of it.
 axum = { version = "0.8", features = ["ws"], optional = true }

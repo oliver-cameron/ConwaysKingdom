@@ -52,8 +52,14 @@ impl Cell {
     /// Conway, so a new type costs one arm and disturbs nothing else.
     #[inline]
     pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
-        match self.meta() {
-            // No special types yet; everything follows the ordinary rules.
+        // Under glass is time-stopped, whatever the cell is and whether or not
+        // it is alive. Checked before the kind, so a pane freezes anything
+        // without every kind having to remember to honour it.
+        if self.is_glass() {
+            return self;
+        }
+        match self.kind() {
+            // No kind-specific rules yet; everything follows Conway.
             _ => self.conway(neighbours, seed),
         }
     }
@@ -112,6 +118,7 @@ fn parent(neighbours: &Neighbours, seed: u64) -> PlayerId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::Kind;
 
     fn neighbours(live: &[usize], player: u8) -> Neighbours {
         let mut n = [Cell::DEAD; 8];
@@ -123,7 +130,7 @@ mod tests {
 
     #[test]
     fn survival_changes_only_the_alive_bit() {
-        let me = Cell::alive(PlayerId(3)).with_meta(0b101_0101_010);
+        let me = Cell::alive(PlayerId(3)).with_kind(Kind(37));
         for live in [2, 3] {
             let next = next_cell(me, &neighbours(&(0..live).collect::<Vec<_>>(), 7), 0);
             assert_eq!(next, me, "{live} neighbours: nothing may change");
@@ -132,12 +139,12 @@ mod tests {
 
     #[test]
     fn death_keeps_owner_and_metadata() {
-        let me = Cell::alive(PlayerId(3)).with_meta(0b101_0101_010);
+        let me = Cell::alive(PlayerId(3)).with_kind(Kind(37));
         for live in [0, 1, 4, 5, 6, 7, 8] {
             let next = next_cell(me, &neighbours(&(0..live).collect::<Vec<_>>(), 7), 0);
             assert!(!next.is_alive(), "{live} neighbours: should die");
             assert_eq!(next.player(), me.player(), "owner is kept");
-            assert_eq!(next.meta(), me.meta(), "metadata is kept");
+            assert_eq!(next.kind(), me.kind(), "kind is kept");
         }
     }
 
@@ -206,16 +213,54 @@ mod tests {
         }
     }
 
+    /// Glass freezes what it covers, whatever surrounds it.
+    #[test]
+    fn a_cell_under_glass_never_changes() {
+        for live in 0..=8 {
+            let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
+            for me in [
+                // Alive under glass: would otherwise die or survive.
+                Cell::alive(PlayerId(3)).with_glass(true),
+                // Dead under glass: would otherwise be born at three.
+                Cell::DEAD.with_glass(true),
+                // Carrying a kind as well, to show the flag wins over it.
+                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_glass(true),
+            ] {
+                assert_eq!(next_cell(me, &n, 0), me, "{live} live neighbours");
+            }
+        }
+    }
+
+    /// Glass and alive are independent: all four combinations are meaningful.
+    #[test]
+    fn glass_and_alive_are_independent() {
+        for alive in [false, true] {
+            for glass in [false, true] {
+                let c = Cell::DEAD
+                    .with_alive(alive)
+                    .with_player(if alive { PlayerId(1) } else { PlayerId::UNOWNED })
+                    .with_glass(glass);
+                assert_eq!(c.is_alive(), alive);
+                assert_eq!(c.is_glass(), glass);
+            }
+        }
+        // A dead cell under glass stays dead even with three live neighbours,
+        // where without the glass it would be born.
+        let n = neighbours(&[0, 1, 2], 4);
+        assert!(next_cell(Cell::DEAD, &n, 0).is_alive());
+        assert!(!next_cell(Cell::DEAD.with_glass(true), &n, 0).is_alive());
+    }
+
     #[test]
     fn a_birth_keeps_whatever_metadata_the_dead_cell_carried() {
-        let corpse = Cell::DEAD.with_meta(0b111_0000_111).with_player(PlayerId(6));
+        let corpse = Cell::DEAD.with_kind(Kind(37)).with_player(PlayerId(6));
         let mut n = [Cell::DEAD; 8];
         for i in 0..3 {
             n[i] = Cell::alive(PlayerId(2));
         }
         let born = next_cell(corpse, &n, 1);
         assert!(born.is_alive());
-        assert_eq!(born.meta(), corpse.meta(), "metadata survives");
+        assert_eq!(born.kind(), corpse.kind(), "kind survives");
         assert_eq!(born.player(), PlayerId(2), "but a parent takes ownership");
     }
 }

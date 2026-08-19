@@ -36,13 +36,51 @@ pub type ChunkId = Coord;
 /// so both sides apply it at the same point in the sequence.
 pub type Tick = u64;
 
+/// What a player is putting down.
+///
+/// Named rather than carried as raw cell bits: the server has to be able to
+/// judge whether a placement is allowed, and it can only do that against a
+/// vocabulary it understands. A client that could send arbitrary bits could
+/// place anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Placement {
+    /// A living cell, owned by whoever placed it.
+    Cell,
+    /// A pane. Freezes what it covers, and is independent of whether the cell
+    /// beneath is alive.
+    Glass,
+}
+
+impl Placement {
+    /// Lay this over whatever is already there.
+    ///
+    /// A transform rather than a value, because alive and glass are
+    /// independent: laying a pane over a living cell must leave the cell
+    /// living, and building a cell under an existing pane must leave the pane.
+    /// Replacing the cell outright would silently destroy one to place the
+    /// other.
+    pub fn apply_to(self, existing: Cell, player: PlayerId) -> Cell {
+        match self {
+            Self::Cell => existing.with_alive(true).with_player(player),
+            // The pane belongs to whoever laid it. There is one owner field
+            // per cell, so glassing another player's living cell takes the
+            // cell with it -- deliberate, and the reason a pane costs what it
+            // does.
+            Self::Glass => existing.with_glass(true).with_player(player),
+        }
+    }
+}
+
 /// Something a player did. Deliberately not raw keystrokes: input is resolved
 /// to a world effect before it goes on the wire, so the server validates an
 /// intent rather than replaying a keyboard.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
-    /// Bring cells to life for this player, at absolute cell coordinates.
-    Paint { cells: Vec<(i32, i32)> },
+    /// Put something down for this player, at absolute cell coordinates.
+    Paint {
+        cells: Vec<(i32, i32)>,
+        placement: Placement,
+    },
     /// Kill cells at absolute cell coordinates.
     Erase { cells: Vec<(i32, i32)> },
 }
@@ -85,19 +123,55 @@ pub enum ServerMessage {
     Resync { tick: Tick, chunks: Vec<ChunkId> },
 }
 
+/// What one placed cell costs.
+///
+/// Placing is dear and reclaiming is cheap, so ground is worth holding and
+/// spending is a decision. Reclaiming your own pays one, so a cell you place
+/// and later take back is a net loss -- building is meant to commit you.
+pub const PLACE_COST: i32 = 5;
+
+/// What an action is worth to the player who did it.
+///
+/// Must be read **before** the action is applied, since it depends on what is
+/// there now. Shared by client and server for the same reason `apply` is: two
+/// implementations of what something costs are two ways to disagree about who
+/// can afford what.
+///
+/// Reclaiming your own living cell earns one. Placing costs one, and so does
+/// destroying someone else's cell — taking ground is not free. Erasing empty
+/// space is neither earned nor spent.
+pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
+    match &stamped.action {
+        Action::Paint { cells, .. } => -(cells.len() as i32) * PLACE_COST,
+        Action::Erase { cells } => cells
+            .iter()
+            .map(|&(row, col)| match world.cell_at(row, col) {
+                Some(cell) if !cell.is_alive() => 0,
+                Some(cell) if cell.player() == stamped.player => 1,
+                Some(_) => -1,
+                None => 0,
+            })
+            .sum(),
+    }
+}
+
 /// Apply an action to a world.
 ///
 /// Shared deliberately: the client predicts by applying actions locally and the
 /// server applies the same ones authoritatively, so two implementations of this
 /// would be two ways to disagree.
 pub fn apply(world: &mut World, stamped: &Stamped) {
-    let cells: &[(i32, i32)] = match &stamped.action {
-        Action::Paint { cells } | Action::Erase { cells } => cells,
-    };
-    let alive = matches!(stamped.action, Action::Paint { .. });
-    let value = if alive { Cell::alive(stamped.player) } else { Cell::DEAD };
-
-    for &(row, col) in cells {
-        world.set_cell_at(row, col, value);
+    match &stamped.action {
+        Action::Paint { cells, placement } => {
+            for &(row, col) in cells {
+                let existing = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+                world.set_cell_at(row, col, placement.apply_to(existing, stamped.player));
+            }
+        }
+        Action::Erase { cells } => {
+            for &(row, col) in cells {
+                world.set_cell_at(row, col, Cell::DEAD);
+            }
+        }
     }
 }

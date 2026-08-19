@@ -71,22 +71,33 @@ impl World {
 
     /// The world the app and the server open with.
     ///
-    /// A Gosper glider gun at the origin. It stays put, so there is always
-    /// something to join to, and it emits a glider every thirty generations,
-    /// so the trail of them says how long the server has been up.
+    /// Two Gosper glider guns facing each other, owned by different players.
+    /// They stay put, so there is always something to join to; they emit a
+    /// glider every thirty generations, so the trail says how long the server
+    /// has been up; and the two streams collide, so births happen with parents
+    /// of different colours and the random attribution is visible.
     ///
-    /// That second property is the point. A still life or an oscillator looks
-    /// identical whether it arrived from the server or the client regenerated
-    /// it locally, so it cannot tell a working join from a broken one. The
-    /// length of the glider trail is not something a client starting from
-    /// nothing can invent.
+    /// That second property is the point of a gun over a still life or an
+    /// oscillator, which look identical whether they arrived from the server or
+    /// the client regenerated them and so cannot tell a working join from a
+    /// broken one.
     pub fn demo() -> Self {
         let mut w = Self::infinite_empty();
-        for (row, col) in GOSPER_GUN {
-            w.set_cell_at(row, col, Cell::alive(PlayerId(1)));
-        }
+        w.seed_gun(0, 0, PlayerId(1), false);
+        // Mirrored and set opposite, so its gliders travel the other way and
+        // the two streams meet.
+        w.seed_gun(0, 80, PlayerId(2), true);
         w.generation = 0;
         w
+    }
+
+    /// A Gosper gun with its top-left at (row, col). Mirrored horizontally it
+    /// is still a gun, just firing the other way.
+    fn seed_gun(&mut self, row: i32, col: i32, player: PlayerId, mirrored: bool) {
+        for (r, c) in GOSPER_GUN {
+            let c = if mirrored { 35 - c } else { c };
+            self.set_cell_at(row + r, col + c, Cell::alive(player));
+        }
     }
 
     pub fn infinite() -> Self {
@@ -182,13 +193,24 @@ impl World {
     /// action reaches the world, so this must be able to grow it.
     pub fn set_cell(&mut self, chunk: Coord, (row, col): (usize, usize), cell: Cell) {
         let chunk = self.canonical(chunk);
-        if cell.is_alive() {
+        // Anything but a wholly empty cell needs somewhere to live -- a pane
+        // over empty ground is still something, and would otherwise vanish
+        // because no chunk was made for it.
+        if cell != Cell::DEAD {
             self.ensure(chunk);
         }
         if let Some(c) = self.chunk_at_mut(chunk) {
             c[(row, col)] = cell;
             self.dirty = true;
         }
+    }
+
+    /// Read one cell by absolute cell coordinates. `None` where no chunk is
+    /// held, which for an infinite world means nothing has ever lived there.
+    pub fn cell_at(&self, row: i32, col: i32) -> Option<Cell> {
+        let n = CHUNK_N as i32;
+        let chunk = self.chunk_at((row.div_euclid(n), col.div_euclid(n)))?;
+        Some(chunk[(row.rem_euclid(n) as usize, col.rem_euclid(n) as usize)])
     }
 
     /// Write one cell addressed in absolute cell coordinates, splitting it
@@ -307,6 +329,7 @@ impl World {
 
         self.active = active;
         self.generation += 1;
+        self.shatter_glass();
         self.dirty = true;
         self.prune();
     }
@@ -338,6 +361,77 @@ impl World {
             }
         }
         halo
+    }
+
+    /// Break every pane that life has reached.
+    ///
+    /// A pane touched by a living, unglassed cell shatters, and takes the whole
+    /// connected run of glass with it — a pane is one object, so cracking a
+    /// corner of it does not leave the rest standing.
+    ///
+    /// Connectivity is orthogonal. Panes are laid as rectangles, and two that
+    /// meet only at a corner are two panes rather than one; joining them
+    /// diagonally would let a break travel between panes that merely touch.
+    ///
+    /// Run after the rules, so it sees the generation that actually did the
+    /// touching. Absolute coordinates throughout, so a pane spanning chunks
+    /// breaks as one rather than stopping at a boundary.
+    fn shatter_glass(&mut self) {
+        // Life reaches diagonally, so a pane is touched by any of the eight.
+        let seeds: Vec<(i32, i32)> = self
+            .glass_cells()
+            .into_iter()
+            .filter(|&(row, col)| {
+                Dir::ALL.iter().any(|dir| {
+                    let (dr, dc) = dir.delta();
+                    self.cell_at(row + dr, col + dc)
+                        .is_some_and(|c| c.is_alive() && !c.is_glass())
+                })
+            })
+            .collect();
+        if seeds.is_empty() {
+            return;
+        }
+
+        let mut broken: HashSet<(i32, i32)> = HashSet::new();
+        let mut queue = seeds;
+        while let Some(at) = queue.pop() {
+            if !broken.insert(at) {
+                continue;
+            }
+            for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let next = (at.0 + dr, at.1 + dc);
+                if !broken.contains(&next)
+                    && self.cell_at(next.0, next.1).is_some_and(|c| c.is_glass())
+                {
+                    queue.push(next);
+                }
+            }
+        }
+
+        for (row, col) in broken {
+            if let Some(cell) = self.cell_at(row, col) {
+                self.set_cell_at(row, col, cell.with_glass(false));
+            }
+        }
+    }
+
+    /// Every glassed cell, in absolute coordinates.
+    fn glass_cells(&self) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        for ((crow, ccol), chunk) in self.stored() {
+            for row in 0..CHUNK_N {
+                for col in 0..CHUNK_N {
+                    if chunk[(row, col)].is_glass() {
+                        out.push((
+                            crow * CHUNK_N as i32 + row as i32,
+                            ccol * CHUNK_N as i32 + col as i32,
+                        ));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Drop empty chunks. Safe unconditionally: an absent chunk reads as dead,
@@ -698,6 +792,108 @@ mod tests {
         let b2 = b.with_chunk_for_test(coord, edited);
         assert_eq!(a.live_cells(), b2.live_cells(), "liveness is unchanged");
         assert_ne!(a.digest(), b2.digest(), "but the digest must differ");
+    }
+
+    /// A pane is one object: touching any of it breaks all of it, however far
+    /// it runs and across however many chunks.
+    #[test]
+    fn touching_a_pane_shatters_the_whole_run() {
+        let mut w = World::infinite_empty();
+        // A run of glass 40 cells long, which spans three chunks at 16 wide.
+        for col in 0..40 {
+            w.set_cell_at(0, col, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+        }
+        // A block far along it, so the break has to travel back to the start.
+        for (r, c) in [(1, 38), (1, 39), (2, 38), (2, 39)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
+        }
+        assert!(w.cell_at(0, 0).unwrap().is_glass());
+
+        w.step();
+
+        for col in 0..40 {
+            assert!(
+                !w.cell_at(0, col).map(|c| c.is_glass()).unwrap_or(false),
+                "glass at column {col} survived"
+            );
+        }
+    }
+
+    /// Two panes that meet only at a corner are two panes. Breaking one must
+    /// not break the other, or every pane on a diagonal falls together.
+    #[test]
+    fn a_break_does_not_jump_a_diagonal_join() {
+        let mut w = World::infinite_empty();
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            w.set_cell_at(r, c, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+        }
+        // Touching only at (1,1)'s corner.
+        for (r, c) in [(2, 2), (2, 3), (3, 2), (3, 3)] {
+            w.set_cell_at(r, c, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+        }
+        // Life against the first pane only.
+        for (r, c) in [(-1, -1), (-1, 0), (-2, -1), (-2, 0)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
+        }
+
+        w.step();
+
+        assert!(!w.cell_at(0, 0).unwrap().is_glass(), "the touched pane breaks");
+        assert!(
+            w.cell_at(3, 3).unwrap().is_glass(),
+            "the pane it only meets at a corner should stand"
+        );
+    }
+
+    /// Glass with nothing alive beside it is left alone.
+    #[test]
+    fn an_untouched_pane_stands() {
+        let mut w = World::infinite_empty();
+        for col in 0..8 {
+            w.set_cell_at(0, col, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+        }
+        for _ in 0..10 {
+            w.step();
+        }
+        for col in 0..8 {
+            assert!(w.cell_at(0, col).unwrap().is_glass(), "column {col} broke");
+        }
+    }
+
+    /// A pane is not broken by what it covers. The cell underneath is frozen,
+    /// and frozen is not "alive and unglassed", so it cannot be the seed --
+    /// otherwise every pane laid over life would shatter on the next tick.
+    #[test]
+    fn a_pane_is_not_broken_by_the_cell_it_covers() {
+        let mut w = World::infinite_empty();
+        // Alone, so nothing can be born next to it: a single live cell gives
+        // any neighbour one live neighbour, and a birth needs three.
+        w.set_cell_at(0, 0, Cell::alive(PlayerId(1)).with_glass(true));
+
+        for _ in 0..10 {
+            w.step();
+        }
+
+        let c = w.cell_at(0, 0).unwrap();
+        assert!(c.is_glass(), "the pane broke from the inside");
+        assert!(c.is_alive(), "and what it covers should be frozen, not dead");
+    }
+
+    /// Frozen cells still count as neighbours, so a pane laid over life makes
+    /// life around itself -- and that newborn breaks the pane. Emergent rather
+    /// than designed, and worth pinning down: it means glass shelters what is
+    /// under it without sealing it off from the world.
+    #[test]
+    fn life_born_beside_a_pane_breaks_it() {
+        let mut w = World::infinite_empty();
+        for col in 0..6 {
+            w.set_cell_at(0, col, Cell::alive(PlayerId(1)).with_glass(true));
+        }
+        w.step();
+        assert!(
+            !w.cell_at(0, 0).unwrap().is_glass(),
+            "a cell born beside the pane should have broken it"
+        );
     }
 
     #[test]
