@@ -23,7 +23,7 @@
 //! from the tick and the cell's absolute position, so every peer rolls the same
 //! number without exchanging one.
 
-use super::cell::{Cell, Kind};
+use super::cell::Cell;
 use super::player::PlayerId;
 
 /// Neighbours in [`super::Dir::ALL`] order: N, NE, E, SE, S, SW, W, NW.
@@ -52,17 +52,14 @@ impl Cell {
     /// Conway, so a new type costs one arm and disturbs nothing else.
     #[inline]
     pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
-        // A frozen cell is time-stopped, whatever it is. Checked before the
-        // kind, so freezing works on anything without every kind having to
-        // remember to honour it.
-        if self.is_frozen() {
+        // Under glass is time-stopped, whatever the cell is and whether or not
+        // it is alive. Checked before the kind, so a pane freezes anything
+        // without every kind having to remember to honour it.
+        if self.is_glass() {
             return self;
         }
         match self.kind() {
-            // Glass is a structure, not life: it does not live or die by
-            // neighbour count. It goes when the pane it belongs to breaks.
-            Kind::GLASS => self,
-            // Everything else follows the ordinary rules.
+            // No kind-specific rules yet; everything follows Conway.
             _ => self.conway(neighbours, seed),
         }
     }
@@ -121,6 +118,7 @@ fn parent(neighbours: &Neighbours, seed: u64) -> PlayerId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::Kind;
 
     fn neighbours(live: &[usize], player: u8) -> Neighbours {
         let mut n = [Cell::DEAD; 8];
@@ -215,30 +213,42 @@ mod tests {
         }
     }
 
-    /// A frozen cell is time-stopped whatever surrounds it. This is what a
-    /// glass pane does to the cells it covers.
+    /// Glass freezes what it covers, whatever surrounds it.
     #[test]
-    fn a_frozen_cell_never_changes() {
+    fn a_cell_under_glass_never_changes() {
         for live in 0..=8 {
             let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
             for me in [
-                Cell::alive(PlayerId(3)).with_frozen(true),
-                Cell::DEAD.with_frozen(true),
-                Cell::alive(PlayerId(2)).with_kind(Kind::GLASS).with_frozen(true),
+                // Alive under glass: would otherwise die or survive.
+                Cell::alive(PlayerId(3)).with_glass(true),
+                // Dead under glass: would otherwise be born at three.
+                Cell::DEAD.with_glass(true),
+                // Carrying a kind as well, to show the flag wins over it.
+                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_glass(true),
             ] {
                 assert_eq!(next_cell(me, &n, 0), me, "{live} live neighbours");
             }
         }
     }
 
-    /// Glass is a structure, not life: it does not die of loneliness.
+    /// Glass and alive are independent: all four combinations are meaningful.
     #[test]
-    fn glass_ignores_its_neighbours() {
-        let glass = Cell::alive(PlayerId(1)).with_kind(Kind::GLASS);
-        for live in 0..=8 {
-            let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
-            assert_eq!(next_cell(glass, &n, 0), glass, "{live} live neighbours");
+    fn glass_and_alive_are_independent() {
+        for alive in [false, true] {
+            for glass in [false, true] {
+                let c = Cell::DEAD
+                    .with_alive(alive)
+                    .with_player(if alive { PlayerId(1) } else { PlayerId::UNOWNED })
+                    .with_glass(glass);
+                assert_eq!(c.is_alive(), alive);
+                assert_eq!(c.is_glass(), glass);
+            }
         }
+        // A dead cell under glass stays dead even with three live neighbours,
+        // where without the glass it would be born.
+        let n = neighbours(&[0, 1, 2], 4);
+        assert!(next_cell(Cell::DEAD, &n, 0).is_alive());
+        assert!(!next_cell(Cell::DEAD.with_glass(true), &n, 0).is_alive());
     }
 
     #[test]

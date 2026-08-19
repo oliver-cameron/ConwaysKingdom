@@ -6,7 +6,7 @@
 //! keep the [`World`] and drop everything else in this file.
 
 use crate::render::app::App;
-use crate::render::atlas::{Atlas, Source};
+use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
 };
@@ -15,7 +15,8 @@ use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
 use crate::sim::{World, CHUNK_N};
 
 use crate::net::link::Link;
-use crate::net::{ClientMessage, ServerMessage};
+use crate::net::{Action, ClientMessage, ServerMessage, Stamped};
+use crate::sim::PlayerId;
 
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
@@ -247,6 +248,28 @@ impl BattleApp {
     /// Ask for any visible chunk not already requested. The camera is fixed for
     /// now, so this settles after the first frame; it is written against the
     /// viewport so panning needs no new code.
+    /// Bring a cell to life for this player.
+    ///
+    /// Applied locally *and* sent, rather than sent and awaited: the rules are
+    /// deterministic and the server applies the same `net::apply`, so acting
+    /// immediately shows the right answer a round trip early. If the server
+    /// disagrees -- because the action was refused, or landed on a different
+    /// tick -- the chunk digests will not match and the resync puts it right.
+    fn place(&mut self, row: i32, col: i32) {
+        let player = self.me.unwrap_or(PlayerId(1));
+        let action = Action::Paint { cells: vec![(row, col)] };
+        let stamped = Stamped { tick: self.world.generation, player, action };
+
+        crate::net::apply(&mut self.world, &stamped);
+        self.world.dirty = true;
+
+        match &self.link {
+            Some(link) => link.send(ClientMessage::Act(stamped)),
+            // Offline, the local world is the only world, so it is already done.
+            None => log::debug!("placed ({row}, {col}) locally; no server to tell"),
+        }
+    }
+
     /// Chunk coordinates the viewport covers, plus a margin.
     fn visible_chunks(&self) -> Vec<crate::sim::Coord> {
         let (vw, vh) = self.viewport;
@@ -302,7 +325,7 @@ impl App for BattleApp {
             WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
         };
         let mut chunks = ChunkStore::new(&gpu.device);
-        let atlas = Atlas::new(&gpu.device, &gpu.queue, atlas_source());
+        let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
         chunks.sync(&gpu.queue, &world, TORUS_REPEATS, &[]);
 
@@ -404,10 +427,7 @@ impl App for BattleApp {
 
         if let Some(at) = self.pending_click.take() {
             let (row, col) = self.cell_under_cursor(at);
-            // Resolved and deliberately ignored. Sending it is one line --
-            // ClientMessage::Act with a Paint at this cell -- once there is a
-            // decision about what a click should mean.
-            log::info!("click at cell ({row}, {col})");
+            self.place(row, col);
         }
 
         self.world.update(dt, GENERATION_SPAN);
@@ -585,21 +605,4 @@ fn open_link() -> Option<Link> {
     let link = Link::connect(url?);
     link.send(ClientMessage::Join { name });
     Some(link)
-}
-
-/// Where the sprite sheet comes from.
-///
-/// `assets/atlas.png` if it exists at build time, otherwise the generated
-/// sheet — so the project runs with no art checked in, and gains art by
-/// dropping a file in. 256x256 RGBA: R saturation, G lightness, A coverage.
-/// No hue; that comes from the player.
-fn atlas_source() -> Source<'static> {
-    #[cfg(feature = "atlas-image")]
-    {
-        Source::Png(include_bytes!("../assets/atlas.png"))
-    }
-    #[cfg(not(feature = "atlas-image"))]
-    {
-        Source::Generated
-    }
 }

@@ -23,8 +23,6 @@ default = ["render"]
 render = ["dep:wgpu", "dep:winit"]
 # The websocket server. Native only.
 server = ["dep:axum", "dep:tower-http"]
-# Load assets/atlas.png instead of the generated sheet.
-atlas-image = []
 
 [dependencies]
 wgpu = { version = "30", optional = true }

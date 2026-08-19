@@ -49,9 +49,10 @@ pub mod bits {
     pub const FLAG_WIDTH: u16 = 2;
     pub const FLAG_MASK: u16 = (1 << FLAG_WIDTH) - 1;
 
-    /// This cell does not update. Set on the cells a glass pane covers, so
-    /// time inside one is frozen; the rule returns such a cell unchanged.
-    pub const FLAG_FROZEN: u16 = 1 << 9;
+    /// A pane covers this cell. Independent of `ALIVE`: a cell may be alive,
+    /// glassed, both, or neither. Glass freezes what it covers, so the rule
+    /// returns such a cell unchanged.
+    pub const FLAG_GLASS: u16 = 1 << 9;
 
     /// Bits 11..16: player number, at the top of the word.
     pub const PLAYER_SHIFT: u16 = 11;
@@ -66,7 +67,7 @@ const _: () = {
     assert!(bits::KIND_SHIFT == 1);
     assert!(bits::FLAG_SHIFT == bits::KIND_SHIFT + bits::KIND_WIDTH);
     assert!(bits::PLAYER_SHIFT == bits::FLAG_SHIFT + bits::FLAG_WIDTH);
-    assert!(bits::FLAG_FROZEN == 1 << bits::FLAG_SHIFT);
+    assert!(bits::FLAG_GLASS == 1 << bits::FLAG_SHIFT);
     assert!(bits::PLAYER_SHIFT + bits::PLAYER_WIDTH == 16);
     // R16Uint is read little-endian by the GPU.
     assert!(cfg!(target_endian = "little"));
@@ -118,10 +119,11 @@ impl Cell {
         (self.bits() >> bits::FLAG_SHIFT) & bits::FLAG_MASK
     }
 
-    /// Frozen cells do not update, so a glass pane stops time inside itself.
+    /// Under glass, and therefore not updating: a pane stops time inside
+    /// itself. Says nothing about whether the cell is alive.
     #[inline]
-    pub const fn is_frozen(self) -> bool {
-        self.bits() & bits::FLAG_FROZEN != 0
+    pub const fn is_glass(self) -> bool {
+        self.bits() & bits::FLAG_GLASS != 0
     }
 
     #[inline]
@@ -146,11 +148,11 @@ impl Cell {
     }
 
     #[inline]
-    pub const fn with_frozen(self, frozen: bool) -> Self {
-        if frozen {
-            Self::from_bits(self.bits() | bits::FLAG_FROZEN)
+    pub const fn with_glass(self, glass: bool) -> Self {
+        if glass {
+            Self::from_bits(self.bits() | bits::FLAG_GLASS)
         } else {
-            Self::from_bits(self.bits() & !bits::FLAG_FROZEN)
+            Self::from_bits(self.bits() & !bits::FLAG_GLASS)
         }
     }
 }
@@ -160,7 +162,7 @@ impl core::fmt::Debug for Cell {
         f.debug_struct("Cell")
             .field("alive", &self.is_alive())
             .field("kind", &self.kind().0)
-            .field("frozen", &self.is_frozen())
+            .field("glass", &self.is_glass())
             .field("player", &self.player().0)
             .finish()
     }
@@ -175,11 +177,10 @@ pub struct Kind(pub u8);
 impl Kind {
     /// An ordinary living cell.
     pub const NORMAL: Self = Self(0);
-    /// A pane. Freezes what it covers; breaks when live cells touch it.
-    pub const GLASS: Self = Self(1);
-    /// Kinds that must have a sprite. Extend this and the atlas test fails
-    /// until the art exists.
-    pub const ALL: [Self; 2] = [Self::NORMAL, Self::GLASS];
+    /// Every kind. Each must have art at its own index in `render::atlas`;
+    /// extend this and the sprite list beside it, or it will not compile.
+    pub const ALL: [Self; 1] = [Self::NORMAL];
+    pub const COUNT: usize = Self::ALL.len();
 }
 
 /// A chunk's cells, row-major. The first index is the texture's Y, the second
@@ -384,21 +385,21 @@ mod tests {
     fn the_bit_fields_are_independent() {
         for kind in [0u8, 1, 200, 255] {
             for p in 0..=PlayerId::MAX {
-                for frozen in [false, true] {
+                for glass in [false, true] {
                     let c = Cell::DEAD
                         .with_alive(true)
                         .with_kind(Kind(kind))
-                        .with_frozen(frozen)
+                        .with_glass(glass)
                         .with_player(PlayerId(p));
                     assert!(c.is_alive());
                     assert_eq!(c.kind(), Kind(kind));
-                    assert_eq!(c.is_frozen(), frozen);
+                    assert_eq!(c.is_glass(), glass);
                     assert_eq!(c.player(), PlayerId(p));
                     // Clearing alive must leave the others alone.
                     let d = c.with_alive(false);
                     assert!(!d.is_alive());
                     assert_eq!(d.kind(), Kind(kind));
-                    assert_eq!(d.is_frozen(), frozen);
+                    assert_eq!(d.is_glass(), glass);
                     assert_eq!(d.player(), PlayerId(p));
                 }
             }
@@ -428,7 +429,7 @@ mod tests {
         assert_eq!(c.bits() >> bits::PLAYER_SHIFT, 5);
         assert_eq!(c.player(), PlayerId(5));
 
-        let low = Cell::alive(PlayerId(1)).with_kind(Kind(255)).with_frozen(true);
+        let low = Cell::alive(PlayerId(1)).with_kind(Kind(255)).with_glass(true);
         let high = Cell::alive(PlayerId(2));
         assert!(high.bits() > low.bits(), "player dominates the ordering");
     }
