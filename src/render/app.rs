@@ -17,7 +17,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 use crate::render::context::{Frame, FrameAcquire, GpuState};
-use crate::render::ui::Ui;
 
 /// Implement this to plug your own resources and pipelines into the loop. The
 /// core knows nothing about what you draw — it calls `draw_calls` each frame
@@ -41,8 +40,31 @@ pub trait App: 'static {
         Some(wgpu::Color { r: 0.05, g: 0.05, b: 0.08, a: 1.0 })
     }
 
-    /// Build the overlay. Runs every frame, after `update`.
-    fn hud(&mut self, _ctx: &egui::Context) {}
+    /// A raw window event, before it is dispatched to anything below.
+    /// Returning true means the app took it and the typed callbacks should not
+    /// also fire — an interface layer uses this to keep a click on a button
+    /// from also acting on the world.
+    fn on_window_event(&mut self, _event: &WindowEvent, _scale: f32) -> bool {
+        false
+    }
+
+    /// Record anything that should sit on top of the world, into the same
+    /// pass. Runs after `draw_calls`.
+    ///
+    /// `render` knows nothing about what draws here; an interface is the
+    /// client's business, and keeping it out of this module is what lets the
+    /// module stay generic wgpu and winit.
+    ///
+    /// Takes `&self` because the frame holds an immutable borrow of the app
+    /// for the whole pass — `draw_calls` returns references into it. Anything
+    /// here that needs to mutate does so behind its own cell.
+    fn overlay(
+        &self,
+        _gpu: &GpuState,
+        _encoder: &mut wgpu::CommandEncoder,
+        _pass: &mut wgpu::RenderPass<'static>,
+    ) {
+    }
 
     fn on_key(&mut self, _code: winit::keyboard::KeyCode, _pressed: bool) {}
     fn on_scroll(&mut self, _delta: MouseScrollDelta) {}
@@ -82,7 +104,6 @@ pub async fn run<A: App>() {
 struct Running<A> {
     window: Arc<Window>,
     gpu: GpuState,
-    ui: Ui,
     app: A,
     last_frame: f64,
 }
@@ -111,10 +132,9 @@ impl<A: App> Harness<A> {
         let Some((window, gpu)) = self.pending.borrow_mut().take() else {
             return;
         };
-        let ui = Ui::new(&gpu);
         let app = A::init(&gpu);
         let last_frame = now_secs();
-        self.running = Some(Running { window, gpu, ui, app, last_frame });
+        self.running = Some(Running { window, gpu, app, last_frame });
         if let Some(r) = &self.running {
             r.window.request_redraw();
         }
@@ -173,10 +193,10 @@ impl<A: App> ApplicationHandler for Harness<A> {
         self.take_pending();
         let Some(r) = &mut self.running else { return };
 
-        // The overlay sees every event first, and anything it uses is not also
-        // an action in the world -- otherwise pressing a button would take a
-        // cell behind it.
-        let consumed = r.ui.on_window_event(&event, r.gpu.scale_factor);
+        // The app sees the raw event first, and anything it takes does not
+        // also fire the typed callbacks -- otherwise pressing a button would
+        // take the cell behind it.
+        let consumed = r.app.on_window_event(&event, r.gpu.scale_factor);
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -214,16 +234,13 @@ impl<A: App> ApplicationHandler for Harness<A> {
 
                 r.app.update(&r.gpu, dt);
 
-                let app = &mut r.app;
-                let ui_output = r.ui.run(&r.gpu, now, |ctx| app.hud(ctx));
-
                 match Frame::begin(&r.gpu) {
                     FrameAcquire::Ready(frame) => {
                         let calls = r.app.draw_calls();
-                        let ui = &mut r.ui;
+                        let app = &r.app;
                         let gpu = &r.gpu;
-                        frame.submit(gpu, r.app.clear_color(), &calls, |encoder, pass| {
-                            ui.render(gpu, encoder, pass, &ui_output);
+                        frame.submit(gpu, app.clear_color(), &calls, |encoder, pass| {
+                            app.overlay(gpu, encoder, pass);
                         });
                     }
                     FrameAcquire::Skip => {}

@@ -12,7 +12,6 @@ pub mod atlas;
 pub mod chunks;
 pub mod context;
 pub mod pipeline;
-pub mod ui;
 
 pub use app::{run, App};
 pub use atlas::Atlas;
@@ -21,5 +20,4 @@ pub use chunks::{
     Instance, MAX_INSTANCES, SHADER_SOURCE,
 };
 pub use context::{Draw, DrawCall, Frame, FrameAcquire, GpuState, IndexBufferBinding};
-pub use ui::Ui;
 pub use pipeline::{create_pipeline, create_pipeline_with, PipelineDescriptor};
