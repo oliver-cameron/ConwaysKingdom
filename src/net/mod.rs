@@ -62,7 +62,11 @@ impl Placement {
     pub fn apply_to(self, existing: Cell, player: PlayerId) -> Cell {
         match self {
             Self::Cell => existing.with_alive(true).with_player(player),
-            Self::Glass => existing.with_glass(true),
+            // The pane belongs to whoever laid it. There is one owner field
+            // per cell, so glassing another player's living cell takes the
+            // cell with it -- deliberate, and the reason a pane costs what it
+            // does.
+            Self::Glass => existing.with_glass(true).with_player(player),
         }
     }
 }
@@ -119,6 +123,13 @@ pub enum ServerMessage {
     Resync { tick: Tick, chunks: Vec<ChunkId> },
 }
 
+/// What one placed cell costs.
+///
+/// Placing is dear and reclaiming is cheap, so ground is worth holding and
+/// spending is a decision. Reclaiming your own pays one, so a cell you place
+/// and later take back is a net loss -- building is meant to commit you.
+pub const PLACE_COST: i32 = 5;
+
 /// What an action is worth to the player who did it.
 ///
 /// Must be read **before** the action is applied, since it depends on what is
@@ -131,7 +142,7 @@ pub enum ServerMessage {
 /// space is neither earned nor spent.
 pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
     match &stamped.action {
-        Action::Paint { cells, .. } => -(cells.len() as i32),
+        Action::Paint { cells, .. } => -(cells.len() as i32) * PLACE_COST,
         Action::Erase { cells } => cells
             .iter()
             .map(|&(row, col)| match world.cell_at(row, col) {

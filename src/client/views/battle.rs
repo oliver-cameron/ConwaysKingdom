@@ -97,9 +97,14 @@ pub struct BattleApp {
     camera: (f32, f32),
     /// Screen pixels per cell.
     zoom: f32,
-    /// Left button held, and whether it has moved far enough to be a drag.
+    /// Left button held, and where it went down, in cells. A drag draws a
+    /// rectangle to fill; a press that never moves is a single click.
     dragging: bool,
     drag_moved: bool,
+    drag_from: (i32, i32),
+    /// Middle button held: panning. Separate from the left button so drawing a
+    /// rectangle and moving the view are never the same gesture.
+    panning: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
     /// Fingers currently down, as (id, position). Two of them is a pinch.
@@ -290,6 +295,55 @@ impl BattleApp {
     /// Ask for any visible chunk not already requested. The camera is fixed for
     /// now, so this settles after the first frame; it is written against the
     /// viewport so panning needs no new code.
+    /// Fill a rectangle with whatever the hotbar has selected.
+    ///
+    /// Always places, never takes: a drag across occupied ground is far more
+    /// likely to be building over it than a request to clear it cell by cell,
+    /// and an accidental sweep that wiped a structure would be unforgiving.
+    /// Taking stays a deliberate single click.
+    fn fill(&mut self, from: (i32, i32), to: (i32, i32)) {
+        let (r0, r1) = (from.0.min(to.0), from.0.max(to.0));
+        let (c0, c1) = (from.1.min(to.1), from.1.max(to.1));
+        let cells: Vec<(i32, i32)> = (r0..=r1)
+            .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+            .collect();
+        let count = cells.len();
+
+        let player = self.me.unwrap_or(PlayerId(1));
+        let stamped = Stamped {
+            tick: self.world.generation,
+            player,
+            action: Action::Paint {
+                cells,
+                placement: hotbar::SLOTS[self.slot].placement,
+            },
+        };
+
+        let delta = crate::net::value_delta(&self.world, &stamped);
+        if self.value + delta < 0 {
+            self.notice = Some(format!(
+                "{count} cells costs {}, you have {}",
+                -delta, self.value
+            ));
+            return;
+        }
+        self.notice = None;
+        self.value += delta;
+        crate::net::apply(&mut self.world, &stamped);
+        self.world.dirty = true;
+        self.last_action = Some(format!(
+            "filled {}x{} with {}, -{}",
+            r1 - r0 + 1,
+            c1 - c0 + 1,
+            hotbar::SLOTS[self.slot].name,
+            -delta
+        ));
+
+        if let Some(link) = &self.link {
+            link.send(ClientMessage::Act(stamped));
+        }
+    }
+
     /// One button does everything, and the cell under it decides which.
     ///
     /// Something living there means take it — your own for value, someone
@@ -464,6 +518,8 @@ impl App for BattleApp {
             zoom: START_ZOOM,
             dragging: false,
             drag_moved: false,
+            drag_from: (0, 0),
+            panning: false,
             pan: [false; 4],
             touches: Vec::new(),
             pinch_span: None,
@@ -509,8 +565,12 @@ impl App for BattleApp {
         }
 
         if let Some(at) = self.pending_click.take() {
-            let (row, col) = self.cell_under_cursor(at);
-            self.click(row, col);
+            let to = self.cell_under_cursor(at);
+            if self.drag_moved {
+                self.fill(self.drag_from, to);
+            } else {
+                self.click(to.0, to.1);
+            }
         }
 
         self.world.update(dt, GENERATION_SPAN);
@@ -581,13 +641,14 @@ impl App for BattleApp {
     fn on_cursor(&mut self, x: f64, y: f64) {
         let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
         self.cursor = (x, y);
-        if self.dragging {
-            if dx.abs() > DRAG_SLOP || dy.abs() > DRAG_SLOP {
-                self.drag_moved = true;
-            }
-            // Dragging pulls the world with the pointer, so the camera moves
-            // the other way. Divided by zoom, because the drag is in pixels
-            // and the camera lives in cells.
+
+        if self.dragging && (dx.abs() > DRAG_SLOP || dy.abs() > DRAG_SLOP) {
+            self.drag_moved = true;
+        }
+        if self.panning {
+            // Panning pulls the world with the pointer, so the camera moves the
+            // other way. Divided by zoom, because the drag is in pixels and the
+            // camera lives in cells.
             self.camera.0 -= dx as f32 / self.zoom;
             self.camera.1 -= dy as f32 / self.zoom;
             self.camera_dirty = true;
@@ -634,7 +695,9 @@ impl App for BattleApp {
         }
 
         match self.touches.as_slice() {
-            // One finger drags, like a held mouse button.
+            // One finger pans, which is what a finger does everywhere else.
+            // Drawing a rectangle on a touchscreen will want a deliberate
+            // gesture of its own rather than stealing this one.
             [(_, at)] => {
                 if matches!(phase, P::Started) {
                     self.cursor = *at;
@@ -668,23 +731,32 @@ impl App for BattleApp {
         }
     }
 
-    fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta, zoom_gesture: bool) {
+    /// A wheel zooms; a trackpad scrolls the view. They arrive as the same
+    /// event, and the only thing separating them is the unit: a wheel reports
+    /// discrete lines, a trackpad continuous pixels. Holding ctrl means zoom
+    /// either way, which is how a trackpad pinch reaches a browser.
+    ///
+    /// Splitting on the unit is what makes the gestures consistent. Treating
+    /// every scroll as zoom made a two-finger swipe on a trackpad lurch the
+    /// zoom when every other application pans with it.
+    fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta, ctrl: bool) {
         use winit::event::MouseScrollDelta as D;
-        // A line of wheel and a pixel of trackpad are wildly different
-        // magnitudes, so normalise before using either.
-        let mut steps = match delta {
-            D::LineDelta(_, y) => y,
-            D::PixelDelta(p) => p.y as f32 / 50.0,
-        };
-        // A pinch reported as ctrl+wheel arrives in much finer increments than
-        // a wheel notch, so it needs a gentler factor or the smallest pinch
-        // jumps several zoom levels.
-        if zoom_gesture {
-            steps *= 0.35;
+        match delta {
+            // A wheel notch: zoom, about the cursor rather than the screen
+            // centre, so what is under the pointer stays under it.
+            D::LineDelta(_, y) => self.zoom_about_cursor(1.15f32.powf(y)),
+            // A trackpad. Pixels are already screen distance, so panning is a
+            // straight division by zoom; zooming needs a much gentler factor
+            // than a notch or the smallest pinch jumps several levels.
+            D::PixelDelta(p) if ctrl => {
+                self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0))
+            }
+            D::PixelDelta(p) => {
+                self.camera.0 -= p.x as f32 / self.zoom;
+                self.camera.1 -= p.y as f32 / self.zoom;
+                self.camera_dirty = true;
+            }
         }
-        // About the cursor, not the screen centre: zooming towards a corner
-        // should keep what is under the pointer under the pointer.
-        self.zoom_about_cursor(1.15f32.powf(steps));
     }
 
     /// Left removes, right places.
@@ -697,22 +769,27 @@ impl App for BattleApp {
     /// cell. Resolution is deferred to the next frame, because input callbacks
     /// are not handed the `GpuState` and the screen-to-world mapping needs the
     /// viewport.
+    /// Left draws: a click acts on one cell, a drag fills the rectangle it
+    /// swept. Middle pans, so drawing and moving the view are never the same
+    /// gesture and neither has to guess which was meant.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
-        if button != winit::event::MouseButton::Left {
-            return;
+        use winit::event::MouseButton as B;
+        match button {
+            B::Middle => self.panning = pressed,
+            B::Left if pressed => {
+                self.dragging = true;
+                self.drag_moved = false;
+                self.drag_from = self.cell_under_cursor(self.cursor);
+            }
+            B::Left => {
+                if !self.dragging {
+                    return;
+                }
+                self.dragging = false;
+                self.pending_click = Some(self.cursor);
+            }
+            _ => {}
         }
-        if pressed {
-            self.dragging = true;
-            self.drag_moved = false;
-            return;
-        }
-        self.dragging = false;
-        // A press that moved was a pan, not a click on whatever happened to be
-        // under the cursor when it started.
-        if self.drag_moved {
-            return;
-        }
-        self.pending_click = Some(self.cursor);
     }
 
     fn on_window_event(&mut self, event: &winit::event::WindowEvent, scale: f32) -> bool {
