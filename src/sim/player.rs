@@ -40,11 +40,25 @@ pub struct Player {
     /// Tick this player was last heard from, for timing out a dead
     /// connection. A plain counter here so `sim` owes `net` nothing.
     pub last_seen: u64,
+    /// What this player has to spend. Reclaiming your own cells earns it;
+    /// placing cells, or destroying someone else's, costs it. Signed because
+    /// the arithmetic is naturally signed, though the rules never let it fall
+    /// below zero -- an action that cannot be afforded is refused instead.
+    pub value: i32,
 }
 
 impl Player {
+    /// What a player joins with.
+    ///
+    /// Provisional. The intended opening is a small block of cells to mine
+    /// rather than a number in hand, so this only needs to be enough to build
+    /// something before the mining loop takes over -- twenty cells at the
+    /// current price. Reclaiming pays one against a cost of five, so the ratio
+    /// is what actually sets the pace; this only sets where it starts.
+    pub const STARTING_VALUE: i32 = 100;
+
     pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
-        Self { id, name: name.into(), last_seen: 0 }
+        Self { id, name: name.into(), last_seen: 0, value: Self::STARTING_VALUE }
     }
 }
 

@@ -47,6 +47,10 @@ impl Server {
         &self.world
     }
 
+    pub fn value_of(&self, id: PlayerId) -> Option<i32> {
+        self.players.get(&id).map(|p| p.value)
+    }
+
     pub fn player_count(&self) -> usize {
         self.players.len()
     }
@@ -133,7 +137,24 @@ impl Server {
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
-                if self.players.contains_key(&stamped.player) {
+                // Cost is charged now, against the world as it stands, rather
+                // than when the action is applied at the tick boundary -- the
+                // client priced it against the same state, so pricing it later
+                // would let the two disagree.
+                if let Some(player) = self.players.get(&stamped.player) {
+                    let delta = crate::net::value_delta(&self.world, &stamped);
+                    if player.value + delta < 0 {
+                        log::info!(
+                            "refused {:?}: costs {} with {} in hand",
+                            stamped.player,
+                            -delta,
+                            player.value
+                        );
+                        return Vec::new();
+                    }
+                    if let Some(p) = self.players.get_mut(&stamped.player) {
+                        p.value += delta;
+                    }
                     self.pending.push(stamped);
                 }
                 Vec::new()
@@ -217,7 +238,7 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::Action;
+    use crate::net::{Action, Placement, PLACE_COST};
     use crate::sim::CHUNK_N;
 
     #[test]
@@ -250,7 +271,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)] },
+                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)], placement: Placement::Cell },
             }),
         );
         s.step();
@@ -277,7 +298,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)] },
+                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)], placement: Placement::Cell },
             }),
         );
         for _ in 0..25 {
@@ -318,6 +339,69 @@ mod tests {
             "a bad file must not be silently replaced with an empty world"
         );
         let _ = std::fs::remove_file(&corrupt);
+    }
+
+    #[test]
+    fn reclaiming_your_own_cells_pays_and_placing_costs() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        let start = s.value_of(me).unwrap();
+
+        let act = |s: &mut Server, action| {
+            s.handle(Some(me), ClientMessage::Act(Stamped { tick: s.tick(), player: me, action }));
+            s.step();
+        };
+
+        // A 2x2 block: a still life, so it is still where it was put when the
+        // next assertion looks. A blinker would have rotated out from under it.
+        act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)], placement: Placement::Cell });
+        assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST));
+
+        // Reclaiming two of your own pays two back.
+        // Reclaiming pays one each, well short of what they cost to place.
+        act(&mut s, Action::Erase { cells: vec![(0, 0), (0, 1)] });
+        assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST + 2));
+
+        // Erasing empty space is neither earned nor spent.
+        act(&mut s, Action::Erase { cells: vec![(90, 90)] });
+        assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST + 2));
+    }
+
+    #[test]
+    fn destroying_another_players_cell_costs() {
+        let mut s = Server::new(World::infinite_empty());
+        let a = s.join("a").unwrap();
+        let b = s.join("b").unwrap();
+        // A block again, so a's cell survives long enough for b to attack it.
+        s.handle(Some(a), ClientMessage::Act(Stamped {
+            tick: 0,
+            player: a,
+            action: Action::Paint { cells: vec![(50, 50), (50, 51), (51, 50), (51, 51)], placement: Placement::Cell },
+        }));
+        s.step();
+        assert_eq!(s.world().cell_at(50, 50).map(|c| c.player()), Some(a));
+
+        let before = s.value_of(b).unwrap();
+        s.handle(Some(b), ClientMessage::Act(Stamped {
+            tick: s.tick(), player: b, action: Action::Erase { cells: vec![(50, 50)] },
+        }));
+        s.step();
+        assert_eq!(s.value_of(b), Some(before - 1), "taking ground is not free");
+    }
+
+    #[test]
+    fn an_action_you_cannot_afford_is_refused() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        let purse = s.value_of(me).unwrap();
+        let too_many: Vec<_> = (0..purse / PLACE_COST + 1).map(|i| (0, i)).collect();
+
+        s.handle(Some(me), ClientMessage::Act(Stamped {
+            tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Cell },
+        }));
+        s.step();
+        assert_eq!(s.value_of(me), Some(purse), "nothing was spent");
+        assert!(s.world().live_cells().is_empty(), "and nothing was placed");
     }
 
     #[test]

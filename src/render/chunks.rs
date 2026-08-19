@@ -16,14 +16,27 @@ pub const SHADER_SOURCE: &str = include_str!("shaders/grid.wgsl");
 /// Upper bound on chunks drawn in one frame. Sizes the instance buffer.
 pub const MAX_INSTANCES: usize = 1024;
 
+/// Layer zero is never written after startup and holds nothing but dead cells.
+/// One shared layer, because every unloaded chunk looks exactly the same.
+pub const UNLOADED_LAYER: u32 = 0;
+
+/// `meta.y` of an instance: what kind of quad it is.
+pub const KIND_CHUNK: u32 = 0;
+/// A single quad standing in for every unloaded chunk at once.
+///
+/// One instance rather than one per chunk, because the visible chunk count
+/// grows as the square of zooming out: a 1920x1080 screen at one pixel per
+/// cell covers over eight thousand of them, far past any sane instance budget,
+/// so the far edges simply stopped being drawn. Since they all look identical
+/// there is nothing to gain from drawing them separately.
+pub const KIND_BACKDROP: u32 = 1;
+
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
-/// `R16Uint`: one 16-bit integer per cell, matching `Cell`'s bit layout, so the
-/// shader unpacks fields with shifts rather than reading channels.
-///
-/// Note this is *not* storage-capable — no 1- or 2-byte format is; the smallest
-/// are `Rgba8Uint` and `R32Uint`. Moving the simulation to a compute shader
-/// would therefore mean widening the cell, not just changing a constant.
+/// `Rgba8Uint`: R and G are the cell's sixteen bits, B and A its tile UV. Four
+/// bytes is also the narrowest storage-capable size, so moving the simulation
+/// to a compute shader later stays a dispatch change rather than a storage
+/// rewrite.
 pub struct ChunkTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -31,7 +44,7 @@ pub struct ChunkTexture {
 }
 
 impl ChunkTexture {
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Uint;
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Uint;
 
     /// Layers to allocate, the guaranteed floor for `max_texture_array_layers`.
     /// Allocated up front because an array texture cannot be resized.
@@ -168,6 +181,24 @@ pub fn world_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 },
                 count: None,
             },
+            // The sprite sheet, filtered: a cell is a 16x16 image, so it is
+            // sampled rather than fetched, unlike the cell data itself.
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -182,6 +213,7 @@ pub struct ChunkStore {
     /// Canonical chunk coordinate -> array layer. Canonical, so a torus chunk
     /// drawn at nine global positions still occupies one layer.
     layers: HashMap<Coord, u32>,
+    next_free: u32,
     free: Vec<u32>,
     instances: Vec<Instance>,
     buffer: wgpu::Buffer,
@@ -198,10 +230,17 @@ impl ChunkStore {
         Self {
             texture: ChunkTexture::new(device, ChunkTexture::LAYER_BUDGET),
             layers: HashMap::new(),
+            // Layer zero is reserved, so allocation starts above it.
+            next_free: UNLOADED_LAYER + 1,
             free: Vec::new(),
             instances: Vec::with_capacity(MAX_INSTANCES),
             buffer,
         }
+    }
+
+    /// Zero layer zero once. It stays dead for the life of the app.
+    pub fn init_unloaded_layer(&self, queue: &wgpu::Queue) {
+        self.texture.upload(queue, UNLOADED_LAYER, &Chunk::dead());
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
@@ -219,7 +258,16 @@ impl ChunkStore {
     /// Push every chunk the world holds to the GPU and rebuild the instance
     /// list. `repeats` is how many copies of a toroidal world to draw either
     /// side of the original; it is ignored for infinite worlds.
-    pub fn sync(&mut self, queue: &wgpu::Queue, world: &World, repeats: i32) {
+    /// `visible` is the region on screen, in absolute cells, as (min, max).
+    /// Everything in it that the world does not hold is covered by one
+    /// backdrop quad rather than a quad per chunk.
+    pub fn sync(
+        &mut self,
+        queue: &wgpu::Queue,
+        world: &World,
+        repeats: i32,
+        visible: ((i32, i32), (i32, i32)),
+    ) {
         let present: HashSet<Coord> = world.stored().iter().map(|&(c, _)| c).collect();
         let free = &mut self.free;
         self.layers.retain(|coord, layer| {
@@ -234,12 +282,13 @@ impl ChunkStore {
             let layer = match self.layers.get(&coord) {
                 Some(&l) => l,
                 None => {
-                    let next = self.layers.len() as u32;
-                    let Some(l) = self
-                        .free
-                        .pop()
-                        .or_else(|| (next < self.texture.layers).then_some(next))
-                    else {
+                    let fresh = self.next_free;
+                    let Some(l) = self.free.pop().or_else(|| {
+                        (fresh < self.texture.layers).then(|| {
+                            self.next_free += 1;
+                            fresh
+                        })
+                    }) else {
                         log::warn!("layer budget exhausted; chunk {coord:?} not drawn");
                         continue;
                     };
@@ -251,6 +300,20 @@ impl ChunkStore {
         }
 
         self.instances.clear();
+
+        // First, so the chunks drawn after it paint over it. There is no depth
+        // buffer and no blending, so order alone decides.
+        let ((min_row, min_col), (max_row, max_col)) = visible;
+        self.instances.push(Instance {
+            rect: [
+                min_col as f32,
+                min_row as f32,
+                (max_col - min_col + 1) as f32,
+                (max_row - min_row + 1) as f32,
+            ],
+            meta: [UNLOADED_LAYER, KIND_BACKDROP, 0, 0],
+        });
+
         for (global, canonical) in world.render_tiles(repeats) {
             let Some(&layer) = self.layers.get(&canonical) else {
                 continue;
@@ -266,7 +329,7 @@ impl ChunkStore {
                     CHUNK_N as f32,
                     CHUNK_N as f32,
                 ],
-                meta: [layer, 0, 0, 0],
+                meta: [layer, KIND_CHUNK, 0, 0],
             });
         }
 
