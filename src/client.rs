@@ -6,7 +6,7 @@
 //! keep the [`World`] and drop everything else in this file.
 
 use crate::render::app::App;
-use crate::render::atlas::Atlas;
+use crate::render::atlas::{Atlas, Source};
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
 };
@@ -93,6 +93,10 @@ pub struct BattleApp {
     drag_moved: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
+    /// Fingers currently down, as (id, position). Two of them is a pinch.
+    touches: Vec<(u64, (f64, f64))>,
+    /// Distance between the two fingers last frame, to measure the pinch by.
+    pinch_span: Option<f64>,
     /// Viewport size in physical pixels, refreshed every frame from the
     /// `GpuState`. Cached only because input callbacks are not handed one --
     /// updating it solely on resize left it stale whenever a resize event did
@@ -243,6 +247,21 @@ impl BattleApp {
     /// Ask for any visible chunk not already requested. The camera is fixed for
     /// now, so this settles after the first frame; it is written against the
     /// viewport so panning needs no new code.
+    /// Chunk coordinates the viewport covers, plus a margin.
+    fn visible_chunks(&self) -> Vec<crate::sim::Coord> {
+        let (vw, vh) = self.viewport;
+        let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
+        let min = (
+            (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
+            (self.camera.0 - half.0).floor() as i32 - VIEW_MARGIN,
+        );
+        let max = (
+            (self.camera.1 + half.1).ceil() as i32 + VIEW_MARGIN,
+            (self.camera.0 + half.0).ceil() as i32 + VIEW_MARGIN,
+        );
+        World::chunks_covering(min, max)
+    }
+
     fn subscribe_to_view(&mut self) {
         let (vw, vh) = self.viewport;
         let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
@@ -283,8 +302,9 @@ impl App for BattleApp {
             WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
         };
         let mut chunks = ChunkStore::new(&gpu.device);
-        let atlas = Atlas::new(&gpu.device, &gpu.queue);
-        chunks.sync(&gpu.queue, &world, TORUS_REPEATS);
+        let atlas = Atlas::new(&gpu.device, &gpu.queue, atlas_source());
+        chunks.init_unloaded_layer(&gpu.queue);
+        chunks.sync(&gpu.queue, &world, TORUS_REPEATS, &[]);
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
@@ -344,6 +364,8 @@ impl App for BattleApp {
             dragging: false,
             drag_moved: false,
             pan: [false; 4],
+            touches: Vec::new(),
+            pinch_span: None,
             viewport: (1.0, 1.0),
             me: None,
             subscribed: std::collections::HashSet::new(),
@@ -390,12 +412,17 @@ impl App for BattleApp {
 
         self.world.update(dt, GENERATION_SPAN);
         if self.world.dirty {
-            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS);
+            let visible = self.visible_chunks();
+            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, &visible);
             self.world.dirty = false;
         }
         if self.camera_dirty {
             self.write_camera(gpu);
             self.camera_dirty = false;
+            // Panning brings different chunks into view, and the unloaded ones
+            // among them are drawn from the instance list, so it must follow.
+            let visible = self.visible_chunks();
+            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, &visible);
         }
     }
 
@@ -438,6 +465,59 @@ impl App for BattleApp {
             _ => return,
         };
         self.pan[slot] = pressed;
+    }
+
+    fn on_touch(&mut self, id: u64, phase: winit::event::TouchPhase, x: f64, y: f64) {
+        use winit::event::TouchPhase as P;
+        match phase {
+            P::Started => self.touches.push((id, (x, y))),
+            P::Moved => {
+                if let Some(t) = self.touches.iter_mut().find(|t| t.0 == id) {
+                    t.1 = (x, y);
+                }
+            }
+            P::Ended | P::Cancelled => self.touches.retain(|t| t.0 != id),
+        }
+
+        match self.touches.as_slice() {
+            // One finger drags, like a held mouse button.
+            [(_, at)] => {
+                if matches!(phase, P::Started) {
+                    self.cursor = *at;
+                    self.pinch_span = None;
+                    return;
+                }
+                let (dx, dy) = (at.0 - self.cursor.0, at.1 - self.cursor.1);
+                self.cursor = *at;
+                self.camera.0 -= dx as f32 / self.zoom;
+                self.camera.1 -= dy as f32 / self.zoom;
+                self.camera_dirty = true;
+            }
+            // Two fingers pinch. Zoom by the ratio of the gap between them, so
+            // the gesture is scale-invariant: the same spread does the same
+            // thing whether the fingers started close together or far apart.
+            [(_, a), (_, b)] => {
+                let span = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                let midpoint = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
+                if let Some(previous) = self.pinch_span {
+                    if previous > 1.0 && span > 1.0 {
+                        // Anchor on the midpoint, so the world does not slide
+                        // out from under the fingers doing the pinching.
+                        let before = self.cell_under_cursor_f(self.viewport, midpoint);
+                        self.zoom = (self.zoom * (span / previous) as f32)
+                            .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+                        let after = self.cell_under_cursor_f(self.viewport, midpoint);
+                        self.camera.0 += before.0 - after.0;
+                        self.camera.1 += before.1 - after.1;
+                        self.camera_dirty = true;
+                    }
+                }
+                self.pinch_span = Some(span);
+                self.cursor = midpoint;
+            }
+            // No fingers, or more than two: nothing to measure.
+            _ => self.pinch_span = None,
+        }
     }
 
     fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
@@ -505,4 +585,21 @@ fn open_link() -> Option<Link> {
     let link = Link::connect(url?);
     link.send(ClientMessage::Join { name });
     Some(link)
+}
+
+/// Where the sprite sheet comes from.
+///
+/// `assets/atlas.png` if it exists at build time, otherwise the generated
+/// sheet — so the project runs with no art checked in, and gains art by
+/// dropping a file in. 256x256 RGBA: R saturation, G lightness, A coverage.
+/// No hue; that comes from the player.
+fn atlas_source() -> Source<'static> {
+    #[cfg(feature = "atlas-image")]
+    {
+        Source::Png(include_bytes!("../assets/atlas.png"))
+    }
+    #[cfg(not(feature = "atlas-image"))]
+    {
+        Source::Generated
+    }
 }

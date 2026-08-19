@@ -25,7 +25,7 @@ mod player;
 mod rule;
 mod world;
 
-pub use cell::{bits, Cell, Chunk, Halo, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use cell::{bits, Cell, Chunk, Halo, Kind, CHUNK_CELLS, CHUNK_N, HALO_N};
 pub use dir::Dir;
 pub use player::{Player, PlayerId};
 pub use rule::{next_cell, Neighbours, RuleFn};

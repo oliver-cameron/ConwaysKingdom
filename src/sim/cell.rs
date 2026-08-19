@@ -12,10 +12,11 @@ pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 ///
 /// ```text
 ///  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-/// |   player    |      metadata / flags      | A |
+/// |   player    |F |G |       kind        | A |
 /// ```
 ///
-/// Bit 0 is alive. The ten above it are yours. The top five are the player,
+/// Bit 0 is alive, bits 1..9 the kind, bits 9..11 flags. The top five are the
+/// player,
 /// and being the top field means the number extracts with a single shift and
 /// no mask, and that comparing two raw cells orders them by player first.
 ///
@@ -37,10 +38,20 @@ pub mod bits {
     /// Bit 0: alive or dead.
     pub const ALIVE: u16 = 1;
 
-    /// Bits 1..11: metadata and flags, undivided. Carve as needed.
-    pub const META_SHIFT: u16 = 1;
-    pub const META_WIDTH: u16 = 10;
-    pub const META_MASK: u16 = (1 << META_WIDTH) - 1;
+    /// Bits 1..9: what kind of cell this is. Also the index of its sprite, so
+    /// every kind necessarily has art — see `render::atlas`.
+    pub const KIND_SHIFT: u16 = 1;
+    pub const KIND_WIDTH: u16 = 8;
+    pub const KIND_MASK: u16 = (1 << KIND_WIDTH) - 1;
+
+    /// Bits 9..11: flags.
+    pub const FLAG_SHIFT: u16 = 9;
+    pub const FLAG_WIDTH: u16 = 2;
+    pub const FLAG_MASK: u16 = (1 << FLAG_WIDTH) - 1;
+
+    /// This cell does not update. Set on the cells a glass pane covers, so
+    /// time inside one is frozen; the rule returns such a cell unchanged.
+    pub const FLAG_FROZEN: u16 = 1 << 9;
 
     /// Bits 11..16: player number, at the top of the word.
     pub const PLAYER_SHIFT: u16 = 11;
@@ -52,8 +63,10 @@ const _: () = {
     assert!(size_of::<Cell>() == 2 && align_of::<Cell>() == 1);
     // The fields must tile all sixteen bits with no overlap and no gap.
     assert!(bits::ALIVE == 1);
-    assert!(bits::META_SHIFT == 1);
-    assert!(bits::PLAYER_SHIFT == bits::META_SHIFT + bits::META_WIDTH);
+    assert!(bits::KIND_SHIFT == 1);
+    assert!(bits::FLAG_SHIFT == bits::KIND_SHIFT + bits::KIND_WIDTH);
+    assert!(bits::PLAYER_SHIFT == bits::FLAG_SHIFT + bits::FLAG_WIDTH);
+    assert!(bits::FLAG_FROZEN == 1 << bits::FLAG_SHIFT);
     assert!(bits::PLAYER_SHIFT + bits::PLAYER_WIDTH == 16);
     // R16Uint is read little-endian by the GPU.
     assert!(cfg!(target_endian = "little"));
@@ -94,9 +107,21 @@ impl Cell {
         PlayerId((self.bits() >> bits::PLAYER_SHIFT) as u8)
     }
 
+    /// What kind of cell this is, which is also its sprite index.
     #[inline]
-    pub const fn meta(self) -> u16 {
-        (self.bits() >> bits::META_SHIFT) & bits::META_MASK
+    pub const fn kind(self) -> Kind {
+        Kind(((self.bits() >> bits::KIND_SHIFT) & bits::KIND_MASK) as u8)
+    }
+
+    #[inline]
+    pub const fn flags(self) -> u16 {
+        (self.bits() >> bits::FLAG_SHIFT) & bits::FLAG_MASK
+    }
+
+    /// Frozen cells do not update, so a glass pane stops time inside itself.
+    #[inline]
+    pub const fn is_frozen(self) -> bool {
+        self.bits() & bits::FLAG_FROZEN != 0
     }
 
     #[inline]
@@ -115,9 +140,18 @@ impl Cell {
     }
 
     #[inline]
-    pub const fn with_meta(self, meta: u16) -> Self {
-        let cleared = self.bits() & !(bits::META_MASK << bits::META_SHIFT);
-        Self::from_bits(cleared | ((meta & bits::META_MASK) << bits::META_SHIFT))
+    pub const fn with_kind(self, kind: Kind) -> Self {
+        let cleared = self.bits() & !(bits::KIND_MASK << bits::KIND_SHIFT);
+        Self::from_bits(cleared | ((kind.0 as u16 & bits::KIND_MASK) << bits::KIND_SHIFT))
+    }
+
+    #[inline]
+    pub const fn with_frozen(self, frozen: bool) -> Self {
+        if frozen {
+            Self::from_bits(self.bits() | bits::FLAG_FROZEN)
+        } else {
+            Self::from_bits(self.bits() & !bits::FLAG_FROZEN)
+        }
     }
 }
 
@@ -125,10 +159,27 @@ impl core::fmt::Debug for Cell {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Cell")
             .field("alive", &self.is_alive())
-            .field("meta", &self.meta())
+            .field("kind", &self.kind().0)
+            .field("frozen", &self.is_frozen())
             .field("player", &self.player().0)
             .finish()
     }
+}
+
+/// What a cell is. The number is also the index of the cell's sprite, so a
+/// kind cannot exist without art — `render::atlas` asserts every one is drawn.
+#[repr(transparent)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable)]
+pub struct Kind(pub u8);
+
+impl Kind {
+    /// An ordinary living cell.
+    pub const NORMAL: Self = Self(0);
+    /// A pane. Freezes what it covers; breaks when live cells touch it.
+    pub const GLASS: Self = Self(1);
+    /// Kinds that must have a sprite. Extend this and the atlas test fails
+    /// until the art exists.
+    pub const ALL: [Self; 2] = [Self::NORMAL, Self::GLASS];
 }
 
 /// A chunk's cells, row-major. The first index is the texture's Y, the second
@@ -331,25 +382,31 @@ mod tests {
     /// Each field must round-trip, and none may disturb another.
     #[test]
     fn the_bit_fields_are_independent() {
-        for meta in [0, 1, 511, bits::META_MASK] {
+        for kind in [0u8, 1, 200, 255] {
             for p in 0..=PlayerId::MAX {
-                let c = Cell::DEAD
-                    .with_alive(true)
-                    .with_meta(meta)
-                    .with_player(PlayerId(p));
-                assert!(c.is_alive());
-                assert_eq!(c.meta(), meta);
-                assert_eq!(c.player(), PlayerId(p));
-                // Clearing alive must leave the other two alone.
-                let d = c.with_alive(false);
-                assert!(!d.is_alive());
-                assert_eq!(d.meta(), meta);
-                assert_eq!(d.player(), PlayerId(p));
+                for frozen in [false, true] {
+                    let c = Cell::DEAD
+                        .with_alive(true)
+                        .with_kind(Kind(kind))
+                        .with_frozen(frozen)
+                        .with_player(PlayerId(p));
+                    assert!(c.is_alive());
+                    assert_eq!(c.kind(), Kind(kind));
+                    assert_eq!(c.is_frozen(), frozen);
+                    assert_eq!(c.player(), PlayerId(p));
+                    // Clearing alive must leave the others alone.
+                    let d = c.with_alive(false);
+                    assert!(!d.is_alive());
+                    assert_eq!(d.kind(), Kind(kind));
+                    assert_eq!(d.is_frozen(), frozen);
+                    assert_eq!(d.player(), PlayerId(p));
+                }
             }
         }
-        // Overflow is masked, not smeared into a neighbouring field.
-        let c = Cell::DEAD.with_meta(bits::META_MASK + 1);
-        assert_eq!(c.meta(), 0);
+        // A kind uses all eight of its bits without touching the flags.
+        let c = Cell::DEAD.with_kind(Kind(255));
+        assert_eq!(c.kind(), Kind(255));
+        assert_eq!(c.flags(), 0);
         assert_eq!(c.player(), PlayerId::UNOWNED);
         assert!(!c.is_alive());
     }
@@ -371,7 +428,7 @@ mod tests {
         assert_eq!(c.bits() >> bits::PLAYER_SHIFT, 5);
         assert_eq!(c.player(), PlayerId(5));
 
-        let low = Cell::alive(PlayerId(1)).with_meta(bits::META_MASK);
+        let low = Cell::alive(PlayerId(1)).with_kind(Kind(255)).with_frozen(true);
         let high = Cell::alive(PlayerId(2));
         assert!(high.bits() > low.bits(), "player dominates the ordering");
     }
@@ -382,7 +439,7 @@ mod tests {
         assert_eq!(c, Cell::DEAD);
         assert!(!c.is_alive());
         assert_eq!(c.player(), PlayerId::UNOWNED);
-        assert_eq!(c.meta(), 0);
+        assert_eq!(c.kind(), Kind::NORMAL);
     }
 
     #[test]

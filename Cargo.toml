@@ -23,6 +23,8 @@ default = ["render"]
 render = ["dep:wgpu", "dep:winit"]
 # The websocket server. Native only.
 server = ["dep:axum", "dep:tower-http"]
+# Load assets/atlas.png instead of the generated sheet.
+atlas-image = []
 
 [dependencies]
 wgpu = { version = "30", optional = true }
@@ -31,6 +33,8 @@ bytemuck = { version = "1.16", features = ["derive", "extern_crate_alloc", "min_
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1.1", features = ["alloc"] }
+# Decoding an atlas sheet. Tiny, pure Rust, and builds for wasm.
+png = "0.18"
 
 # Server transport. Optional so the client, and a wasm build, pull none of it.
 axum = { version = "0.8", features = ["ws"], optional = true }
