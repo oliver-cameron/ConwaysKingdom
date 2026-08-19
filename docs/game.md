@@ -8,12 +8,14 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 
 | | |
 |---|---|
-| place a cell | −5 each |
-| reclaim your own living cell | +1 |
-| destroy another player's cell | −1, because taking ground should not be free |
-| erase empty ground | nothing |
+| place life or ice | −5 each |
+| reclaim your own | +1 |
+| take another player's | −1, because taking ground should not be free |
+| take what is not there | nothing |
 
-Placing at five against reclaiming at one is what sets the pace: a cell you place and later take back is a net loss, so building commits you. Starting value is 100 — twenty cells, enough to build something before the mining loop takes over. It is a number to tune; the ratio matters more than the starting figure.
+Placing at five against reclaiming at one is what sets the pace: anything you place and later take back is a net loss, so building commits you. Starting value is 100 — twenty cells, enough to build something before the mining loop takes over. It is a number to tune; the ratio matters more than the starting figure.
+
+The rule reads the same for life and for ice, because the question it asks is whether the thing being taken is there and whose it is, not which of the two it is.
 
 An action that cannot be afforded is refused. The client prices and refuses locally on the same terms the server would, so a refusal is instant rather than a round trip away, and the two cannot disagree because `net::value_delta` is one function used by both.
 
@@ -21,10 +23,14 @@ Cost is read **before** the action is applied, since it depends on what is there
 
 ## Placing and taking
 
-One button. The cell under it decides which:
+One button, and the cell under it decides which — for whatever the hotbar is holding:
 
-- something there → take it
-- empty ground → put down whatever the hotbar has selected
+- what you are holding is already there → take it back
+- it is not → put it down
+
+Keyed on what is held rather than on whether the cell is occupied at all, because **life and ice are independent**. Holding Life and clicking a living cell under a pane kills the life and leaves the pane standing; clearing the square outright would destroy a pane the player never aimed at, at five a cell. Holding Ice and clicking that same pane lifts it and leaves the life, which is the only way a misplaced pane comes back.
+
+`Action::Erase` carries what to remove for the same reason `Paint` carries what to lay: the server judges an intent, and "kill the life on this square" is a different intent from "clear this square".
 
 A **drag fills a rectangle**, at five per cell. Filling always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
 
@@ -72,7 +78,7 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 
 ## The hotbar
 
-Picks what a click places. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row.
+Picks what a click acts on — both what it places and, on ground that already has it, what it takes back. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row. The two are `Life` and `Ice`: the placement is named for what is put down, since a cell is the square and life is one of the two things that can be on it.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 

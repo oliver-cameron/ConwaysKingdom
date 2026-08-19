@@ -696,12 +696,19 @@ impl BattleApp {
         })
     }
 
-    /// One button does everything, and the cell under it decides which.
+    /// One button does everything, and the cell under it decides which — for
+    /// whatever the hotbar is holding.
     ///
-    /// Something living there means take it — your own for value, someone
-    /// else's at a cost. Empty ground means put down whatever the hotbar has
-    /// selected. There is nothing to hold and nothing to remember, which is
-    /// what a clicker opening needs.
+    /// The thing you are holding is already there, so take it back: your own
+    /// for value, someone else's at a cost. It is not there, so put it down.
+    /// There is nothing to hold and nothing to remember, which is what a
+    /// clicker opening needs.
+    ///
+    /// Keyed on what is held rather than on whether the cell is occupied at
+    /// all, because life and ice are independent. Clicking a living cell under
+    /// a pane means killing the life, not taking the pane with it — and it is
+    /// what gives a misplaced pane a way back, since holding Ice and clicking
+    /// one lifts it.
     ///
     /// Applied locally *and* sent, rather than sent and awaited: the rules are
     /// deterministic and the server runs the same `net::apply` and charges by
@@ -711,14 +718,16 @@ impl BattleApp {
     fn click(&mut self, row: i32, col: i32) {
         let player = self.player();
         let cells = vec![(row, col)];
-        let occupied = self
-            .world
-            .cell_at(row, col)
-            .is_some_and(|c| c.is_alive() || c.is_ice());
-        let action = if occupied {
-            Action::Erase { cells }
+        let slot = &hotbar::SLOTS[self.slot];
+        let placement = slot.placement;
+
+        let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
+        // Already there is exactly "taking it away would change something".
+        let already_there = placement.remove_from(existing) != existing;
+        let action = if already_there {
+            Action::Erase { cells, placement }
         } else {
-            Action::Paint { cells, placement: hotbar::SLOTS[self.slot].placement }
+            Action::Paint { cells, placement }
         };
         let stamped = Stamped { tick: self.world.generation, player, action };
 
@@ -733,12 +742,15 @@ impl BattleApp {
         }
         self.notice = None;
 
-        let occupant = self.world.cell_at(row, col).filter(|c| c.is_alive());
-        self.last_action = Some(match occupant {
-            None if occupied => format!("cleared ice at ({row}, {col})"),
-            None => format!("placed {} at ({row}, {col})", hotbar::SLOTS[self.slot].name),
-            Some(c) if c.player() == player => format!("took ({row}, {col}), +1"),
-            Some(c) => format!("destroyed player {}'s ({row}, {col}), -1", c.player().0),
+        let name = slot.name;
+        self.last_action = Some(match (already_there, existing.player()) {
+            (false, _) => format!("placed {name} at ({row}, {col}), {delta:+}"),
+            (true, owner) if owner == player => {
+                format!("took your {name} at ({row}, {col}), {delta:+}")
+            }
+            (true, owner) => {
+                format!("took player {}'s {name} at ({row}, {col}), {delta:+}", owner.0)
+            }
         });
         self.value += delta;
 

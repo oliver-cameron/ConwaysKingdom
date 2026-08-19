@@ -44,8 +44,10 @@ pub type Tick = u64;
 /// place anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Placement {
-    /// A living cell, owned by whoever placed it.
-    Cell,
+    /// Life, owned by whoever placed it. Named for what is placed rather than
+    /// for what holds it: a cell is the square, and life is one of the two
+    /// things that can be on it.
+    Life,
     /// A pane. Freezes what it covers, and is independent of whether the cell
     /// beneath is alive.
     Ice,
@@ -61,12 +63,30 @@ impl Placement {
     /// other.
     pub fn apply_to(self, existing: Cell, player: PlayerId) -> Cell {
         match self {
-            Self::Cell => existing.with_alive(true).with_player(player),
+            Self::Life => existing.with_alive(true).with_player(player),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
             // cell with it -- deliberate, and the reason a pane costs what it
             // does.
             Self::Ice => existing.with_ice(true).with_player(player),
+        }
+    }
+
+    /// Take this away, and leave everything else alone.
+    ///
+    /// The inverse of [`Self::apply_to`], and the reason clicking a living
+    /// cell under ice kills the life without taking the pane with it. Life and
+    /// ice are independent flags, so removing one must not touch the other —
+    /// clearing the cell outright would destroy a pane the player did not aim
+    /// at, and at five a cell that is an expensive misunderstanding.
+    ///
+    /// The owner stays. A cell keeps its owner when it dies of the rule, and
+    /// `Chunk::is_empty` asks about life and ice rather than about ownership,
+    /// so a cleared cell still lets its chunk be dropped.
+    pub fn remove_from(self, existing: Cell) -> Cell {
+        match self {
+            Self::Life => existing.with_alive(false),
+            Self::Ice => existing.with_ice(false),
         }
     }
 }
@@ -81,8 +101,14 @@ pub enum Action {
         cells: Vec<(i32, i32)>,
         placement: Placement,
     },
-    /// Kill cells at absolute cell coordinates.
-    Erase { cells: Vec<(i32, i32)> },
+    /// Take a placement away at absolute cell coordinates, leaving whatever
+    /// else is on those cells. Carries what to remove for the same reason
+    /// `Paint` carries what to lay: the server judges an intent, and "clear
+    /// this square" is a different intent from "kill the life on it".
+    Erase {
+        cells: Vec<(i32, i32)>,
+        placement: Placement,
+    },
 }
 
 /// An action stamped with who did it and when, which is what makes replay on
@@ -161,10 +187,13 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
                 .count();
             -(changed as i32) * PLACE_COST
         }
-        Action::Erase { cells } => cells
+        // What counts as "there" depends on what is being taken, since life
+        // and ice are independent: removing ice from a living cell with no
+        // pane on it is as much a no-op as erasing empty ground.
+        Action::Erase { cells, placement } => cells
             .iter()
             .map(|&(row, col)| match world.cell_at(row, col) {
-                Some(cell) if !cell.is_alive() => 0,
+                Some(cell) if placement.remove_from(cell) == cell => 0,
                 Some(cell) if cell.player() == stamped.player => 1,
                 Some(_) => -1,
                 None => 0,
@@ -186,9 +215,10 @@ pub fn apply(world: &mut World, stamped: &Stamped) {
                 world.set_cell_at(row, col, placement.apply_to(existing, stamped.player));
             }
         }
-        Action::Erase { cells } => {
+        Action::Erase { cells, placement } => {
             for &(row, col) in cells {
-                world.set_cell_at(row, col, Cell::DEAD);
+                let existing = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+                world.set_cell_at(row, col, placement.remove_from(existing));
             }
         }
     }
@@ -229,9 +259,9 @@ mod tests {
     #[test]
     fn a_pane_over_a_living_cell_is_a_change() {
         let mut world = World::infinite_empty();
-        apply(&mut world, &paint(vec![(0, 0)], Placement::Cell));
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
         assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -PLACE_COST);
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Cell)), 0);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), 0);
     }
 
     /// A pane belongs to whoever laid it, and there is one owner field per
@@ -249,6 +279,93 @@ mod tests {
         assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -PLACE_COST);
     }
 
+    /// The reason `Erase` carries a placement at all. Life and ice are
+    /// independent, so taking the life off an iced cell must leave the pane
+    /// standing — clearing the square outright destroyed a pane the player
+    /// never aimed at, at five a cell.
+    #[test]
+    fn taking_the_life_off_an_iced_cell_leaves_the_ice() {
+        let mut world = World::infinite_empty();
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Ice));
+
+        let take = Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
+        };
+        assert_eq!(value_delta(&world, &take), 1, "reclaiming your own pays one");
+        apply(&mut world, &take);
+
+        let cell = world.cell_at(0, 0).unwrap();
+        assert!(!cell.is_alive(), "the life should be gone");
+        assert!(cell.is_ice(), "the pane should still be standing");
+        assert_eq!(cell.player(), PlayerId(1), "and still belong to whoever laid it");
+    }
+
+    /// And the other way about, which is what gives a misplaced pane a way
+    /// back: holding Ice and clicking one lifts it, and the life under it
+    /// carries on.
+    #[test]
+    fn taking_the_ice_off_a_living_cell_leaves_the_life() {
+        let mut world = World::infinite_empty();
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Ice));
+
+        let take = Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
+        };
+        apply(&mut world, &take);
+
+        let cell = world.cell_at(0, 0).unwrap();
+        assert!(cell.is_alive());
+        assert!(!cell.is_ice());
+    }
+
+    /// Taking away what is not there is neither earned nor spent, and what
+    /// counts as "there" depends on what is being taken.
+    #[test]
+    fn taking_what_is_not_there_is_free() {
+        let mut world = World::infinite_empty();
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
+        let before = world.cell_at(0, 0).unwrap();
+
+        let no_pane = Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
+        };
+        assert_eq!(value_delta(&world, &no_pane), 0);
+        apply(&mut world, &no_pane);
+        assert_eq!(
+            world.cell_at(0, 0).unwrap(),
+            before,
+            "there was no pane to lift, so nothing should have moved"
+        );
+    }
+
+    /// Breaking someone else's costs one, because taking ground is not free —
+    /// and that now covers a pane as well as a cell, since both are theirs.
+    #[test]
+    fn breaking_another_players_pane_costs_one() {
+        let mut world = World::infinite_empty();
+        let theirs = Stamped {
+            tick: 0,
+            player: PlayerId(2),
+            action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
+        };
+        apply(&mut world, &theirs);
+
+        let mine = Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
+        };
+        assert_eq!(value_delta(&world, &mine), -1);
+    }
+
     /// Ground nobody holds prices as empty, which is what `apply` writes into
     /// it. The two must agree or a client would be charged for one thing and
     /// given another.
@@ -257,6 +374,6 @@ mod tests {
         let world = World::infinite_empty();
         let far = vec![(100_000, 100_000)];
         assert!(world.cell_at(far[0].0, far[0].1).is_none());
-        assert_eq!(value_delta(&world, &paint(far, Placement::Cell)), -PLACE_COST);
+        assert_eq!(value_delta(&world, &paint(far, Placement::Life)), -PLACE_COST);
     }
 }
