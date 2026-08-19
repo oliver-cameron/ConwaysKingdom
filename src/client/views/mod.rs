@@ -28,10 +28,17 @@ pub struct Views {
     events: Vec<egui::Event>,
     pointer: egui::Pos2,
     modifiers: egui::Modifiers,
-    /// Whether egui claimed the pointer last frame. Used to decide whether a
-    /// click belongs to the interface or the world; one frame stale, which no
-    /// one can perceive and which avoids running the UI twice per frame.
-    wants_pointer: bool,
+    /// What the interface covered last frame, in points.
+    ///
+    /// Consumption is decided from this rather than from egui's own
+    /// `wants_pointer`, which depends on interaction state this integration
+    /// feeds by hand: if any of that is wrong the answer sticks true and the
+    /// world silently stops receiving clicks, with nothing to show why. A
+    /// rectangle can be reasoned about, printed, and seen.
+    claimed: Option<egui::Rect>,
+    /// True while a widget is being dragged, so a drag that leaves the panel
+    /// still belongs to the panel.
+    dragging_widget: bool,
     start: f64,
     renderer: egui_wgpu::Renderer,
 }
@@ -86,7 +93,8 @@ impl Views {
             events: Vec::new(),
             pointer: egui::Pos2::ZERO,
             modifiers: egui::Modifiers::default(),
-            wants_pointer: false,
+            claimed: None,
+            dragging_widget: false,
             start: 0.0,
             // No depth buffer and one sample, matching the world's pipeline;
             // egui has to agree with it because they share a pass.
@@ -102,9 +110,12 @@ impl Views {
         }
     }
 
-    /// Whether the interface, rather than the world, should get the next click.
+    /// Whether the interface, rather than the world, should get the pointer.
     pub fn wants_pointer(&self) -> bool {
-        self.wants_pointer
+        self.dragging_widget
+            || self
+                .claimed
+                .is_some_and(|rect| rect.contains(self.pointer))
     }
 
     /// Translate a window event. Returns whether the world should ignore it.
@@ -138,7 +149,7 @@ impl Views {
                     pressed: *state == ElementState::Pressed,
                     modifiers: self.modifiers,
                 });
-                self.wants_pointer
+                self.wants_pointer()
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (unit, d) = match delta {
@@ -158,7 +169,7 @@ impl Views {
                     phase: egui::TouchPhase::Move,
                     modifiers: self.modifiers,
                 });
-                self.wants_pointer
+                self.wants_pointer()
             }
             WindowEvent::ModifiersChanged(state) => {
                 let s = state.state();
@@ -177,7 +188,12 @@ impl Views {
 
     /// Build the frame, upload whatever textures it produced, and hand back
     /// the shapes to draw.
-    pub fn run(&mut self, gpu: &GpuState, now: f64, build: impl FnOnce(&egui::Context)) -> Output {
+    pub fn run(
+        &mut self,
+        gpu: &GpuState,
+        now: f64,
+        build: impl FnOnce(&egui::Context) -> Option<egui::Rect>,
+    ) -> Output {
         if self.start == 0.0 {
             self.start = now;
         }
@@ -197,10 +213,10 @@ impl Views {
         self.ctx.set_pixels_per_point(pixels_per_point);
 
         self.ctx.begin_pass(input);
-        build(&self.ctx);
+        self.claimed = build(&self.ctx);
         let mut full = self.ctx.end_pass();
 
-        self.wants_pointer = self.ctx.egui_wants_pointer_input();
+        self.dragging_widget = self.ctx.egui_is_using_pointer();
 
         let renderer = &mut self.renderer;
         consume_textures(&mut full.textures_delta, |change| match change {

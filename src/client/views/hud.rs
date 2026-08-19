@@ -17,10 +17,20 @@ pub struct Status<'a> {
     pub connected: bool,
     /// Why the last action was refused, if it was.
     pub notice: Option<&'a str>,
+    /// Whether the pointer is currently over the interface rather than the
+    /// world. Shown because a stuck value here silently eats every click, and
+    /// a number on screen is easier to trust than a guess.
+    pub pointer_on_ui: bool,
+    /// The cell under the cursor. Moves when the mouse moves, so it says at a
+    /// glance whether pointer events are arriving at all.
+    pub cursor_cell: (i32, i32),
+    /// What the last click did, or why it did nothing.
+    pub last_action: Option<&'a str>,
 }
 
-pub fn show(ctx: &egui::Context, status: &Status<'_>) {
-    egui::Window::new("kingdom")
+/// Returns the rectangle it occupied, so the client knows what it covered.
+pub fn show(ctx: &egui::Context, status: &Status<'_>) -> Option<egui::Rect> {
+    let response = egui::Window::new("kingdom")
         .title_bar(false)
         .resizable(false)
         // Fixed, or dragging it would be indistinguishable from panning the
@@ -59,9 +69,22 @@ pub fn show(ctx: &egui::Context, status: &Status<'_>) {
             }
 
             ui.separator();
+            ui.small(format!(
+                "cursor  ({}, {})   {}",
+                status.cursor_cell.0,
+                status.cursor_cell.1,
+                if status.pointer_on_ui { "over panel" } else { "on world" }
+            ));
+            ui.small(format!(
+                "last  {}",
+                status.last_action.unwrap_or("nothing yet")
+            ));
+
+            ui.separator();
             ui.small("left click: take a cell   right click: place one");
             ui.small("drag or arrows to pan, wheel or pinch to zoom");
         });
+    response.map(|r| r.response.rect)
 }
 
 /// The colour the shader gives a player, computed the same way so the HUD
