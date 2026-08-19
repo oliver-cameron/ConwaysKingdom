@@ -67,7 +67,14 @@ pub trait App: 'static {
     }
 
     fn on_key(&mut self, _code: winit::keyboard::KeyCode, _pressed: bool) {}
-    fn on_scroll(&mut self, _delta: MouseScrollDelta) {}
+    /// A wheel or trackpad scroll. `zoom_gesture` is set when the platform
+    /// reports it as a pinch rather than a scroll — browsers and most desktop
+    /// environments send a trackpad pinch as ctrl+wheel.
+    fn on_scroll(&mut self, _delta: MouseScrollDelta, _zoom_gesture: bool) {}
+
+    /// A trackpad pinch, where the platform reports one as a gesture rather
+    /// than as ctrl+wheel. macOS and iOS do; nothing else in winit does.
+    fn on_pinch(&mut self, _delta: f64) {}
 
     /// Cursor moved, in physical pixels from the top-left of the surface.
     fn on_cursor(&mut self, _x: f64, _y: f64) {}
@@ -106,6 +113,9 @@ struct Running<A> {
     gpu: GpuState,
     app: A,
     last_frame: f64,
+    /// Control held. A trackpad pinch arrives as ctrl+wheel nearly everywhere,
+    /// so the wheel needs to know.
+    ctrl: bool,
 }
 
 struct Harness<A> {
@@ -134,7 +144,7 @@ impl<A: App> Harness<A> {
         };
         let app = A::init(&gpu);
         let last_frame = now_secs();
-        self.running = Some(Running { window, gpu, app, last_frame });
+        self.running = Some(Running { window, gpu, app, last_frame, ctrl: false });
         if let Some(r) = &self.running {
             r.window.request_redraw();
         }
@@ -213,7 +223,9 @@ impl<A: App> ApplicationHandler for Harness<A> {
                     },
                 ..
             } if !consumed => r.app.on_key(code, state == ElementState::Pressed),
-            WindowEvent::MouseWheel { delta, .. } if !consumed => r.app.on_scroll(delta),
+            WindowEvent::ModifiersChanged(state) => r.ctrl = state.state().control_key(),
+            WindowEvent::MouseWheel { delta, .. } if !consumed => r.app.on_scroll(delta, r.ctrl),
+            WindowEvent::PinchGesture { delta, .. } if !consumed => r.app.on_pinch(delta),
             WindowEvent::CursorMoved { position, .. } => r.app.on_cursor(position.x, position.y),
             WindowEvent::MouseInput { button, state, .. } if !consumed => {
                 r.app.on_click(button, state == ElementState::Pressed)

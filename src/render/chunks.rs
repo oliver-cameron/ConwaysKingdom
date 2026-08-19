@@ -17,10 +17,19 @@ pub const SHADER_SOURCE: &str = include_str!("shaders/grid.wgsl");
 pub const MAX_INSTANCES: usize = 1024;
 
 /// Layer zero is never written after startup and holds nothing but dead cells.
-/// Chunks the client does not have point at it, so a gap in the world draws as
-/// an empty chunk -- with its grid outline -- rather than as nothing at all.
-/// One shared layer, because every unloaded chunk looks the same.
+/// One shared layer, because every unloaded chunk looks exactly the same.
 pub const UNLOADED_LAYER: u32 = 0;
+
+/// `meta.y` of an instance: what kind of quad it is.
+pub const KIND_CHUNK: u32 = 0;
+/// A single quad standing in for every unloaded chunk at once.
+///
+/// One instance rather than one per chunk, because the visible chunk count
+/// grows as the square of zooming out: a 1920x1080 screen at one pixel per
+/// cell covers over eight thousand of them, far past any sane instance budget,
+/// so the far edges simply stopped being drawn. Since they all look identical
+/// there is nothing to gain from drawing them separately.
+pub const KIND_BACKDROP: u32 = 1;
 
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
@@ -249,14 +258,15 @@ impl ChunkStore {
     /// Push every chunk the world holds to the GPU and rebuild the instance
     /// list. `repeats` is how many copies of a toroidal world to draw either
     /// side of the original; it is ignored for infinite worlds.
-    /// `visible` is every chunk coordinate on screen. Those the world does not
-    /// hold are still drawn, pointing at the unloaded layer.
+    /// `visible` is the region on screen, in absolute cells, as (min, max).
+    /// Everything in it that the world does not hold is covered by one
+    /// backdrop quad rather than a quad per chunk.
     pub fn sync(
         &mut self,
         queue: &wgpu::Queue,
         world: &World,
         repeats: i32,
-        visible: &[Coord],
+        visible: ((i32, i32), (i32, i32)),
     ) {
         let present: HashSet<Coord> = world.stored().iter().map(|&(c, _)| c).collect();
         let free = &mut self.free;
@@ -290,6 +300,20 @@ impl ChunkStore {
         }
 
         self.instances.clear();
+
+        // First, so the chunks drawn after it paint over it. There is no depth
+        // buffer and no blending, so order alone decides.
+        let ((min_row, min_col), (max_row, max_col)) = visible;
+        self.instances.push(Instance {
+            rect: [
+                min_col as f32,
+                min_row as f32,
+                (max_col - min_col + 1) as f32,
+                (max_row - min_row + 1) as f32,
+            ],
+            meta: [UNLOADED_LAYER, KIND_BACKDROP, 0, 0],
+        });
+
         for (global, canonical) in world.render_tiles(repeats) {
             let Some(&layer) = self.layers.get(&canonical) else {
                 continue;
@@ -305,28 +329,7 @@ impl ChunkStore {
                     CHUNK_N as f32,
                     CHUNK_N as f32,
                 ],
-                meta: [layer, 0, 0, 0],
-            });
-        }
-
-        // Anything visible the world does not hold draws as an unloaded chunk,
-        // so the grid stays continuous instead of ending at a ragged edge.
-        for &coord in visible {
-            let canonical = world.canonical(coord);
-            if self.layers.contains_key(&canonical) {
-                continue;
-            }
-            if self.instances.len() == MAX_INSTANCES {
-                break;
-            }
-            self.instances.push(Instance {
-                rect: [
-                    (coord.1 * CHUNK_N as i32) as f32,
-                    (coord.0 * CHUNK_N as i32) as f32,
-                    CHUNK_N as f32,
-                    CHUNK_N as f32,
-                ],
-                meta: [UNLOADED_LAYER, 0, 0, 0],
+                meta: [layer, KIND_CHUNK, 0, 0],
             });
         }
 

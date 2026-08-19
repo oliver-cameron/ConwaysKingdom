@@ -238,7 +238,7 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::Action;
+    use crate::net::{Action, Placement};
     use crate::sim::CHUNK_N;
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)] },
+                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)], placement: Placement::Cell },
             }),
         );
         s.step();
@@ -298,7 +298,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)] },
+                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)], placement: Placement::Cell },
             }),
         );
         for _ in 0..25 {
@@ -354,7 +354,7 @@ mod tests {
 
         // A 2x2 block: a still life, so it is still where it was put when the
         // next assertion looks. A blinker would have rotated out from under it.
-        act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)] });
+        act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)], placement: Placement::Cell });
         assert_eq!(s.value_of(me), Some(start - 4));
 
         // Reclaiming two of your own pays two back.
@@ -375,7 +375,7 @@ mod tests {
         s.handle(Some(a), ClientMessage::Act(Stamped {
             tick: 0,
             player: a,
-            action: Action::Paint { cells: vec![(50, 50), (50, 51), (51, 50), (51, 51)] },
+            action: Action::Paint { cells: vec![(50, 50), (50, 51), (51, 50), (51, 51)], placement: Placement::Cell },
         }));
         s.step();
         assert_eq!(s.world().cell_at(50, 50).map(|c| c.player()), Some(a));
@@ -396,7 +396,7 @@ mod tests {
         let too_many: Vec<_> = (0..purse + 1).map(|i| (0, i)).collect();
 
         s.handle(Some(me), ClientMessage::Act(Stamped {
-            tick: 0, player: me, action: Action::Paint { cells: too_many },
+            tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Cell },
         }));
         s.step();
         assert_eq!(s.value_of(me), Some(purse), "nothing was spent");
