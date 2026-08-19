@@ -48,10 +48,14 @@ pub struct Player {
 }
 
 impl Player {
-    /// What a player joins with. Provisional: the intended opening is a small
-    /// block of cells to mine rather than a number, so this is enough to act
-    /// with until that exists.
-    pub const STARTING_VALUE: i32 = 16;
+    /// What a player joins with.
+    ///
+    /// Provisional. The intended opening is a small block of cells to mine
+    /// rather than a number in hand, so this only needs to be enough to build
+    /// something before the mining loop takes over -- twenty cells at the
+    /// current price. Reclaiming pays one against a cost of five, so the ratio
+    /// is what actually sets the pace; this only sets where it starts.
+    pub const STARTING_VALUE: i32 = 100;
 
     pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
         Self { id, name: name.into(), last_seen: 0, value: Self::STARTING_VALUE }

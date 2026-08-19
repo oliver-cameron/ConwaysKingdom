@@ -91,7 +91,8 @@ pub fn show(
 
             ui.separator();
             ui.small(format!("holding  {}", status.holding));
-            ui.small("left click acts, left drag pans");
+            ui.small("left click acts, left drag fills");
+            ui.small("middle drag or arrows to pan");
             ui.small("wheel or pinch to zoom, 1-9 to choose");
         });
     response.map(|r| r.response.rect)
