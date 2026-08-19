@@ -1,4 +1,8 @@
-//! The overlay.
+//! The interface: egui, and the views drawn with it.
+//!
+//! Lives under `client` rather than `render` because what to show is policy,
+//! not plumbing — `render` stays generic wgpu and winit, and knows nothing
+//! about egui. The client feeds it events and hands it the pass.
 //!
 //! egui draws into the same render pass as the world, so there is no second
 //! surface and no compositing step.
@@ -10,9 +14,11 @@
 //! targets, and a HUD needs only pointer, wheel and modifiers — the IME and
 //! clipboard handling that egui-winit exists for is not in play.
 
+pub mod hud;
+
 use crate::render::context::GpuState;
 
-pub struct Ui {
+pub struct Views {
     ctx: egui::Context,
     /// Events gathered since the last frame.
     events: Vec<egui::Event>,
@@ -26,14 +32,19 @@ pub struct Ui {
     renderer: egui_wgpu::Renderer,
 }
 
-/// What a frame of UI produced: the shapes to draw and the textures to upload.
+/// The shapes a frame of interface produced.
+///
+/// Deliberately holds no `TexturesDelta`. egui panics if one is dropped with
+/// deltas unapplied, and a frame is not always drawn — the surface can report
+/// Skip while it settles, which is exactly when the font atlas first arrives.
+/// Uploading textures when they are produced rather than when they are drawn
+/// removes the failure case instead of guarding it.
 pub struct Output {
     primitives: Vec<egui::ClippedPrimitive>,
-    textures_delta: egui::TexturesDelta,
     pixels_per_point: f32,
 }
 
-impl Ui {
+impl Views {
     pub fn new(gpu: &GpuState) -> Self {
         Self {
             ctx: egui::Context::default(),
@@ -69,7 +80,9 @@ impl Ui {
                 // egui works in points; winit reports physical pixels.
                 self.pointer = egui::pos2(position.x as f32 / scale, position.y as f32 / scale);
                 self.events.push(egui::Event::PointerMoved(self.pointer));
-                self.wants_pointer
+                // Never withheld. The client tracks the cursor for its own
+                // hover and drag handling, and a position is not an action.
+                false
             }
             WindowEvent::CursorLeft { .. } => {
                 self.events.push(egui::Event::PointerGone);
@@ -127,7 +140,8 @@ impl Ui {
         }
     }
 
-    /// Build the frame, then hand back what to draw.
+    /// Build the frame, upload whatever textures it produced, and hand back
+    /// the shapes to draw.
     pub fn run(&mut self, gpu: &GpuState, now: f64, build: impl FnOnce(&egui::Context)) -> Output {
         if self.start == 0.0 {
             self.start = now;
@@ -153,15 +167,25 @@ impl Ui {
 
         self.wants_pointer = self.ctx.egui_wants_pointer_input();
 
+        // A texture can arrive as several partial updates in one frame, so
+        // each id carries a list rather than a single delta.
+        for (id, deltas) in &full.textures_delta.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
+            }
+        }
+        for id in &full.textures_delta.free {
+            self.renderer.free_texture(id);
+        }
+
         Output {
             primitives: self.ctx.tessellate(full.shapes, pixels_per_point),
-            textures_delta: full.textures_delta,
             pixels_per_point,
         }
     }
 
-    /// Upload what changed, then record the overlay into the pass the world was
-    /// just drawn into.
+    /// Record the interface into the pass the world was just drawn into.
     pub fn render(
         &mut self,
         gpu: &GpuState,
@@ -169,15 +193,6 @@ impl Ui {
         pass: &mut wgpu::RenderPass<'static>,
         output: &Output,
     ) {
-        // A texture can arrive as several partial updates in one frame, so each
-        // id carries a list rather than a single delta.
-        for (id, deltas) in &output.textures_delta.set {
-            for delta in deltas {
-                self.renderer
-                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
-            }
-        }
-
         let descriptor = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [gpu.size.0, gpu.size.1],
             pixels_per_point: output.pixels_per_point,
@@ -190,9 +205,5 @@ impl Ui {
             &descriptor,
         );
         self.renderer.render(pass, &output.primitives, &descriptor);
-
-        for id in &output.textures_delta.free {
-            self.renderer.free_texture(id);
-        }
     }
 }

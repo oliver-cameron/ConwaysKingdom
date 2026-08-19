@@ -5,7 +5,12 @@
 //! which world to open, and where to point the camera. A headless server would
 //! keep the [`World`] and drop everything else in this file.
 
+pub mod views;
+
+use std::cell::RefCell;
+
 use crate::render::app::App;
+use crate::client::views::{hud, Views};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -83,6 +88,13 @@ enum Act {
 }
 
 pub struct BattleApp {
+    /// The interface, and the shapes it produced this frame.
+    ///
+    /// Behind a cell because the overlay is recorded while the frame holds an
+    /// immutable borrow of the app: `draw_calls` returns references into it,
+    /// so the pass cannot also take `&mut`.
+    views: RefCell<Views>,
+    ui_output: RefCell<Option<views::Output>>,
     pipeline: wgpu::RenderPipeline,
     bind_groups: Vec<wgpu::BindGroup>,
     vertex_buffers: Vec<wgpu::Buffer>,
@@ -123,6 +135,10 @@ pub struct BattleApp {
     /// simulates: the rules are deterministic, so offline is a game of one
     /// rather than a broken game.
     link: Option<Link>,
+    /// Seconds since the client started. The interface animates against this,
+    /// so it must be real time -- the generation counter only moves four times
+    /// a second and would make every hover and fade crawl.
+    elapsed: f64,
     /// Why the last action was refused, shown until the next one succeeds.
     notice: Option<String>,
     /// What this player can spend. Predicted locally with the same arithmetic
@@ -415,6 +431,8 @@ impl App for BattleApp {
         );
 
         let mut app = Self {
+            views: RefCell::new(Views::new(gpu)),
+            ui_output: RefCell::new(None),
             pipeline,
             bind_groups: vec![bind_group],
             vertex_buffers,
@@ -431,6 +449,7 @@ impl App for BattleApp {
             touches: Vec::new(),
             pinch_span: None,
             viewport: (1.0, 1.0),
+            elapsed: 0.0,
             notice: None,
             value: Player::STARTING_VALUE,
             me: None,
@@ -479,6 +498,23 @@ impl App for BattleApp {
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, &visible);
             self.world.dirty = false;
         }
+        self.elapsed += dt as f64;
+        let status = hud::Status {
+            player: self.me.unwrap_or(PlayerId(1)),
+            value: self.value,
+            generation: self.world.generation,
+            chunks_held: self.world.stored_count(),
+            chunks_drawn: self.chunks.instance_count(),
+            zoom: self.zoom,
+            connected: self.link.is_some(),
+            notice: self.notice.as_deref(),
+        };
+        let output = self
+            .views
+            .borrow_mut()
+            .run(gpu, self.elapsed, |ctx| hud::show(ctx, &status));
+        *self.ui_output.borrow_mut() = Some(output);
+
         if self.camera_dirty {
             self.write_camera(gpu);
             self.camera_dirty = false;
@@ -631,50 +667,19 @@ impl App for BattleApp {
         }
     }
 
-    fn hud(&mut self, ctx: &egui::Context) {
-        egui::Window::new("kingdom")
-            .title_bar(false)
-            .resizable(false)
-            .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])
-            .show(ctx, |ui| {
-                let player = self.me.unwrap_or(PlayerId(1));
-                ui.horizontal(|ui| {
-                    // The same colour the shader gives this player's cells, so
-                    // the swatch and the board cannot disagree about who is who.
-                    let (r, g, b) = player_colour(player);
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(14.0, 14.0),
-                        egui::Sense::hover(),
-                    );
-                    ui.painter()
-                        .rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
-                    ui.heading(format!("Player {}", player.0));
-                });
+    fn on_window_event(&mut self, event: &winit::event::WindowEvent, scale: f32) -> bool {
+        self.views.borrow_mut().on_window_event(event, scale)
+    }
 
-                ui.separator();
-                ui.label(format!("Value  {}", self.value));
-                ui.label(format!("Generation  {}", self.world.generation));
-                ui.label(format!(
-                    "Chunks  {} held, {} drawn",
-                    self.world.stored_count(),
-                    self.chunks.instance_count()
-                ));
-                ui.label(format!("Zoom  {:.1} px/cell", self.zoom));
-
-                ui.separator();
-                match &self.link {
-                    Some(_) => ui.colored_label(egui::Color32::from_rgb(120, 210, 140), "connected"),
-                    None => ui.colored_label(egui::Color32::from_rgb(220, 170, 90), "offline"),
-                };
-
-                if let Some(notice) = &self.notice {
-                    ui.colored_label(egui::Color32::from_rgb(230, 120, 110), notice);
-                }
-
-                ui.separator();
-                ui.small("left click: take a cell   right click: place one");
-                ui.small("drag or arrows to pan, wheel or pinch to zoom");
-            });
+    fn overlay(
+        &self,
+        gpu: &GpuState,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &mut wgpu::RenderPass<'static>,
+    ) {
+        if let Some(output) = self.ui_output.borrow().as_ref() {
+            self.views.borrow_mut().render(gpu, encoder, pass, output);
+        }
     }
 
     fn clear_color(&self) -> Option<wgpu::Color> {
@@ -705,60 +710,6 @@ fn open_link() -> Option<Link> {
     Some(link)
 }
 
-/// The colour the shader gives a player, computed the same way so the HUD
-/// swatch matches the cells on the board. OKLab with the chroma bisected down
-/// until it fits sRGB, which keeps hue and lightness exactly rather than
-/// bending them the way clamping would.
-fn player_colour(player: PlayerId) -> (u8, u8, u8) {
-    const HUE_STEP: f32 = 0.618_034;
-    const TAU: f32 = std::f32::consts::TAU;
-
-    let hue = (player.0 as f32 * HUE_STEP).fract() * TAU;
-    let saturation = if player.0 % 2 == 1 { 1.0 } else { 0.55 };
-    let lightness = 0.62f32;
-
-    let oklab_to_linear = |l: f32, a: f32, b: f32| {
-        let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
-        let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
-        let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
-        let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-        [
-            4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
-            -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
-            -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
-        ]
-    };
-    let inside = |c: [f32; 3]| c.iter().all(|v| (-0.0005..=1.0005).contains(v));
-
-    let chroma = 0.30 * saturation * (1.0 - (2.0 * lightness - 1.0).abs());
-    let (dx, dy) = (hue.cos(), hue.sin());
-    let mut scale = 1.0;
-    if !inside(oklab_to_linear(lightness, chroma * dx, chroma * dy)) {
-        let (mut lo, mut hi) = (0.0f32, 1.0f32);
-        for _ in 0..8 {
-            let mid = (lo + hi) * 0.5;
-            let c = chroma * mid;
-            if inside(oklab_to_linear(lightness, c * dx, c * dy)) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        scale = lo;
-    }
-    let c = chroma * scale;
-    let linear = oklab_to_linear(lightness, c * dx, c * dy);
-
-    // egui takes sRGB bytes, so encode; the shader hands linear to a surface
-    // that does this in hardware.
-    let encode = |v: f32| {
-        let v = v.clamp(0.0, 1.0);
-        let s = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-        (s * 255.0).round() as u8
-    };
-    (encode(linear[0]), encode(linear[1]), encode(linear[2]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -768,6 +719,7 @@ mod tests {
     /// is in range and distinct between players.
     #[test]
     fn player_colours_are_in_gamut_and_distinct() {
+        use crate::client::views::hud::player_colour;
         let mut seen = Vec::new();
         for p in 1..=PlayerId::MAX {
             let c = player_colour(PlayerId(p));

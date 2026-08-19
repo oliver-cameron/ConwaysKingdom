@@ -248,12 +248,12 @@ impl Frame {
     ///
     /// `overlay` runs after the draw calls, in the same pass, so an interface
     /// drawn on top needs no second surface and no compositing step. It gets
-    /// the encoder too, since egui uploads its buffers through one.
+    /// the encoder too, since an overlay may need to upload buffers of its own
+    /// before drawing.
     ///
-    /// The pass is `'static` because that is what egui's renderer takes: it
-    /// keeps referenced resources alive itself, and the only consequence is
-    /// that touching the encoder while the pass is open is a runtime error
-    /// rather than a compile one.
+    /// The pass is `'static` because a pass keeps its referenced resources
+    /// alive itself; the only consequence is that touching the encoder while
+    /// the pass is open becomes a runtime error rather than a compile one.
     pub fn submit(
         mut self,
         gpu: &GpuState,
