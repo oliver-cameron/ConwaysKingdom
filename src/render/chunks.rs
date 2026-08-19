@@ -24,12 +24,10 @@ pub const UNLOADED_LAYER: u32 = 0;
 
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
-/// `R16Uint`: one 16-bit integer per cell, matching `Cell`'s bit layout, so the
-/// shader unpacks fields with shifts rather than reading channels.
-///
-/// Note this is *not* storage-capable — no 1- or 2-byte format is; the smallest
-/// are `Rgba8Uint` and `R32Uint`. Moving the simulation to a compute shader
-/// would therefore mean widening the cell, not just changing a constant.
+/// `Rgba8Uint`: R and G are the cell's sixteen bits, B and A its tile UV. Four
+/// bytes is also the narrowest storage-capable size, so moving the simulation
+/// to a compute shader later stays a dispatch change rather than a storage
+/// rewrite.
 pub struct ChunkTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -37,7 +35,7 @@ pub struct ChunkTexture {
 }
 
 impl ChunkTexture {
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Uint;
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Uint;
 
     /// Layers to allocate, the guaranteed floor for `max_texture_array_layers`.
     /// Allocated up front because an array texture cannot be resized.

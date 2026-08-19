@@ -58,7 +58,13 @@ impl GpuState {
             .await
             .expect("no suitable GPU adapter found (check that WebGPU/WebGL2 is available)");
 
-        log::info!("using adapter: {:?}", adapter.get_info());
+        let info = adapter.get_info();
+        log::info!(
+            "adapter: {} ({:?} via {:?})",
+            info.name,
+            info.device_type,
+            info.backend
+        );
 
         // WebGL2 only supports a reduced limit set (no storage buffers,
         // smaller texture sizes, etc). Requesting the downlevel defaults
@@ -105,6 +111,16 @@ impl GpuState {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&device, &config);
+        // The web target has no console to read a panic out of, so say what was
+        // negotiated: a surface that is smaller or a different format than
+        // expected is the usual reason a page renders wrong rather than not at
+        // all.
+        log::info!(
+            "surface: {width}x{height} {:?}, present {:?}, {} format(s) offered",
+            config.format,
+            config.present_mode,
+            surface_caps.formats.len()
+        );
 
         Self {
             surface,

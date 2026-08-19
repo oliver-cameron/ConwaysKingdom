@@ -202,6 +202,14 @@ impl World {
         }
     }
 
+    /// Read one cell by absolute cell coordinates. `None` where no chunk is
+    /// held, which for an infinite world means nothing has ever lived there.
+    pub fn cell_at(&self, row: i32, col: i32) -> Option<Cell> {
+        let n = CHUNK_N as i32;
+        let chunk = self.chunk_at((row.div_euclid(n), col.div_euclid(n)))?;
+        Some(chunk[(row.rem_euclid(n) as usize, col.rem_euclid(n) as usize)])
+    }
+
     /// Write one cell addressed in absolute cell coordinates, splitting it
     /// into chunk and offset. Callers dealing in world positions should use
     /// this rather than doing the arithmetic themselves — getting it wrong

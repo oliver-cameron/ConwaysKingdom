@@ -85,6 +85,31 @@ pub enum ServerMessage {
     Resync { tick: Tick, chunks: Vec<ChunkId> },
 }
 
+/// What an action is worth to the player who did it.
+///
+/// Must be read **before** the action is applied, since it depends on what is
+/// there now. Shared by client and server for the same reason `apply` is: two
+/// implementations of what something costs are two ways to disagree about who
+/// can afford what.
+///
+/// Reclaiming your own living cell earns one. Placing costs one, and so does
+/// destroying someone else's cell — taking ground is not free. Erasing empty
+/// space is neither earned nor spent.
+pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
+    match &stamped.action {
+        Action::Paint { cells } => -(cells.len() as i32),
+        Action::Erase { cells } => cells
+            .iter()
+            .map(|&(row, col)| match world.cell_at(row, col) {
+                Some(cell) if !cell.is_alive() => 0,
+                Some(cell) if cell.player() == stamped.player => 1,
+                Some(_) => -1,
+                None => 0,
+            })
+            .sum(),
+    }
+}
+
 /// Apply an action to a world.
 ///
 /// Shared deliberately: the client predicts by applying actions locally and the
