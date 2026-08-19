@@ -36,6 +36,10 @@ pub trait App: 'static {
 
     /// A mouse button went down or up, at the last reported cursor position.
     fn on_click(&mut self, _button: MouseButton, _pressed: bool) {}
+
+    /// A finger touched, moved, or left. `id` distinguishes fingers, which is
+    /// what makes a pinch tellable from a drag.
+    fn on_touch(&mut self, _id: u64, _phase: TouchPhase, _x: f64, _y: f64) {}
 }
 
 /// Run the event loop. Logging is the caller's business: initialising it here
@@ -109,6 +113,9 @@ pub async fn run<A: App>() {
                     WindowEvent::MouseInput { button, state, .. } => {
                         app.on_click(button, state == ElementState::Pressed)
                     }
+                    WindowEvent::Touch(t) => {
+                        app.on_touch(t.id, t.phase, t.location.x, t.location.y)
+                    }
                     WindowEvent::RedrawRequested => {
                         // The browser gives no resize event for the canvas
                         // element, only for its own window, and the devtools
@@ -154,24 +161,31 @@ pub async fn run<A: App>() {
 /// Keep the canvas the size of the window it sits in, at the device's real
 /// pixel density.
 ///
-/// The backing store is sized in physical pixels and the element in CSS
-/// pixels, so a HiDPI display renders at its own resolution instead of being
-/// upscaled. Only called when something actually changed, since setting the
-/// size unconditionally would clear the canvas every frame.
+/// Compares against the last size *requested*, not the canvas's current size.
+/// `Window::inner_size` on the web returns a value winit updates from its own
+/// resize observer, so it does not reflect a request until a later frame —
+/// comparing against it means requesting again every frame, and setting a
+/// canvas's size clears it, so the picture never survives to be shown.
 #[cfg(target_arch = "wasm32")]
 fn fit_canvas_to_window(window: &winit::window::Window) {
+    use std::cell::Cell;
     use winit::dpi::PhysicalSize;
+
+    thread_local! {
+        static REQUESTED: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    }
+
     let Some(win) = web_sys::window() else { return };
     let dpr = win.device_pixel_ratio().max(1.0);
     let w = win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
     let h = win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
-    let want = PhysicalSize::new((w * dpr).round() as u32, (h * dpr).round() as u32);
-    if want.width == 0 || want.height == 0 {
+    let want = ((w * dpr).round() as u32, (h * dpr).round() as u32);
+    if want.0 == 0 || want.1 == 0 || REQUESTED.get() == want {
         return;
     }
-    if window.inner_size() != want {
-        let _ = window.request_inner_size(want);
-    }
+    REQUESTED.set(want);
+    log::info!("canvas -> {}x{} ({}x css at dpr {dpr})", want.0, want.1, w as u32);
+    let _ = window.request_inner_size(PhysicalSize::new(want.0, want.1));
 }
 
 #[cfg(not(target_arch = "wasm32"))]

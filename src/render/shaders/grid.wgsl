@@ -7,9 +7,11 @@
 // changing both.
 //
 //  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-// |   player    |      metadata / flags      | A |
+// |   player    |F |G |       kind        | A |
 const ALIVE_BIT:    u32 = 1u;
-const META_SHIFT:   u32 = 1u;   const META_MASK: u32 = 1023u;
+const KIND_SHIFT:   u32 = 1u;   const KIND_MASK: u32 = 255u;
+const FLAG_SHIFT:   u32 = 9u;
+const FLAG_FROZEN:  u32 = 512u; // 1 << 9
 const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 
 // Sprites along one edge of the atlas; see render::atlas.
@@ -165,9 +167,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Where in this cell we are, in 0..1, then into the cell's sprite. A chunk
     // is 16 cells of 16 texels, so 256 texels across: a u8 per axis.
     let within = fract(in.local);
-    // Low eight bits of the metadata pick the sprite: 256 of them, laid out
-    // 16 by 16 on the sheet.
-    let sprite = (cell >> META_SHIFT) & 255u;
+    // A cell's kind is its sprite index, so a kind cannot name art that does
+    // not exist. 256 of them, laid out 16 by 16 on the sheet.
+    let sprite = (cell >> KIND_SHIFT) & KIND_MASK;
     let sheet = vec2<f32>(f32(sprite % SHEET_N), f32(sprite / SHEET_N));
     let uv = (sheet + within) / f32(SHEET_N);
 
@@ -177,7 +179,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     let player = cell >> PLAYER_SHIFT;
-    let rgb = shade(texel.g, texel.r * player_saturation(player), player_hue(player));
+    var lightness = texel.g;
+    // A frozen cell is time-stopped; washing it out says so without needing a
+    // second sprite for every kind.
+    if (cell & FLAG_FROZEN) != 0u {
+        lightness = mix(lightness, 0.86, 0.45);
+    }
+    let rgb = shade(lightness, texel.r * player_saturation(player), player_hue(player));
     // Composited against the background rather than alpha-blended, so the
     // pipeline needs no blend state and draw order stays irrelevant.
     return vec4<f32>(mix(background, rgb, texel.a), 1.0);

@@ -23,7 +23,7 @@
 //! from the tick and the cell's absolute position, so every peer rolls the same
 //! number without exchanging one.
 
-use super::cell::Cell;
+use super::cell::{Cell, Kind};
 use super::player::PlayerId;
 
 /// Neighbours in [`super::Dir::ALL`] order: N, NE, E, SE, S, SW, W, NW.
@@ -52,8 +52,17 @@ impl Cell {
     /// Conway, so a new type costs one arm and disturbs nothing else.
     #[inline]
     pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
-        match self.meta() {
-            // No special types yet; everything follows the ordinary rules.
+        // A frozen cell is time-stopped, whatever it is. Checked before the
+        // kind, so freezing works on anything without every kind having to
+        // remember to honour it.
+        if self.is_frozen() {
+            return self;
+        }
+        match self.kind() {
+            // Glass is a structure, not life: it does not live or die by
+            // neighbour count. It goes when the pane it belongs to breaks.
+            Kind::GLASS => self,
+            // Everything else follows the ordinary rules.
             _ => self.conway(neighbours, seed),
         }
     }
@@ -123,7 +132,7 @@ mod tests {
 
     #[test]
     fn survival_changes_only_the_alive_bit() {
-        let me = Cell::alive(PlayerId(3)).with_meta(0b101_0101_010);
+        let me = Cell::alive(PlayerId(3)).with_kind(Kind(37));
         for live in [2, 3] {
             let next = next_cell(me, &neighbours(&(0..live).collect::<Vec<_>>(), 7), 0);
             assert_eq!(next, me, "{live} neighbours: nothing may change");
@@ -132,12 +141,12 @@ mod tests {
 
     #[test]
     fn death_keeps_owner_and_metadata() {
-        let me = Cell::alive(PlayerId(3)).with_meta(0b101_0101_010);
+        let me = Cell::alive(PlayerId(3)).with_kind(Kind(37));
         for live in [0, 1, 4, 5, 6, 7, 8] {
             let next = next_cell(me, &neighbours(&(0..live).collect::<Vec<_>>(), 7), 0);
             assert!(!next.is_alive(), "{live} neighbours: should die");
             assert_eq!(next.player(), me.player(), "owner is kept");
-            assert_eq!(next.meta(), me.meta(), "metadata is kept");
+            assert_eq!(next.kind(), me.kind(), "kind is kept");
         }
     }
 
@@ -206,16 +215,42 @@ mod tests {
         }
     }
 
+    /// A frozen cell is time-stopped whatever surrounds it. This is what a
+    /// glass pane does to the cells it covers.
+    #[test]
+    fn a_frozen_cell_never_changes() {
+        for live in 0..=8 {
+            let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
+            for me in [
+                Cell::alive(PlayerId(3)).with_frozen(true),
+                Cell::DEAD.with_frozen(true),
+                Cell::alive(PlayerId(2)).with_kind(Kind::GLASS).with_frozen(true),
+            ] {
+                assert_eq!(next_cell(me, &n, 0), me, "{live} live neighbours");
+            }
+        }
+    }
+
+    /// Glass is a structure, not life: it does not die of loneliness.
+    #[test]
+    fn glass_ignores_its_neighbours() {
+        let glass = Cell::alive(PlayerId(1)).with_kind(Kind::GLASS);
+        for live in 0..=8 {
+            let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
+            assert_eq!(next_cell(glass, &n, 0), glass, "{live} live neighbours");
+        }
+    }
+
     #[test]
     fn a_birth_keeps_whatever_metadata_the_dead_cell_carried() {
-        let corpse = Cell::DEAD.with_meta(0b111_0000_111).with_player(PlayerId(6));
+        let corpse = Cell::DEAD.with_kind(Kind(37)).with_player(PlayerId(6));
         let mut n = [Cell::DEAD; 8];
         for i in 0..3 {
             n[i] = Cell::alive(PlayerId(2));
         }
         let born = next_cell(corpse, &n, 1);
         assert!(born.is_alive());
-        assert_eq!(born.meta(), corpse.meta(), "metadata survives");
+        assert_eq!(born.kind(), corpse.kind(), "kind survives");
         assert_eq!(born.player(), PlayerId(2), "but a parent takes ownership");
     }
 }

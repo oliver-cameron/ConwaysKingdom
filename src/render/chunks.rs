@@ -16,6 +16,12 @@ pub const SHADER_SOURCE: &str = include_str!("shaders/grid.wgsl");
 /// Upper bound on chunks drawn in one frame. Sizes the instance buffer.
 pub const MAX_INSTANCES: usize = 1024;
 
+/// Layer zero is never written after startup and holds nothing but dead cells.
+/// Chunks the client does not have point at it, so a gap in the world draws as
+/// an empty chunk -- with its grid outline -- rather than as nothing at all.
+/// One shared layer, because every unloaded chunk looks the same.
+pub const UNLOADED_LAYER: u32 = 0;
+
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
 /// `R16Uint`: one 16-bit integer per cell, matching `Cell`'s bit layout, so the
@@ -200,6 +206,7 @@ pub struct ChunkStore {
     /// Canonical chunk coordinate -> array layer. Canonical, so a torus chunk
     /// drawn at nine global positions still occupies one layer.
     layers: HashMap<Coord, u32>,
+    next_free: u32,
     free: Vec<u32>,
     instances: Vec<Instance>,
     buffer: wgpu::Buffer,
@@ -216,10 +223,17 @@ impl ChunkStore {
         Self {
             texture: ChunkTexture::new(device, ChunkTexture::LAYER_BUDGET),
             layers: HashMap::new(),
+            // Layer zero is reserved, so allocation starts above it.
+            next_free: UNLOADED_LAYER + 1,
             free: Vec::new(),
             instances: Vec::with_capacity(MAX_INSTANCES),
             buffer,
         }
+    }
+
+    /// Zero layer zero once. It stays dead for the life of the app.
+    pub fn init_unloaded_layer(&self, queue: &wgpu::Queue) {
+        self.texture.upload(queue, UNLOADED_LAYER, &Chunk::dead());
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
@@ -237,7 +251,15 @@ impl ChunkStore {
     /// Push every chunk the world holds to the GPU and rebuild the instance
     /// list. `repeats` is how many copies of a toroidal world to draw either
     /// side of the original; it is ignored for infinite worlds.
-    pub fn sync(&mut self, queue: &wgpu::Queue, world: &World, repeats: i32) {
+    /// `visible` is every chunk coordinate on screen. Those the world does not
+    /// hold are still drawn, pointing at the unloaded layer.
+    pub fn sync(
+        &mut self,
+        queue: &wgpu::Queue,
+        world: &World,
+        repeats: i32,
+        visible: &[Coord],
+    ) {
         let present: HashSet<Coord> = world.stored().iter().map(|&(c, _)| c).collect();
         let free = &mut self.free;
         self.layers.retain(|coord, layer| {
@@ -252,12 +274,13 @@ impl ChunkStore {
             let layer = match self.layers.get(&coord) {
                 Some(&l) => l,
                 None => {
-                    let next = self.layers.len() as u32;
-                    let Some(l) = self
-                        .free
-                        .pop()
-                        .or_else(|| (next < self.texture.layers).then_some(next))
-                    else {
+                    let fresh = self.next_free;
+                    let Some(l) = self.free.pop().or_else(|| {
+                        (fresh < self.texture.layers).then(|| {
+                            self.next_free += 1;
+                            fresh
+                        })
+                    }) else {
                         log::warn!("layer budget exhausted; chunk {coord:?} not drawn");
                         continue;
                     };
@@ -285,6 +308,27 @@ impl ChunkStore {
                     CHUNK_N as f32,
                 ],
                 meta: [layer, 0, 0, 0],
+            });
+        }
+
+        // Anything visible the world does not hold draws as an unloaded chunk,
+        // so the grid stays continuous instead of ending at a ragged edge.
+        for &coord in visible {
+            let canonical = world.canonical(coord);
+            if self.layers.contains_key(&canonical) {
+                continue;
+            }
+            if self.instances.len() == MAX_INSTANCES {
+                break;
+            }
+            self.instances.push(Instance {
+                rect: [
+                    (coord.1 * CHUNK_N as i32) as f32,
+                    (coord.0 * CHUNK_N as i32) as f32,
+                    CHUNK_N as f32,
+                    CHUNK_N as f32,
+                ],
+                meta: [UNLOADED_LAYER, 0, 0, 0],
             });
         }
 
