@@ -271,7 +271,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)], placement: Placement::Cell },
+                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)], placement: Placement::Life },
             }),
         );
         s.step();
@@ -298,7 +298,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)], placement: Placement::Cell },
+                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)], placement: Placement::Life },
             }),
         );
         for _ in 0..25 {
@@ -354,16 +354,16 @@ mod tests {
 
         // A 2x2 block: a still life, so it is still where it was put when the
         // next assertion looks. A blinker would have rotated out from under it.
-        act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)], placement: Placement::Cell });
+        act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)], placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST));
 
         // Reclaiming two of your own pays two back.
         // Reclaiming pays one each, well short of what they cost to place.
-        act(&mut s, Action::Erase { cells: vec![(0, 0), (0, 1)] });
+        act(&mut s, Action::Erase { cells: vec![(0, 0), (0, 1)], placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST + 2));
 
         // Erasing empty space is neither earned nor spent.
-        act(&mut s, Action::Erase { cells: vec![(90, 90)] });
+        act(&mut s, Action::Erase { cells: vec![(90, 90)], placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST + 2));
     }
 
@@ -376,14 +376,14 @@ mod tests {
         s.handle(Some(a), ClientMessage::Act(Stamped {
             tick: 0,
             player: a,
-            action: Action::Paint { cells: vec![(50, 50), (50, 51), (51, 50), (51, 51)], placement: Placement::Cell },
+            action: Action::Paint { cells: vec![(50, 50), (50, 51), (51, 50), (51, 51)], placement: Placement::Life },
         }));
         s.step();
         assert_eq!(s.world().cell_at(50, 50).map(|c| c.player()), Some(a));
 
         let before = s.value_of(b).unwrap();
         s.handle(Some(b), ClientMessage::Act(Stamped {
-            tick: s.tick(), player: b, action: Action::Erase { cells: vec![(50, 50)] },
+            tick: s.tick(), player: b, action: Action::Erase { cells: vec![(50, 50)], placement: Placement::Life },
         }));
         s.step();
         assert_eq!(s.value_of(b), Some(before - 1), "taking ground is not free");
@@ -397,7 +397,7 @@ mod tests {
         let too_many: Vec<_> = (0..purse / PLACE_COST + 1).map(|i| (0, i)).collect();
 
         s.handle(Some(me), ClientMessage::Act(Stamped {
-            tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Cell },
+            tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Life },
         }));
         s.step();
         assert_eq!(s.value_of(me), Some(purse), "nothing was spent");

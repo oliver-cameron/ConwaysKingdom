@@ -18,7 +18,7 @@ pub struct Slot {
 }
 
 pub const SLOTS: [Slot; 2] = [
-    Slot { name: "Cell", placement: Placement::Cell },
+    Slot { name: "Life", placement: Placement::Life },
     // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
     Slot { name: "Ice", placement: Placement::Ice },
