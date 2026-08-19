@@ -971,12 +971,9 @@ impl App for BattleApp {
             let hud_rect = hud::show(ctx, &theme, &status);
             let bar = hotbar::show(ctx, &theme, slot);
             picked = bar.picked;
-            // Either panel claims the pointer, so the union is what the world
-            // must not receive.
-            match (hud_rect, bar.rect) {
-                (Some(a), Some(b)) => Some(a.union(b)),
-                (a, b) => a.or(b),
-            }
+            // Each panel on its own. Folding them together first would claim
+            // everything between them, and they sit in opposite corners.
+            [hud_rect, bar.rect].into_iter().flatten().collect()
         });
         if let Some(index) = picked {
             self.slot = index;
