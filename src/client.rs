@@ -93,8 +93,11 @@ pub struct BattleApp {
     drag_moved: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
-    /// Viewport size in physical pixels, cached because input callbacks are
-    /// not handed the `GpuState`.
+    /// Viewport size in physical pixels, refreshed every frame from the
+    /// `GpuState`. Cached only because input callbacks are not handed one --
+    /// updating it solely on resize left it stale whenever a resize event did
+    /// not arrive, and zoom anchoring then disagreed with the camera about how
+    /// big the screen was.
     viewport: (f32, f32),
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
@@ -117,7 +120,7 @@ impl BattleApp {
     /// live pattern, so what is on screen is whatever `VIEW_CENTRE` and
     /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
     fn write_camera(&self, gpu: &GpuState) {
-        let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
+        let (vw, vh) = self.viewport;
         let zoom = self.zoom;
         let origin = [
             self.camera.0 - vw / (2.0 * zoom),
@@ -152,8 +155,8 @@ impl BattleApp {
 
     /// Where a screen position lands in the world, in absolute cell
     /// coordinates. The inverse of what the vertex shader does.
-    fn cell_under_cursor(&self, gpu: &GpuState, (px, py): (f64, f64)) -> (i32, i32) {
-        let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
+    fn cell_under_cursor(&self, (px, py): (f64, f64)) -> (i32, i32) {
+        let (vw, vh) = self.viewport;
         let origin = (
             self.camera.0 - vw / (2.0 * self.zoom),
             self.camera.1 - vh / (2.0 * self.zoom),
@@ -180,7 +183,7 @@ impl BattleApp {
     }
 
     /// Drain the socket and fold what arrived into the local world.
-    fn pump_link(&mut self, gpu: &GpuState) {
+    fn pump_link(&mut self) {
         let Some(link) = &mut self.link else { return };
         let messages = link.drain();
         let closed = link.is_closed();
@@ -234,14 +237,14 @@ impl BattleApp {
             return;
         }
 
-        self.subscribe_to_view(gpu);
+        self.subscribe_to_view();
     }
 
     /// Ask for any visible chunk not already requested. The camera is fixed for
     /// now, so this settles after the first frame; it is written against the
     /// viewport so panning needs no new code.
-    fn subscribe_to_view(&mut self, gpu: &GpuState) {
-        let (vw, vh) = (gpu.size.0 as f32, gpu.size.1 as f32);
+    fn subscribe_to_view(&mut self) {
+        let (vw, vh) = self.viewport;
         let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
         let min = (
             (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
@@ -355,22 +358,30 @@ impl App for BattleApp {
     }
 
     fn resize(&mut self, gpu: &GpuState) {
+        // `update` notices this too; this just avoids a frame of staleness.
         self.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
         self.camera_dirty = true;
-        self.subscribed.clear(); // the viewport changed; ask again
+        self.subscribed.clear();
 
         self.write_camera(gpu);
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        let viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
+        if viewport != self.viewport {
+            self.viewport = viewport;
+            self.camera_dirty = true;
+            self.subscribed.clear(); // a different area is visible now
+        }
+
         self.apply_pan(dt);
 
         if self.link.is_some() {
-            self.pump_link(gpu);
+            self.pump_link();
         }
 
         if let Some(at) = self.pending_click.take() {
-            let (row, col) = self.cell_under_cursor(gpu, at);
+            let (row, col) = self.cell_under_cursor(at);
             // Resolved and deliberately ignored. Sending it is one line --
             // ClientMessage::Act with a Paint at this cell -- once there is a
             // decision about what a click should mean.
@@ -430,7 +441,6 @@ impl App for BattleApp {
     }
 
     fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
-        let gpu_size = self.viewport;
         use winit::event::MouseScrollDelta as D;
         // A line of wheel and a pixel of trackpad are wildly different
         // magnitudes, so normalise before using either.
@@ -440,9 +450,9 @@ impl App for BattleApp {
         };
         // Zoom about the cursor, not the screen centre: zooming towards a
         // corner should keep what is under the pointer under the pointer.
-        let before = self.cell_under_cursor_f(gpu_size, self.cursor);
+        let before = self.cell_under_cursor_f(self.viewport, self.cursor);
         self.zoom = (self.zoom * 1.15f32.powf(steps)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
-        let after = self.cell_under_cursor_f(gpu_size, self.cursor);
+        let after = self.cell_under_cursor_f(self.viewport, self.cursor);
         self.camera.0 += before.0 - after.0;
         self.camera.1 += before.1 - after.1;
         self.camera_dirty = true;

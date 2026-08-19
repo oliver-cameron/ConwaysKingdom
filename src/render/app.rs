@@ -64,15 +64,9 @@ pub async fn run<A: App>() {
             .expect("couldn't append canvas to document body");
 
         // winit leaves the canvas at the HTML default of 300x150, and
-        // `inner_size` reads the element, so the surface would be configured
-        // at 300x150 and stretched across the viewport by the CSS -- correct
-        // but a blurry fraction of the real resolution.
-        use winit::dpi::PhysicalSize;
-        if let Some(win) = web_sys::window() {
-            let w = win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
-            let h = win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
-            let _ = window.request_inner_size(PhysicalSize::new(w as u32, h as u32));
-        }
+        // `inner_size` reads the element, so without this the surface is
+        // configured at 300x150 and stretched across the viewport by the CSS.
+        fit_canvas_to_window(&window);
     }
 
     let mut gpu = GpuState::new(window.clone()).await;
@@ -116,6 +110,15 @@ pub async fn run<A: App>() {
                         app.on_click(button, state == ElementState::Pressed)
                     }
                     WindowEvent::RedrawRequested => {
+                        // The browser gives no resize event for the canvas
+                        // element, only for its own window, and the devtools
+                        // pane changes that without any page event a canvas
+                        // would see. Checking each frame costs two property
+                        // reads and covers every case: window resize, devtools
+                        // opening, zoom, a rotated phone.
+                        #[cfg(target_arch = "wasm32")]
+                        fit_canvas_to_window(&window);
+
                         let now = now_secs();
                         let dt = (now - last_frame).max(0.0) as f32;
                         last_frame = now;
@@ -146,6 +149,29 @@ pub async fn run<A: App>() {
             }
         })
         .expect("event loop error");
+}
+
+/// Keep the canvas the size of the window it sits in, at the device's real
+/// pixel density.
+///
+/// The backing store is sized in physical pixels and the element in CSS
+/// pixels, so a HiDPI display renders at its own resolution instead of being
+/// upscaled. Only called when something actually changed, since setting the
+/// size unconditionally would clear the canvas every frame.
+#[cfg(target_arch = "wasm32")]
+fn fit_canvas_to_window(window: &winit::window::Window) {
+    use winit::dpi::PhysicalSize;
+    let Some(win) = web_sys::window() else { return };
+    let dpr = win.device_pixel_ratio().max(1.0);
+    let w = win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
+    let h = win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
+    let want = PhysicalSize::new((w * dpr).round() as u32, (h * dpr).round() as u32);
+    if want.width == 0 || want.height == 0 {
+        return;
+    }
+    if window.inner_size() != want {
+        let _ = window.request_inner_size(want);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

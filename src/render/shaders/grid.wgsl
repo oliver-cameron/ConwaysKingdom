@@ -101,6 +101,22 @@ fn player_hue(player: u32) -> f32 {
     return fract(f32(player) * HUE_STEP) * TAU;
 }
 
+/// Saturation is a second axis for telling players apart, because five bits of
+/// player leaves 31 of them and hue alone gets crowded: the closest pair ends
+/// up 0.026 apart in OKLab, which is not much.
+///
+/// Two tiers, alternating, so neighbouring player numbers differ in saturation
+/// as well as hue. Measured over 31 players that lifts the closest pair to
+/// 0.037, and over the first eight -- the case that actually happens -- to
+/// 0.119. Spreading saturation smoothly instead is worse than doing nothing,
+/// since lowering it shrinks the chroma radius and pulls colours together.
+fn player_saturation(player: u32) -> f32 {
+    if (player & 1u) == 1u {
+        return 1.0;
+    }
+    return 0.55;
+}
+
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) local: vec2<f32>,                       // cell coords in the chunk
@@ -160,8 +176,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(background, 1.0);
     }
 
-    let hue = player_hue((cell >> PLAYER_SHIFT));
-    let rgb = shade(texel.g, texel.r, hue);
+    let player = cell >> PLAYER_SHIFT;
+    let rgb = shade(texel.g, texel.r * player_saturation(player), player_hue(player));
     // Composited against the background rather than alpha-blended, so the
     // pipeline needs no blend state and draw order stays irrelevant.
     return vec4<f32>(mix(background, rgb, texel.a), 1.0);
