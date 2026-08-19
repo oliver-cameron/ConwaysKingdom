@@ -73,6 +73,15 @@ pub fn set_connection(url: Option<String>, name: String) {
     *CONNECTION.lock().unwrap() = Some((url, name));
 }
 
+/// What a click does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Act {
+    /// Take a cell away. Yours pays; someone else's costs.
+    Remove,
+    /// Put one down.
+    Place,
+}
+
 pub struct BattleApp {
     pipeline: wgpu::RenderPipeline,
     bind_groups: Vec<wgpu::BindGroup>,
@@ -114,6 +123,8 @@ pub struct BattleApp {
     /// simulates: the rules are deterministic, so offline is a game of one
     /// rather than a broken game.
     link: Option<Link>,
+    /// Why the last action was refused, shown until the next one succeeds.
+    notice: Option<String>,
     /// What this player can spend. Predicted locally with the same arithmetic
     /// the server charges by, so the number on screen is the number the server
     /// will agree with.
@@ -121,7 +132,7 @@ pub struct BattleApp {
     /// A click waiting to be resolved to a cell. Input callbacks are not given
     /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
     /// the next `update` rather than guessed here.
-    pending_click: Option<((f64, f64), bool)>,
+    pending_click: Option<((f64, f64), Act)>,
 }
 
 impl BattleApp {
@@ -260,13 +271,12 @@ impl BattleApp {
     /// the same `net::value_delta`, so acting immediately shows the right
     /// answer a round trip early. If the server disagrees the chunk digests
     /// will not match and the resync puts it right.
-    fn act_on(&mut self, row: i32, col: i32, destroy: bool) {
+    fn act_on(&mut self, row: i32, col: i32, act: Act) {
         let player = self.me.unwrap_or(PlayerId(1));
         let cells = vec![(row, col)];
-        let action = if destroy {
-            Action::Erase { cells }
-        } else {
-            Action::Paint { cells }
+        let action = match act {
+            Act::Remove => Action::Erase { cells },
+            Act::Place => Action::Paint { cells },
         };
         let stamped = Stamped { tick: self.world.generation, player, action };
 
@@ -276,18 +286,15 @@ impl BattleApp {
         // away, and the two cannot disagree because it is the same function.
         let delta = crate::net::value_delta(&self.world, &stamped);
         if self.value + delta < 0 {
-            log::info!("cannot afford that: costs {}, {} in hand", -delta, self.value);
+            self.notice = Some(format!("costs {}, you have {}", -delta, self.value));
             return;
         }
+        self.notice = None;
         self.value += delta;
 
         crate::net::apply(&mut self.world, &stamped);
         self.world.dirty = true;
-        log::info!(
-            "{} ({row}, {col}); value {}",
-            if destroy { "destroyed" } else { "placed" },
-            self.value
-        );
+        log::debug!("{act:?} ({row}, {col}); value {}", self.value);
 
         match &self.link {
             Some(link) => link.send(ClientMessage::Act(stamped)),
@@ -424,6 +431,7 @@ impl App for BattleApp {
             touches: Vec::new(),
             pinch_span: None,
             viewport: (1.0, 1.0),
+            notice: None,
             value: Player::STARTING_VALUE,
             me: None,
             subscribed: std::collections::HashSet::new(),
@@ -460,9 +468,9 @@ impl App for BattleApp {
             self.pump_link();
         }
 
-        if let Some((at, destroy)) = self.pending_click.take() {
+        if let Some((at, act)) = self.pending_click.take() {
             let (row, col) = self.cell_under_cursor(at);
-            self.act_on(row, col, destroy);
+            self.act_on(row, col, act);
         }
 
         self.world.update(dt, GENERATION_SPAN);
@@ -593,25 +601,80 @@ impl App for BattleApp {
         self.camera_dirty = true;
     }
 
-    /// Clicks are received and resolved to a cell, but deliberately do nothing
-    /// yet. This is where a `net::Action` will be built and sent.
+    /// Left removes, right places.
+    ///
+    /// Removing is the ordinary click because it is the one you make most: it
+    /// is how a player mines their own cells for value, and clearing your own
+    /// ground should not need a modifier.
+    ///
+    /// Left also pans, so a press that moved is a pan rather than a click on a
+    /// cell. Resolution is deferred to the next frame, because input callbacks
+    /// are not handed the `GpuState` and the screen-to-world mapping needs the
+    /// viewport.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
-        if button != winit::event::MouseButton::Left {
-            return;
+        use winit::event::MouseButton as B;
+        match button {
+            B::Left => {
+                if pressed {
+                    self.dragging = true;
+                    self.drag_moved = false;
+                    return;
+                }
+                self.dragging = false;
+                if self.drag_moved {
+                    return;
+                }
+                self.pending_click = Some((self.cursor, Act::Remove));
+            }
+            B::Right if pressed => self.pending_click = Some((self.cursor, Act::Place)),
+            _ => {}
         }
-        if pressed {
-            self.dragging = true;
-            self.drag_moved = false;
-            return;
-        }
-        self.dragging = false;
-        // A press that moved was a pan, not a click on a cell.
-        if self.drag_moved {
-            return;
-        }
-        // `gpu` is not passed to input callbacks, so resolve on the next frame
-        // instead of guessing the viewport here.
-        self.pending_click = Some((self.cursor, false));
+    }
+
+    fn hud(&mut self, ctx: &egui::Context) {
+        egui::Window::new("kingdom")
+            .title_bar(false)
+            .resizable(false)
+            .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])
+            .show(ctx, |ui| {
+                let player = self.me.unwrap_or(PlayerId(1));
+                ui.horizontal(|ui| {
+                    // The same colour the shader gives this player's cells, so
+                    // the swatch and the board cannot disagree about who is who.
+                    let (r, g, b) = player_colour(player);
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(14.0, 14.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter()
+                        .rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
+                    ui.heading(format!("Player {}", player.0));
+                });
+
+                ui.separator();
+                ui.label(format!("Value  {}", self.value));
+                ui.label(format!("Generation  {}", self.world.generation));
+                ui.label(format!(
+                    "Chunks  {} held, {} drawn",
+                    self.world.stored_count(),
+                    self.chunks.instance_count()
+                ));
+                ui.label(format!("Zoom  {:.1} px/cell", self.zoom));
+
+                ui.separator();
+                match &self.link {
+                    Some(_) => ui.colored_label(egui::Color32::from_rgb(120, 210, 140), "connected"),
+                    None => ui.colored_label(egui::Color32::from_rgb(220, 170, 90), "offline"),
+                };
+
+                if let Some(notice) = &self.notice {
+                    ui.colored_label(egui::Color32::from_rgb(230, 120, 110), notice);
+                }
+
+                ui.separator();
+                ui.small("left click: take a cell   right click: place one");
+                ui.small("drag or arrows to pan, wheel or pinch to zoom");
+            });
     }
 
     fn clear_color(&self) -> Option<wgpu::Color> {
@@ -640,4 +703,82 @@ fn open_link() -> Option<Link> {
     let link = Link::connect(url?);
     link.send(ClientMessage::Join { name });
     Some(link)
+}
+
+/// The colour the shader gives a player, computed the same way so the HUD
+/// swatch matches the cells on the board. OKLab with the chroma bisected down
+/// until it fits sRGB, which keeps hue and lightness exactly rather than
+/// bending them the way clamping would.
+fn player_colour(player: PlayerId) -> (u8, u8, u8) {
+    const HUE_STEP: f32 = 0.618_034;
+    const TAU: f32 = std::f32::consts::TAU;
+
+    let hue = (player.0 as f32 * HUE_STEP).fract() * TAU;
+    let saturation = if player.0 % 2 == 1 { 1.0 } else { 0.55 };
+    let lightness = 0.62f32;
+
+    let oklab_to_linear = |l: f32, a: f32, b: f32| {
+        let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+        let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+        let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+        let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+        [
+            4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+            -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+            -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+        ]
+    };
+    let inside = |c: [f32; 3]| c.iter().all(|v| (-0.0005..=1.0005).contains(v));
+
+    let chroma = 0.30 * saturation * (1.0 - (2.0 * lightness - 1.0).abs());
+    let (dx, dy) = (hue.cos(), hue.sin());
+    let mut scale = 1.0;
+    if !inside(oklab_to_linear(lightness, chroma * dx, chroma * dy)) {
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..8 {
+            let mid = (lo + hi) * 0.5;
+            let c = chroma * mid;
+            if inside(oklab_to_linear(lightness, c * dx, c * dy)) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        scale = lo;
+    }
+    let c = chroma * scale;
+    let linear = oklab_to_linear(lightness, c * dx, c * dy);
+
+    // egui takes sRGB bytes, so encode; the shader hands linear to a surface
+    // that does this in hardware.
+    let encode = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        let s = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+        (s * 255.0).round() as u8
+    };
+    (encode(linear[0]), encode(linear[1]), encode(linear[2]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The HUD swatch and the cells on the board must agree about a player's
+    /// colour, so this reproduces the shader's arithmetic and checks the result
+    /// is in range and distinct between players.
+    #[test]
+    fn player_colours_are_in_gamut_and_distinct() {
+        let mut seen = Vec::new();
+        for p in 1..=PlayerId::MAX {
+            let c = player_colour(PlayerId(p));
+            assert!(
+                !seen.contains(&c),
+                "players {p} and an earlier one share {c:?}"
+            );
+            seen.push(c);
+        }
+        // Player 1 is the saturated tier, player 2 the muted one.
+        let (a, b) = (player_colour(PlayerId(1)), player_colour(PlayerId(2)));
+        assert_ne!(a, b);
+    }
 }

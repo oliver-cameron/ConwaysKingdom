@@ -16,12 +16,16 @@ pub struct GpuState {
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
     pub size: (u32, u32),
+    /// Physical pixels per logical point, so the overlay can size itself the
+    /// way the platform expects rather than in raw device pixels.
+    pub scale_factor: f32,
     pub window: Arc<Window>,
 }
 
 impl GpuState {
     pub async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
+        let scale_factor = window.scale_factor();
         let (width, height) = (size.width.max(1), size.height.max(1));
 
         // Native: let wgpu pick the best of Vulkan / Metal / DX12.
@@ -128,6 +132,7 @@ impl GpuState {
             queue,
             config,
             size: (width, height),
+            scale_factor: scale_factor as f32,
             window,
         }
     }
@@ -238,7 +243,24 @@ impl Frame {
     /// the command buffer and presents. `clear_color` of `None` loads
     /// the existing contents of the target instead of clearing it
     /// (useful if you're compositing multiple passes elsewhere).
-    pub fn submit(mut self, gpu: &GpuState, clear_color: Option<wgpu::Color>, calls: &[DrawCall]) {
+    /// Records every draw call into a single render pass, then submits and
+    /// presents.
+    ///
+    /// `overlay` runs after the draw calls, in the same pass, so an interface
+    /// drawn on top needs no second surface and no compositing step. It gets
+    /// the encoder too, since egui uploads its buffers through one.
+    ///
+    /// The pass is `'static` because that is what egui's renderer takes: it
+    /// keeps referenced resources alive itself, and the only consequence is
+    /// that touching the encoder while the pass is open is a runtime error
+    /// rather than a compile one.
+    pub fn submit(
+        mut self,
+        gpu: &GpuState,
+        clear_color: Option<wgpu::Color>,
+        calls: &[DrawCall],
+        overlay: impl FnOnce(&mut wgpu::CommandEncoder, &mut wgpu::RenderPass<'static>),
+    ) {
         {
             let mut pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame render pass"),
@@ -258,7 +280,8 @@ impl Frame {
                 occlusion_query_set: None,
                 timestamp_writes: None,
                 multiview_mask: None,
-            });
+            })
+            .forget_lifetime();
 
             for call in calls {
                 pass.set_pipeline(call.pipeline);
@@ -288,6 +311,8 @@ impl Frame {
                     }
                 }
             }
+
+            overlay(&mut self.encoder, &mut pass);
         }
 
         gpu.queue.submit(std::iter::once(self.encoder.finish()));
