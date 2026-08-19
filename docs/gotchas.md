@@ -69,6 +69,12 @@ An enum can never be `Pod`: it has invalid bit patterns. And bytemuck refuses to
 
 For a chunk, "nothing alive" discards panes for good. "Every cell exactly `DEAD`" keeps every chunk life ever passed through, because a cell keeps its owner when it dies, and an infinite world grows without bound. It has to be "no life and no structure".
 
+## A drag is not a sequence of small moves
+
+Deciding that a press has become a drag from the distance between **one pointer event and the next** does not work. A slow, deliberate sweep arrives as a stream of one- and two-pixel moves, and no single one of them clears any threshold worth setting — while a hand that shakes on the button produces one that does. Measure from where the press landed instead.
+
+*Symptom:* dragging out a rectangle places a single cell at the release point, and the faster you drag the more likely it is to work. It reads as the fill being broken rather than the classification.
+
 ## Serving over plain HTTP costs you WebGPU
 
 `navigator.gpu` requires a secure context. `http://host:8080` is not one, so a browser falls back to WebGL2 — which works, but is a different backend with lower limits. `localhost` **is** a secure context, so an SSH tunnel gets you WebGPU without TLS.

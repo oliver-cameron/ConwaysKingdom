@@ -1,6 +1,6 @@
 # ConwaysKingdom
 
-Conway's game of life, weaponised. An unbounded shared world where players own the cells they place, mine them back for value, and wall each other off with glass.
+Conway's game of life, weaponised. An unbounded shared world where players own the cells they place, mine them back for value, and wall each other off with ice.
 
 Runs natively and in a browser, against a server or alone. The simulation is deterministic, so an unconnected client is a complete game rather than a broken one.
 

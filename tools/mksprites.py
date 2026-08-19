@@ -113,13 +113,13 @@ PANE_OVER_ALIVE = [
     "================",
 ]
 
-# Dead and unglassed is deliberately blank: the file exists so the set is
+# Dead and ice-free is deliberately blank: the file exists so the set is
 # complete, and so there is somewhere to draw rubble later.
 for name, art in [
     ("dead", EMPTY),
     ("alive", ALIVE),
-    ("dead_glass", PANE),
-    ("alive_glass", PANE_OVER_ALIVE),
+    ("dead_ice", PANE),
+    ("alive_ice", PANE_OVER_ALIVE),
 ]:
     sheet = blank()
     stamp(sheet, 0, 0, art)

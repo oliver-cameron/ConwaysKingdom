@@ -85,6 +85,16 @@ pub trait App: 'static {
     /// A finger touched, moved, or left. `id` distinguishes fingers, which is
     /// what makes a pinch tellable from a drag.
     fn on_touch(&mut self, _id: u64, _phase: TouchPhase, _x: f64, _y: f64) {}
+
+    /// What the pointer should look like. Read after every `update`, and sent
+    /// to the window only when it changes — a cursor set every frame flickers
+    /// on some platforms and is a call into the compositor on all of them.
+    ///
+    /// Here rather than in the app because only the loop holds the window, and
+    /// handing the window out would let anything resize or retitle it.
+    fn cursor_icon(&self) -> winit::window::CursorIcon {
+        winit::window::CursorIcon::Default
+    }
 }
 
 pub async fn run<A: App>() {
@@ -116,6 +126,8 @@ struct Running<A> {
     /// Control held. A trackpad pinch arrives as ctrl+wheel nearly everywhere,
     /// so the wheel needs to know.
     ctrl: bool,
+    /// What the cursor was last set to, so it is only set again on a change.
+    cursor: winit::window::CursorIcon,
 }
 
 struct Harness<A> {
@@ -144,7 +156,14 @@ impl<A: App> Harness<A> {
         };
         let app = A::init(&gpu);
         let last_frame = now_secs();
-        self.running = Some(Running { window, gpu, app, last_frame, ctrl: false });
+        self.running = Some(Running {
+            window,
+            gpu,
+            app,
+            last_frame,
+            ctrl: false,
+            cursor: winit::window::CursorIcon::Default,
+        });
         if let Some(r) = &self.running {
             r.window.request_redraw();
         }
@@ -245,6 +264,12 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 r.last_frame = now;
 
                 r.app.update(&r.gpu, dt);
+
+                let cursor = r.app.cursor_icon();
+                if cursor != r.cursor {
+                    r.cursor = cursor;
+                    r.window.set_cursor(cursor);
+                }
 
                 match Frame::begin(&r.gpu) {
                     FrameAcquire::Ready(frame) => {

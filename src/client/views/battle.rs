@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use crate::render::app::App;
-use super::{hotbar, hud, Views};
+use super::{hotbar, hud, overlay, Views};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -16,7 +16,7 @@ use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
 use crate::sim::{World, CHUNK_N};
 
 use crate::net::link::Link;
-use crate::net::{Action, ClientMessage, ServerMessage, Stamped};
+use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
 use crate::sim::{Player, PlayerId};
 
 /// Seconds of wall clock per generation.
@@ -37,8 +37,40 @@ const ZOOM_RANGE: (f32, f32) = (1.0, 64.0);
 /// whatever the zoom is.
 const PAN_SPEED: f32 = 600.0;
 
-/// A press that moves further than this many pixels was a drag, not a click.
-const DRAG_SLOP: f64 = 3.0;
+/// A press that travels further than this many points from where it landed is
+/// a drag rather than a click.
+///
+/// Points, not physical pixels: a hand shakes by a distance on the glass, not
+/// by a number of pixels, so on a display at twice the density the same shake
+/// covers twice as many of them.
+const DRAG_SLOP: f64 = 4.0;
+
+/// Multiplies the keyboard pan while shift is held.
+const PAN_FAST: f32 = 3.0;
+
+/// Seconds for a released pan to decay to a third of its speed. A flick
+/// coasts roughly `speed * PAN_GLIDE` cells and stops. Zero turns it off.
+const PAN_GLIDE: f32 = 0.15;
+
+/// Below this, in cells per second, letting go is a stop rather than a flick.
+const PAN_GLIDE_MIN: f32 = 3.0;
+
+/// How much of a frame's measured speed carries into the glide. Smoothed,
+/// because one short frame at the end of a drag reports a speed the hand never
+/// had, and the glide would take it literally.
+const PAN_SMOOTHING: f32 = 0.35;
+
+/// The hover box is not drawn below this many pixels per cell. A box around a
+/// two-pixel cell claims a precision the pointer does not have.
+const HOVER_MIN_ZOOM: f32 = 4.0;
+
+/// The most cells one drag may cover.
+///
+/// A drag at one pixel per cell can sweep millions, and every one of them
+/// would be listed, priced, applied and put on the wire. The cap is what keeps
+/// a careless sweep from stalling the client; the price is what keeps a
+/// deliberate one honest.
+const MAX_FILL_CELLS: i64 = 4096;
 
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
@@ -74,6 +106,64 @@ pub fn set_connection(url: Option<String>, name: String) {
     *CONNECTION.lock().unwrap() = Some((url, name));
 }
 
+/// What the pointer is doing.
+///
+/// One thing at a time by construction. Drawing and panning were two
+/// independent flags, so a press could be both at once and the release of
+/// either ended neither cleanly.
+#[derive(Clone, Copy, PartialEq)]
+enum Gesture {
+    None,
+    /// The left button, or one finger, over the world: a click if it never
+    /// travels, a rectangle to fill if it does.
+    Drawing(Drag),
+    /// The view follows the pointer. `button` is what has to come up again to
+    /// end it, and is `None` for fingers.
+    Panning { button: Option<winit::event::MouseButton> },
+}
+
+/// A press that may yet become a drag.
+#[derive(Clone, Copy, PartialEq)]
+struct Drag {
+    /// Where the press landed, in cells, as (row, col).
+    from: (i32, i32),
+    /// And in pixels, which is what decides a drag from a click.
+    from_px: (f64, f64),
+    moved: bool,
+}
+
+impl Drag {
+    fn begin(px: (f64, f64), cell: (i32, i32)) -> Self {
+        Self { from: cell, from_px: px, moved: false }
+    }
+
+    /// Note where the press has got to. `slop` is in the same physical pixels
+    /// the positions are.
+    fn reached(&mut self, px: (f64, f64), slop: f64) {
+        self.moved |= travelled(self.from_px, px, slop);
+    }
+}
+
+/// Whether a press that landed at `from` and has reached `to` is a drag.
+///
+/// Measured from where the press landed, not between one pointer event and the
+/// next. That was the bug: a slow, deliberate sweep arrives as a stream of
+/// one-pixel moves, no single one of them clears any threshold worth setting,
+/// and the whole gesture collapsed into a click at the release point — so a
+/// dragged pane came out as a single cell.
+fn travelled(from: (f64, f64), to: (f64, f64), slop: f64) -> bool {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    dx * dx + dy * dy > slop * slop
+}
+
+/// A finished gesture waiting to be resolved to cells. Input callbacks are not
+/// handed the `GpuState`, and the screen-to-world mapping needs the viewport,
+/// so it waits for the next `update` rather than guessing here.
+struct Pending {
+    drag: Drag,
+    to_px: (f64, f64),
+}
+
 pub struct BattleApp {
     /// The interface, and the shapes it produced this frame.
     ///
@@ -97,26 +187,51 @@ pub struct BattleApp {
     camera: (f32, f32),
     /// Screen pixels per cell.
     zoom: f32,
-    /// Left button held, and where it went down, in cells. A drag draws a
-    /// rectangle to fill; a press that never moves is a single click.
-    dragging: bool,
-    drag_moved: bool,
-    drag_from: (i32, i32),
-    /// Middle button held: panning. Separate from the left button so drawing a
-    /// rectangle and moving the view are never the same gesture.
-    panning: bool,
+    /// What the pointer is doing.
+    gesture: Gesture,
+    /// Space held, which turns the left button into a pan. The convention in
+    /// every drawing tool, and the only mouse pan available on a trackpad with
+    /// no middle button.
+    space: bool,
+    /// Shift held, which hurries the keyboard pan.
+    shift: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
-    /// Fingers currently down, as (id, position). Two of them is a pinch.
+    /// Cells the view has been dragged since the last frame. Accumulated here
+    /// rather than measured in the pointer callback, which is given no time
+    /// step — the same movement over two frames and over twenty is not the
+    /// same flick.
+    pan_step: (f32, f32),
+    /// Cells per second the view keeps once a pan is let go.
+    pan_velocity: (f32, f32),
+    /// Fingers currently down, as (id, position).
     touches: Vec<(u64, (f64, f64))>,
-    /// Distance between the two fingers last frame, to measure the pinch by.
+    /// How many were down last time they were looked at. A finger arriving or
+    /// leaving moves their centre without the hand moving, so the count is
+    /// what says whether a jump in it was a gesture or an arithmetic artefact.
+    touch_count: usize,
+    /// Distance between two fingers last frame, to measure a pinch by.
     pinch_span: Option<f64>,
+    /// Where the fingers' centre was last frame, to measure a two-finger pan
+    /// by. Also the point a pinch scales about.
+    view_anchor: Option<(f64, f64)>,
+    /// Set once a touch has had a second finger join it, and held until every
+    /// finger lifts. Without it, lifting one finger out of a pinch turns the
+    /// other into a drawing gesture and paints a line across the world.
+    touch_view: bool,
+    /// Whether a pointer is hovering over the world at all. A finger is not
+    /// hovering — there is nothing under it once it lifts — so the hover box
+    /// would otherwise be left behind wherever the last touch ended.
+    hovering: bool,
     /// Viewport size in physical pixels, refreshed every frame from the
     /// `GpuState`. Cached only because input callbacks are not handed one --
     /// updating it solely on resize left it stale whenever a resize event did
     /// not arrive, and zoom anchoring then disagreed with the camera about how
     /// big the screen was.
     viewport: (f32, f32),
+    /// Physical pixels per point, refreshed beside the viewport. Cached for
+    /// the same reason: input callbacks are handed no `GpuState`.
+    scale: f32,
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
     /// Our own player number, once the server has issued one.
@@ -141,11 +256,8 @@ pub struct BattleApp {
     /// the server charges by, so the number on screen is the number the server
     /// will agree with.
     value: i32,
-    /// A click waiting to be resolved to a cell. Input callbacks are not given
-    /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
-    /// the next `update` rather than guessed here.
-    /// A click waiting to be resolved to a cell.
-    pending_click: Option<(f64, f64)>,
+    /// A finished gesture waiting to be resolved to cells.
+    pending: Option<Pending>,
     /// Which hotbar slot is selected.
     slot: usize,
 }
@@ -156,32 +268,37 @@ impl BattleApp {
     /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
     fn write_camera(&self, gpu: &GpuState) {
         let (vw, vh) = self.viewport;
-        let zoom = self.zoom;
-        let origin = [
-            self.camera.0 - vw / (2.0 * zoom),
-            self.camera.1 - vh / (2.0 * zoom),
-        ];
+        let (ox, oy) = self.origin();
 
         gpu.queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                origin,
+                origin: [ox, oy],
                 viewport: [vw, vh],
-                zoom,
+                zoom: self.zoom,
                 chunk_n: CHUNK_N as f32,
                 _pad: [0.0; 2],
             }),
         );
     }
 
-    /// Screen position to world position in cells, unrounded. Zoom anchoring
-    /// needs the fraction, which the integer form throws away.
-    fn cell_under_cursor_f(&self, (vw, vh): (f32, f32), (px, py): (f64, f64)) -> (f32, f32) {
-        let origin = (
+    /// The cell at the top-left of the screen, as (x, y). Every mapping
+    /// between the screen and the world starts here, and it used to be written
+    /// out at each of them — four copies of two lines is four places for the
+    /// camera to be understood differently.
+    fn origin(&self) -> (f32, f32) {
+        let (vw, vh) = self.viewport;
+        (
             self.camera.0 - vw / (2.0 * self.zoom),
             self.camera.1 - vh / (2.0 * self.zoom),
-        );
+        )
+    }
+
+    /// Screen position to world position in cells, unrounded. Zoom anchoring
+    /// needs the fraction, which the integer form throws away.
+    fn cell_under_cursor_f(&self, (px, py): (f64, f64)) -> (f32, f32) {
+        let origin = self.origin();
         (
             origin.0 + px as f32 / self.zoom,
             origin.1 + py as f32 / self.zoom,
@@ -190,15 +307,33 @@ impl BattleApp {
 
     /// Where a screen position lands in the world, in absolute cell
     /// coordinates. The inverse of what the vertex shader does.
-    fn cell_under_cursor(&self, (px, py): (f64, f64)) -> (i32, i32) {
-        let (vw, vh) = self.viewport;
-        let origin = (
-            self.camera.0 - vw / (2.0 * self.zoom),
-            self.camera.1 - vh / (2.0 * self.zoom),
-        );
-        let x = origin.0 + px as f32 / self.zoom;
-        let y = origin.1 + py as f32 / self.zoom;
+    fn cell_under_cursor(&self, at: (f64, f64)) -> (i32, i32) {
+        let (x, y) = self.cell_under_cursor_f(at);
         (y.floor() as i32, x.floor() as i32) // (row, col)
+    }
+
+    /// A block of cells as a rectangle on screen, in points.
+    ///
+    /// Points, not pixels: egui works in points and the camera in physical
+    /// pixels, and this is the one place the two meet. `to` is included, so a
+    /// cell and itself is one cell wide.
+    fn cell_rect(&self, scale: f32, from: (i32, i32), to: (i32, i32)) -> egui::Rect {
+        let origin = self.origin();
+        let point = |x: f32, y: f32| {
+            egui::pos2(
+                (x - origin.0) * self.zoom / scale,
+                (y - origin.1) * self.zoom / scale,
+            )
+        };
+        let (r0, r1) = (from.0.min(to.0) as f32, from.0.max(to.0) as f32 + 1.0);
+        let (c0, c1) = (from.1.min(to.1) as f32, from.1.max(to.1) as f32 + 1.0);
+        egui::Rect::from_min_max(point(c0, r0), point(c1, r1))
+    }
+
+    /// Who we are. Before the server has said, we are player one — offline is
+    /// a game of one rather than a game of nobody.
+    fn player(&self) -> PlayerId {
+        self.me.unwrap_or(PlayerId(1))
     }
 }
 
@@ -207,9 +342,9 @@ impl BattleApp {
     /// place. Shared by the wheel, the trackpad and two fingers, so all three
     /// behave identically rather than each drifting its own way.
     fn zoom_about(&mut self, factor: f32, at: (f64, f64)) {
-        let before = self.cell_under_cursor_f(self.viewport, at);
+        let before = self.cell_under_cursor_f(at);
         self.zoom = (self.zoom * factor).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
-        let after = self.cell_under_cursor_f(self.viewport, at);
+        let after = self.cell_under_cursor_f(at);
         self.camera.0 += before.0 - after.0;
         self.camera.1 += before.1 - after.1;
         self.camera_dirty = true;
@@ -219,18 +354,157 @@ impl BattleApp {
         self.zoom_about(factor, self.cursor);
     }
 
-    /// Move the camera for whatever pan keys are held. Returns whether it
-    /// moved, so the uniform is only rewritten when it needs to be.
+    /// Move the view by a pointer movement in pixels.
+    ///
+    /// The world follows the pointer, so the camera goes the other way, and
+    /// the drag is in pixels while the camera lives in cells.
+    fn pan_by_pixels(&mut self, dx: f64, dy: f64) {
+        let step = (dx as f32 / self.zoom, dy as f32 / self.zoom);
+        self.camera.0 -= step.0;
+        self.camera.1 -= step.1;
+        self.pan_step.0 -= step.0;
+        self.pan_step.1 -= step.1;
+        self.camera_dirty = true;
+    }
+
+    fn begin_pan(&mut self, button: Option<winit::event::MouseButton>) {
+        self.gesture = Gesture::Panning { button };
+        self.pan_velocity = (0.0, 0.0);
+        self.pan_step = (0.0, 0.0);
+    }
+
+    /// Let go, and let it coast if it was still moving.
+    fn end_pan(&mut self) {
+        self.gesture = Gesture::None;
+        if self.pan_velocity.0.hypot(self.pan_velocity.1) < PAN_GLIDE_MIN {
+            self.pan_velocity = (0.0, 0.0);
+        }
+    }
+
+    /// The drag threshold in the physical pixels positions are reported in.
+    fn slop(&self) -> f64 {
+        DRAG_SLOP * self.scale.max(1.0) as f64
+    }
+
+    /// Whether a gesture the world owns is in progress.
+    fn gesture_active(&self) -> bool {
+        self.gesture != Gesture::None || self.touch_view
+    }
+
+    fn is_panning(&self) -> bool {
+        matches!(self.gesture, Gesture::Panning { .. }) || self.touch_view
+    }
+
+    /// Drop whatever the pointer was doing, without acting on it.
+    ///
+    /// Escape, and anything that takes the focus away: the release that would
+    /// have ended the gesture goes to whoever took the focus, not to us, and a
+    /// gesture nothing ends leaves the view stuck to a pointer that is
+    /// somewhere else entirely.
+    fn cancel_gesture(&mut self) {
+        self.gesture = Gesture::None;
+        self.pending = None;
+        self.pan = [false; 4];
+        self.space = false;
+        self.shift = false;
+        self.touches.clear();
+        self.touch_count = 0;
+        self.touch_view = false;
+        self.pinch_span = None;
+        self.view_anchor = None;
+        self.pan_velocity = (0.0, 0.0);
+    }
+
+    /// Move the camera for whatever pan keys are held, then either measure the
+    /// pan in progress or carry a released one on.
     fn apply_pan(&mut self, dt: f32) {
         let x = (self.pan[1] as i32 - self.pan[0] as i32) as f32;
         let y = (self.pan[3] as i32 - self.pan[2] as i32) as f32;
-        if x == 0.0 && y == 0.0 {
+        if x != 0.0 || y != 0.0 {
+            let step = PAN_SPEED * if self.shift { PAN_FAST } else { 1.0 } * dt / self.zoom;
+            self.camera.0 += x * step;
+            self.camera.1 += y * step;
+            self.camera_dirty = true;
+            // A key and a glide pulling at once would be two answers to where
+            // the view is going.
+            self.pan_velocity = (0.0, 0.0);
+        }
+
+        if self.is_panning() {
+            self.measure_pan(dt);
+        } else {
+            self.pan_step = (0.0, 0.0);
+            self.glide(dt);
+        }
+    }
+
+    /// Turn this frame's dragging into a speed, smoothed. One short frame at
+    /// the end of a drag reports a speed the hand never had, and an unsmoothed
+    /// glide would take it literally.
+    fn measure_pan(&mut self, dt: f32) {
+        let (dx, dy) = std::mem::take(&mut self.pan_step);
+        if dt <= 0.0 {
             return;
         }
-        let step = PAN_SPEED * dt / self.zoom;
-        self.camera.0 += x * step;
-        self.camera.1 += y * step;
+        let (vx, vy) = self.pan_velocity;
+        self.pan_velocity = (
+            vx + (dx / dt - vx) * PAN_SMOOTHING,
+            vy + (dy / dt - vy) * PAN_SMOOTHING,
+        );
+    }
+
+    /// Carry a released pan on, decaying, so a flick covers ground without a
+    /// second drag.
+    fn glide(&mut self, dt: f32) {
+        let (vx, vy) = self.pan_velocity;
+        if vx == 0.0 && vy == 0.0 {
+            return;
+        }
+        self.camera.0 += vx * dt;
+        self.camera.1 += vy * dt;
         self.camera_dirty = true;
+
+        let decay = if PAN_GLIDE > 0.0 { (-dt / PAN_GLIDE).exp() } else { 0.0 };
+        self.pan_velocity = (vx * decay, vy * decay);
+        // Stop rather than approach zero forever, or the camera never settles
+        // and every frame rewrites the uniform and resyncs the instance list.
+        if self.pan_velocity.0.hypot(self.pan_velocity.1) < 0.5 {
+            self.pan_velocity = (0.0, 0.0);
+        }
+    }
+
+    /// Move and scale the view to follow the fingers.
+    ///
+    /// One gesture rather than two: fingers that spread while they travel do
+    /// both at once, which is what keeps the world under them. Zooming about
+    /// where they were and then moving by how far they went is what puts the
+    /// cell that was under them back under them.
+    fn follow_touches(&mut self) {
+        let focus = centroid(&self.touches);
+        let span = pinch_span(&self.touches);
+
+        // The centre of two fingers is nowhere near the centre of one, so a
+        // finger arriving or leaving moves it without the hand moving. Take
+        // the new centre as the anchor instead of panning by the jump.
+        let settled = self.touch_count == self.touches.len();
+        self.touch_count = self.touches.len();
+
+        if settled {
+            if let (Some(anchor), Some(before), Some(now)) =
+                (self.view_anchor, self.pinch_span, span)
+            {
+                if before > 1.0 && now > 1.0 {
+                    self.zoom_about((now / before) as f32, anchor);
+                }
+            }
+            if let Some(anchor) = self.view_anchor {
+                self.pan_by_pixels(focus.0 - anchor.0, focus.1 - anchor.1);
+            }
+        }
+
+        self.pinch_span = span;
+        self.view_anchor = Some(focus);
+        self.cursor = focus;
     }
 
     /// Drain the socket and fold what arrived into the local world.
@@ -302,24 +576,20 @@ impl BattleApp {
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
     fn fill(&mut self, from: (i32, i32), to: (i32, i32)) {
-        let (r0, r1) = (from.0.min(to.0), from.0.max(to.0));
-        let (c0, c1) = (from.1.min(to.1), from.1.max(to.1));
-        let cells: Vec<(i32, i32)> = (r0..=r1)
-            .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
-            .collect();
-        let count = cells.len();
-
-        let player = self.me.unwrap_or(PlayerId(1));
-        let stamped = Stamped {
-            tick: self.world.generation,
-            player,
-            action: Action::Paint {
-                cells,
-                placement: hotbar::SLOTS[self.slot].placement,
-            },
+        let (rows, cols) = span(from, to);
+        let cells = match self.rectangle(from, to) {
+            Ok(cells) => cells,
+            Err(why) => {
+                self.notice = Some(why);
+                return;
+            }
         };
+        let count = cells.len();
+        let (stamped, delta) = self.quote(cells);
 
-        let delta = crate::net::value_delta(&self.world, &stamped);
+        // All or nothing. A rectangle laid as far as the value stretched would
+        // be a different shape from the one that was drawn, and the player
+        // would be left working out where it stopped and why.
         if self.value + delta < 0 {
             self.notice = Some(format!(
                 "{count} cells costs {}, you have {}",
@@ -332,9 +602,7 @@ impl BattleApp {
         crate::net::apply(&mut self.world, &stamped);
         self.world.dirty = true;
         self.last_action = Some(format!(
-            "filled {}x{} with {}, -{}",
-            r1 - r0 + 1,
-            c1 - c0 + 1,
+            "filled {rows}x{cols} with {}, -{}",
             hotbar::SLOTS[self.slot].name,
             -delta
         ));
@@ -342,6 +610,90 @@ impl BattleApp {
         if let Some(link) = &self.link {
             link.send(ClientMessage::Act(stamped));
         }
+    }
+
+    /// The cells a rectangle covers, or why it may not be laid at all.
+    fn rectangle(&self, from: (i32, i32), to: (i32, i32)) -> Result<Vec<(i32, i32)>, String> {
+        let (rows, cols) = span(from, to);
+        let area = rows * cols;
+        if area > MAX_FILL_CELLS {
+            return Err(format!("{area} cells is more than one drag may lay"));
+        }
+        let (r0, r1) = (from.0.min(to.0), from.0.max(to.0));
+        let (c0, c1) = (from.1.min(to.1), from.1.max(to.1));
+        Ok((r0..=r1)
+            .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+            .collect())
+    }
+
+    /// Price a paint of these cells: the action that would be sent, and what
+    /// it would cost. Shared by the fill and by the preview of it, so the
+    /// preview cannot promise something the release then refuses.
+    fn quote(&self, cells: Vec<(i32, i32)>) -> (Stamped, i32) {
+        let stamped = Stamped {
+            tick: self.world.generation,
+            player: self.player(),
+            action: Action::Paint {
+                cells,
+                placement: hotbar::SLOTS[self.slot].placement,
+            },
+        };
+        let delta = crate::net::value_delta(&self.world, &stamped);
+        (stamped, delta)
+    }
+
+    /// The box around the cell the pointer is on.
+    ///
+    /// Absent while the view is moving, while a rectangle is being swept —
+    /// the rectangle is the answer then, and a box around its far corner as
+    /// well is noise — and when the cells are too small to point at one.
+    fn hover_mark(&self, scale: f32, on_ui: bool) -> Option<egui::Rect> {
+        if on_ui || !self.hovering || self.is_panning() || self.zoom < HOVER_MIN_ZOOM {
+            return None;
+        }
+        if matches!(self.gesture, Gesture::Drawing(drag) if drag.moved) {
+            return None;
+        }
+        let at = self.cell_under_cursor(self.cursor);
+        Some(self.cell_rect(scale, at, at))
+    }
+
+    /// The rectangle a drag has swept so far, with its size and its price.
+    fn selection_mark(&self, scale: f32) -> Option<overlay::Selection> {
+        let Gesture::Drawing(drag) = self.gesture else { return None };
+        if !drag.moved {
+            return None;
+        }
+        let to = self.cell_under_cursor(self.cursor);
+        let (rows, cols) = span(drag.from, to);
+        let slot = &hotbar::SLOTS[self.slot];
+
+        let (label, allowed) = match self.rectangle(drag.from, to) {
+            Err(why) => (why, false),
+            Ok(cells) => {
+                let (_, delta) = self.quote(cells);
+                if self.value + delta < 0 {
+                    (
+                        format!(
+                            "{} {rows}x{cols}   costs {}, you have {}",
+                            slot.name, -delta, self.value
+                        ),
+                        false,
+                    )
+                } else {
+                    (format!("{} {rows}x{cols}   {delta}", slot.name), true)
+                }
+            }
+        };
+
+        let (r, g, b) = hud::player_colour(self.player());
+        Some(overlay::Selection {
+            rect: self.cell_rect(scale, drag.from, to),
+            tint: egui::Color32::from_rgb(r, g, b),
+            hatched: slot.placement == Placement::Ice,
+            label,
+            allowed,
+        })
     }
 
     /// One button does everything, and the cell under it decides which.
@@ -357,12 +709,12 @@ impl BattleApp {
     /// answer a round trip early. If the server disagrees the chunk digests
     /// will not match and the resync puts it right.
     fn click(&mut self, row: i32, col: i32) {
-        let player = self.me.unwrap_or(PlayerId(1));
+        let player = self.player();
         let cells = vec![(row, col)];
         let occupied = self
             .world
             .cell_at(row, col)
-            .is_some_and(|c| c.is_alive() || c.is_glass());
+            .is_some_and(|c| c.is_alive() || c.is_ice());
         let action = if occupied {
             Action::Erase { cells }
         } else {
@@ -383,7 +735,7 @@ impl BattleApp {
 
         let occupant = self.world.cell_at(row, col).filter(|c| c.is_alive());
         self.last_action = Some(match occupant {
-            None if occupied => format!("cleared glass at ({row}, {col})"),
+            None if occupied => format!("cleared ice at ({row}, {col})"),
             None => format!("placed {} at ({row}, {col})", hotbar::SLOTS[self.slot].name),
             Some(c) if c.player() == player => format!("took ({row}, {col}), +1"),
             Some(c) => format!("destroyed player {}'s ({row}, {col}), -1", c.player().0),
@@ -404,15 +756,13 @@ impl BattleApp {
     /// The region on screen, in absolute cells, as (min, max), with a margin.
     fn visible_cells(&self) -> ((i32, i32), (i32, i32)) {
         let (vw, vh) = self.viewport;
-        let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
+        let (ox, oy) = self.origin();
+        let (w, h) = (vw / self.zoom, vh / self.zoom);
         (
+            (oy.floor() as i32 - VIEW_MARGIN, ox.floor() as i32 - VIEW_MARGIN),
             (
-                (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
-                (self.camera.0 - half.0).floor() as i32 - VIEW_MARGIN,
-            ),
-            (
-                (self.camera.1 + half.1).ceil() as i32 + VIEW_MARGIN,
-                (self.camera.0 + half.0).ceil() as i32 + VIEW_MARGIN,
+                (oy + h).ceil() as i32 + VIEW_MARGIN,
+                (ox + w).ceil() as i32 + VIEW_MARGIN,
             ),
         )
     }
@@ -516,13 +866,18 @@ impl App for BattleApp {
             camera_dirty: true,
             camera: START_CENTRE,
             zoom: START_ZOOM,
-            dragging: false,
-            drag_moved: false,
-            drag_from: (0, 0),
-            panning: false,
+            gesture: Gesture::None,
+            space: false,
+            shift: false,
             pan: [false; 4],
+            pan_step: (0.0, 0.0),
+            pan_velocity: (0.0, 0.0),
             touches: Vec::new(),
+            touch_count: 0,
             pinch_span: None,
+            view_anchor: None,
+            touch_view: false,
+            hovering: false,
             viewport: (1.0, 1.0),
             elapsed: 0.0,
             notice: None,
@@ -530,13 +885,15 @@ impl App for BattleApp {
             value: Player::STARTING_VALUE,
             me: None,
             subscribed: std::collections::HashSet::new(),
+            scale: 1.0,
             cursor: (0.0, 0.0),
-            pending_click: None,
+            pending: None,
             slot: 0,
             link,
         };
         app.world.dirty = false;
         app.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
+        app.scale = gpu.scale_factor;
         app.write_camera(gpu);
         app
     }
@@ -544,6 +901,7 @@ impl App for BattleApp {
     fn resize(&mut self, gpu: &GpuState) {
         // `update` notices this too; this just avoids a frame of staleness.
         self.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
+        self.scale = gpu.scale_factor;
         self.camera_dirty = true;
         self.subscribed.clear();
 
@@ -551,6 +909,7 @@ impl App for BattleApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        self.scale = gpu.scale_factor;
         let viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
         if viewport != self.viewport {
             self.viewport = viewport;
@@ -564,10 +923,14 @@ impl App for BattleApp {
             self.pump_link();
         }
 
-        if let Some(at) = self.pending_click.take() {
-            let to = self.cell_under_cursor(at);
-            if self.drag_moved {
-                self.fill(self.drag_from, to);
+        if let Some(Pending { drag, to_px }) = self.pending.take() {
+            let to = self.cell_under_cursor(to_px);
+            // A press that travelled but stayed inside one cell is still a
+            // click. A one-cell fill would place where a click would take, so
+            // which of the two happens must not turn on a few pixels of hand
+            // shake at high zoom.
+            if drag.moved && to != drag.from {
+                self.fill(drag.from, to);
             } else {
                 self.click(to.0, to.1);
             }
@@ -581,7 +944,7 @@ impl App for BattleApp {
         }
         self.elapsed += dt as f64;
         let status = hud::Status {
-            player: self.me.unwrap_or(PlayerId(1)),
+            player: self.player(),
             value: self.value,
             generation: self.world.generation,
             chunks_held: self.world.stored_count(),
@@ -598,8 +961,13 @@ impl App for BattleApp {
             let views = self.views.borrow();
             (self.slot, views.theme)
         };
+        let marks = overlay::Marks {
+            hover: self.hover_mark(gpu.scale_factor, status.pointer_on_ui),
+            selection: self.selection_mark(gpu.scale_factor),
+        };
         let mut picked = None;
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {
+            overlay::show(ctx, &theme, &marks);
             let hud_rect = hud::show(ctx, &theme, &status);
             let bar = hotbar::show(ctx, &theme, slot);
             picked = bar.picked;
@@ -641,17 +1009,13 @@ impl App for BattleApp {
     fn on_cursor(&mut self, x: f64, y: f64) {
         let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
         self.cursor = (x, y);
+        self.hovering = true;
 
-        if self.dragging && (dx.abs() > DRAG_SLOP || dy.abs() > DRAG_SLOP) {
-            self.drag_moved = true;
-        }
-        if self.panning {
-            // Panning pulls the world with the pointer, so the camera moves the
-            // other way. Divided by zoom, because the drag is in pixels and the
-            // camera lives in cells.
-            self.camera.0 -= dx as f32 / self.zoom;
-            self.camera.1 -= dy as f32 / self.zoom;
-            self.camera_dirty = true;
+        let slop = self.slop();
+        if let Gesture::Drawing(drag) = &mut self.gesture {
+            drag.reached((x, y), slop);
+        } else if self.is_panning() {
+            self.pan_by_pixels(dx, dy);
         }
     }
 
@@ -662,6 +1026,24 @@ impl App for BattleApp {
                 self.slot = index;
             }
             return;
+        }
+        match code {
+            K::Space => {
+                self.space = pressed;
+                return;
+            }
+            K::ShiftLeft | K::ShiftRight => {
+                self.shift = pressed;
+                return;
+            }
+            // Abandon whatever is being drawn. A rectangle you have decided
+            // against otherwise has to be shrunk back to one cell to be made
+            // harmless, and that still places a cell.
+            K::Escape if pressed => {
+                self.cancel_gesture();
+                return;
+            }
+            _ => {}
         }
         let slot = match code {
             K::ArrowLeft | K::KeyA => 0,
@@ -679,55 +1061,73 @@ impl App for BattleApp {
         if !delta.is_finite() {
             return;
         }
+        self.pan_velocity = (0.0, 0.0);
         self.zoom_about_cursor((1.0 + delta as f32).clamp(0.5, 2.0));
     }
 
+    /// One finger draws; two move the view.
+    ///
+    /// The split that every touch drawing surface uses, and the one the mouse
+    /// already uses here: the primary pointer draws, and a second gesture
+    /// moves the view. Nothing to switch between, no timing to get right, and
+    /// no mode to be in and forget.
+    ///
+    /// The alternative — one finger pans, as a map does — leaves nothing to
+    /// draw with, and the hotbar has already promised the player is holding
+    /// something.
     fn on_touch(&mut self, id: u64, phase: winit::event::TouchPhase, x: f64, y: f64) {
         use winit::event::TouchPhase as P;
+        // A finger is not a hovering pointer. There is nothing under it once
+        // it lifts, so the hover box would be left behind where it ended.
+        self.hovering = false;
+        let at = (x, y);
+
         match phase {
-            P::Started => self.touches.push((id, (x, y))),
+            P::Started => {
+                self.touches.push((id, at));
+                self.pan_velocity = (0.0, 0.0);
+            }
             P::Moved => {
                 if let Some(t) = self.touches.iter_mut().find(|t| t.0 == id) {
-                    t.1 = (x, y);
+                    t.1 = at;
                 }
             }
             P::Ended | P::Cancelled => self.touches.retain(|t| t.0 != id),
         }
 
-        match self.touches.as_slice() {
-            // One finger pans, which is what a finger does everywhere else.
-            // Drawing a rectangle on a touchscreen will want a deliberate
-            // gesture of its own rather than stealing this one.
-            [(_, at)] => {
-                if matches!(phase, P::Started) {
-                    self.cursor = *at;
-                    self.pinch_span = None;
-                    return;
-                }
-                let (dx, dy) = (at.0 - self.cursor.0, at.1 - self.cursor.1);
-                self.cursor = *at;
-                self.camera.0 -= dx as f32 / self.zoom;
-                self.camera.1 -= dy as f32 / self.zoom;
-                self.camera_dirty = true;
+        // A second finger means the view rather than the world, and it stays
+        // that way until every finger lifts. Whatever the first finger had
+        // started drawing is abandoned rather than resolved: the player was
+        // reaching for a pinch, not finishing a rectangle.
+        if self.touches.len() > 1 {
+            self.touch_view = true;
+            self.gesture = Gesture::None;
+        }
+
+        if self.touches.is_empty() {
+            if let Gesture::Drawing(drag) = self.gesture {
+                self.gesture = Gesture::None;
+                self.pending = Some(Pending { drag, to_px: self.cursor });
             }
-            // Two fingers pinch. Zoom by the ratio of the gap between them, so
-            // the gesture is scale-invariant: the same spread does the same
-            // thing whether the fingers started close together or far apart.
-            [(_, a), (_, b)] => {
-                let span = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-                let midpoint = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
-                if let Some(previous) = self.pinch_span {
-                    if previous > 1.0 && span > 1.0 {
-                        // Anchored on the midpoint, so the world does not slide
-                        // out from under the fingers doing the pinching.
-                        self.zoom_about((span / previous) as f32, midpoint);
-                    }
-                }
-                self.pinch_span = Some(span);
-                self.cursor = midpoint;
-            }
-            // No fingers, or more than two: nothing to measure.
-            _ => self.pinch_span = None,
+            self.touch_view = false;
+            self.touch_count = 0;
+            self.pinch_span = None;
+            self.view_anchor = None;
+            return;
+        }
+
+        if self.touch_view {
+            self.follow_touches();
+            return;
+        }
+
+        self.cursor = at;
+        self.touch_count = self.touches.len();
+        let slop = self.slop();
+        if matches!(phase, P::Started) {
+            self.gesture = Gesture::Drawing(Drag::begin(at, self.cell_under_cursor(at)));
+        } else if let Gesture::Drawing(drag) = &mut self.gesture {
+            drag.reached(at, slop);
         }
     }
 
@@ -741,6 +1141,9 @@ impl App for BattleApp {
     /// zoom when every other application pans with it.
     fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta, ctrl: bool) {
         use winit::event::MouseScrollDelta as D;
+        // A trackpad sends its own momentum after the fingers lift, so ours
+        // would be a second one running alongside it.
+        self.pan_velocity = (0.0, 0.0);
         match delta {
             // A wheel notch: zoom, about the cursor rather than the screen
             // centre, so what is under the pointer stays under it.
@@ -751,49 +1154,75 @@ impl App for BattleApp {
             D::PixelDelta(p) if ctrl => {
                 self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0))
             }
-            D::PixelDelta(p) => {
-                self.camera.0 -= p.x as f32 / self.zoom;
-                self.camera.1 -= p.y as f32 / self.zoom;
-                self.camera_dirty = true;
-            }
+            D::PixelDelta(p) => self.pan_by_pixels(p.x, p.y),
         }
     }
 
-    /// Left removes, right places.
-    ///
-    /// Removing is the ordinary click because it is the one you make most: it
-    /// is how a player mines their own cells for value, and clearing your own
-    /// ground should not need a modifier.
-    ///
-    /// Left also pans, so a press that moved is a pan rather than a click on a
-    /// cell. Resolution is deferred to the next frame, because input callbacks
-    /// are not handed the `GpuState` and the screen-to-world mapping needs the
-    /// viewport.
     /// Left draws: a click acts on one cell, a drag fills the rectangle it
-    /// swept. Middle pans, so drawing and moving the view are never the same
-    /// gesture and neither has to guess which was meant.
+    /// swept. Middle, right and space+left all pan, so drawing and moving the
+    /// view are never the same gesture and neither has to guess which was
+    /// meant — and every mouse and trackpad has at least one of the three.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
         use winit::event::MouseButton as B;
-        match button {
-            B::Middle => self.panning = pressed,
-            B::Left if pressed => {
-                self.dragging = true;
-                self.drag_moved = false;
-                self.drag_from = self.cell_under_cursor(self.cursor);
-            }
-            B::Left => {
-                if !self.dragging {
-                    return;
+        if pressed {
+            // A press is aiming at something, so a glide left over from the
+            // last one stops here rather than sliding the target away.
+            self.pan_velocity = (0.0, 0.0);
+            match button {
+                B::Middle | B::Right => self.begin_pan(Some(button)),
+                B::Left if self.space => self.begin_pan(Some(button)),
+                B::Left => {
+                    let at = self.cursor;
+                    self.gesture = Gesture::Drawing(Drag::begin(at, self.cell_under_cursor(at)));
                 }
-                self.dragging = false;
-                self.pending_click = Some(self.cursor);
+                _ => {}
+            }
+            return;
+        }
+        match self.gesture {
+            Gesture::Panning { button: held } if held == Some(button) => self.end_pan(),
+            Gesture::Drawing(drag) if button == B::Left => {
+                self.gesture = Gesture::None;
+                self.pending = Some(Pending { drag, to_px: self.cursor });
             }
             _ => {}
         }
     }
 
+    fn cursor_icon(&self) -> winit::window::CursorIcon {
+        use winit::window::CursorIcon as C;
+        if self.is_panning() {
+            C::Grabbing
+        } else if self.space {
+            C::Grab
+        } else if self.views.borrow().wants_pointer() {
+            C::Default
+        } else {
+            C::Crosshair
+        }
+    }
+
     fn on_window_event(&mut self, event: &winit::event::WindowEvent, scale: f32) -> bool {
-        self.views.borrow_mut().on_window_event(event, scale)
+        use winit::event::WindowEvent as E;
+        match event {
+            E::Focused(false) => self.cancel_gesture(),
+            E::CursorLeft { .. } => self.hovering = false,
+            _ => {}
+        }
+
+        let consumed = self.views.borrow_mut().on_window_event(event, scale);
+
+        // A gesture that began on the world keeps the pointer until it ends,
+        // even if it strays over a panel. Without this, a drag released over
+        // the hotbar is swallowed: `on_click` never fires, the rectangle is
+        // never filled, and the gesture stays open with nothing to close it.
+        //
+        // The interface still sees the event — only the answer changes — so
+        // egui's own idea of where the pointer is stays right.
+        if self.gesture_active() && matches!(event, E::MouseInput { .. } | E::CursorMoved { .. }) {
+            return false;
+        }
+        consumed
     }
 
     fn overlay(
@@ -860,6 +1289,97 @@ mod tests {
         let (a, b) = (player_colour(PlayerId(1)), player_colour(PlayerId(2)));
         assert_ne!(a, b);
     }
+
+    /// The bug this was written against. A drag was decided from the distance
+    /// between one pointer event and the next, so a slow, deliberate sweep —
+    /// which arrives as a stream of one-pixel moves — never counted as one,
+    /// and a dragged pane came out as a single cell at the release point.
+    #[test]
+    fn a_slow_sweep_is_a_drag() {
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0));
+        for step in 1..=60 {
+            drag.reached((100.0 + step as f64, 100.0), DRAG_SLOP);
+            assert!(
+                !drag.moved || step as f64 > DRAG_SLOP,
+                "a press should not become a drag inside the slop"
+            );
+        }
+        assert!(drag.moved, "sixty one-pixel steps is a drag, not a click");
+    }
+
+    /// And the case the slop exists for: a hand that shakes on the button is
+    /// still clicking, however many events it produces.
+    #[test]
+    fn a_shaky_press_is_a_click() {
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0));
+        for at in [(102.0, 100.0), (98.0, 101.0), (100.0, 98.0), (101.0, 101.0)] {
+            drag.reached(at, DRAG_SLOP);
+        }
+        assert!(!drag.moved);
+    }
+
+    /// Once a press is a drag it stays one. Coming back to where it started
+    /// mid-sweep must not turn the gesture back into a click.
+    #[test]
+    fn a_drag_does_not_become_a_click_again() {
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0));
+        drag.reached((400.0, 400.0), DRAG_SLOP);
+        drag.reached((100.0, 100.0), DRAG_SLOP);
+        assert!(drag.moved);
+    }
+
+    /// The cap that keeps a sweep at one pixel per cell from listing, pricing
+    /// and sending millions of cells.
+    #[test]
+    fn a_rectangle_is_bounded() {
+        let (rows, cols) = span((0, 0), (-3, 4));
+        assert_eq!((rows, cols), (4, 5));
+        assert!(span((0, 0), (i32::MAX, i32::MAX)).0 > MAX_FILL_CELLS);
+    }
+
+    /// A pinch is measured between two fingers and nothing else, but the
+    /// centre is measured over however many are down — which is what lets a
+    /// pinch that has lost a finger carry on panning with the other.
+    #[test]
+    fn fingers_have_a_centre_and_sometimes_a_span() {
+        let two = [(1, (0.0, 0.0)), (2, (10.0, 0.0))];
+        assert_eq!(centroid(&two), (5.0, 0.0));
+        assert_eq!(pinch_span(&two), Some(10.0));
+
+        let one = [(1, (4.0, 6.0))];
+        assert_eq!(centroid(&one), (4.0, 6.0));
+        assert_eq!(pinch_span(&one), None);
+        assert_eq!(pinch_span(&[]), None);
+    }
+}
+
+/// How many rows and columns a rectangle covers, both ends included.
+///
+/// In `i64` because a drag at one pixel per cell can span most of an `i32`,
+/// and the product of two of those still has to be a number the cap can be
+/// compared against rather than an overflow.
+fn span(from: (i32, i32), to: (i32, i32)) -> (i64, i64) {
+    (
+        (from.0 as i64 - to.0 as i64).abs() + 1,
+        (from.1 as i64 - to.1 as i64).abs() + 1,
+    )
+}
+
+/// The middle of however many fingers are down. One finger's middle is itself,
+/// which is what lets a pinch that has lost a finger carry on panning.
+fn centroid(touches: &[(u64, (f64, f64))]) -> (f64, f64) {
+    let n = touches.len().max(1) as f64;
+    let sum = touches
+        .iter()
+        .fold((0.0, 0.0), |a, t| (a.0 + t.1 .0, a.1 + t.1 .1));
+    (sum.0 / n, sum.1 / n)
+}
+
+/// The gap between exactly two fingers. One has no span to measure, and three
+/// or more is not a pinch anybody means.
+fn pinch_span(touches: &[(u64, (f64, f64))]) -> Option<f64> {
+    let [(_, a), (_, b)] = touches else { return None };
+    Some(((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
 }
 
 /// The digit a key stands for, if it is one.
