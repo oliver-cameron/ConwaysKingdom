@@ -137,6 +137,10 @@ pub struct BattleApp {
     elapsed: f64,
     /// Why the last action was refused, shown until the next one succeeds.
     notice: Option<String>,
+    /// What the last click did, kept so the interface can show it. Without
+    /// this a click that lands on empty ground is indistinguishable from a
+    /// click that never arrived.
+    last_action: Option<String>,
     /// What this player can spend. Predicted locally with the same arithmetic
     /// the server charges by, so the number on screen is the number the server
     /// will agree with.
@@ -302,6 +306,20 @@ impl BattleApp {
             return;
         }
         self.notice = None;
+
+        // Said plainly, because taking nothing from empty ground looks exactly
+        // like a click that never arrived.
+        let occupant = self.world.cell_at(row, col).filter(|c| c.is_alive());
+        self.last_action = Some(match (act, occupant) {
+            (Act::Place, _) => format!("placed ({row}, {col})"),
+            (Act::Remove, None) => format!("nothing at ({row}, {col})"),
+            (Act::Remove, Some(c)) if c.player() == player => {
+                format!("took your cell at ({row}, {col}), +1")
+            }
+            (Act::Remove, Some(c)) => {
+                format!("destroyed player {}'s cell at ({row}, {col}), -1", c.player().0)
+            }
+        });
         self.value += delta;
 
         crate::net::apply(&mut self.world, &stamped);
@@ -447,6 +465,7 @@ impl App for BattleApp {
             viewport: (1.0, 1.0),
             elapsed: 0.0,
             notice: None,
+            last_action: None,
             value: Player::STARTING_VALUE,
             me: None,
             subscribed: std::collections::HashSet::new(),
@@ -504,6 +523,9 @@ impl App for BattleApp {
             zoom: self.zoom,
             connected: self.link.is_some(),
             notice: self.notice.as_deref(),
+            pointer_on_ui: self.views.borrow().wants_pointer(),
+            cursor_cell: self.cell_under_cursor(self.cursor),
+            last_action: self.last_action.as_deref(),
         };
         let output = self
             .views
