@@ -193,7 +193,10 @@ impl World {
     /// action reaches the world, so this must be able to grow it.
     pub fn set_cell(&mut self, chunk: Coord, (row, col): (usize, usize), cell: Cell) {
         let chunk = self.canonical(chunk);
-        if cell.is_alive() {
+        // Anything but a wholly empty cell needs somewhere to live -- a pane
+        // over empty ground is still something, and would otherwise vanish
+        // because no chunk was made for it.
+        if cell != Cell::DEAD {
             self.ensure(chunk);
         }
         if let Some(c) = self.chunk_at_mut(chunk) {

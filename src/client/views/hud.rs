@@ -26,17 +26,26 @@ pub struct Status<'a> {
     pub cursor_cell: (i32, i32),
     /// What the last click did, or why it did nothing.
     pub last_action: Option<&'a str>,
+    /// The hotbar slot currently selected.
+    pub holding: &'a str,
 }
 
 /// Returns the rectangle it occupied, so the client knows what it covered.
-pub fn show(ctx: &egui::Context, status: &Status<'_>) -> Option<egui::Rect> {
+pub fn show(
+    ctx: &egui::Context,
+    theme: &crate::client::views::theme::Theme,
+    status: &Status<'_>,
+) -> Option<egui::Rect> {
     let response = egui::Window::new("kingdom")
         .title_bar(false)
         .resizable(false)
         // Fixed, or dragging it would be indistinguishable from panning the
         // world underneath.
         .movable(false)
-        .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])
+        .anchor(
+            egui::Align2::LEFT_TOP,
+            [theme.metrics.margin, theme.metrics.margin],
+        )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // The same colour the shader gives this player's cells, so the
@@ -60,12 +69,12 @@ pub fn show(ctx: &egui::Context, status: &Status<'_>) -> Option<egui::Rect> {
 
             ui.separator();
             if status.connected {
-                ui.colored_label(egui::Color32::from_rgb(120, 210, 140), "connected");
+                ui.colored_label(theme.palette.good, "connected");
             } else {
-                ui.colored_label(egui::Color32::from_rgb(220, 170, 90), "offline");
+                ui.colored_label(theme.palette.warn, "offline");
             }
             if let Some(notice) = status.notice {
-                ui.colored_label(egui::Color32::from_rgb(230, 120, 110), notice);
+                ui.colored_label(theme.palette.bad, notice);
             }
 
             ui.separator();
@@ -81,8 +90,9 @@ pub fn show(ctx: &egui::Context, status: &Status<'_>) -> Option<egui::Rect> {
             ));
 
             ui.separator();
-            ui.small("left click: take a cell   right click: place one");
-            ui.small("drag or arrows to pan, wheel or pinch to zoom");
+            ui.small(format!("holding  {}", status.holding));
+            ui.small("left click acts, left drag pans");
+            ui.small("wheel or pinch to zoom, 1-9 to choose");
         });
     response.map(|r| r.response.rect)
 }

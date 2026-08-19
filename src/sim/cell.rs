@@ -230,10 +230,19 @@ impl Chunk {
         Self { cells: [Cell::DEAD; CHUNK_CELLS] }
     }
 
-    /// No live cells anywhere. An empty chunk contributes nothing to any
-    /// neighbour, so it need be neither stored nor stepped.
+    /// Nothing here worth keeping: no life, and no structure either.
+    ///
+    /// Not simply "nothing alive". A chunk holding only panes still holds
+    /// something, and dropping it would destroy them for good, since a
+    /// recreated chunk comes back zeroed.
+    ///
+    /// Nor is it "every cell exactly `DEAD`". A cell keeps its owner when it
+    /// dies, so a chunk life has passed through is full of non-zero corpses.
+    /// Those are inert -- nothing counts a dead cell, and a birth takes its
+    /// owner from live neighbours -- so discarding them changes nothing, and
+    /// refusing to would let an infinite world grow without bound again.
     pub fn is_empty(&self) -> bool {
-        self.cells.iter().all(|c| !c.is_alive())
+        self.cells.iter().all(|c| !c.is_alive() && !c.is_glass())
     }
 
     /// Exactly the `&[u8]` `Queue::write_texture` wants. No conversion.

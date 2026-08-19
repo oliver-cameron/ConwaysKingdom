@@ -18,7 +18,9 @@
 //! clipboard handling that egui-winit exists for is not in play.
 
 pub mod battle;
+pub mod hotbar;
 pub mod hud;
+pub mod theme;
 
 use crate::render::context::GpuState;
 
@@ -40,6 +42,7 @@ pub struct Views {
     /// still belongs to the panel.
     dragging_widget: bool,
     start: f64,
+    pub theme: theme::Theme,
     renderer: egui_wgpu::Renderer,
 }
 
@@ -88,8 +91,13 @@ pub struct Output {
 
 impl Views {
     pub fn new(gpu: &GpuState) -> Self {
+        let ctx = egui::Context::default();
+        let theme = theme::Theme::default();
+        // Once, not per frame: egui keeps its style between passes.
+        theme.apply(&ctx);
         Self {
-            ctx: egui::Context::default(),
+            ctx,
+            theme,
             events: Vec::new(),
             pointer: egui::Pos2::ZERO,
             modifiers: egui::Modifiers::default(),

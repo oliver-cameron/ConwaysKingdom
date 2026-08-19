@@ -18,6 +18,7 @@ const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across a sheet
 const STATES: u32 = 4u;          // dead, alive, dead+glass, alive+glass
+const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
 
 struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
@@ -129,6 +130,11 @@ struct VsOut {
     /// because texels are what the tiles are addressed in.
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) layer: u32,
+    /// Position in the world, in cells. The backdrop spans thousands of chunks,
+    /// so it works from this rather than from a texel offset that would run out
+    /// of precision.
+    @location(2) world: vec2<f32>,
+    @location(3) @interpolate(flat) kind: u32,
 };
 
 @vertex
@@ -147,14 +153,36 @@ fn vs_main(
         px / cam.viewport * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0),
         0.0, 1.0,
     );
-    // rect.zw is the chunk's size in cells; times SPRITE_N gives texels.
+    // rect.zw is the quad's size in cells; times TILE_N gives texels.
     out.local = corner * rect.zw * f32(TILE_N);
+    out.world = world;
+    out.kind = attrs.y;
     out.layer = attrs.x;
     return out;
 }
 
+/// The faint ring drawn on a chunk's outer cells, so chunk boundaries stay
+/// visible and loading is something you can watch.
+fn grid_tint(cell_in_chunk: vec2<f32>, n: f32) -> vec3<f32> {
+    if cell_in_chunk.x < 1.0 || cell_in_chunk.y < 1.0
+        || cell_in_chunk.x >= n - 1.0 || cell_in_chunk.y >= n - 1.0 {
+        return vec3<f32>(0.012, 0.012, 0.02);
+    }
+    return vec3<f32>(0.0);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let n = cam.chunk_n;
+
+    // Unloaded ground: every chunk of it looks the same, so it is one quad and
+    // the pattern comes from the world position rather than from a texture.
+    if in.kind == KIND_BACKDROP {
+        let cell = floor(in.world);
+        let within_chunk = cell - floor(cell / n) * n;
+        return vec4<f32>(grid_tint(within_chunk, n), 1.0);
+    }
+
     // local is in texels across the chunk; the cell is that divided by a
     // tile's width, and where we are inside the cell is the remainder.
     let cell_coord = vec2<i32>(floor(in.local / f32(TILE_N)));
@@ -180,13 +208,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sheet_uv = (uv + within / f32(TILE_N)) / SHEET_TILES;
     let sprite = textureSample(sprites, sprite_sampler, sheet_uv, layer);
 
-    // Faint grid on the chunk's outer ring, so chunk loading stays visible.
-    let n = cam.chunk_n;
-    let cell_f = vec2<f32>(cell_coord);
-    var colour = vec3<f32>(0.0);
-    if cell_f.x < 1.0 || cell_f.y < 1.0 || cell_f.x >= n - 1.0 || cell_f.y >= n - 1.0 {
-        colour = vec3<f32>(0.012, 0.012, 0.02);
-    }
+    var colour = grid_tint(vec2<f32>(cell_coord), n);
 
     let player = cell >> PLAYER_SHIFT;
     colour = mix(

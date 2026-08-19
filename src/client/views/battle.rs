@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use crate::render::app::App;
-use super::{hud, Views};
+use super::{hotbar, hud, Views};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -74,15 +74,6 @@ pub fn set_connection(url: Option<String>, name: String) {
     *CONNECTION.lock().unwrap() = Some((url, name));
 }
 
-/// What a click does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Act {
-    /// Take a cell away. Yours pays; someone else's costs.
-    Remove,
-    /// Put one down.
-    Place,
-}
-
 pub struct BattleApp {
     /// The interface, and the shapes it produced this frame.
     ///
@@ -148,7 +139,10 @@ pub struct BattleApp {
     /// A click waiting to be resolved to a cell. Input callbacks are not given
     /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
     /// the next `update` rather than guessed here.
-    pending_click: Option<((f64, f64), Act)>,
+    /// A click waiting to be resolved to a cell.
+    pending_click: Option<(f64, f64)>,
+    /// Which hotbar slot is selected.
+    slot: usize,
 }
 
 impl BattleApp {
@@ -204,6 +198,22 @@ impl BattleApp {
 }
 
 impl BattleApp {
+    /// Scale the zoom about a screen position, keeping what is under it in
+    /// place. Shared by the wheel, the trackpad and two fingers, so all three
+    /// behave identically rather than each drifting its own way.
+    fn zoom_about(&mut self, factor: f32, at: (f64, f64)) {
+        let before = self.cell_under_cursor_f(self.viewport, at);
+        self.zoom = (self.zoom * factor).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+        let after = self.cell_under_cursor_f(self.viewport, at);
+        self.camera.0 += before.0 - after.0;
+        self.camera.1 += before.1 - after.1;
+        self.camera_dirty = true;
+    }
+
+    fn zoom_about_cursor(&mut self, factor: f32) {
+        self.zoom_about(factor, self.cursor);
+    }
+
     /// Move the camera for whatever pan keys are held. Returns whether it
     /// moved, so the uniform is only rewritten when it needs to be.
     fn apply_pan(&mut self, dt: f32) {
@@ -280,19 +290,29 @@ impl BattleApp {
     /// Ask for any visible chunk not already requested. The camera is fixed for
     /// now, so this settles after the first frame; it is written against the
     /// viewport so panning needs no new code.
-    /// Place a cell, or destroy whatever is there.
+    /// One button does everything, and the cell under it decides which.
+    ///
+    /// Something living there means take it — your own for value, someone
+    /// else's at a cost. Empty ground means put down whatever the hotbar has
+    /// selected. There is nothing to hold and nothing to remember, which is
+    /// what a clicker opening needs.
     ///
     /// Applied locally *and* sent, rather than sent and awaited: the rules are
     /// deterministic and the server runs the same `net::apply` and charges by
     /// the same `net::value_delta`, so acting immediately shows the right
     /// answer a round trip early. If the server disagrees the chunk digests
     /// will not match and the resync puts it right.
-    fn act_on(&mut self, row: i32, col: i32, act: Act) {
+    fn click(&mut self, row: i32, col: i32) {
         let player = self.me.unwrap_or(PlayerId(1));
         let cells = vec![(row, col)];
-        let action = match act {
-            Act::Remove => Action::Erase { cells },
-            Act::Place => Action::Paint { cells },
+        let occupied = self
+            .world
+            .cell_at(row, col)
+            .is_some_and(|c| c.is_alive() || c.is_glass());
+        let action = if occupied {
+            Action::Erase { cells }
+        } else {
+            Action::Paint { cells, placement: hotbar::SLOTS[self.slot].placement }
         };
         let stamped = Stamped { tick: self.world.generation, player, action };
 
@@ -307,24 +327,18 @@ impl BattleApp {
         }
         self.notice = None;
 
-        // Said plainly, because taking nothing from empty ground looks exactly
-        // like a click that never arrived.
         let occupant = self.world.cell_at(row, col).filter(|c| c.is_alive());
-        self.last_action = Some(match (act, occupant) {
-            (Act::Place, _) => format!("placed ({row}, {col})"),
-            (Act::Remove, None) => format!("nothing at ({row}, {col})"),
-            (Act::Remove, Some(c)) if c.player() == player => {
-                format!("took your cell at ({row}, {col}), +1")
-            }
-            (Act::Remove, Some(c)) => {
-                format!("destroyed player {}'s cell at ({row}, {col}), -1", c.player().0)
-            }
+        self.last_action = Some(match occupant {
+            None if occupied => format!("cleared glass at ({row}, {col})"),
+            None => format!("placed {} at ({row}, {col})", hotbar::SLOTS[self.slot].name),
+            Some(c) if c.player() == player => format!("took ({row}, {col}), +1"),
+            Some(c) => format!("destroyed player {}'s ({row}, {col}), -1", c.player().0),
         });
         self.value += delta;
 
         crate::net::apply(&mut self.world, &stamped);
         self.world.dirty = true;
-        log::debug!("{act:?} ({row}, {col}); value {}", self.value);
+        log::debug!("clicked ({row}, {col}); value {}", self.value);
 
         match &self.link {
             Some(link) => link.send(ClientMessage::Act(stamped)),
@@ -333,33 +347,24 @@ impl BattleApp {
         }
     }
 
-    /// Chunk coordinates the viewport covers, plus a margin.
-    fn visible_chunks(&self) -> Vec<crate::sim::Coord> {
+    /// The region on screen, in absolute cells, as (min, max), with a margin.
+    fn visible_cells(&self) -> ((i32, i32), (i32, i32)) {
         let (vw, vh) = self.viewport;
         let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
-        let min = (
-            (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
-            (self.camera.0 - half.0).floor() as i32 - VIEW_MARGIN,
-        );
-        let max = (
-            (self.camera.1 + half.1).ceil() as i32 + VIEW_MARGIN,
-            (self.camera.0 + half.0).ceil() as i32 + VIEW_MARGIN,
-        );
-        World::chunks_covering(min, max)
+        (
+            (
+                (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
+                (self.camera.0 - half.0).floor() as i32 - VIEW_MARGIN,
+            ),
+            (
+                (self.camera.1 + half.1).ceil() as i32 + VIEW_MARGIN,
+                (self.camera.0 + half.0).ceil() as i32 + VIEW_MARGIN,
+            ),
+        )
     }
 
     fn subscribe_to_view(&mut self) {
-        let (vw, vh) = self.viewport;
-        let half = (vw / (2.0 * self.zoom), vh / (2.0 * self.zoom));
-        let min = (
-            (self.camera.1 - half.1).floor() as i32 - VIEW_MARGIN,
-            (self.camera.0 - half.0).floor() as i32 - VIEW_MARGIN,
-        );
-        let max = (
-            (self.camera.1 + half.1).ceil() as i32 + VIEW_MARGIN,
-            (self.camera.0 + half.0).ceil() as i32 + VIEW_MARGIN,
-        );
-
+        let (min, max) = self.visible_cells();
         let wanted: Vec<_> = World::chunks_covering(min, max)
             .into_iter()
             .filter(|c| !self.subscribed.contains(c))
@@ -390,7 +395,7 @@ impl App for BattleApp {
         let mut chunks = ChunkStore::new(&gpu.device);
         let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
-        chunks.sync(&gpu.queue, &world, TORUS_REPEATS, &[]);
+        chunks.sync(&gpu.queue, &world, TORUS_REPEATS, ((0, 0), (0, 0)));
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
@@ -471,6 +476,7 @@ impl App for BattleApp {
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
             pending_click: None,
+            slot: 0,
             link,
         };
         app.world.dirty = false;
@@ -502,15 +508,15 @@ impl App for BattleApp {
             self.pump_link();
         }
 
-        if let Some((at, act)) = self.pending_click.take() {
+        if let Some(at) = self.pending_click.take() {
             let (row, col) = self.cell_under_cursor(at);
-            self.act_on(row, col, act);
+            self.click(row, col);
         }
 
         self.world.update(dt, GENERATION_SPAN);
         if self.world.dirty {
-            let visible = self.visible_chunks();
-            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, &visible);
+            let visible = self.visible_cells();
+            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
             self.world.dirty = false;
         }
         self.elapsed += dt as f64;
@@ -526,20 +532,36 @@ impl App for BattleApp {
             pointer_on_ui: self.views.borrow().wants_pointer(),
             cursor_cell: self.cell_under_cursor(self.cursor),
             last_action: self.last_action.as_deref(),
+            holding: hotbar::SLOTS[self.slot].name,
         };
-        let output = self
-            .views
-            .borrow_mut()
-            .run(gpu, self.elapsed, |ctx| hud::show(ctx, &status));
+        let (slot, theme) = {
+            let views = self.views.borrow();
+            (self.slot, views.theme)
+        };
+        let mut picked = None;
+        let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {
+            let hud_rect = hud::show(ctx, &theme, &status);
+            let bar = hotbar::show(ctx, &theme, slot);
+            picked = bar.picked;
+            // Either panel claims the pointer, so the union is what the world
+            // must not receive.
+            match (hud_rect, bar.rect) {
+                (Some(a), Some(b)) => Some(a.union(b)),
+                (a, b) => a.or(b),
+            }
+        });
+        if let Some(index) = picked {
+            self.slot = index;
+        }
         *self.ui_output.borrow_mut() = Some(output);
 
         if self.camera_dirty {
             self.write_camera(gpu);
             self.camera_dirty = false;
-            // Panning brings different chunks into view, and the unloaded ones
-            // among them are drawn from the instance list, so it must follow.
-            let visible = self.visible_chunks();
-            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, &visible);
+            // Panning changes the region the backdrop has to cover, so the
+            // instance list follows the camera.
+            let visible = self.visible_cells();
+            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
         }
     }
 
@@ -574,6 +596,12 @@ impl App for BattleApp {
 
     fn on_key(&mut self, code: winit::keyboard::KeyCode, pressed: bool) {
         use winit::keyboard::KeyCode as K;
+        if let Some(index) = digit(code).and_then(hotbar::slot_for_digit) {
+            if pressed {
+                self.slot = index;
+            }
+            return;
+        }
         let slot = match code {
             K::ArrowLeft | K::KeyA => 0,
             K::ArrowRight | K::KeyD => 1,
@@ -582,6 +610,15 @@ impl App for BattleApp {
             _ => return,
         };
         self.pan[slot] = pressed;
+    }
+
+    /// A trackpad pinch, on the platforms that report one as a gesture.
+    /// `delta` is a relative change, so it multiplies rather than adds.
+    fn on_pinch(&mut self, delta: f64) {
+        if !delta.is_finite() {
+            return;
+        }
+        self.zoom_about_cursor((1.0 + delta as f32).clamp(0.5, 2.0));
     }
 
     fn on_touch(&mut self, id: u64, phase: winit::event::TouchPhase, x: f64, y: f64) {
@@ -618,15 +655,9 @@ impl App for BattleApp {
                 let midpoint = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
                 if let Some(previous) = self.pinch_span {
                     if previous > 1.0 && span > 1.0 {
-                        // Anchor on the midpoint, so the world does not slide
+                        // Anchored on the midpoint, so the world does not slide
                         // out from under the fingers doing the pinching.
-                        let before = self.cell_under_cursor_f(self.viewport, midpoint);
-                        self.zoom = (self.zoom * (span / previous) as f32)
-                            .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
-                        let after = self.cell_under_cursor_f(self.viewport, midpoint);
-                        self.camera.0 += before.0 - after.0;
-                        self.camera.1 += before.1 - after.1;
-                        self.camera_dirty = true;
+                        self.zoom_about((span / previous) as f32, midpoint);
                     }
                 }
                 self.pinch_span = Some(span);
@@ -637,22 +668,23 @@ impl App for BattleApp {
         }
     }
 
-    fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
+    fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta, zoom_gesture: bool) {
         use winit::event::MouseScrollDelta as D;
         // A line of wheel and a pixel of trackpad are wildly different
         // magnitudes, so normalise before using either.
-        let steps = match delta {
+        let mut steps = match delta {
             D::LineDelta(_, y) => y,
             D::PixelDelta(p) => p.y as f32 / 50.0,
         };
-        // Zoom about the cursor, not the screen centre: zooming towards a
-        // corner should keep what is under the pointer under the pointer.
-        let before = self.cell_under_cursor_f(self.viewport, self.cursor);
-        self.zoom = (self.zoom * 1.15f32.powf(steps)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
-        let after = self.cell_under_cursor_f(self.viewport, self.cursor);
-        self.camera.0 += before.0 - after.0;
-        self.camera.1 += before.1 - after.1;
-        self.camera_dirty = true;
+        // A pinch reported as ctrl+wheel arrives in much finer increments than
+        // a wheel notch, so it needs a gentler factor or the smallest pinch
+        // jumps several zoom levels.
+        if zoom_gesture {
+            steps *= 0.35;
+        }
+        // About the cursor, not the screen centre: zooming towards a corner
+        // should keep what is under the pointer under the pointer.
+        self.zoom_about_cursor(1.15f32.powf(steps));
     }
 
     /// Left removes, right places.
@@ -666,23 +698,21 @@ impl App for BattleApp {
     /// are not handed the `GpuState` and the screen-to-world mapping needs the
     /// viewport.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
-        use winit::event::MouseButton as B;
-        match button {
-            B::Left => {
-                if pressed {
-                    self.dragging = true;
-                    self.drag_moved = false;
-                    return;
-                }
-                self.dragging = false;
-                if self.drag_moved {
-                    return;
-                }
-                self.pending_click = Some((self.cursor, Act::Remove));
-            }
-            B::Right if pressed => self.pending_click = Some((self.cursor, Act::Place)),
-            _ => {}
+        if button != winit::event::MouseButton::Left {
+            return;
         }
+        if pressed {
+            self.dragging = true;
+            self.drag_moved = false;
+            return;
+        }
+        self.dragging = false;
+        // A press that moved was a pan, not a click on whatever happened to be
+        // under the cursor when it started.
+        if self.drag_moved {
+            return;
+        }
+        self.pending_click = Some(self.cursor);
     }
 
     fn on_window_event(&mut self, event: &winit::event::WindowEvent, scale: f32) -> bool {
@@ -701,7 +731,9 @@ impl App for BattleApp {
     }
 
     fn clear_color(&self) -> Option<wgpu::Color> {
-        Some(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 })
+        // From the theme, so the world's ground and the panels beside it are
+        // the same colour rather than two guesses at the same colour.
+        Some(self.views.borrow().theme.clear_color())
     }
 }
 
@@ -751,4 +783,21 @@ mod tests {
         let (a, b) = (player_colour(PlayerId(1)), player_colour(PlayerId(2)));
         assert_ne!(a, b);
     }
+}
+
+/// The digit a key stands for, if it is one.
+fn digit(code: winit::keyboard::KeyCode) -> Option<u32> {
+    use winit::keyboard::KeyCode as K;
+    Some(match code {
+        K::Digit1 | K::Numpad1 => 1,
+        K::Digit2 | K::Numpad2 => 2,
+        K::Digit3 | K::Numpad3 => 3,
+        K::Digit4 | K::Numpad4 => 4,
+        K::Digit5 | K::Numpad5 => 5,
+        K::Digit6 | K::Numpad6 => 6,
+        K::Digit7 | K::Numpad7 => 7,
+        K::Digit8 | K::Numpad8 => 8,
+        K::Digit9 | K::Numpad9 => 9,
+        _ => return None,
+    })
 }
