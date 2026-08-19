@@ -31,14 +31,19 @@ pub struct Views {
     events: Vec<egui::Event>,
     pointer: egui::Pos2,
     modifiers: egui::Modifiers,
-    /// What the interface covered last frame, in points.
+    /// What each panel covered last frame, in points.
     ///
     /// Consumption is decided from this rather than from egui's own
     /// `wants_pointer`, which depends on interaction state this integration
     /// feeds by hand: if any of that is wrong the answer sticks true and the
     /// world silently stops receiving clicks, with nothing to show why. A
     /// rectangle can be reasoned about, printed, and seen.
-    claimed: Option<egui::Rect>,
+    ///
+    /// One rectangle per panel, never their union. Two panels' union is their
+    /// bounding box, and the panels are in opposite corners — the box between
+    /// a HUD at the top left and a hotbar at the bottom centre is most of the
+    /// window, so the world only received the strip beyond it.
+    claimed: Vec<egui::Rect>,
     /// True while a widget is being dragged, so a drag that leaves the panel
     /// still belongs to the panel.
     dragging_widget: bool,
@@ -78,6 +83,15 @@ enum Change<'a> {
     Free(egui::TextureId),
 }
 
+/// Whether any panel covers the pointer.
+///
+/// A list rather than one rectangle, and this is why: the panels sit in
+/// different corners, and anything that folds them into a single rectangle
+/// first claims all the world between them.
+fn claims(panels: &[egui::Rect], pointer: egui::Pos2) -> bool {
+    panels.iter().any(|panel| panel.contains(pointer))
+}
+
 /// The shapes a frame of interface produced.
 ///
 /// Deliberately holds no `TexturesDelta`. egui panics if one is dropped with
@@ -102,7 +116,7 @@ impl Views {
             events: Vec::new(),
             pointer: egui::Pos2::ZERO,
             modifiers: egui::Modifiers::default(),
-            claimed: None,
+            claimed: Vec::new(),
             dragging_widget: false,
             start: 0.0,
             // No depth buffer and one sample, matching the world's pipeline;
@@ -121,10 +135,7 @@ impl Views {
 
     /// Whether the interface, rather than the world, should get the pointer.
     pub fn wants_pointer(&self) -> bool {
-        self.dragging_widget
-            || self
-                .claimed
-                .is_some_and(|rect| rect.contains(self.pointer))
+        self.dragging_widget || claims(&self.claimed, self.pointer)
     }
 
     /// Translate a window event. Returns whether the world should ignore it.
@@ -201,7 +212,7 @@ impl Views {
         &mut self,
         gpu: &GpuState,
         now: f64,
-        build: impl FnOnce(&egui::Context) -> Option<egui::Rect>,
+        build: impl FnOnce(&egui::Context) -> Vec<egui::Rect>,
     ) -> Output {
         if self.start == 0.0 {
             self.start = now;
@@ -304,5 +315,30 @@ mod tests {
             "handling the deltas is not enough; the delta must be emptied too"
         );
         // Dropping `full` here is the actual assertion: it panics if not empty.
+    }
+
+    /// The panels were folded into one rectangle with `Rect::union`, which is
+    /// their bounding box. A HUD at the top left and a hotbar at the bottom
+    /// centre bound most of the window between them, so the world only ever
+    /// received the strip to the right of the hotbar — and every gesture
+    /// anywhere else was swallowed with nothing on screen to say why.
+    #[test]
+    fn panels_claim_themselves_and_not_the_space_between_them() {
+        let hud = egui::Rect::from_min_size(egui::pos2(14.0, 14.0), egui::vec2(220.0, 300.0));
+        let hotbar =
+            egui::Rect::from_min_size(egui::pos2(600.0, 700.0), egui::vec2(110.0, 50.0));
+        let panels = [hud, hotbar];
+
+        assert!(claims(&panels, egui::pos2(100.0, 100.0)), "on the HUD");
+        assert!(claims(&panels, egui::pos2(640.0, 720.0)), "on the hotbar");
+
+        // Between the two, and the case the union got wrong.
+        assert!(!claims(&panels, egui::pos2(400.0, 400.0)), "open world");
+        assert!(!claims(&panels, egui::pos2(100.0, 690.0)), "below the HUD");
+        assert!(!claims(&panels, egui::pos2(590.0, 60.0)), "above the hotbar");
+        assert!(
+            claims(&[hud.union(hotbar)], egui::pos2(400.0, 400.0)),
+            "the union swallowed open world, which is the bug this replaced"
+        );
     }
 }
