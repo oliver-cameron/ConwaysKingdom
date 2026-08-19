@@ -12,6 +12,9 @@ const ALIVE_BIT:    u32 = 1u;
 const META_SHIFT:   u32 = 1u;   const META_MASK: u32 = 1023u;
 const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 
+// Sprites along one edge of the atlas; see render::atlas.
+const SHEET_N: u32 = 16u;
+
 struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
     viewport: vec2<f32>,   // framebuffer size in physical pixels
@@ -22,6 +25,81 @@ struct Camera {
 
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var chunks: texture_2d_array<u32>;
+@group(0) @binding(2) var atlas: texture_2d<f32>;
+@group(0) @binding(3) var atlas_sampler: sampler;
+
+// --- colour -----------------------------------------------------------------
+//
+// The atlas carries no hue: R is saturation, G lightness, A coverage. Hue comes
+// from the cell's player, so one sheet serves every player and two players'
+// cells are the same shape in different colours.
+//
+// OKLab rather than HSV, because HSV's hues are not evenly spaced perceptually:
+// its yellows and cyans read far brighter than its blues at equal "value", so
+// players would not look equally prominent. Output is linear, which is what the
+// sRGB surface format expects to convert itself.
+
+const TAU: f32 = 6.283185307;
+// Golden ratio: consecutive player numbers land far apart on the hue circle,
+// so neighbouring players never share a colour.
+const HUE_STEP: f32 = 0.6180339887;
+
+fn oklab_to_linear_srgb(lab: vec3<f32>) -> vec3<f32> {
+    let l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+    let m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+    let s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+    let l = l_ * l_ * l_;
+    let m = m_ * m_ * m_;
+    let s = s_ * s_ * s_;
+    return vec3<f32>(
+         4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+    );
+}
+
+fn in_gamut(rgb: vec3<f32>) -> bool {
+    return all(rgb >= vec3<f32>(-0.0005)) && all(rgb <= vec3<f32>(1.0005));
+}
+
+/// Lightness, saturation and a hue angle to linear RGB.
+///
+/// Asking for more chroma than sRGB can show is the normal case, not an edge
+/// one: at this chroma most hues leave the gamut at some lightness. Clamping
+/// the result would fix the range but bend the hue -- red clips before blue,
+/// so two players drift towards each other. Instead the chroma is bisected
+/// down until it fits, which keeps hue and lightness exactly and gives up only
+/// the saturation that could not be shown. That is what OKHSL does, and the
+/// part worth having here.
+fn shade(lightness: f32, saturation: f32, hue: f32) -> vec3<f32> {
+    let dir = vec2<f32>(cos(hue), sin(hue));
+    // Taper towards black and white, where no hue has any chroma to spare.
+    let chroma = 0.30 * saturation * (1.0 - abs(2.0 * lightness - 1.0));
+
+    var rgb = oklab_to_linear_srgb(vec3<f32>(lightness, chroma * dir.x, chroma * dir.y));
+    if in_gamut(rgb) {
+        return clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
+    var lo = 0.0;
+    var hi = 1.0;
+    for (var i = 0; i < 8; i = i + 1) {
+        let mid = (lo + hi) * 0.5;
+        let c = chroma * mid;
+        if in_gamut(oklab_to_linear_srgb(vec3<f32>(lightness, c * dir.x, c * dir.y))) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let c = chroma * lo;
+    rgb = oklab_to_linear_srgb(vec3<f32>(lightness, c * dir.x, c * dir.y));
+    return clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn player_hue(player: u32) -> f32 {
+    return fract(f32(player) * HUE_STEP) * TAU;
+}
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -55,15 +133,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(floor(in.local));
     let cell = textureLoad(chunks, coord, i32(in.layer), 0).r;
 
-    if (cell & ALIVE_BIT) == 0u {
-        // Tint the outermost ring of dead cells so chunk boundaries are
-        // visible: that is what makes chunk loading something you can watch.
-        let n = cam.chunk_n;
-        if in.local.x < 1.0 || in.local.y < 1.0
-            || in.local.x >= n - 1.0 || in.local.y >= n - 1.0 {
-            return vec4<f32>(0.06, 0.06, 0.09, 1.0);     // chunk grid
-        }
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);            // dead: black
+    // Faint grid on the chunk's outer ring, so chunk loading stays visible.
+    let n = cam.chunk_n;
+    let on_edge = in.local.x < 1.0 || in.local.y < 1.0
+        || in.local.x >= n - 1.0 || in.local.y >= n - 1.0;
+    var background = vec3<f32>(0.0);
+    if on_edge {
+        background = vec3<f32>(0.012, 0.012, 0.02);
     }
-    return vec4<f32>(1.0, 0.85, 0.1, 1.0);               // alive: yellow
+
+    if (cell & ALIVE_BIT) == 0u {
+        return vec4<f32>(background, 1.0);
+    }
+
+    // Where in this cell we are, in 0..1, then into the cell's sprite. A chunk
+    // is 16 cells of 16 texels, so 256 texels across: a u8 per axis.
+    let within = fract(in.local);
+    // Low eight bits of the metadata pick the sprite: 256 of them, laid out
+    // 16 by 16 on the sheet.
+    let sprite = (cell >> META_SHIFT) & 255u;
+    let sheet = vec2<f32>(f32(sprite % SHEET_N), f32(sprite / SHEET_N));
+    let uv = (sheet + within) / f32(SHEET_N);
+
+    let texel = textureSample(atlas, atlas_sampler, uv);
+    if texel.a < 0.02 {
+        return vec4<f32>(background, 1.0);
+    }
+
+    let hue = player_hue((cell >> PLAYER_SHIFT));
+    let rgb = shade(texel.g, texel.r, hue);
+    // Composited against the background rather than alpha-blended, so the
+    // pipeline needs no blend state and draw order stays irrelevant.
+    return vec4<f32>(mix(background, rgb, texel.a), 1.0);
 }

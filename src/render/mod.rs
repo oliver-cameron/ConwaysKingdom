@@ -8,11 +8,13 @@
 //! turns chunks into texture layers, and is the only place that knows both.
 
 pub mod app;
+pub mod atlas;
 pub mod chunks;
 pub mod context;
 pub mod pipeline;
 
 pub use app::{run, App};
+pub use atlas::Atlas;
 pub use chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, ChunkTexture,
     Instance, MAX_INSTANCES, SHADER_SOURCE,

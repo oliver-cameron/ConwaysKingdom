@@ -6,6 +6,7 @@
 //! keep the [`World`] and drop everything else in this file.
 
 use crate::render::app::App;
+use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
 };
@@ -77,7 +78,12 @@ pub struct BattleApp {
     vertex_buffers: Vec<wgpu::Buffer>,
     camera_buffer: wgpu::Buffer,
     chunks: ChunkStore,
+    /// Held for as long as the bind group refers to it.
+    _atlas: Atlas,
     world: World,
+    /// Set by anything that moves or scales the camera. Zoom used to change
+    /// the field without anything uploading it, so scrolling did nothing.
+    camera_dirty: bool,
     /// Camera centre, in cells, as (x, y).
     camera: (f32, f32),
     /// Screen pixels per cell.
@@ -87,6 +93,9 @@ pub struct BattleApp {
     drag_moved: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
+    /// Viewport size in physical pixels, cached because input callbacks are
+    /// not handed the `GpuState`.
+    viewport: (f32, f32),
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
     /// Our own player number, once the server has issued one.
@@ -128,6 +137,19 @@ impl BattleApp {
         );
     }
 
+    /// Screen position to world position in cells, unrounded. Zoom anchoring
+    /// needs the fraction, which the integer form throws away.
+    fn cell_under_cursor_f(&self, (vw, vh): (f32, f32), (px, py): (f64, f64)) -> (f32, f32) {
+        let origin = (
+            self.camera.0 - vw / (2.0 * self.zoom),
+            self.camera.1 - vh / (2.0 * self.zoom),
+        );
+        (
+            origin.0 + px as f32 / self.zoom,
+            origin.1 + py as f32 / self.zoom,
+        )
+    }
+
     /// Where a screen position lands in the world, in absolute cell
     /// coordinates. The inverse of what the vertex shader does.
     fn cell_under_cursor(&self, gpu: &GpuState, (px, py): (f64, f64)) -> (i32, i32) {
@@ -145,16 +167,16 @@ impl BattleApp {
 impl BattleApp {
     /// Move the camera for whatever pan keys are held. Returns whether it
     /// moved, so the uniform is only rewritten when it needs to be.
-    fn apply_pan(&mut self, dt: f32) -> bool {
+    fn apply_pan(&mut self, dt: f32) {
         let x = (self.pan[1] as i32 - self.pan[0] as i32) as f32;
         let y = (self.pan[3] as i32 - self.pan[2] as i32) as f32;
         if x == 0.0 && y == 0.0 {
-            return self.dragging;
+            return;
         }
         let step = PAN_SPEED * dt / self.zoom;
         self.camera.0 += x * step;
         self.camera.1 += y * step;
-        true
+        self.camera_dirty = true;
     }
 
     /// Drain the socket and fold what arrived into the local world.
@@ -258,6 +280,7 @@ impl App for BattleApp {
             WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
         };
         let mut chunks = ChunkStore::new(&gpu.device);
+        let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.sync(&gpu.queue, &world, TORUS_REPEATS);
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -279,6 +302,14 @@ impl App for BattleApp {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(chunks.view()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&atlas.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&atlas.sampler),
                 },
             ],
         });
@@ -302,12 +333,15 @@ impl App for BattleApp {
             vertex_buffers,
             camera_buffer,
             chunks,
+            _atlas: atlas,
             world,
+            camera_dirty: true,
             camera: START_CENTRE,
             zoom: START_ZOOM,
             dragging: false,
             drag_moved: false,
             pan: [false; 4],
+            viewport: (1.0, 1.0),
             me: None,
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
@@ -315,18 +349,21 @@ impl App for BattleApp {
             link,
         };
         app.world.dirty = false;
+        app.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
         app.write_camera(gpu);
         app
     }
 
     fn resize(&mut self, gpu: &GpuState) {
+        self.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
+        self.camera_dirty = true;
         self.subscribed.clear(); // the viewport changed; ask again
 
         self.write_camera(gpu);
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
-        let moved = self.apply_pan(dt);
+        self.apply_pan(dt);
 
         if self.link.is_some() {
             self.pump_link(gpu);
@@ -345,10 +382,9 @@ impl App for BattleApp {
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS);
             self.world.dirty = false;
         }
-        // The camera no longer depends on the world, only on where it is
-        // pointed, so it is rewritten when it moves and not otherwise.
-        if moved {
+        if self.camera_dirty {
             self.write_camera(gpu);
+            self.camera_dirty = false;
         }
     }
 
@@ -377,6 +413,7 @@ impl App for BattleApp {
             // and the camera lives in cells.
             self.camera.0 -= dx as f32 / self.zoom;
             self.camera.1 -= dy as f32 / self.zoom;
+            self.camera_dirty = true;
         }
     }
 
@@ -393,6 +430,7 @@ impl App for BattleApp {
     }
 
     fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta) {
+        let gpu_size = self.viewport;
         use winit::event::MouseScrollDelta as D;
         // A line of wheel and a pixel of trackpad are wildly different
         // magnitudes, so normalise before using either.
@@ -400,7 +438,14 @@ impl App for BattleApp {
             D::LineDelta(_, y) => y,
             D::PixelDelta(p) => p.y as f32 / 50.0,
         };
+        // Zoom about the cursor, not the screen centre: zooming towards a
+        // corner should keep what is under the pointer under the pointer.
+        let before = self.cell_under_cursor_f(gpu_size, self.cursor);
         self.zoom = (self.zoom * 1.15f32.powf(steps)).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+        let after = self.cell_under_cursor_f(gpu_size, self.cursor);
+        self.camera.0 += before.0 - after.0;
+        self.camera.1 += before.1 - after.1;
+        self.camera_dirty = true;
     }
 
     /// Clicks are received and resolved to a cell, but deliberately do nothing

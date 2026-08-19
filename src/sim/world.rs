@@ -71,22 +71,33 @@ impl World {
 
     /// The world the app and the server open with.
     ///
-    /// A Gosper glider gun at the origin. It stays put, so there is always
-    /// something to join to, and it emits a glider every thirty generations,
-    /// so the trail of them says how long the server has been up.
+    /// Two Gosper glider guns facing each other, owned by different players.
+    /// They stay put, so there is always something to join to; they emit a
+    /// glider every thirty generations, so the trail says how long the server
+    /// has been up; and the two streams collide, so births happen with parents
+    /// of different colours and the random attribution is visible.
     ///
-    /// That second property is the point. A still life or an oscillator looks
-    /// identical whether it arrived from the server or the client regenerated
-    /// it locally, so it cannot tell a working join from a broken one. The
-    /// length of the glider trail is not something a client starting from
-    /// nothing can invent.
+    /// That second property is the point of a gun over a still life or an
+    /// oscillator, which look identical whether they arrived from the server or
+    /// the client regenerated them and so cannot tell a working join from a
+    /// broken one.
     pub fn demo() -> Self {
         let mut w = Self::infinite_empty();
-        for (row, col) in GOSPER_GUN {
-            w.set_cell_at(row, col, Cell::alive(PlayerId(1)));
-        }
+        w.seed_gun(0, 0, PlayerId(1), false);
+        // Mirrored and set opposite, so its gliders travel the other way and
+        // the two streams meet.
+        w.seed_gun(0, 80, PlayerId(2), true);
         w.generation = 0;
         w
+    }
+
+    /// A Gosper gun with its top-left at (row, col). Mirrored horizontally it
+    /// is still a gun, just firing the other way.
+    fn seed_gun(&mut self, row: i32, col: i32, player: PlayerId, mirrored: bool) {
+        for (r, c) in GOSPER_GUN {
+            let c = if mirrored { 35 - c } else { c };
+            self.set_cell_at(row + r, col + c, Cell::alive(player));
+        }
     }
 
     pub fn infinite() -> Self {
