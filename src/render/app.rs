@@ -1,12 +1,27 @@
+//! The window, the event loop, and the frame.
+//!
+//! winit 0.30 replaced the closure-driven loop with [`ApplicationHandler`], and
+//! moved window creation inside it — a window only exists once the platform has
+//! resumed. GPU setup follows the window, and it is async, so [`Harness`] holds
+//! three states: no window, waiting for the device, running. On native the wait
+//! is a `block_on`; in a browser it cannot be, so the device arrives through a
+//! shared slot that is checked each time the loop wakes.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
-use winit::{event::*, event_loop::{ControlFlow, EventLoop}, window::WindowBuilder};
 
-use crate::render::context::{DrawCall, Frame, FrameAcquire};
-use crate::render::context::GpuState;
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::{Window, WindowId};
 
-/// Implement this to plug your own resources/pipelines into the event
-/// loop. The core knows nothing about what you draw — it just calls
-/// `draw_calls` each frame and submits whatever you return.
+use crate::render::context::{Frame, FrameAcquire, GpuState};
+use crate::render::ui::Ui;
+
+/// Implement this to plug your own resources and pipelines into the loop. The
+/// core knows nothing about what you draw — it calls `draw_calls` each frame
+/// and submits whatever comes back.
 pub trait App: 'static {
     fn init(gpu: &GpuState) -> Self
     where
@@ -15,18 +30,19 @@ pub trait App: 'static {
     /// Called after the surface has been reconfigured for a new size.
     fn resize(&mut self, _gpu: &GpuState) {}
 
-    /// Called once per frame before `draw_calls`, with the time in
-    /// seconds since the previous frame.
+    /// Called once per frame before `draw_calls`, with seconds since the last.
     fn update(&mut self, _gpu: &GpuState, _dt: f32) {}
 
-    /// Called once per frame. Return every draw call you want recorded
-    /// into this frame's single render pass, in order.
-    fn draw_calls(&self) -> Vec<DrawCall<'_>>;
+    /// Every draw call to record into this frame's render pass, in order.
+    fn draw_calls(&self) -> Vec<crate::render::context::DrawCall<'_>>;
 
-    /// Clear color for the frame, or `None` to load existing contents.
+    /// Clear colour, or `None` to keep what is already there.
     fn clear_color(&self) -> Option<wgpu::Color> {
         Some(wgpu::Color { r: 0.05, g: 0.05, b: 0.08, a: 1.0 })
     }
+
+    /// Build the overlay. Runs every frame, after `update`.
+    fn hud(&mut self, _ctx: &egui::Context) {}
 
     fn on_key(&mut self, _code: winit::keyboard::KeyCode, _pressed: bool) {}
     fn on_scroll(&mut self, _delta: MouseScrollDelta) {}
@@ -42,120 +58,192 @@ pub trait App: 'static {
     fn on_touch(&mut self, _id: u64, _phase: TouchPhase, _x: f64, _y: f64) {}
 }
 
-/// Run the event loop. Logging is the caller's business: initialising it here
-/// as well as in `main` panics with `SetLoggerError`, since a logger can only
-/// be installed once.
 pub async fn run<A: App>() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("wgpu core")
-            .build(&event_loop)
-            .expect("failed to create window"),
-    );
+    event_loop.set_control_flow(ControlFlow::Wait);
 
-    #[cfg(target_arch = "wasm32")]
+    let harness = Harness::<A>::default();
+
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        use winit::platform::web::WindowExtWebSys;
-        web_sys::window()
-            .and_then(|win| win.document())
-            .and_then(|doc| {
-                let canvas = window.canvas()?;
-                canvas.set_id("render-canvas");
-                doc.body()?.append_child(&canvas).ok()?;
-                Some(())
-            })
-            .expect("couldn't append canvas to document body");
-
-        // winit leaves the canvas at the HTML default of 300x150, and
-        // `inner_size` reads the element, so without this the surface is
-        // configured at 300x150 and stretched across the viewport by the CSS.
-        fit_canvas_to_window(&window);
+        let mut harness = harness;
+        event_loop.run_app(&mut harness).expect("event loop error");
     }
 
-    let mut gpu = GpuState::new(window.clone()).await;
-    let mut app = A::init(&gpu);
-    let mut last_frame = now_secs();
+    // `run_app` never returns, which a browser will not tolerate; `spawn_app`
+    // hands the loop to the page instead.
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        event_loop.spawn_app(harness);
+    }
+}
 
-    // Kick off the redraw chain. From here each frame asks for the next one,
-    // so the loop is paced by exactly one scheduler.
-    window.request_redraw();
+struct Running<A> {
+    window: Arc<Window>,
+    gpu: GpuState,
+    ui: Ui,
+    app: A,
+    last_frame: f64,
+}
 
-    event_loop
-        .run(move |event, elwt| {
-            // Wait, not Poll. `request_redraw` already maps to
-            // requestAnimationFrame on the web, whereas Poll schedules a
-            // second loop through requestIdleCallback -- which winit's own
-            // docs note "might be affected by browser throttling". Running
-            // both means two schedulers competing to drive one renderer.
-            elwt.set_control_flow(ControlFlow::Wait);
+struct Harness<A> {
+    running: Option<Running<A>>,
+    /// Where the device lands when it is built off-thread, which is the only
+    /// option in a browser.
+    pending: Rc<RefCell<Option<(Arc<Window>, GpuState)>>>,
+    /// Set once the window exists, so a second `resumed` does not build another.
+    started: bool,
+}
 
-            match event {
-                Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
-                    WindowEvent::Resized(size) => {
-                        gpu.resize(size.width, size.height);
-                        app.resize(&gpu);
-                    }
-                    WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                physical_key: winit::keyboard::PhysicalKey::Code(code),
-                                state,
-                                ..
-                            },
-                        ..
-                    } => app.on_key(code, state == ElementState::Pressed),
-                    WindowEvent::MouseWheel { delta, .. } => app.on_scroll(delta),
-                    WindowEvent::CursorMoved { position, .. } => {
-                        app.on_cursor(position.x, position.y)
-                    }
-                    WindowEvent::MouseInput { button, state, .. } => {
-                        app.on_click(button, state == ElementState::Pressed)
-                    }
-                    WindowEvent::Touch(t) => {
-                        app.on_touch(t.id, t.phase, t.location.x, t.location.y)
-                    }
-                    WindowEvent::RedrawRequested => {
-                        // The browser gives no resize event for the canvas
-                        // element, only for its own window, and the devtools
-                        // pane changes that without any page event a canvas
-                        // would see. Checking each frame costs two property
-                        // reads and covers every case: window resize, devtools
-                        // opening, zoom, a rotated phone.
-                        #[cfg(target_arch = "wasm32")]
-                        fit_canvas_to_window(&window);
+impl<A> Default for Harness<A> {
+    fn default() -> Self {
+        Self { running: None, pending: Rc::new(RefCell::new(None)), started: false }
+    }
+}
 
-                        let now = now_secs();
-                        let dt = (now - last_frame).max(0.0) as f32;
-                        last_frame = now;
+impl<A: App> Harness<A> {
+    /// Promote a delivered device into a running app.
+    fn take_pending(&mut self) {
+        if self.running.is_some() {
+            return;
+        }
+        let Some((window, gpu)) = self.pending.borrow_mut().take() else {
+            return;
+        };
+        let ui = Ui::new(&gpu);
+        let app = A::init(&gpu);
+        let last_frame = now_secs();
+        self.running = Some(Running { window, gpu, ui, app, last_frame });
+        if let Some(r) = &self.running {
+            r.window.request_redraw();
+        }
+    }
+}
 
-                        app.update(&gpu, dt);
+impl<A: App> ApplicationHandler for Harness<A> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.started {
+            return;
+        }
+        self.started = true;
 
-                        match Frame::begin(&gpu) {
-                            FrameAcquire::Ready(frame) => {
-                                let calls = app.draw_calls();
-                                frame.submit(&gpu, app.clear_color(), &calls);
-                            }
-                            FrameAcquire::Skip => {}
-                            FrameAcquire::Reconfigure => {
-                                gpu.resize(gpu.size.0, gpu.size.1);
-                            }
-                            FrameAcquire::Lost => {
-                                log::error!("GPU device lost");
-                                elwt.exit();
-                            }
-                        }
+        let attributes = Window::default_attributes().with_title("Conway's Kingdom");
+        let window = Arc::new(
+            event_loop
+                .create_window(attributes)
+                .expect("failed to create window"),
+        );
 
-                        // Ask for the next frame now that this one is done.
-                        window.request_redraw();
-                    }
-                    _ => {}
-                },
-                _ => {}
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+            web_sys::window()
+                .and_then(|win| win.document())
+                .and_then(|doc| {
+                    let canvas = window.canvas()?;
+                    canvas.set_id("render-canvas");
+                    doc.body()?.append_child(&canvas).ok()?;
+                    Some(())
+                })
+                .expect("couldn't append canvas to document body");
+            fit_canvas_to_window(&window);
+        }
+
+        let pending = self.pending.clone();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let gpu = pollster::block_on(GpuState::new(window.clone()));
+            *pending.borrow_mut() = Some((window, gpu));
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let gpu = GpuState::new(window.clone()).await;
+            *pending.borrow_mut() = Some((window.clone(), gpu));
+            // Nothing else will wake the loop, so ask for the first frame here.
+            window.request_redraw();
+        });
+
+        self.take_pending();
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        self.take_pending();
+        let Some(r) = &mut self.running else { return };
+
+        // The overlay sees every event first, and anything it uses is not also
+        // an action in the world -- otherwise pressing a button would take a
+        // cell behind it.
+        let consumed = r.ui.on_window_event(&event, r.gpu.scale_factor);
+
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                r.gpu.resize(size.width, size.height);
+                r.app.resize(&r.gpu);
             }
-        })
-        .expect("event loop error");
+            WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key: winit::keyboard::PhysicalKey::Code(code),
+                        state,
+                        ..
+                    },
+                ..
+            } if !consumed => r.app.on_key(code, state == ElementState::Pressed),
+            WindowEvent::MouseWheel { delta, .. } if !consumed => r.app.on_scroll(delta),
+            WindowEvent::CursorMoved { position, .. } => r.app.on_cursor(position.x, position.y),
+            WindowEvent::MouseInput { button, state, .. } if !consumed => {
+                r.app.on_click(button, state == ElementState::Pressed)
+            }
+            WindowEvent::Touch(t) if !consumed => {
+                r.app.on_touch(t.id, t.phase, t.location.x, t.location.y)
+            }
+            WindowEvent::RedrawRequested => {
+                // The browser gives no resize event for the canvas element,
+                // only for its own window, and the devtools pane changes the
+                // space available with no event a canvas would see.
+                #[cfg(target_arch = "wasm32")]
+                fit_canvas_to_window(&r.window);
+
+                let now = now_secs();
+                let dt = (now - r.last_frame).max(0.0) as f32;
+                r.last_frame = now;
+
+                r.app.update(&r.gpu, dt);
+
+                let app = &mut r.app;
+                let ui_output = r.ui.run(&r.gpu, now, |ctx| app.hud(ctx));
+
+                match Frame::begin(&r.gpu) {
+                    FrameAcquire::Ready(frame) => {
+                        let calls = r.app.draw_calls();
+                        let ui = &mut r.ui;
+                        let gpu = &r.gpu;
+                        frame.submit(gpu, r.app.clear_color(), &calls, |encoder, pass| {
+                            ui.render(gpu, encoder, pass, &ui_output);
+                        });
+                    }
+                    FrameAcquire::Skip => {}
+                    FrameAcquire::Reconfigure => {
+                        let (w, h) = r.gpu.size;
+                        r.gpu.resize(w, h);
+                    }
+                    FrameAcquire::Lost => {
+                        log::error!("GPU device lost");
+                        event_loop.exit();
+                    }
+                }
+
+                // Ask for the next frame now that this one is done. One
+                // scheduler, paced by the display.
+                r.window.request_redraw();
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Keep the canvas the size of the window it sits in, at the device's real
@@ -167,7 +255,7 @@ pub async fn run<A: App>() {
 /// comparing against it means requesting again every frame, and setting a
 /// canvas's size clears it, so the picture never survives to be shown.
 #[cfg(target_arch = "wasm32")]
-fn fit_canvas_to_window(window: &winit::window::Window) {
+fn fit_canvas_to_window(window: &Window) {
     use std::cell::Cell;
     use winit::dpi::PhysicalSize;
 
@@ -184,7 +272,7 @@ fn fit_canvas_to_window(window: &winit::window::Window) {
         return;
     }
     REQUESTED.set(want);
-    log::info!("canvas -> {}x{} ({}x css at dpr {dpr})", want.0, want.1, w as u32);
+    log::info!("canvas -> {}x{} (dpr {dpr})", want.0, want.1);
     let _ = window.request_inner_size(PhysicalSize::new(want.0, want.1));
 }
 
