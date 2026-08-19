@@ -20,16 +20,21 @@ pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 /// and being the top field means the number extracts with a single shift and
 /// no mask, and that comparing two raw cells orders them by player first.
 ///
-/// Stored as two explicit little-endian bytes rather than a `u16` field, so the
-/// in-memory order is ours rather than the host's. The texture is `R16Uint`,
-/// which GPUs read little-endian, so the assertion below fires at compile time
-/// on a big-endian target rather than producing quietly scrambled cells.
+/// Four bytes per cell, uploaded as `Rgba8Uint`: the sixteen bits above in R
+/// and G, then **U and V in B and A** — the tile this cell shows from its
+/// sprite sheet. A sheet is a 16x16 grid of 16x16 tiles, so a `u8` each is
+/// ample, and a structure spanning several cells gives each one a different
+/// tile so the parts line up.
+///
+/// Stored as explicit bytes rather than a `u16` and two `u8`s, so the order is
+/// ours rather than the host's, and so alignment stays 1 — which is what lets a
+/// chunk be cast straight out of a save file or a wire frame at any offset.
 ///
 /// A zeroed cell is dead and unowned, which is what makes zeroed memory a valid
 /// empty world. Never give bit 0 clear a live meaning.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-pub struct Cell(pub [u8; 2]);
+pub struct Cell(pub [u8; 4]);
 
 /// The bit layout. Adjust here and in the matching block at the top of
 /// `render/shaders/grid.wgsl` — the shader cannot read Rust constants, so those
@@ -61,7 +66,7 @@ pub mod bits {
 }
 
 const _: () = {
-    assert!(size_of::<Cell>() == 2 && align_of::<Cell>() == 1);
+    assert!(size_of::<Cell>() == 4 && align_of::<Cell>() == 1);
     // The fields must tile all sixteen bits with no overlap and no gap.
     assert!(bits::ALIVE == 1);
     assert!(bits::KIND_SHIFT == 1);
@@ -74,16 +79,37 @@ const _: () = {
 };
 
 impl Cell {
-    pub const DEAD: Self = Self([0, 0]);
+    pub const DEAD: Self = Self([0, 0, 0, 0]);
 
+    /// Keeps the UV: changing what a cell *is* should not move which tile it
+    /// draws, or a pane would scramble its picture every generation.
     #[inline]
     pub const fn from_bits(bits: u16) -> Self {
-        Self(bits.to_le_bytes())
+        let [lo, hi] = bits.to_le_bytes();
+        Self([lo, hi, 0, 0])
     }
 
     #[inline]
     pub const fn bits(self) -> u16 {
-        u16::from_le_bytes(self.0)
+        u16::from_le_bytes([self.0[0], self.0[1]])
+    }
+
+    /// Replace the sixteen bits, keeping the UV.
+    #[inline]
+    const fn set_bits(self, bits: u16) -> Self {
+        let [lo, hi] = bits.to_le_bytes();
+        Self([lo, hi, self.0[2], self.0[3]])
+    }
+
+    /// Which tile of its sheet this cell draws, as (u, v).
+    #[inline]
+    pub const fn uv(self) -> (u8, u8) {
+        (self.0[2], self.0[3])
+    }
+
+    #[inline]
+    pub const fn with_uv(self, u: u8, v: u8) -> Self {
+        Self([self.0[0], self.0[1], u, v])
     }
 
     /// A live cell belonging to `player`.
@@ -93,7 +119,7 @@ impl Cell {
     /// discovered later as a cell nobody can claim.
     pub const fn alive(player: PlayerId) -> Self {
         assert!(player.is_owned(), "a live cell must have a non-zero player");
-        Self::from_bits(bits::ALIVE).with_player(player)
+        Self::DEAD.set_bits(bits::ALIVE).with_player(player)
     }
 
     #[inline]
@@ -129,30 +155,30 @@ impl Cell {
     #[inline]
     pub const fn with_alive(self, alive: bool) -> Self {
         if alive {
-            Self::from_bits(self.bits() | bits::ALIVE)
+            self.set_bits(self.bits() | bits::ALIVE)
         } else {
-            Self::from_bits(self.bits() & !bits::ALIVE)
+            self.set_bits(self.bits() & !bits::ALIVE)
         }
     }
 
     #[inline]
     pub const fn with_player(self, player: PlayerId) -> Self {
         let cleared = self.bits() & !(bits::PLAYER_MASK << bits::PLAYER_SHIFT);
-        Self::from_bits(cleared | ((player.0 as u16 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT))
+        self.set_bits(cleared | ((player.0 as u16 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT))
     }
 
     #[inline]
     pub const fn with_kind(self, kind: Kind) -> Self {
         let cleared = self.bits() & !(bits::KIND_MASK << bits::KIND_SHIFT);
-        Self::from_bits(cleared | ((kind.0 as u16 & bits::KIND_MASK) << bits::KIND_SHIFT))
+        self.set_bits(cleared | ((kind.0 as u16 & bits::KIND_MASK) << bits::KIND_SHIFT))
     }
 
     #[inline]
     pub const fn with_glass(self, glass: bool) -> Self {
         if glass {
-            Self::from_bits(self.bits() | bits::FLAG_GLASS)
+            self.set_bits(self.bits() | bits::FLAG_GLASS)
         } else {
-            Self::from_bits(self.bits() & !bits::FLAG_GLASS)
+            self.set_bits(self.bits() & !bits::FLAG_GLASS)
         }
     }
 }
@@ -163,6 +189,7 @@ impl core::fmt::Debug for Cell {
             .field("alive", &self.is_alive())
             .field("kind", &self.kind().0)
             .field("glass", &self.is_glass())
+            .field("uv", &self.uv())
             .field("player", &self.player().0)
             .finish()
     }
@@ -413,12 +440,31 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_is_two_bytes_little_endian() {
-        assert_eq!(size_of::<Cell>(), 2);
-        let c = Cell::from_bits(0xABCD);
-        assert_eq!(c.0, [0xCD, 0xAB], "low byte first, whatever the host");
+    fn a_cell_is_four_bytes_little_endian() {
+        assert_eq!(size_of::<Cell>(), 4);
+        let c = Cell::from_bits(0xABCD).with_uv(7, 9);
+        assert_eq!(c.0, [0xCD, 0xAB, 7, 9], "low byte first, then u and v");
         assert_eq!(c.bits(), 0xABCD);
-        assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 2);
+        assert_eq!(c.uv(), (7, 9));
+        assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 4);
+    }
+
+    /// A cell's tile must survive everything the rules do to it, or a pane
+    /// would scramble its picture every generation.
+    #[test]
+    fn the_uv_survives_every_change() {
+        let c = Cell::alive(PlayerId(3)).with_uv(11, 4);
+        assert_eq!(c.uv(), (11, 4));
+        for changed in [
+            c.with_alive(false),
+            c.with_alive(true),
+            c.with_player(PlayerId(9)),
+            c.with_kind(Kind(200)),
+            c.with_glass(true),
+            c.with_glass(false),
+        ] {
+            assert_eq!(changed.uv(), (11, 4), "the tile moved");
+        }
     }
 
     /// The player sits at the top of the word, so extracting it is a shift with

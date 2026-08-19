@@ -1,10 +1,12 @@
 //! The sprites a cell is drawn from.
 //!
-//! One 16x16 image per sprite, in its own file, loaded into one layer of a
-//! texture array. A sprite index is a layer index, so there is no sheet layout
-//! to agree on and no risk of a sprite bleeding into its neighbour.
+//! One file per cell state, each a 256x256 sheet of 16x16 tiles, loaded into
+//! its own layer of a texture array. The layer says what the cell *is*; the
+//! cell's own UV says which tile of that sheet it draws, so a structure
+//! spanning several cells gives each one a different tile and the parts line
+//! up.
 //!
-//! Sprites are **strictly 16x16 and not anti-aliased**: sampling is nearest and
+//! Tiles are **strictly 16x16 and not anti-aliased**: sampling is nearest and
 //! there is no mip chain, so a cell is pixel art at every zoom rather than a
 //! blurred blob. A chunk is 16 cells of 16 texels, so it spans 256x256 — a `u8`
 //! on each axis, which is the coordinate space the shader works in.
@@ -15,22 +17,41 @@
 
 use crate::sim::Kind;
 
-/// Texels along one edge of a sprite.
-pub const SPRITE_N: u32 = 16;
+/// Texels along one edge of a tile — one cell's worth of picture.
+pub const TILE_N: u32 = 16;
+/// Tiles along one edge of a sheet, so 256 of them per state.
+pub const SHEET_TILES: u32 = 16;
+/// A sheet's edge in texels.
+pub const SHEET_N: u32 = TILE_N * SHEET_TILES;
 
-/// Layer holding the pane drawn over a cell carrying the glass flag. Glass is
-/// a flag rather than a kind — a cell may be alive, glass, both or neither —
-/// so it needs a layer of its own rather than a kind's.
-pub const LAYER_GLASS: u32 = Kind::COUNT as u32;
+/// The states a cell can be drawn in. Alive and glassed are independent, so
+/// there are four, and **each has its own image** — a glassed cell is not the
+/// living sprite with a pane composited on top, it is its own picture.
+///
+/// That is not only an art decision. Compositing means sampling one sprite
+/// inside an `if` on whether the cell is alive, and WGSL requires anything
+/// using implicit derivatives to sit in uniform control flow. One image per
+/// state means one unconditional sample.
+pub const STATES: u32 = 4;
 
-/// Every layer: one per kind, then glass.
-pub const LAYERS: u32 = LAYER_GLASS + 1;
+/// Layer for a cell, from its kind and state. States are consecutive within a
+/// kind, so a kind's four images sit together.
+#[inline]
+pub const fn layer_for(kind: Kind, alive: bool, glass: bool) -> u32 {
+    kind.0 as u32 * STATES + (alive as u32) + (glass as u32) * 2
+}
 
-/// The file behind each layer. A kind's art lives at its own index, so adding a
-/// kind without adding a file fails to compile.
+/// Every layer: four states for every kind.
+pub const LAYERS: u32 = Kind::COUNT as u32 * STATES;
+
+/// The file behind each layer, in `layer_for` order: for each kind, dead,
+/// alive, dead under glass, alive under glass. Adding a kind without adding
+/// its four images fails to compile.
 const SPRITE_FILES: [&[u8]; LAYERS as usize] = [
-    include_bytes!("../../assets/sprites/normal.png"),
-    include_bytes!("../../assets/sprites/glass.png"),
+    include_bytes!("../../assets/sprites/dead.png"),
+    include_bytes!("../../assets/sprites/alive.png"),
+    include_bytes!("../../assets/sprites/dead_glass.png"),
+    include_bytes!("../../assets/sprites/alive_glass.png"),
 ];
 
 pub struct Atlas {
@@ -48,8 +69,8 @@ impl Atlas {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprites"),
             size: wgpu::Extent3d {
-                width: SPRITE_N,
-                height: SPRITE_N,
+                width: SHEET_N,
+                height: SHEET_N,
                 depth_or_array_layers: LAYERS,
             },
             mip_level_count: 1,
@@ -77,12 +98,12 @@ impl Atlas {
                 &texels,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(SPRITE_N * 4),
-                    rows_per_image: Some(SPRITE_N),
+                    bytes_per_row: Some(SHEET_N * 4),
+                    rows_per_image: Some(SHEET_N),
                 },
                 wgpu::Extent3d {
-                    width: SPRITE_N,
-                    height: SPRITE_N,
+                    width: SHEET_N,
+                    height: SHEET_N,
                     depth_or_array_layers: 1,
                 },
             );
@@ -117,9 +138,9 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
     let info = reader.info();
-    if info.width != SPRITE_N || info.height != SPRITE_N {
+    if info.width != SHEET_N || info.height != SHEET_N {
         return Err(format!(
-            "sprite is {}x{}, expected {SPRITE_N}x{SPRITE_N}",
+            "sheet is {}x{}, expected {SHEET_N}x{SHEET_N}",
             info.width, info.height
         ));
     }
@@ -131,17 +152,17 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if frame.bit_depth != png::BitDepth::Eight {
         return Err(format!("{:?} PNG; needs 8 bits per channel", frame.bit_depth));
     }
-    buf.truncate((SPRITE_N * SPRITE_N * 4) as usize);
+    buf.truncate((SHEET_N * SHEET_N * 4) as usize);
     Ok(buf)
 }
 
 /// A hollow square, so a missing sprite is obvious rather than invisible.
 fn placeholder() -> Vec<u8> {
-    let mut out = vec![0u8; (SPRITE_N * SPRITE_N * 4) as usize];
-    for y in 0..SPRITE_N {
-        for x in 0..SPRITE_N {
-            let edge = x == 0 || y == 0 || x == SPRITE_N - 1 || y == SPRITE_N - 1;
-            let at = ((y * SPRITE_N + x) * 4) as usize;
+    let mut out = vec![0u8; (SHEET_N * SHEET_N * 4) as usize];
+    for y in 0..SHEET_N {
+        for x in 0..SHEET_N {
+            let edge = x % TILE_N == 0 || y % TILE_N == 0;
+            let at = ((y * SHEET_N + x) * 4) as usize;
             out[at] = 255;
             out[at + 1] = 128;
             out[at + 3] = if edge { 255 } else { 0 };
@@ -154,47 +175,78 @@ fn placeholder() -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// Every kind must have art, and it must be exactly 16x16. A kind's sprite
-    /// lives at its own index, so adding a kind without a file will not
-    /// compile; this catches a file that is present but wrong.
+    /// Every kind in every state must have art, sized exactly 16x16. Dead and
+    /// unglassed is allowed to be blank; the others are not, since a state you
+    /// cannot see is a state you cannot play against.
     #[test]
-    fn every_kind_has_a_sixteen_by_sixteen_sprite() {
+    fn every_state_of_every_kind_has_a_sprite() {
         assert_eq!(SPRITE_FILES.len(), LAYERS as usize);
         for kind in Kind::ALL {
-            let texels = decode(SPRITE_FILES[kind.0 as usize])
-                .unwrap_or_else(|e| panic!("Kind({}) sprite: {e}", kind.0));
-            assert_eq!(texels.len(), (SPRITE_N * SPRITE_N * 4) as usize);
-            let covered = texels.chunks(4).filter(|t| t[3] > 8).count();
-            assert!(
-                covered > (SPRITE_N * SPRITE_N / 8) as usize,
-                "Kind({}) is nearly blank: {covered} texels covered",
-                kind.0
-            );
+            for (alive, glass) in [(false, false), (true, false), (false, true), (true, true)] {
+                let layer = layer_for(kind, alive, glass) as usize;
+                let texels = decode(SPRITE_FILES[layer]).unwrap_or_else(|e| {
+                    panic!("Kind({}) alive={alive} glass={glass}: {e}", kind.0)
+                });
+                assert_eq!(texels.len(), (SHEET_N * SHEET_N * 4) as usize);
+
+                // Tile (0, 0) is the default art and must be drawn.
+                let covered = (0..TILE_N)
+                    .flat_map(|y| (0..TILE_N).map(move |x| (x, y)))
+                    .filter(|&(x, y)| texels[(((y * SHEET_N + x) * 4) + 3) as usize] > 8)
+                    .count();
+                if alive || glass {
+                    assert!(
+                        covered > (TILE_N * TILE_N / 8) as usize,
+                        "Kind({}) alive={alive} glass={glass}: tile (0,0) is blank",
+                        kind.0
+                    );
+                }
+            }
         }
     }
 
+    /// Layers are consecutive and unique, so no two states share art by
+    /// accident.
     #[test]
-    fn glass_has_its_own_sprite() {
-        let texels = decode(SPRITE_FILES[LAYER_GLASS as usize]).expect("glass sprite");
-        assert_eq!(texels.len(), (SPRITE_N * SPRITE_N * 4) as usize);
-        // A pane is a frame: its border is opaque and its middle is not.
-        let at = |x: usize, y: usize| texels[(y * SPRITE_N as usize + x) * 4 + 3];
+    fn every_state_gets_its_own_layer() {
+        let mut seen = Vec::new();
+        for kind in Kind::ALL {
+            for (alive, glass) in [(false, false), (true, false), (false, true), (true, true)] {
+                seen.push(layer_for(kind, alive, glass));
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (0..LAYERS).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_pane_is_a_frame_you_can_see_through() {
+        let texels = decode(SPRITE_FILES[layer_for(Kind::NORMAL, false, true) as usize])
+            .expect("dead under glass");
+        let at = |x: usize, y: usize| texels[(y * SHEET_N as usize + x) * 4 + 3];
         assert_eq!(at(0, 0), 255, "the frame should be solid");
         assert!(at(8, 8) < 128, "the middle should show what is under it");
     }
 
-    /// No anti-aliasing: coverage is on or off, never a soft edge.
+    /// No anti-aliasing: coverage is one of a few fixed inks, never a ramp.
     #[test]
     fn sprites_have_hard_edges() {
         for bytes in SPRITE_FILES {
             let texels = decode(bytes).expect("sprite");
             for t in texels.chunks(4) {
                 assert!(
-                    t[3] == 0 || t[3] == 255 || t[3] == 89,
-                    "alpha {} is a soft edge; sprites are pixel art",
+                    matches!(t[3], 0 | 89 | 191 | 255),
+                    "alpha {} is a soft edge; tiles are pixel art",
                     t[3]
                 );
             }
         }
+    }
+
+    /// A cell's UV must be able to reach every tile of its sheet.
+    #[test]
+    fn a_u8_uv_covers_the_sheet() {
+        assert_eq!(SHEET_N / TILE_N, SHEET_TILES);
+        assert!(SHEET_TILES <= 256, "a u8 must be able to address every tile");
     }
 }

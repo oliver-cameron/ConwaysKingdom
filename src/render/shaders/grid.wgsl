@@ -13,10 +13,11 @@ const KIND_SHIFT:   u32 = 1u;   const KIND_MASK: u32 = 255u;
 const FLAG_GLASS:   u32 = 512u; // 1 << 9
 const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 
-// Texels along one edge of a sprite, and the layer holding the pane. See
-// render::atlas -- one sprite per layer, so a sprite index is a layer index.
-const SPRITE_N: u32 = 16u;
-const LAYER_GLASS: i32 = 1;
+// See render::atlas. One layer per cell state; a cell's own UV picks the tile
+// within that layer's sheet.
+const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
+const SHEET_TILES: f32 = 16.0;   // tiles across a sheet
+const STATES: u32 = 4u;          // dead, alive, dead+glass, alive+glass
 
 struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
@@ -27,7 +28,7 @@ struct Camera {
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
-@group(0) @binding(1) var chunks: texture_2d_array<u32>;
+@group(0) @binding(1) var chunks: texture_2d_array<u32>;   // rg = cell bits, ba = uv
 @group(0) @binding(2) var sprites: texture_2d_array<f32>;
 @group(0) @binding(3) var sprite_sampler: sampler;
 
@@ -125,7 +126,7 @@ struct VsOut {
     /// Position within the chunk in **texels**, 0..256 -- a u8 on each axis.
     /// A chunk is 16 cells of 16 texels, so the cell is `local / 16` and the
     /// position inside it is `local % 16`. Held in texels rather than cells
-    /// because texels are what the sprites are addressed in.
+    /// because texels are what the tiles are addressed in.
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) layer: u32,
 };
@@ -147,55 +148,52 @@ fn vs_main(
         0.0, 1.0,
     );
     // rect.zw is the chunk's size in cells; times SPRITE_N gives texels.
-    out.local = corner * rect.zw * f32(SPRITE_N);
+    out.local = corner * rect.zw * f32(TILE_N);
     out.layer = attrs.x;
     return out;
 }
 
-/// Sample one sprite layer at a position within a cell, given in texels.
-fn sprite_at(layer: i32, texel_in_cell: vec2<f32>) -> vec4<f32> {
-    return textureSample(sprites, sprite_sampler, texel_in_cell / f32(SPRITE_N), layer);
-}
-
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    // local is in texels across the chunk; the cell is the texel divided by a
-    // sprite's width, and where we are inside that cell is the remainder.
-    let cell_coord = vec2<i32>(floor(in.local / f32(SPRITE_N)));
-    let within = in.local % f32(SPRITE_N);
-    let cell = textureLoad(chunks, cell_coord, i32(in.layer), 0).r;
+    // local is in texels across the chunk; the cell is that divided by a
+    // tile's width, and where we are inside the cell is the remainder.
+    let cell_coord = vec2<i32>(floor(in.local / f32(TILE_N)));
+    let within = in.local % f32(TILE_N);
+
+    // rg holds the cell's sixteen bits, ba the tile it draws.
+    let texel = textureLoad(chunks, cell_coord, i32(in.layer), 0);
+    let cell = texel.r | (texel.g << 8u);
+    let uv = vec2<f32>(f32(texel.b), f32(texel.a));
+
+    let alive = (cell & ALIVE_BIT) != 0u;
+    let glass = (cell & FLAG_GLASS) != 0u;
+
+    // Every combination of alive and glass has its own picture, so this is one
+    // sample with no branch. That matters beyond tidiness: sampling inside a
+    // conditional is sampling in non-uniform control flow, which WGSL forbids
+    // for anything using implicit derivatives.
+    let kind = (cell >> KIND_SHIFT) & KIND_MASK;
+    let state = u32(alive) + u32(glass) * 2u;
+    let layer = i32(kind * STATES + state);
+
+    // Tile within the sheet, then the texel within that tile.
+    let sheet_uv = (uv + within / f32(TILE_N)) / SHEET_TILES;
+    let sprite = textureSample(sprites, sprite_sampler, sheet_uv, layer);
 
     // Faint grid on the chunk's outer ring, so chunk loading stays visible.
     let n = cam.chunk_n;
     let cell_f = vec2<f32>(cell_coord);
-    let on_edge = cell_f.x < 1.0 || cell_f.y < 1.0
-        || cell_f.x >= n - 1.0 || cell_f.y >= n - 1.0;
     var colour = vec3<f32>(0.0);
-    if on_edge {
+    if cell_f.x < 1.0 || cell_f.y < 1.0 || cell_f.x >= n - 1.0 || cell_f.y >= n - 1.0 {
         colour = vec3<f32>(0.012, 0.012, 0.02);
     }
 
     let player = cell >> PLAYER_SHIFT;
-    let saturation = player_saturation(player);
-    let hue = player_hue(player);
-
-    // The living cell, if there is one. Its kind is its sprite layer, so a
-    // kind cannot name art that does not exist.
-    if (cell & ALIVE_BIT) != 0u {
-        let texel = sprite_at(i32((cell >> KIND_SHIFT) & KIND_MASK), within);
-        if texel.a > 0.02 {
-            colour = mix(colour, shade(texel.g, texel.r * saturation, hue), texel.a);
-        }
-    }
-
-    // The pane over it, if there is one. Drawn after, and independently of
-    // whether the cell is alive: a cell may be alive, glassed, both or neither.
-    if (cell & FLAG_GLASS) != 0u {
-        let pane = sprite_at(LAYER_GLASS, within);
-        if pane.a > 0.02 {
-            colour = mix(colour, shade(pane.g, pane.r * saturation, hue), pane.a);
-        }
-    }
+    colour = mix(
+        colour,
+        shade(sprite.g, sprite.r * player_saturation(player), player_hue(player)),
+        sprite.a,
+    );
 
     // Composited against the background rather than alpha-blended, so the
     // pipeline needs no blend state and draw order stays irrelevant.

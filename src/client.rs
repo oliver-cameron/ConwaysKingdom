@@ -16,7 +16,7 @@ use crate::sim::{World, CHUNK_N};
 
 use crate::net::link::Link;
 use crate::net::{Action, ClientMessage, ServerMessage, Stamped};
-use crate::sim::PlayerId;
+use crate::sim::{Player, PlayerId};
 
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
@@ -114,10 +114,14 @@ pub struct BattleApp {
     /// simulates: the rules are deterministic, so offline is a game of one
     /// rather than a broken game.
     link: Option<Link>,
+    /// What this player can spend. Predicted locally with the same arithmetic
+    /// the server charges by, so the number on screen is the number the server
+    /// will agree with.
+    value: i32,
     /// A click waiting to be resolved to a cell. Input callbacks are not given
     /// the `GpuState`, and the mapping needs the viewport, so it is deferred to
     /// the next `update` rather than guessed here.
-    pending_click: Option<(f64, f64)>,
+    pending_click: Option<((f64, f64), bool)>,
 }
 
 impl BattleApp {
@@ -197,6 +201,7 @@ impl BattleApp {
             match msg {
                 ServerMessage::Welcome { you, tick } => {
                     log::info!("joined as {you:?} at tick {tick}; adopting the server's world");
+                    self.value = Player::STARTING_VALUE;
                     self.me = Some(you);
                     // Now, and only now, drop the local world. Until Welcome
                     // arrives there is nothing authoritative to replace it
@@ -248,25 +253,46 @@ impl BattleApp {
     /// Ask for any visible chunk not already requested. The camera is fixed for
     /// now, so this settles after the first frame; it is written against the
     /// viewport so panning needs no new code.
-    /// Bring a cell to life for this player.
+    /// Place a cell, or destroy whatever is there.
     ///
     /// Applied locally *and* sent, rather than sent and awaited: the rules are
-    /// deterministic and the server applies the same `net::apply`, so acting
-    /// immediately shows the right answer a round trip early. If the server
-    /// disagrees -- because the action was refused, or landed on a different
-    /// tick -- the chunk digests will not match and the resync puts it right.
-    fn place(&mut self, row: i32, col: i32) {
+    /// deterministic and the server runs the same `net::apply` and charges by
+    /// the same `net::value_delta`, so acting immediately shows the right
+    /// answer a round trip early. If the server disagrees the chunk digests
+    /// will not match and the resync puts it right.
+    fn act_on(&mut self, row: i32, col: i32, destroy: bool) {
         let player = self.me.unwrap_or(PlayerId(1));
-        let action = Action::Paint { cells: vec![(row, col)] };
+        let cells = vec![(row, col)];
+        let action = if destroy {
+            Action::Erase { cells }
+        } else {
+            Action::Paint { cells }
+        };
         let stamped = Stamped { tick: self.world.generation, player, action };
+
+        // Priced against the world as it stands, before the action changes it,
+        // and refused here on the same terms the server would refuse it. Doing
+        // it locally means the refusal is instant rather than a round trip
+        // away, and the two cannot disagree because it is the same function.
+        let delta = crate::net::value_delta(&self.world, &stamped);
+        if self.value + delta < 0 {
+            log::info!("cannot afford that: costs {}, {} in hand", -delta, self.value);
+            return;
+        }
+        self.value += delta;
 
         crate::net::apply(&mut self.world, &stamped);
         self.world.dirty = true;
+        log::info!(
+            "{} ({row}, {col}); value {}",
+            if destroy { "destroyed" } else { "placed" },
+            self.value
+        );
 
         match &self.link {
             Some(link) => link.send(ClientMessage::Act(stamped)),
-            // Offline, the local world is the only world, so it is already done.
-            None => log::debug!("placed ({row}, {col}) locally; no server to tell"),
+            // Offline, the local world is the only world, so it is done.
+            None => {}
         }
     }
 
@@ -373,6 +399,14 @@ impl App for BattleApp {
         );
 
         let vertex_buffers = vec![chunks.instance_buffer().clone()];
+        log::info!(
+            "client ready: {} sprite layers, chunk {}x{} cells, cell {} bytes",
+            crate::render::atlas::LAYERS,
+            CHUNK_N,
+            CHUNK_N,
+            size_of::<crate::sim::Cell>(),
+        );
+
         let mut app = Self {
             pipeline,
             bind_groups: vec![bind_group],
@@ -390,6 +424,7 @@ impl App for BattleApp {
             touches: Vec::new(),
             pinch_span: None,
             viewport: (1.0, 1.0),
+            value: Player::STARTING_VALUE,
             me: None,
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
@@ -425,9 +460,9 @@ impl App for BattleApp {
             self.pump_link();
         }
 
-        if let Some(at) = self.pending_click.take() {
+        if let Some((at, destroy)) = self.pending_click.take() {
             let (row, col) = self.cell_under_cursor(at);
-            self.place(row, col);
+            self.act_on(row, col, destroy);
         }
 
         self.world.update(dt, GENERATION_SPAN);
@@ -576,7 +611,7 @@ impl App for BattleApp {
         }
         // `gpu` is not passed to input callbacks, so resolve on the next frame
         // instead of guessing the viewport here.
-        self.pending_click = Some(self.cursor);
+        self.pending_click = Some((self.cursor, false));
     }
 
     fn clear_color(&self) -> Option<wgpu::Color> {
