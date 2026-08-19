@@ -1,4 +1,7 @@
-//! The interface: egui, and the views drawn with it.
+//! The views, and the interface they are drawn with.
+//!
+//! A view is a screen: [`battle`] is the game, and a menu or a lobby would sit
+//! beside it. [`Views`] is the egui plumbing they share.
 //!
 //! Lives under `client` rather than `render` because what to show is policy,
 //! not plumbing — `render` stays generic wgpu and winit, and knows nothing
@@ -14,6 +17,7 @@
 //! targets, and a HUD needs only pointer, wheel and modifiers — the IME and
 //! clipboard handling that egui-winit exists for is not in play.
 
+pub mod battle;
 pub mod hud;
 
 use crate::render::context::GpuState;
@@ -30,6 +34,37 @@ pub struct Views {
     wants_pointer: bool,
     start: f64,
     renderer: egui_wgpu::Renderer,
+}
+
+/// Hand every texture change to the renderer, then empty the delta.
+///
+/// Emptying it is not tidiness. `TexturesDelta` asserts on drop that it is
+/// empty, and reading it through a reference leaves it full, so the assert
+/// fires however faithfully the deltas were handled. Split out so the emptying
+/// can be tested without a GPU, since the bug is in the bookkeeping rather
+/// than in the upload.
+fn consume_textures(
+    delta: &mut egui::TexturesDelta,
+    mut sink: impl FnMut(Change<'_>),
+) {
+    // A texture can arrive as several partial updates in one frame, so each id
+    // carries a list rather than a single delta.
+    for (id, deltas) in &delta.set {
+        for d in deltas {
+            sink(Change::Set(*id, d));
+        }
+    }
+    for id in &delta.free {
+        sink(Change::Free(*id));
+    }
+    delta.clear();
+}
+
+/// One texture change. A single callback rather than two, because both need
+/// the renderer and two closures cannot borrow it at once.
+enum Change<'a> {
+    Set(egui::TextureId, &'a egui::epaint::ImageDelta),
+    Free(egui::TextureId),
 }
 
 /// The shapes a frame of interface produced.
@@ -163,21 +198,15 @@ impl Views {
 
         self.ctx.begin_pass(input);
         build(&self.ctx);
-        let full = self.ctx.end_pass();
+        let mut full = self.ctx.end_pass();
 
         self.wants_pointer = self.ctx.egui_wants_pointer_input();
 
-        // A texture can arrive as several partial updates in one frame, so
-        // each id carries a list rather than a single delta.
-        for (id, deltas) in &full.textures_delta.set {
-            for delta in deltas {
-                self.renderer
-                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
-            }
-        }
-        for id in &full.textures_delta.free {
-            self.renderer.free_texture(id);
-        }
+        let renderer = &mut self.renderer;
+        consume_textures(&mut full.textures_delta, |change| match change {
+            Change::Set(id, delta) => renderer.update_texture(&gpu.device, &gpu.queue, id, delta),
+            Change::Free(id) => renderer.free_texture(&id),
+        });
 
         Output {
             primitives: self.ctx.tessellate(full.shapes, pixels_per_point),
@@ -205,5 +234,50 @@ impl Views {
             &descriptor,
         );
         self.renderer.render(pass, &output.primitives, &descriptor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The failure that took the client down on startup: egui hands over a
+    /// `TexturesDelta`, and dropping one that still holds deltas asserts. It
+    /// happened on the first frames, when the font atlas arrives and the
+    /// surface is still reporting Skip, so nothing had drawn yet.
+    ///
+    /// No GPU here: the bug is in the bookkeeping, and the bookkeeping is what
+    /// this checks.
+    #[test]
+    fn a_frames_textures_are_consumed_and_the_delta_emptied() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 240.0),
+            )),
+            ..Default::default()
+        });
+        egui::Area::new("test".into()).show(&ctx, |ui| ui.label("Player 1"));
+        let mut full = ctx.end_pass();
+
+        // Drawing text builds a font atlas, so there is something to lose.
+        assert!(
+            !full.textures_delta.is_empty(),
+            "no textures produced, so this would pass for the wrong reason"
+        );
+
+        let mut uploaded = 0;
+        consume_textures(&mut full.textures_delta, |change| {
+            if matches!(change, Change::Set(..)) {
+                uploaded += 1;
+            }
+        });
+        assert!(uploaded > 0, "the delta should have reached the renderer");
+        assert!(
+            full.textures_delta.is_empty(),
+            "handling the deltas is not enough; the delta must be emptied too"
+        );
+        // Dropping `full` here is the actual assertion: it panics if not empty.
     }
 }
