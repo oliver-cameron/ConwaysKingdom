@@ -19,9 +19,9 @@ pub struct Slot {
 
 pub const SLOTS: [Slot; 2] = [
     Slot { name: "Cell", placement: Placement::Cell },
-    // Glass is a flag rather than a kind, so a pane lies over a living cell as
+    // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
-    Slot { name: "Glass", placement: Placement::Glass },
+    Slot { name: "Ice", placement: Placement::Ice },
 ];
 
 /// Which slot a digit selects, if any. `1` is the first.

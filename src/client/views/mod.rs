@@ -20,6 +20,7 @@
 pub mod battle;
 pub mod hotbar;
 pub mod hud;
+pub mod overlay;
 pub mod theme;
 
 use crate::render::context::GpuState;

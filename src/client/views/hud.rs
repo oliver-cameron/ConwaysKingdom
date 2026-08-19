@@ -92,8 +92,11 @@ pub fn show(
             ui.separator();
             ui.small(format!("holding  {}", status.holding));
             ui.small("left click acts, left drag fills");
-            ui.small("middle drag or arrows to pan");
+            ui.small("right, middle or space+drag to pan");
+            ui.small("arrows or WASD to pan, shift to hurry");
             ui.small("wheel or pinch to zoom, 1-9 to choose");
+            ui.small("one finger draws, two move the view");
+            ui.small("escape abandons the drag in progress");
         });
     response.map(|r| r.response.rect)
 }

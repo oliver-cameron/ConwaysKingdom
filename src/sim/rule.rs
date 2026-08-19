@@ -52,10 +52,10 @@ impl Cell {
     /// Conway, so a new type costs one arm and disturbs nothing else.
     #[inline]
     pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
-        // Under glass is time-stopped, whatever the cell is and whether or not
+        // Under ice is time-stopped, whatever the cell is and whether or not
         // it is alive. Checked before the kind, so a pane freezes anything
         // without every kind having to remember to honour it.
-        if self.is_glass() {
+        if self.is_ice() {
             return self;
         }
         match self.kind() {
@@ -213,42 +213,42 @@ mod tests {
         }
     }
 
-    /// Glass freezes what it covers, whatever surrounds it.
+    /// Ice freezes what it covers, whatever surrounds it.
     #[test]
-    fn a_cell_under_glass_never_changes() {
+    fn a_cell_under_ice_never_changes() {
         for live in 0..=8 {
             let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
             for me in [
-                // Alive under glass: would otherwise die or survive.
-                Cell::alive(PlayerId(3)).with_glass(true),
-                // Dead under glass: would otherwise be born at three.
-                Cell::DEAD.with_glass(true),
+                // Alive under ice: would otherwise die or survive.
+                Cell::alive(PlayerId(3)).with_ice(true),
+                // Dead under ice: would otherwise be born at three.
+                Cell::DEAD.with_ice(true),
                 // Carrying a kind as well, to show the flag wins over it.
-                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_glass(true),
+                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_ice(true),
             ] {
                 assert_eq!(next_cell(me, &n, 0), me, "{live} live neighbours");
             }
         }
     }
 
-    /// Glass and alive are independent: all four combinations are meaningful.
+    /// Ice and alive are independent: all four combinations are meaningful.
     #[test]
-    fn glass_and_alive_are_independent() {
+    fn ice_and_alive_are_independent() {
         for alive in [false, true] {
-            for glass in [false, true] {
+            for ice in [false, true] {
                 let c = Cell::DEAD
                     .with_alive(alive)
                     .with_player(if alive { PlayerId(1) } else { PlayerId::UNOWNED })
-                    .with_glass(glass);
+                    .with_ice(ice);
                 assert_eq!(c.is_alive(), alive);
-                assert_eq!(c.is_glass(), glass);
+                assert_eq!(c.is_ice(), ice);
             }
         }
-        // A dead cell under glass stays dead even with three live neighbours,
-        // where without the glass it would be born.
+        // A dead cell under ice stays dead even with three live neighbours,
+        // where without the ice it would be born.
         let n = neighbours(&[0, 1, 2], 4);
         assert!(next_cell(Cell::DEAD, &n, 0).is_alive());
-        assert!(!next_cell(Cell::DEAD.with_glass(true), &n, 0).is_alive());
+        assert!(!next_cell(Cell::DEAD.with_ice(true), &n, 0).is_alive());
     }
 
     #[test]

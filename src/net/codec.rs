@@ -67,7 +67,7 @@ mod tests {
                 player: PlayerId(2),
                 action: Action::Paint {
                     cells: vec![(3, 3)],
-                    placement: Placement::Glass,
+                    placement: Placement::Ice,
                 },
             }),
             ClientMessage::Subscribe { chunks: vec![(0, 0), (-1, 5)] },

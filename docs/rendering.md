@@ -41,10 +41,10 @@ One file per cell **state**, in `assets/sprites/`, each a 256×256 sheet of 16×
 |---|---|
 | dead | `dead.png` (deliberately blank) |
 | alive | `alive.png` |
-| dead under glass | `dead_glass.png` |
-| alive under glass | `alive_glass.png` |
+| dead under ice | `dead_ice.png` |
+| alive under ice | `alive_ice.png` |
 
-Four images rather than compositing a pane over a cell. That is partly an art decision — what a glassed cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One state, one unconditional sample.
+Four images rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One state, one unconditional sample.
 
 The layer is `kind * 4 + state`, so a kind's four images sit together and a kind cannot name art that does not exist. `Kind::ALL` is walked by a test that fails if any state is blank.
 

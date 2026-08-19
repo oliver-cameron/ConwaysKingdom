@@ -48,13 +48,13 @@ pub enum Placement {
     Cell,
     /// A pane. Freezes what it covers, and is independent of whether the cell
     /// beneath is alive.
-    Glass,
+    Ice,
 }
 
 impl Placement {
     /// Lay this over whatever is already there.
     ///
-    /// A transform rather than a value, because alive and glass are
+    /// A transform rather than a value, because alive and ice are
     /// independent: laying a pane over a living cell must leave the cell
     /// living, and building a cell under an existing pane must leave the pane.
     /// Replacing the cell outright would silently destroy one to place the
@@ -63,10 +63,10 @@ impl Placement {
         match self {
             Self::Cell => existing.with_alive(true).with_player(player),
             // The pane belongs to whoever laid it. There is one owner field
-            // per cell, so glassing another player's living cell takes the
+            // per cell, so icing another player's living cell takes the
             // cell with it -- deliberate, and the reason a pane costs what it
             // does.
-            Self::Glass => existing.with_glass(true).with_player(player),
+            Self::Ice => existing.with_ice(true).with_player(player),
         }
     }
 }
@@ -142,7 +142,25 @@ pub const PLACE_COST: i32 = 5;
 /// space is neither earned nor spent.
 pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
     match &stamped.action {
-        Action::Paint { cells, .. } => -(cells.len() as i32) * PLACE_COST,
+        // Only the cells a placement actually changes are charged for.
+        // Charging for the rest made extending a pane cost as much as laying
+        // it again, which is what a drag does constantly: the natural way to
+        // make a rectangle bigger is to sweep the whole of it a second time.
+        //
+        // This reads the world, so a client prices against the chunks it
+        // holds rather than against all of them. That is already true of
+        // `Erase`, and a player can only paint where they can point, which is
+        // on screen and therefore held.
+        Action::Paint { cells, placement } => {
+            let changed = cells
+                .iter()
+                .filter(|&&(row, col)| {
+                    let existing = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+                    placement.apply_to(existing, stamped.player) != existing
+                })
+                .count();
+            -(changed as i32) * PLACE_COST
+        }
         Action::Erase { cells } => cells
             .iter()
             .map(|&(row, col)| match world.cell_at(row, col) {
@@ -173,5 +191,72 @@ pub fn apply(world: &mut World, stamped: &Stamped) {
                 world.set_cell_at(row, col, Cell::DEAD);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paint(cells: Vec<(i32, i32)>, placement: Placement) -> Stamped {
+        Stamped { tick: 0, player: PlayerId(1), action: Action::Paint { cells, placement } }
+    }
+
+    /// The reason the pricing reads the world at all. A drag is extended by
+    /// sweeping the whole rectangle again, so every cell already laid would be
+    /// paid for a second time.
+    #[test]
+    fn painting_what_is_already_there_is_free() {
+        let mut world = World::infinite_empty();
+        let cells = vec![(0, 0), (0, 1), (0, 2)];
+
+        let first = paint(cells.clone(), Placement::Ice);
+        assert_eq!(value_delta(&world, &first), -3 * PLACE_COST);
+        apply(&mut world, &first);
+
+        // The same rectangle again, plus one cell it did not cover.
+        let mut wider = cells.clone();
+        wider.push((0, 3));
+        assert_eq!(
+            value_delta(&world, &paint(wider, Placement::Ice)),
+            -PLACE_COST,
+            "only the cell that changed should be charged for"
+        );
+    }
+
+    /// Ice and life are independent, so laying one over the other is a
+    /// change even though the cell was not empty.
+    #[test]
+    fn a_pane_over_a_living_cell_is_a_change() {
+        let mut world = World::infinite_empty();
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Cell));
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -PLACE_COST);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Cell)), 0);
+    }
+
+    /// A pane belongs to whoever laid it, and there is one owner field per
+    /// cell, so icing someone else's ice takes it — and taking it is a
+    /// change, whatever the flags say.
+    #[test]
+    fn taking_over_another_players_pane_is_a_change() {
+        let mut world = World::infinite_empty();
+        let theirs = Stamped {
+            tick: 0,
+            player: PlayerId(2),
+            action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
+        };
+        apply(&mut world, &theirs);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -PLACE_COST);
+    }
+
+    /// Ground nobody holds prices as empty, which is what `apply` writes into
+    /// it. The two must agree or a client would be charged for one thing and
+    /// given another.
+    #[test]
+    fn unheld_ground_prices_as_empty() {
+        let world = World::infinite_empty();
+        let far = vec![(100_000, 100_000)];
+        assert!(world.cell_at(far[0].0, far[0].1).is_none());
+        assert_eq!(value_delta(&world, &paint(far, Placement::Cell)), -PLACE_COST);
     }
 }
