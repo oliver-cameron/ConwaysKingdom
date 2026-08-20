@@ -16,19 +16,32 @@
 use super::theme::Theme;
 
 /// Everything the overlay draws, assembled by the client each frame.
-#[derive(Default)]
 pub struct Marks {
     /// The cell under the pointer. Absent when the pointer is over a panel,
     /// when the view is being moved, or when cells are too small to point at
     /// one — a box around a two-pixel cell claims a precision the pointer
     /// does not have.
     pub hover: Option<egui::Rect>,
+    /// The player's own colour, which is what every mark on the world is
+    /// drawn in. The accent belongs to the panels; using it out here would
+    /// say the interface owns the cell rather than the player about to take
+    /// it, and two players would point at cells in the same colour.
+    pub tint: egui::Color32,
     /// The rectangle a drag has swept so far.
     pub selection: Option<Selection>,
 }
 
 pub struct Selection {
-    pub rect: egui::Rect,
+    /// What would be laid: one rectangle for a pane, one per cell for a
+    /// stroke. A stroke doubles back on itself, so there is no outline that
+    /// describes it — the cells are the shape.
+    pub cells: Vec<egui::Rect>,
+    /// Everything the drag spans, which is where the label hangs from. For a
+    /// pane it is the pane; for a stroke it is what the hand covered.
+    pub bounds: egui::Rect,
+    /// Whether to draw an edge round `bounds`. A pane has one; a line does
+    /// not, and a box round a scribble says nothing true about it.
+    pub outlined: bool,
     /// The player's own colour. Ice has no colour of its own — the shader
     /// tints all four cell states with the owner's hue and tells them apart by
     /// sprite — so the preview does the same and hatches instead.
@@ -56,27 +69,34 @@ pub fn show(ctx: &egui::Context, theme: &Theme, marks: &Marks) {
     ));
 
     if let Some(rect) = marks.hover {
-        painter.rect_filled(rect, 0.0, p.accent.gamma_multiply(0.10));
+        painter.rect_filled(rect, 0.0, marks.tint.gamma_multiply(0.14));
         painter.rect_stroke(
             rect,
             0.0,
-            egui::Stroke::new(1.0, p.accent.gamma_multiply(0.75)),
+            egui::Stroke::new(1.0, marks.tint.gamma_multiply(0.8)),
             egui::StrokeKind::Inside,
         );
     }
 
     let Some(selection) = &marks.selection else { return };
     let edge = if selection.allowed { selection.tint } else { p.bad };
-    painter.rect_filled(selection.rect, 0.0, edge.gamma_multiply(0.16));
-    if selection.hatched {
-        hatch(&painter, selection.rect, edge.gamma_multiply(0.45));
+    // A stroke's cells are drawn solid enough to read as cells; a pane's one
+    // rectangle is a wash, because what matters there is the extent.
+    let wash = if selection.outlined { 0.16 } else { 0.45 };
+    for cell in &selection.cells {
+        painter.rect_filled(*cell, 0.0, edge.gamma_multiply(wash));
     }
-    painter.rect_stroke(
-        selection.rect,
-        0.0,
-        egui::Stroke::new(1.5, edge),
-        egui::StrokeKind::Inside,
-    );
+    if selection.hatched {
+        hatch(&painter, selection.bounds, edge.gamma_multiply(0.45));
+    }
+    if selection.outlined {
+        painter.rect_stroke(
+            selection.bounds,
+            0.0,
+            egui::Stroke::new(1.5, edge),
+            egui::StrokeKind::Inside,
+        );
+    }
     chip(&painter, theme, selection);
 }
 
@@ -127,8 +147,8 @@ fn chip(painter: &egui::Painter, theme: &Theme, selection: &Selection) {
     let size = galley.size() + padding * 2.0;
     let screen = painter.clip_rect();
     let wanted = egui::pos2(
-        selection.rect.left(),
-        selection.rect.top() - size.y - 4.0,
+        selection.bounds.left(),
+        selection.bounds.top() - size.y - 4.0,
     );
     let at = egui::pos2(
         wanted.x.clamp(screen.left() + 4.0, (screen.right() - size.x - 4.0).max(screen.left())),

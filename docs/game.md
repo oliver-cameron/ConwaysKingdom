@@ -8,14 +8,17 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 
 | | |
 |---|---|
-| place life or ice | −5 each |
+| place life | −1 each |
+| place ice | −5 each |
 | reclaim your own | +1 |
 | take another player's | −1, because taking ground should not be free |
 | take what is not there | nothing |
 
-Placing at five against reclaiming at one is what sets the pace: anything you place and later take back is a net loss, so building commits you. Starting value is 100 — twenty cells, enough to build something before the mining loop takes over. It is a number to tune; the ratio matters more than the starting figure.
+Life is cheap because it is drawn by the stroke rather than placed cell by cell: a pencil lays tens of cells in a gesture, and at five a cell that is a gesture nobody can afford. Ice stays dear because a pane is a wall, and a wall that costs what a cell costs is not a decision.
 
-The rule reads the same for life and for ice, because the question it asks is whether the thing being taken is there and whose it is, not which of the two it is.
+Life at one against reclaiming at one means putting a cell down and taking it back is free, which is deliberate — rearrange your own board as much as you like. **What drains value is the rule.** A cell that dies of its neighbours cannot be reclaimed, so the sink is mortality rather than the act of placing, and the game is about drawing patterns that survive. Starting value is 100.
+
+The taking rule reads the same for life and for ice, because the question it asks is whether the thing being taken is there and whose it is, not which of the two it is.
 
 An action that cannot be afforded is refused. The client prices and refuses locally on the same terms the server would, so a refusal is instant rather than a round trip away, and the two cannot disagree because `net::value_delta` is one function used by both.
 
@@ -32,15 +35,19 @@ Keyed on what is held rather than on whether the cell is occupied at all, becaus
 
 `Action::Erase` carries what to remove for the same reason `Paint` carries what to lay: the server judges an intent, and "kill the life on this square" is a different intent from "clear this square".
 
-A **drag fills a rectangle**, at five per cell. Filling always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
+**A drag lays the shape the held slot lays**, and the two slots lay different shapes. Life is a **pencil**: every cell the pointer crosses, so you draw a pattern and watch the line appear under your hand. Ice is a **rectangle**: two corners, because a pane is a shape you place and dragging one out says how big before it exists. Which one a drag is drawing is fixed when the button goes down, so changing slot midway does not change a line already half drawn.
 
-The rectangle is drawn while you sweep it, with its size and its price beside it, and a drag that cannot be paid for is drawn as refused before the button comes up. **A fill is all or nothing.** One laid as far as the value stretched would be a different shape from the one that was drawn, and the player would be left working out where it stopped and why.
+The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line. A stroke that crosses itself lists each cell once: the pricing compares every cell against the world rather than against the cells before it, so a repeat would be charged for twice and laid once.
+
+A drag always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
+
+What will be laid is drawn while you draw it, with its size and its price beside it, and a drag that cannot be paid for is drawn as refused before the button comes up. **A drag is all or nothing.** One laid as far as the value stretched would stop somewhere the hand did not, and the player would be left working out where it ran out and why.
 
 Only the cells a placement actually changes are charged for. Extending a rectangle means sweeping the whole of it again, and paying twice for the part that was already there made the natural gesture the expensive one. This is why `value_delta` reads the world for a paint as well as for an erase.
 
-One drag may cover at most 4096 cells. At one pixel per cell a sweep across the screen is millions, and every one of them would be listed, priced, applied and put on the wire.
+One drag lays at most 4096 cells. A rectangle at one pixel per cell can cover millions, each to be listed, priced, applied and put on the wire. A stroke stops growing when it reaches the cap and says so in its label, rather than being trimmed at the end where nobody would see what was lost.
 
-A press that travels but stays inside one cell is still a click. A one-cell fill would place where a click would take, so which of the two happens must not turn on a few pixels of hand shake at high zoom.
+More than one cell is what makes a drag a drag. A press that travelled but stayed inside one cell would place where a click would take, so which of the two happens must not turn on a few pixels of hand shake at high zoom.
 
 ## Ice
 
@@ -55,7 +62,7 @@ Life touching a pane shatters the whole connected run. See [simulation](simulati
 | | |
 |---|---|
 | left click | act on one cell |
-| left drag | fill the rectangle |
+| left drag | draw with what you hold: a stroke of life, a pane of ice |
 | middle drag, right drag, space + left drag | pan |
 | arrows / WASD, shift to hurry | pan |
 | mouse wheel | zoom |
@@ -78,7 +85,7 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 
 ## The hotbar
 
-Picks what a click acts on — both what it places and, on ground that already has it, what it takes back. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row. The two are `Life` and `Ice`: the placement is named for what is put down, since a cell is the square and life is one of the two things that can be on it.
+Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The two are `Life` and `Ice`: the placement is named for what is put down, since a cell is the square and life is one of the two things that can be on it.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 

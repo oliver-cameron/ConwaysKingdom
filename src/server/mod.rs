@@ -238,7 +238,7 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::{Action, Placement, PLACE_COST};
+    use crate::net::{Action, Placement};
     use crate::sim::CHUNK_N;
 
     #[test]
@@ -355,16 +355,16 @@ mod tests {
         // A 2x2 block: a still life, so it is still where it was put when the
         // next assertion looks. A blinker would have rotated out from under it.
         act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)], placement: Placement::Life });
-        assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST));
+        assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost()));
 
         // Reclaiming two of your own pays two back.
         // Reclaiming pays one each, well short of what they cost to place.
         act(&mut s, Action::Erase { cells: vec![(0, 0), (0, 1)], placement: Placement::Life });
-        assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST + 2));
+        assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
 
         // Erasing empty space is neither earned nor spent.
         act(&mut s, Action::Erase { cells: vec![(90, 90)], placement: Placement::Life });
-        assert_eq!(s.value_of(me), Some(start - 4 * PLACE_COST + 2));
+        assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
         let mut s = Server::new(World::infinite_empty());
         let me = s.join("me").unwrap();
         let purse = s.value_of(me).unwrap();
-        let too_many: Vec<_> = (0..purse / PLACE_COST + 1).map(|i| (0, i)).collect();
+        let too_many: Vec<_> = (0..purse / Placement::Life.cost() + 1).map(|i| (0, i)).collect();
 
         s.handle(Some(me), ClientMessage::Act(Stamped {
             tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Life },
