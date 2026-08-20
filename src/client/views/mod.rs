@@ -19,6 +19,7 @@
 
 pub mod battle;
 pub mod hotbar;
+pub mod camera;
 pub mod hud;
 pub mod overlay;
 pub mod theme;
