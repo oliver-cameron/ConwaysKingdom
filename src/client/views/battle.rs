@@ -64,13 +64,13 @@ const PAN_SMOOTHING: f32 = 0.35;
 /// two-pixel cell claims a precision the pointer does not have.
 const HOVER_MIN_ZOOM: f32 = 4.0;
 
-/// The most cells one drag may cover.
+/// The most cells one drag may lay.
 ///
-/// A drag at one pixel per cell can sweep millions, and every one of them
-/// would be listed, priced, applied and put on the wire. The cap is what keeps
-/// a careless sweep from stalling the client; the price is what keeps a
-/// deliberate one honest.
-const MAX_FILL_CELLS: i64 = 4096;
+/// A rectangle at one pixel per cell can cover millions, and every one of them
+/// would be listed, priced, applied and put on the wire. A stroke stops
+/// growing when it reaches this and says so, rather than being trimmed at the
+/// end where nobody would see what was lost.
+const MAX_DRAG_CELLS: i64 = 4096;
 
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
@@ -111,7 +111,6 @@ pub fn set_connection(url: Option<String>, name: String) {
 /// One thing at a time by construction. Drawing and panning were two
 /// independent flags, so a press could be both at once and the release of
 /// either ended neither cleanly.
-#[derive(Clone, Copy, PartialEq)]
 enum Gesture {
     None,
     /// The left button, or one finger, over the world: a click if it never
@@ -123,25 +122,94 @@ enum Gesture {
 }
 
 /// A press that may yet become a drag.
-#[derive(Clone, Copy, PartialEq)]
 struct Drag {
     /// Where the press landed, in cells, as (row, col).
     from: (i32, i32),
     /// And in pixels, which is what decides a drag from a click.
     from_px: (f64, f64),
     moved: bool,
+    /// What this drag lays, taken from the slot held when it began. Fixed at
+    /// the press rather than read each frame, so changing slot mid-stroke does
+    /// not change the shape of a line already half drawn.
+    stroke: hotbar::Stroke,
+    /// Every cell the pointer has crossed, in order. A pencil only.
+    path: Vec<(i32, i32)>,
+    /// The same cells as a set. A stroke that crosses itself would otherwise
+    /// list a cell twice, and the pricing compares each entry against the
+    /// world rather than against the entries before it — so the crossing
+    /// would be charged for twice and paid for once.
+    seen: std::collections::HashSet<(i32, i32)>,
 }
 
 impl Drag {
-    fn begin(px: (f64, f64), cell: (i32, i32)) -> Self {
-        Self { from: cell, from_px: px, moved: false }
+    fn begin(px: (f64, f64), cell: (i32, i32), stroke: hotbar::Stroke) -> Self {
+        let mut drag = Self {
+            from: cell,
+            from_px: px,
+            moved: false,
+            stroke,
+            path: Vec::new(),
+            seen: std::collections::HashSet::new(),
+        };
+        if stroke == hotbar::Stroke::Pencil {
+            drag.mark(cell);
+        }
+        drag
     }
 
     /// Note where the press has got to. `slop` is in the same physical pixels
-    /// the positions are.
-    fn reached(&mut self, px: (f64, f64), slop: f64) {
+    /// the positions are, and `cell` is what is under it now.
+    fn reached(&mut self, px: (f64, f64), slop: f64, cell: (i32, i32)) {
         self.moved |= travelled(self.from_px, px, slop);
+        if self.stroke != hotbar::Stroke::Pencil {
+            return;
+        }
+        // Every cell between the last one and this, not just this one. Pointer
+        // events arrive far apart when the hand moves quickly — a fast stroke
+        // can cross twenty cells between two of them — so a pencil that marked
+        // only where the pointer was reported would draw a dotted line.
+        let last = self.path.last().copied().unwrap_or(self.from);
+        for step in line(last, cell) {
+            if self.path.len() as i64 >= MAX_DRAG_CELLS {
+                return;
+            }
+            self.mark(step);
+        }
     }
+
+    fn mark(&mut self, cell: (i32, i32)) {
+        if self.seen.insert(cell) {
+            self.path.push(cell);
+        }
+    }
+
+    /// Whether the stroke has reached its limit and stopped growing.
+    fn full(&self) -> bool {
+        self.path.len() as i64 >= MAX_DRAG_CELLS
+    }
+}
+
+/// The cells a straight line from `from` to `to` passes through, `from`
+/// excluded. Bresenham, so it is the same set whichever end it starts from.
+fn line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (mut r, mut c) = from;
+    let (dr, dc) = ((to.0 - r).abs(), -(to.1 - c).abs());
+    let (sr, sc) = (if r < to.0 { 1 } else { -1 }, if c < to.1 { 1 } else { -1 });
+    let mut err = dr + dc;
+    let mut out = Vec::new();
+    while (r, c) != to {
+        let e2 = 2 * err;
+        if e2 >= dc {
+            err += dc;
+            r += sr;
+        }
+        if e2 <= dr {
+            err += dr;
+            c += sc;
+        }
+        out.push((r, c));
+    }
+    out
 }
 
 /// Whether a press that landed at `from` and has reached `to` is a drag.
@@ -367,6 +435,12 @@ impl BattleApp {
         self.camera_dirty = true;
     }
 
+    /// Start drawing, with the shape the held slot lays.
+    fn begin_drawing(&mut self, at: (f64, f64)) {
+        let stroke = hotbar::SLOTS[self.slot].stroke;
+        self.gesture = Gesture::Drawing(Drag::begin(at, self.cell_under_cursor(at), stroke));
+    }
+
     fn begin_pan(&mut self, button: Option<winit::event::MouseButton>) {
         self.gesture = Gesture::Panning { button };
         self.pan_velocity = (0.0, 0.0);
@@ -388,7 +462,7 @@ impl BattleApp {
 
     /// Whether a gesture the world owns is in progress.
     fn gesture_active(&self) -> bool {
-        self.gesture != Gesture::None || self.touch_view
+        !matches!(self.gesture, Gesture::None) || self.touch_view
     }
 
     fn is_panning(&self) -> bool {
@@ -575,21 +649,13 @@ impl BattleApp {
     /// likely to be building over it than a request to clear it cell by cell,
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
-    fn fill(&mut self, from: (i32, i32), to: (i32, i32)) {
-        let (rows, cols) = span(from, to);
-        let cells = match self.rectangle(from, to) {
-            Ok(cells) => cells,
-            Err(why) => {
-                self.notice = Some(why);
-                return;
-            }
-        };
+    fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
         let count = cells.len();
         let (stamped, delta) = self.quote(cells);
 
-        // All or nothing. A rectangle laid as far as the value stretched would
-        // be a different shape from the one that was drawn, and the player
-        // would be left working out where it stopped and why.
+        // All or nothing. A stroke laid as far as the value stretched would
+        // stop somewhere the hand did not, and the player would be left
+        // working out where it ran out and why.
         if self.value + delta < 0 {
             self.notice = Some(format!(
                 "{count} cells costs {}, you have {}",
@@ -601,29 +667,43 @@ impl BattleApp {
         self.value += delta;
         crate::net::apply(&mut self.world, &stamped);
         self.world.dirty = true;
-        self.last_action = Some(format!(
-            "filled {rows}x{cols} with {}, -{}",
-            hotbar::SLOTS[self.slot].name,
-            -delta
-        ));
+        self.last_action = Some(format!("{shape}, {delta:+}"));
 
         if let Some(link) = &self.link {
             link.send(ClientMessage::Act(stamped));
         }
     }
 
-    /// The cells a rectangle covers, or why it may not be laid at all.
-    fn rectangle(&self, from: (i32, i32), to: (i32, i32)) -> Result<Vec<(i32, i32)>, String> {
-        let (rows, cols) = span(from, to);
-        let area = rows * cols;
-        if area > MAX_FILL_CELLS {
-            return Err(format!("{area} cells is more than one drag may lay"));
+    /// What a drag would lay, and how to describe it.
+    ///
+    /// One function for both shapes and for both callers, so the preview
+    /// cannot draw one thing and the release lay another.
+    fn drag_cells(&self, drag: &Drag, to: (i32, i32)) -> Result<(Vec<(i32, i32)>, String), String> {
+        let name = hotbar::SLOTS[self.slot].name;
+        match drag.stroke {
+            hotbar::Stroke::Pencil => {
+                let full = if drag.full() { ", full" } else { "" };
+                Ok((
+                    drag.path.clone(),
+                    format!("drew {} cells of {name}{full}", drag.path.len()),
+                ))
+            }
+            hotbar::Stroke::Rectangle => {
+                let (rows, cols) = span(drag.from, to);
+                let area = rows * cols;
+                if area > MAX_DRAG_CELLS {
+                    return Err(format!("{area} cells is more than one drag may lay"));
+                }
+                let (r0, r1) = (drag.from.0.min(to.0), drag.from.0.max(to.0));
+                let (c0, c1) = (drag.from.1.min(to.1), drag.from.1.max(to.1));
+                Ok((
+                    (r0..=r1)
+                        .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+                        .collect(),
+                    format!("laid {rows}x{cols} of {name}"),
+                ))
+            }
         }
-        let (r0, r1) = (from.0.min(to.0), from.0.max(to.0));
-        let (c0, c1) = (from.1.min(to.1), from.1.max(to.1));
-        Ok((r0..=r1)
-            .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
-            .collect())
     }
 
     /// Price a paint of these cells: the action that would be sent, and what
@@ -651,44 +731,50 @@ impl BattleApp {
         if on_ui || !self.hovering || self.is_panning() || self.zoom < HOVER_MIN_ZOOM {
             return None;
         }
-        if matches!(self.gesture, Gesture::Drawing(drag) if drag.moved) {
+        if matches!(&self.gesture, Gesture::Drawing(drag) if drag.moved) {
             return None;
         }
         let at = self.cell_under_cursor(self.cursor);
         Some(self.cell_rect(scale, at, at))
     }
 
-    /// The rectangle a drag has swept so far, with its size and its price.
+    /// What a drag has laid out so far, with what it would cost.
     fn selection_mark(&self, scale: f32) -> Option<overlay::Selection> {
-        let Gesture::Drawing(drag) = self.gesture else { return None };
+        let Gesture::Drawing(drag) = &self.gesture else { return None };
         if !drag.moved {
             return None;
         }
         let to = self.cell_under_cursor(self.cursor);
-        let (rows, cols) = span(drag.from, to);
         let slot = &hotbar::SLOTS[self.slot];
 
-        let (label, allowed) = match self.rectangle(drag.from, to) {
-            Err(why) => (why, false),
-            Ok(cells) => {
-                let (_, delta) = self.quote(cells);
+        let (cells, label, allowed) = match self.drag_cells(drag, to) {
+            Err(why) => (Vec::new(), why, false),
+            Ok((cells, shape)) => {
+                let (_, delta) = self.quote(cells.clone());
                 if self.value + delta < 0 {
-                    (
-                        format!(
-                            "{} {rows}x{cols}   costs {}, you have {}",
-                            slot.name, -delta, self.value
-                        ),
-                        false,
-                    )
+                    let why = format!("{shape}   costs {}, you have {}", -delta, self.value);
+                    (cells, why, false)
                 } else {
-                    (format!("{} {rows}x{cols}   {delta}", slot.name), true)
+                    (cells, format!("{shape}   {delta:+}"), true)
                 }
             }
         };
 
+        let rects: Vec<egui::Rect> = match drag.stroke {
+            // A stroke is its cells; there is no outline to draw round a line
+            // that doubles back on itself.
+            hotbar::Stroke::Pencil => cells
+                .iter()
+                .map(|&at| self.cell_rect(scale, at, at))
+                .collect(),
+            hotbar::Stroke::Rectangle => vec![self.cell_rect(scale, drag.from, to)],
+        };
+
         let (r, g, b) = hud::player_colour(self.player());
         Some(overlay::Selection {
-            rect: self.cell_rect(scale, drag.from, to),
+            bounds: self.cell_rect(scale, drag.from, to),
+            cells: rects,
+            outlined: drag.stroke == hotbar::Stroke::Rectangle,
             tint: egui::Color32::from_rgb(r, g, b),
             hatched: slot.placement == Placement::Ice,
             label,
@@ -937,14 +1023,14 @@ impl App for BattleApp {
 
         if let Some(Pending { drag, to_px }) = self.pending.take() {
             let to = self.cell_under_cursor(to_px);
-            // A press that travelled but stayed inside one cell is still a
-            // click. A one-cell fill would place where a click would take, so
-            // which of the two happens must not turn on a few pixels of hand
-            // shake at high zoom.
-            if drag.moved && to != drag.from {
-                self.fill(drag.from, to);
-            } else {
-                self.click(to.0, to.1);
+            // More than one cell is what makes it a drag rather than a click.
+            // A press that travelled but stayed inside one cell would place
+            // where a click would take, so which of the two happens must not
+            // turn on a few pixels of hand shake at high zoom.
+            match self.drag_cells(&drag, to) {
+                Ok((cells, shape)) if drag.moved && cells.len() > 1 => self.lay(cells, shape),
+                Ok(_) => self.click(to.0, to.1),
+                Err(why) => self.notice = Some(why),
             }
         }
 
@@ -973,7 +1059,9 @@ impl App for BattleApp {
             let views = self.views.borrow();
             (self.slot, views.theme)
         };
+        let (r, g, b) = hud::player_colour(self.player());
         let marks = overlay::Marks {
+            tint: egui::Color32::from_rgb(r, g, b),
             hover: self.hover_mark(gpu.scale_factor, status.pointer_on_ui),
             selection: self.selection_mark(gpu.scale_factor),
         };
@@ -1020,9 +1108,9 @@ impl App for BattleApp {
         self.cursor = (x, y);
         self.hovering = true;
 
-        let slop = self.slop();
+        let (slop, cell) = (self.slop(), self.cell_under_cursor((x, y)));
         if let Gesture::Drawing(drag) = &mut self.gesture {
-            drag.reached((x, y), slop);
+            drag.reached((x, y), slop, cell);
         } else if self.is_panning() {
             self.pan_by_pixels(dx, dy);
         }
@@ -1114,8 +1202,7 @@ impl App for BattleApp {
         }
 
         if self.touches.is_empty() {
-            if let Gesture::Drawing(drag) = self.gesture {
-                self.gesture = Gesture::None;
+            if let Gesture::Drawing(drag) = std::mem::replace(&mut self.gesture, Gesture::None) {
                 self.pending = Some(Pending { drag, to_px: self.cursor });
             }
             self.touch_view = false;
@@ -1132,11 +1219,11 @@ impl App for BattleApp {
 
         self.cursor = at;
         self.touch_count = self.touches.len();
-        let slop = self.slop();
+        let (slop, cell) = (self.slop(), self.cell_under_cursor(at));
         if matches!(phase, P::Started) {
-            self.gesture = Gesture::Drawing(Drag::begin(at, self.cell_under_cursor(at)));
+            self.begin_drawing(at);
         } else if let Gesture::Drawing(drag) = &mut self.gesture {
-            drag.reached(at, slop);
+            drag.reached(at, slop, cell);
         }
     }
 
@@ -1180,21 +1267,20 @@ impl App for BattleApp {
             match button {
                 B::Middle | B::Right => self.begin_pan(Some(button)),
                 B::Left if self.space => self.begin_pan(Some(button)),
-                B::Left => {
-                    let at = self.cursor;
-                    self.gesture = Gesture::Drawing(Drag::begin(at, self.cell_under_cursor(at)));
-                }
+                B::Left => self.begin_drawing(self.cursor),
                 _ => {}
             }
             return;
         }
-        match self.gesture {
+        // Taken out, so the drag can be moved into `pending` rather than
+        // copied -- a stroke carries every cell it has crossed.
+        match std::mem::replace(&mut self.gesture, Gesture::None) {
             Gesture::Panning { button: held } if held == Some(button) => self.end_pan(),
             Gesture::Drawing(drag) if button == B::Left => {
-                self.gesture = Gesture::None;
                 self.pending = Some(Pending { drag, to_px: self.cursor });
             }
-            _ => {}
+            // Not this button's to end, so put it back.
+            other => self.gesture = other,
         }
     }
 
@@ -1305,9 +1391,9 @@ mod tests {
     /// and a dragged pane came out as a single cell at the release point.
     #[test]
     fn a_slow_sweep_is_a_drag() {
-        let mut drag = Drag::begin((100.0, 100.0), (0, 0));
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
         for step in 1..=60 {
-            drag.reached((100.0 + step as f64, 100.0), DRAG_SLOP);
+            drag.reached((100.0 + step as f64, 100.0), DRAG_SLOP, (0, 0));
             assert!(
                 !drag.moved || step as f64 > DRAG_SLOP,
                 "a press should not become a drag inside the slop"
@@ -1320,9 +1406,9 @@ mod tests {
     /// still clicking, however many events it produces.
     #[test]
     fn a_shaky_press_is_a_click() {
-        let mut drag = Drag::begin((100.0, 100.0), (0, 0));
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
         for at in [(102.0, 100.0), (98.0, 101.0), (100.0, 98.0), (101.0, 101.0)] {
-            drag.reached(at, DRAG_SLOP);
+            drag.reached(at, DRAG_SLOP, (0, 0));
         }
         assert!(!drag.moved);
     }
@@ -1331,9 +1417,9 @@ mod tests {
     /// mid-sweep must not turn the gesture back into a click.
     #[test]
     fn a_drag_does_not_become_a_click_again() {
-        let mut drag = Drag::begin((100.0, 100.0), (0, 0));
-        drag.reached((400.0, 400.0), DRAG_SLOP);
-        drag.reached((100.0, 100.0), DRAG_SLOP);
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
+        drag.reached((400.0, 400.0), DRAG_SLOP, (0, 0));
+        drag.reached((100.0, 100.0), DRAG_SLOP, (0, 0));
         assert!(drag.moved);
     }
 
@@ -1343,7 +1429,50 @@ mod tests {
     fn a_rectangle_is_bounded() {
         let (rows, cols) = span((0, 0), (-3, 4));
         assert_eq!((rows, cols), (4, 5));
-        assert!(span((0, 0), (i32::MAX, i32::MAX)).0 > MAX_FILL_CELLS);
+        assert!(span((0, 0), (i32::MAX, i32::MAX)).0 > MAX_DRAG_CELLS);
+    }
+
+    /// A pencil that only marked where the pointer was reported would draw a
+    /// dotted line: events arrive far apart when the hand moves quickly. Every
+    /// step must touch the one before it.
+    #[test]
+    fn a_line_has_no_gaps() {
+        for to in [(9, 2), (2, 9), (-7, 4), (0, 5), (5, 0), (-3, -8)] {
+            let cells = line((0, 0), to);
+            assert_eq!(*cells.last().unwrap(), to, "should arrive at {to:?}");
+            let mut previous = (0, 0);
+            for &at in &cells {
+                let step = ((at.0 - previous.0).abs(), (at.1 - previous.1).abs());
+                assert!(step.0 <= 1 && step.1 <= 1, "jumped from {previous:?} to {at:?}");
+                previous = at;
+            }
+        }
+        assert!(line((3, 3), (3, 3)).is_empty(), "going nowhere marks nothing");
+    }
+
+    /// A stroke that crosses itself must list each cell once. The pricing
+    /// compares every entry against the world rather than against the entries
+    /// before it, so a repeat would be charged for twice and laid once.
+    #[test]
+    fn a_stroke_that_crosses_itself_lists_each_cell_once() {
+        let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil);
+        // Out along a row, back along it, and out again.
+        for cell in [(0, 6), (0, 0), (0, 6)] {
+            drag.reached((100.0, 100.0), DRAG_SLOP, cell);
+        }
+        let unique: std::collections::HashSet<_> = drag.path.iter().collect();
+        assert_eq!(unique.len(), drag.path.len(), "a cell is listed twice");
+        assert_eq!(drag.path.len(), 7, "seven cells from (0,0) to (0,6)");
+    }
+
+    /// The stroke stops at the cap rather than being trimmed later, so what
+    /// is drawn is what is laid.
+    #[test]
+    fn a_stroke_stops_at_its_limit() {
+        let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil);
+        drag.reached((100.0, 100.0), DRAG_SLOP, (0, MAX_DRAG_CELLS as i32 * 2));
+        assert!(drag.full());
+        assert_eq!(drag.path.len() as i64, MAX_DRAG_CELLS);
     }
 
     /// A pinch is measured between two fingers and nothing else, but the

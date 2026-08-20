@@ -50,7 +50,7 @@ The layer is `kind * 4 + state`, so a kind's four images sit together and a kind
 
 A cell's own u,v picks the tile within its sheet, so a structure spanning several cells gives each one a different tile and the parts line up. Tile (0,0) is the default; the rest of the sheet is room for multi-cell pictures.
 
-Regenerate the defaults with `python3 tools/mksprites.py`. It is standalone Python rather than a cargo example because the crate embeds these files with `include_bytes!` and cannot build until they exist. The art is ASCII in the generator so a change is legible in a diff; editing the PNG works equally well.
+The PNGs are the source. There was a generator that drew them from ASCII art, in Python because the crate embeds these files with `include_bytes!` and so cannot build until they exist — which rules out a cargo example. It is gone: the art is edited directly now, and a generator that nobody runs is a second definition of the sprites waiting to disagree with the first.
 
 **No anti-aliasing.** Nearest sampling, no mip chain, hard edges — a test asserts every alpha is one of a few fixed inks. The cost is that far-out zoom point-samples a 16×16 tile down to a pixel and will shimmer, which is why the camera does not go below one pixel per cell.
 

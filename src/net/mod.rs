@@ -72,6 +72,25 @@ impl Placement {
         }
     }
 
+    /// What one of these costs to put down.
+    ///
+    /// Life is cheap because it is drawn by the stroke rather than placed cell
+    /// by cell: a pencil lays tens of cells in a gesture, and at five a cell
+    /// that is a gesture nobody can afford. Ice stays dear because a pane is a
+    /// wall, and a wall that costs what a cell costs is not a decision.
+    ///
+    /// Life at one against reclaiming at one means putting a cell down and
+    /// taking it back is free, which is deliberate: you may rearrange your own
+    /// board as much as you like. What drains value is the rule — a cell that
+    /// dies of its neighbours cannot be reclaimed, so the sink is mortality
+    /// rather than the act of placing.
+    pub const fn cost(self) -> i32 {
+        match self {
+            Self::Life => 1,
+            Self::Ice => 5,
+        }
+    }
+
     /// Take this away, and leave everything else alone.
     ///
     /// The inverse of [`Self::apply_to`], and the reason clicking a living
@@ -149,12 +168,8 @@ pub enum ServerMessage {
     Resync { tick: Tick, chunks: Vec<ChunkId> },
 }
 
-/// What one placed cell costs.
-///
-/// Placing is dear and reclaiming is cheap, so ground is worth holding and
-/// spending is a decision. Reclaiming your own pays one, so a cell you place
-/// and later take back is a net loss -- building is meant to commit you.
-pub const PLACE_COST: i32 = 5;
+/// What reclaiming your own costs, or rather pays.
+pub const RECLAIM: i32 = 1;
 
 /// What an action is worth to the player who did it.
 ///
@@ -185,7 +200,7 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
                     placement.apply_to(existing, stamped.player) != existing
                 })
                 .count();
-            -(changed as i32) * PLACE_COST
+            -(changed as i32) * placement.cost()
         }
         // What counts as "there" depends on what is being taken, since life
         // and ice are independent: removing ice from a living cell with no
@@ -194,8 +209,8 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
             .iter()
             .map(|&(row, col)| match world.cell_at(row, col) {
                 Some(cell) if placement.remove_from(cell) == cell => 0,
-                Some(cell) if cell.player() == stamped.player => 1,
-                Some(_) => -1,
+                Some(cell) if cell.player() == stamped.player => RECLAIM,
+                Some(_) => -RECLAIM,
                 None => 0,
             })
             .sum(),
@@ -241,7 +256,7 @@ mod tests {
         let cells = vec![(0, 0), (0, 1), (0, 2)];
 
         let first = paint(cells.clone(), Placement::Ice);
-        assert_eq!(value_delta(&world, &first), -3 * PLACE_COST);
+        assert_eq!(value_delta(&world, &first), -3 * Placement::Ice.cost());
         apply(&mut world, &first);
 
         // The same rectangle again, plus one cell it did not cover.
@@ -249,7 +264,7 @@ mod tests {
         wider.push((0, 3));
         assert_eq!(
             value_delta(&world, &paint(wider, Placement::Ice)),
-            -PLACE_COST,
+            -Placement::Ice.cost(),
             "only the cell that changed should be charged for"
         );
     }
@@ -260,7 +275,7 @@ mod tests {
     fn a_pane_over_a_living_cell_is_a_change() {
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -PLACE_COST);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -Placement::Ice.cost());
         assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), 0);
     }
 
@@ -276,7 +291,7 @@ mod tests {
             action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         apply(&mut world, &theirs);
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -PLACE_COST);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -Placement::Ice.cost());
     }
 
     /// The reason `Erase` carries a placement at all. Life and ice are
@@ -366,6 +381,20 @@ mod tests {
         assert_eq!(value_delta(&world, &mine), -1);
     }
 
+    /// Life is drawn by the stroke and ice is placed as a wall, so they are
+    /// not worth the same. Pinned because one flat constant is exactly what
+    /// this replaced, and it is an easy thing to fall back to.
+    #[test]
+    fn life_and_ice_are_priced_apart() {
+        assert_eq!(Placement::Life.cost(), 1);
+        assert_eq!(Placement::Ice.cost(), 5);
+
+        let world = World::infinite_empty();
+        let five: Vec<_> = (0..5).map(|c| (0, c)).collect();
+        assert_eq!(value_delta(&world, &paint(five.clone(), Placement::Life)), -5);
+        assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
+    }
+
     /// Ground nobody holds prices as empty, which is what `apply` writes into
     /// it. The two must agree or a client would be charged for one thing and
     /// given another.
@@ -374,6 +403,6 @@ mod tests {
         let world = World::infinite_empty();
         let far = vec![(100_000, 100_000)];
         assert!(world.cell_at(far[0].0, far[0].1).is_none());
-        assert_eq!(value_delta(&world, &paint(far, Placement::Life)), -PLACE_COST);
+        assert_eq!(value_delta(&world, &paint(far, Placement::Life)), -Placement::Life.cost());
     }
 }
