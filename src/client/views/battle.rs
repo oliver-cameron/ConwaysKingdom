@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use crate::render::app::App;
-use super::{hotbar, hud, overlay, Views};
+use super::{camera, hotbar, hud, overlay, Views};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -28,10 +28,6 @@ const START_CENTRE: (f32, f32) = (CHUNK_N as f32 / 2.0, CHUNK_N as f32 / 2.0);
 /// Screen pixels per cell at startup.
 const START_ZOOM: f32 = 16.0;
 
-/// Zoom is clamped to this. Never below 1: point sampling drops sparse cells
-/// under one pixel per cell, so they would flicker out rather than shrink.
-const ZOOM_RANGE: (f32, f32) = (1.0, 64.0);
-
 /// Cells per second when panning with the keyboard, at one pixel per cell.
 /// Divided by the zoom, so a keypress moves the same distance on screen
 /// whatever the zoom is.
@@ -47,18 +43,6 @@ const DRAG_SLOP: f64 = 4.0;
 
 /// Multiplies the keyboard pan while shift is held.
 const PAN_FAST: f32 = 3.0;
-
-/// Seconds for a released pan to decay to a third of its speed. A flick
-/// coasts roughly `speed * PAN_GLIDE` cells and stops. Zero turns it off.
-const PAN_GLIDE: f32 = 0.15;
-
-/// Below this, in cells per second, letting go is a stop rather than a flick.
-const PAN_GLIDE_MIN: f32 = 3.0;
-
-/// How much of a frame's measured speed carries into the glide. Smoothed,
-/// because one short frame at the end of a drag reports a speed the hand never
-/// had, and the glide would take it literally.
-const PAN_SMOOTHING: f32 = 0.35;
 
 /// The hover box is not drawn below this many pixels per cell. A box around a
 /// two-pixel cell claims a precision the pointer does not have.
@@ -248,13 +232,8 @@ pub struct BattleApp {
     /// Held for as long as the bind group refers to it.
     _atlas: Atlas,
     world: World,
-    /// Set by anything that moves or scales the camera. Zoom used to change
-    /// the field without anything uploading it, so scrolling did nothing.
-    camera_dirty: bool,
-    /// Camera centre, in cells, as (x, y).
-    camera: (f32, f32),
-    /// Screen pixels per cell.
-    zoom: f32,
+    /// Where the world is being looked at from, and how that moves.
+    camera: camera::Camera,
     /// What the pointer is doing.
     gesture: Gesture,
     /// Space held, which turns the left button into a pan. The convention in
@@ -265,13 +244,6 @@ pub struct BattleApp {
     shift: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
-    /// Cells the view has been dragged since the last frame. Accumulated here
-    /// rather than measured in the pointer callback, which is given no time
-    /// step — the same movement over two frames and over twenty is not the
-    /// same flick.
-    pan_step: (f32, f32),
-    /// Cells per second the view keeps once a pan is let go.
-    pan_velocity: (f32, f32),
     /// Fingers currently down, as (id, position).
     touches: Vec<(u64, (f64, f64))>,
     /// How many were down last time they were looked at. A finger arriving or
@@ -291,15 +263,6 @@ pub struct BattleApp {
     /// hovering — there is nothing under it once it lifts — so the hover box
     /// would otherwise be left behind wherever the last touch ended.
     hovering: bool,
-    /// Viewport size in physical pixels, refreshed every frame from the
-    /// `GpuState`. Cached only because input callbacks are not handed one --
-    /// updating it solely on resize left it stale whenever a resize event did
-    /// not arrive, and zoom anchoring then disagreed with the camera about how
-    /// big the screen was.
-    viewport: (f32, f32),
-    /// Physical pixels per point, refreshed beside the viewport. Cached for
-    /// the same reason: input callbacks are handed no `GpuState`.
-    scale: f32,
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
     /// Our own player number, once the server has issued one.
@@ -335,67 +298,30 @@ impl BattleApp {
     /// live pattern, so what is on screen is whatever `VIEW_CENTRE` and
     /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
     fn write_camera(&self, gpu: &GpuState) {
-        let (vw, vh) = self.viewport;
-        let (ox, oy) = self.origin();
-
-        gpu.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::bytes_of(&CameraUniform {
-                origin: [ox, oy],
-                viewport: [vw, vh],
-                zoom: self.zoom,
-                chunk_n: CHUNK_N as f32,
-                _pad: [0.0; 2],
-            }),
-        );
+        gpu.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera.uniform()));
     }
 
-    /// The cell at the top-left of the screen, as (x, y). Every mapping
-    /// between the screen and the world starts here, and it used to be written
-    /// out at each of them — four copies of two lines is four places for the
-    /// camera to be understood differently.
-    fn origin(&self) -> (f32, f32) {
-        let (vw, vh) = self.viewport;
-        (
-            self.camera.0 - vw / (2.0 * self.zoom),
-            self.camera.1 - vh / (2.0 * self.zoom),
-        )
-    }
-
-    /// Screen position to world position in cells, unrounded. Zoom anchoring
-    /// needs the fraction, which the integer form throws away.
-    fn cell_under_cursor_f(&self, (px, py): (f64, f64)) -> (f32, f32) {
-        let origin = self.origin();
-        (
-            origin.0 + px as f32 / self.zoom,
-            origin.1 + py as f32 / self.zoom,
-        )
-    }
-
-    /// Where a screen position lands in the world, in absolute cell
-    /// coordinates. The inverse of what the vertex shader does.
     fn cell_under_cursor(&self, at: (f64, f64)) -> (i32, i32) {
-        let (x, y) = self.cell_under_cursor_f(at);
-        (y.floor() as i32, x.floor() as i32) // (row, col)
+        self.camera.cell_at(at)
     }
 
-    /// A block of cells as a rectangle on screen, in points.
+    /// Take the viewport and the pixel density from the frame, and say whether
+    /// the visible area changed.
     ///
-    /// Points, not pixels: egui works in points and the camera in physical
-    /// pixels, and this is the one place the two meet. `to` is included, so a
-    /// cell and itself is one cell wide.
-    fn cell_rect(&self, scale: f32, from: (i32, i32), to: (i32, i32)) -> egui::Rect {
-        let origin = self.origin();
-        let point = |x: f32, y: f32| {
-            egui::pos2(
-                (x - origin.0) * self.zoom / scale,
-                (y - origin.1) * self.zoom / scale,
-            )
-        };
-        let (r0, r1) = (from.0.min(to.0) as f32, from.0.max(to.0) as f32 + 1.0);
-        let (c0, c1) = (from.1.min(to.1) as f32, from.1.max(to.1) as f32 + 1.0);
-        egui::Rect::from_min_max(point(c0, r0), point(c1, r1))
+    /// Cached on the camera because input callbacks are handed no `GpuState`,
+    /// and refreshed every frame rather than on resize alone: updating it only
+    /// on resize left it stale whenever no resize event arrived, and zoom
+    /// anchoring then disagreed with the camera about how big the screen was.
+    fn fit(&mut self, gpu: &GpuState) -> bool {
+        let viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
+        self.camera.scale = gpu.scale_factor;
+        if viewport == self.camera.viewport {
+            return false;
+        }
+        self.camera.viewport = viewport;
+        self.camera.dirty = true;
+        true
     }
 
     /// Who we are. Before the server has said, we are player one — offline is
@@ -406,58 +332,8 @@ impl BattleApp {
 }
 
 impl BattleApp {
-    /// Scale the zoom about a screen position, keeping what is under it in
-    /// place. Shared by the wheel, the trackpad and two fingers, so all three
-    /// behave identically rather than each drifting its own way.
-    fn zoom_about(&mut self, factor: f32, at: (f64, f64)) {
-        let before = self.cell_under_cursor_f(at);
-        self.zoom = (self.zoom * factor).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
-        let after = self.cell_under_cursor_f(at);
-        self.camera.0 += before.0 - after.0;
-        self.camera.1 += before.1 - after.1;
-        self.camera_dirty = true;
-    }
-
     fn zoom_about_cursor(&mut self, factor: f32) {
-        self.zoom_about(factor, self.cursor);
-    }
-
-    /// Move the view by a pointer movement in pixels.
-    ///
-    /// The world follows the pointer, so the camera goes the other way, and
-    /// the drag is in pixels while the camera lives in cells.
-    fn pan_by_pixels(&mut self, dx: f64, dy: f64) {
-        let step = (dx as f32 / self.zoom, dy as f32 / self.zoom);
-        self.camera.0 -= step.0;
-        self.camera.1 -= step.1;
-        self.pan_step.0 -= step.0;
-        self.pan_step.1 -= step.1;
-        self.camera_dirty = true;
-    }
-
-    /// Start drawing, with the shape the held slot lays.
-    fn begin_drawing(&mut self, at: (f64, f64)) {
-        let stroke = hotbar::SLOTS[self.slot].stroke;
-        self.gesture = Gesture::Drawing(Drag::begin(at, self.cell_under_cursor(at), stroke));
-    }
-
-    fn begin_pan(&mut self, button: Option<winit::event::MouseButton>) {
-        self.gesture = Gesture::Panning { button };
-        self.pan_velocity = (0.0, 0.0);
-        self.pan_step = (0.0, 0.0);
-    }
-
-    /// Let go, and let it coast if it was still moving.
-    fn end_pan(&mut self) {
-        self.gesture = Gesture::None;
-        if self.pan_velocity.0.hypot(self.pan_velocity.1) < PAN_GLIDE_MIN {
-            self.pan_velocity = (0.0, 0.0);
-        }
-    }
-
-    /// The drag threshold in the physical pixels positions are reported in.
-    fn slop(&self) -> f64 {
-        DRAG_SLOP * self.scale.max(1.0) as f64
+        self.camera.zoom_about(factor, self.cursor);
     }
 
     /// Whether a gesture the world owns is in progress.
@@ -467,6 +343,27 @@ impl BattleApp {
 
     fn is_panning(&self) -> bool {
         matches!(self.gesture, Gesture::Panning { .. }) || self.touch_view
+    }
+
+    /// The drag threshold in the physical pixels positions are reported in.
+    fn slop(&self) -> f64 {
+        DRAG_SLOP * self.camera.scale.max(1.0) as f64
+    }
+
+    /// Start drawing, with the shape the held slot lays.
+    fn begin_drawing(&mut self, at: (f64, f64)) {
+        let stroke = hotbar::SLOTS[self.slot].stroke;
+        self.gesture = Gesture::Drawing(Drag::begin(at, self.camera.cell_at(at), stroke));
+    }
+
+    fn begin_pan(&mut self, button: Option<winit::event::MouseButton>) {
+        self.gesture = Gesture::Panning { button };
+        self.camera.begin_drag();
+    }
+
+    fn end_pan(&mut self) {
+        self.gesture = Gesture::None;
+        self.camera.end_drag();
     }
 
     /// Drop whatever the pointer was doing, without acting on it.
@@ -486,65 +383,19 @@ impl BattleApp {
         self.touch_view = false;
         self.pinch_span = None;
         self.view_anchor = None;
-        self.pan_velocity = (0.0, 0.0);
+        self.camera.halt();
     }
 
-    /// Move the camera for whatever pan keys are held, then either measure the
-    /// pan in progress or carry a released one on.
+    /// Move the view for whatever pan keys are held, then let the camera
+    /// measure the drag in progress or carry a released one on.
     fn apply_pan(&mut self, dt: f32) {
         let x = (self.pan[1] as i32 - self.pan[0] as i32) as f32;
         let y = (self.pan[3] as i32 - self.pan[2] as i32) as f32;
         if x != 0.0 || y != 0.0 {
-            let step = PAN_SPEED * if self.shift { PAN_FAST } else { 1.0 } * dt / self.zoom;
-            self.camera.0 += x * step;
-            self.camera.1 += y * step;
-            self.camera_dirty = true;
-            // A key and a glide pulling at once would be two answers to where
-            // the view is going.
-            self.pan_velocity = (0.0, 0.0);
+            let speed = PAN_SPEED * if self.shift { PAN_FAST } else { 1.0 };
+            self.camera.nudge(x, y, speed, dt);
         }
-
-        if self.is_panning() {
-            self.measure_pan(dt);
-        } else {
-            self.pan_step = (0.0, 0.0);
-            self.glide(dt);
-        }
-    }
-
-    /// Turn this frame's dragging into a speed, smoothed. One short frame at
-    /// the end of a drag reports a speed the hand never had, and an unsmoothed
-    /// glide would take it literally.
-    fn measure_pan(&mut self, dt: f32) {
-        let (dx, dy) = std::mem::take(&mut self.pan_step);
-        if dt <= 0.0 {
-            return;
-        }
-        let (vx, vy) = self.pan_velocity;
-        self.pan_velocity = (
-            vx + (dx / dt - vx) * PAN_SMOOTHING,
-            vy + (dy / dt - vy) * PAN_SMOOTHING,
-        );
-    }
-
-    /// Carry a released pan on, decaying, so a flick covers ground without a
-    /// second drag.
-    fn glide(&mut self, dt: f32) {
-        let (vx, vy) = self.pan_velocity;
-        if vx == 0.0 && vy == 0.0 {
-            return;
-        }
-        self.camera.0 += vx * dt;
-        self.camera.1 += vy * dt;
-        self.camera_dirty = true;
-
-        let decay = if PAN_GLIDE > 0.0 { (-dt / PAN_GLIDE).exp() } else { 0.0 };
-        self.pan_velocity = (vx * decay, vy * decay);
-        // Stop rather than approach zero forever, or the camera never settles
-        // and every frame rewrites the uniform and resyncs the instance list.
-        if self.pan_velocity.0.hypot(self.pan_velocity.1) < 0.5 {
-            self.pan_velocity = (0.0, 0.0);
-        }
+        self.camera.advance(dt, self.is_panning());
     }
 
     /// Move and scale the view to follow the fingers.
@@ -568,11 +419,11 @@ impl BattleApp {
                 (self.view_anchor, self.pinch_span, span)
             {
                 if before > 1.0 && now > 1.0 {
-                    self.zoom_about((now / before) as f32, anchor);
+                    self.camera.zoom_about((now / before) as f32, anchor);
                 }
             }
             if let Some(anchor) = self.view_anchor {
-                self.pan_by_pixels(focus.0 - anchor.0, focus.1 - anchor.1);
+                self.camera.pan_by_pixels(focus.0 - anchor.0, focus.1 - anchor.1);
             }
         }
 
@@ -727,19 +578,19 @@ impl BattleApp {
     /// Absent while the view is moving, while a rectangle is being swept —
     /// the rectangle is the answer then, and a box around its far corner as
     /// well is noise — and when the cells are too small to point at one.
-    fn hover_mark(&self, scale: f32, on_ui: bool) -> Option<egui::Rect> {
-        if on_ui || !self.hovering || self.is_panning() || self.zoom < HOVER_MIN_ZOOM {
+    fn hover_mark(&self, on_ui: bool) -> Option<egui::Rect> {
+        if on_ui || !self.hovering || self.is_panning() || self.camera.zoom < HOVER_MIN_ZOOM {
             return None;
         }
         if matches!(&self.gesture, Gesture::Drawing(drag) if drag.moved) {
             return None;
         }
         let at = self.cell_under_cursor(self.cursor);
-        Some(self.cell_rect(scale, at, at))
+        Some(self.camera.cell_rect(at, at))
     }
 
     /// What a drag has laid out so far, with what it would cost.
-    fn selection_mark(&self, scale: f32) -> Option<overlay::Selection> {
+    fn selection_mark(&self) -> Option<overlay::Selection> {
         let Gesture::Drawing(drag) = &self.gesture else { return None };
         if !drag.moved {
             return None;
@@ -765,14 +616,14 @@ impl BattleApp {
             // that doubles back on itself.
             hotbar::Stroke::Pencil => cells
                 .iter()
-                .map(|&at| self.cell_rect(scale, at, at))
+                .map(|&at| self.camera.cell_rect(at, at))
                 .collect(),
-            hotbar::Stroke::Rectangle => vec![self.cell_rect(scale, drag.from, to)],
+            hotbar::Stroke::Rectangle => vec![self.camera.cell_rect(drag.from, to)],
         };
 
         let (r, g, b) = hud::player_colour(self.player());
         Some(overlay::Selection {
-            bounds: self.cell_rect(scale, drag.from, to),
+            bounds: self.camera.cell_rect(drag.from, to),
             cells: rects,
             outlined: drag.stroke == hotbar::Stroke::Rectangle,
             tint: egui::Color32::from_rgb(r, g, b),
@@ -851,22 +702,8 @@ impl BattleApp {
         }
     }
 
-    /// The region on screen, in absolute cells, as (min, max), with a margin.
-    fn visible_cells(&self) -> ((i32, i32), (i32, i32)) {
-        let (vw, vh) = self.viewport;
-        let (ox, oy) = self.origin();
-        let (w, h) = (vw / self.zoom, vh / self.zoom);
-        (
-            (oy.floor() as i32 - VIEW_MARGIN, ox.floor() as i32 - VIEW_MARGIN),
-            (
-                (oy + h).ceil() as i32 + VIEW_MARGIN,
-                (ox + w).ceil() as i32 + VIEW_MARGIN,
-            ),
-        )
-    }
-
     fn subscribe_to_view(&mut self) {
-        let (min, max) = self.visible_cells();
+        let (min, max) = self.camera.visible_cells(VIEW_MARGIN);
         let wanted: Vec<_> = World::chunks_covering(min, max)
             .into_iter()
             .filter(|c| !self.subscribed.contains(c))
@@ -961,57 +798,43 @@ impl App for BattleApp {
             chunks,
             _atlas: atlas,
             world,
-            camera_dirty: true,
-            camera: START_CENTRE,
-            zoom: START_ZOOM,
+            camera: camera::Camera::new(START_CENTRE, START_ZOOM),
             gesture: Gesture::None,
             space: false,
             shift: false,
             pan: [false; 4],
-            pan_step: (0.0, 0.0),
-            pan_velocity: (0.0, 0.0),
             touches: Vec::new(),
             touch_count: 0,
             pinch_span: None,
             view_anchor: None,
             touch_view: false,
             hovering: false,
-            viewport: (1.0, 1.0),
             elapsed: 0.0,
             notice: None,
             last_action: None,
             value: Player::STARTING_VALUE,
             me: None,
             subscribed: std::collections::HashSet::new(),
-            scale: 1.0,
             cursor: (0.0, 0.0),
             pending: None,
             slot: 0,
             link,
         };
         app.world.dirty = false;
-        app.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
-        app.scale = gpu.scale_factor;
+        app.fit(gpu);
         app.write_camera(gpu);
         app
     }
 
     fn resize(&mut self, gpu: &GpuState) {
         // `update` notices this too; this just avoids a frame of staleness.
-        self.viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
-        self.scale = gpu.scale_factor;
-        self.camera_dirty = true;
+        self.fit(gpu);
         self.subscribed.clear();
-
         self.write_camera(gpu);
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
-        self.scale = gpu.scale_factor;
-        let viewport = (gpu.size.0 as f32, gpu.size.1 as f32);
-        if viewport != self.viewport {
-            self.viewport = viewport;
-            self.camera_dirty = true;
+        if self.fit(gpu) {
             self.subscribed.clear(); // a different area is visible now
         }
 
@@ -1036,7 +859,7 @@ impl App for BattleApp {
 
         self.world.update(dt, GENERATION_SPAN);
         if self.world.dirty {
-            let visible = self.visible_cells();
+            let visible = self.camera.visible_cells(VIEW_MARGIN);
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
             self.world.dirty = false;
         }
@@ -1047,7 +870,7 @@ impl App for BattleApp {
             generation: self.world.generation,
             chunks_held: self.world.stored_count(),
             chunks_drawn: self.chunks.instance_count(),
-            zoom: self.zoom,
+            zoom: self.camera.zoom,
             connected: self.link.is_some(),
             notice: self.notice.as_deref(),
             pointer_on_ui: self.views.borrow().wants_pointer(),
@@ -1062,8 +885,8 @@ impl App for BattleApp {
         let (r, g, b) = hud::player_colour(self.player());
         let marks = overlay::Marks {
             tint: egui::Color32::from_rgb(r, g, b),
-            hover: self.hover_mark(gpu.scale_factor, status.pointer_on_ui),
-            selection: self.selection_mark(gpu.scale_factor),
+            hover: self.hover_mark(status.pointer_on_ui),
+            selection: self.selection_mark(),
         };
         let mut picked = None;
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {
@@ -1080,12 +903,12 @@ impl App for BattleApp {
         }
         *self.ui_output.borrow_mut() = Some(output);
 
-        if self.camera_dirty {
+        if self.camera.dirty {
             self.write_camera(gpu);
-            self.camera_dirty = false;
+            self.camera.dirty = false;
             // Panning changes the region the backdrop has to cover, so the
             // instance list follows the camera.
-            let visible = self.visible_cells();
+            let visible = self.camera.visible_cells(VIEW_MARGIN);
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
         }
     }
@@ -1112,7 +935,7 @@ impl App for BattleApp {
         if let Gesture::Drawing(drag) = &mut self.gesture {
             drag.reached((x, y), slop, cell);
         } else if self.is_panning() {
-            self.pan_by_pixels(dx, dy);
+            self.camera.pan_by_pixels(dx, dy);
         }
     }
 
@@ -1158,7 +981,7 @@ impl App for BattleApp {
         if !delta.is_finite() {
             return;
         }
-        self.pan_velocity = (0.0, 0.0);
+        self.camera.halt();
         self.zoom_about_cursor((1.0 + delta as f32).clamp(0.5, 2.0));
     }
 
@@ -1182,7 +1005,7 @@ impl App for BattleApp {
         match phase {
             P::Started => {
                 self.touches.push((id, at));
-                self.pan_velocity = (0.0, 0.0);
+                self.camera.halt();
             }
             P::Moved => {
                 if let Some(t) = self.touches.iter_mut().find(|t| t.0 == id) {
@@ -1239,7 +1062,7 @@ impl App for BattleApp {
         use winit::event::MouseScrollDelta as D;
         // A trackpad sends its own momentum after the fingers lift, so ours
         // would be a second one running alongside it.
-        self.pan_velocity = (0.0, 0.0);
+        self.camera.halt();
         match delta {
             // A wheel notch: zoom, about the cursor rather than the screen
             // centre, so what is under the pointer stays under it.
@@ -1250,7 +1073,7 @@ impl App for BattleApp {
             D::PixelDelta(p) if ctrl => {
                 self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0))
             }
-            D::PixelDelta(p) => self.pan_by_pixels(p.x, p.y),
+            D::PixelDelta(p) => self.camera.pan_by_pixels(p.x, p.y),
         }
     }
 
@@ -1263,7 +1086,7 @@ impl App for BattleApp {
         if pressed {
             // A press is aiming at something, so a glide left over from the
             // last one stops here rather than sliding the target away.
-            self.pan_velocity = (0.0, 0.0);
+            self.camera.halt();
             match button {
                 B::Middle | B::Right => self.begin_pan(Some(button)),
                 B::Left if self.space => self.begin_pan(Some(button)),

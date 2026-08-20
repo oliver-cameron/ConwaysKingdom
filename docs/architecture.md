@@ -56,4 +56,6 @@ Transport (tokio, tokio-tungstenite, futures-util) is declared under `cfg(not(ta
 
 A view is a screen. `views::battle` is the game; a menu or lobby would sit beside it. `views::Views` is the egui plumbing they share, and `views::theme` is everything visual.
 
+`views::camera` is split out of the battle view because it is the one part of it that is pure arithmetic — a position, a scale, and the mapping between the screen and the world. That mapping was written out at each of its four call sites, and none of it could be tested without a window to put it in. It knows nothing about what is drawn or what the pointer means: the view decides that a middle drag pans, the camera decides what panning is.
+
 `Views` translates winit events into `egui::RawInput` by hand rather than using `egui-winit`, which does not compile for wasm32 — see [gotchas](gotchas.md).
