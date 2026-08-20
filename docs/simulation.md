@@ -96,9 +96,13 @@ Shattering runs after the rules, in absolute coordinates, so a pane spanning chu
 
 One consequence is emergent rather than designed, and worth knowing: **a frozen cell still counts as a neighbour**, so a pane laid *exactly* on a pattern causes life to be born immediately outside itself, and that newborn breaks the pane.
 
-Note the "exactly". Give the pane one cell of margin — which is the obvious way to wall something off — and every cell that could be born from the frozen pattern lies inside the pane, where the rule returns it unchanged. Nothing is ever born outside to touch it, and **no pane with a margin can ever shatter**. Only a player taking it will remove it. That is why ice looks inert in a game of one: the natural gesture produces the one arrangement the simulation can never break. `a_pane_with_a_margin_seals_what_it_covers_for_good` pins it.
+Note the "exactly". Give the pane one cell of margin and every cell that could be born from the frozen pattern lies inside the pane, where the rule returns it unchanged — so **a pane with a margin is not broken by what it covers**. That is what makes ice work as scaffolding: seal a region and the half-built pattern inside it will not break its own cover.
 
-The lever, if that is not the game wanted, is the seed test in `World::shatter_ice`: it asks for a neighbour that is alive **and ice-free**, so nothing under the pane can break it. Dropping the ice-free half means a pane can never be laid over life at all. Making frozen cells stop counting as neighbours, in `Halo::step_into`, goes the other way and seals panes harder still.
+When a pane goes, **the ice flag is the only thing that changes**. What was under it — alive, dead, and whose — is exactly as it was, which is what makes a pane a schematic rather than a lid: draw the pattern frozen over as many generations as it takes, and it starts living the instant the cover breaks. `shattering_leaves_what_was_under_it_exactly_as_it_was` pins it.
+
+It buys time, not safety. Anything alive arriving from elsewhere breaks it on contact, and a glider is the cheapest way to reach a pane nothing can get beside — `a_glider_shatters_a_pane_it_reaches` flies one in and watches the whole run go. Sealing a pattern in protects it from itself and from nothing else.
+
+The lever, if that is not the game wanted, is the seed test in `World::shatter_ice`: it asks for a neighbour that is alive **and ice-free**, so nothing under a pane can break it.
 
 ## Worlds
 
