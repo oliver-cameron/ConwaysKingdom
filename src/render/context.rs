@@ -22,6 +22,52 @@ pub struct GpuState {
     pub window: Arc<Window>,
 }
 
+/// Whether the browser will actually hand over a WebGPU adapter.
+///
+/// `navigator.gpu` existing is not enough. On a secure origin — which
+/// `localhost` is — Chrome exposes it and then returns **null** from
+/// `requestAdapter` whenever no GPU is usable: a blocklisted driver, a crashed
+/// GPU process, a virtual machine, a headless browser. wgpu hands that null
+/// back as an `Adapter` all the same, and the first method called on it throws
+///
+/// ```text
+/// TypeError: Cannot read properties of null (reading 'info')
+/// ```
+///
+/// which kills the page before the WebGL2 fallback is ever reached. So ask the
+/// browser ourselves, and only name the backend if the answer is yes.
+///
+/// Reached reflectively through `js_sys` rather than through web-sys, whose
+/// WebGPU bindings sit behind `--cfg=web_sys_unstable_apis` and would put a
+/// build flag between this crate and compiling at all.
+#[cfg(target_arch = "wasm32")]
+async fn webgpu_usable() -> bool {
+    use wasm_bindgen::JsCast;
+
+    let get = |on: &wasm_bindgen::JsValue, name: &str| {
+        js_sys::Reflect::get(on, &wasm_bindgen::JsValue::from_str(name)).ok()
+    };
+
+    let Some(navigator) = web_sys::window().map(|w| w.navigator()) else {
+        return false;
+    };
+    let Some(gpu) = get(navigator.as_ref(), "gpu") else { return false };
+    if gpu.is_undefined() || gpu.is_null() {
+        return false;
+    }
+    let Some(request) = get(&gpu, "requestAdapter").and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    else {
+        return false;
+    };
+    let Ok(promise) = request.call0(&gpu).and_then(|p| p.dyn_into::<js_sys::Promise>()) else {
+        return false;
+    };
+    match wasm_bindgen_futures::JsFuture::from(promise).await {
+        Ok(adapter) => !adapter.is_null() && !adapter.is_undefined(),
+        Err(_) => false,
+    }
+}
+
 impl GpuState {
     pub async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
@@ -29,13 +75,19 @@ impl GpuState {
         let (width, height) = (size.width.max(1), size.height.max(1));
 
         // Native: let wgpu pick the best of Vulkan / Metal / DX12.
-        // Wasm: try WebGPU first, fall back to WebGL2 (GL) — requires
-        // the `webgl` feature enabled on the wgpu dependency for the
-        // wasm32 target in Cargo.toml.
-        let backends = if cfg!(target_arch = "wasm32") {
+        #[cfg(not(target_arch = "wasm32"))]
+        let backends = wgpu::Backends::PRIMARY;
+
+        // Wasm: WebGPU when the browser will really give us one, and WebGL2
+        // otherwise — which needs the `webgl` feature on the wgpu dependency
+        // for the wasm32 target in Cargo.toml. Asking for WebGPU when it
+        // cannot be had does not fall back, it crashes; see `webgpu_usable`.
+        #[cfg(target_arch = "wasm32")]
+        let backends = if webgpu_usable().await {
             wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
         } else {
-            wgpu::Backends::PRIMARY
+            log::warn!("no WebGPU adapter offered; falling back to WebGL2");
+            wgpu::Backends::GL
         };
 
         // InstanceDescriptor no longer implements Default as of wgpu

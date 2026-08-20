@@ -16,6 +16,28 @@ At 0.36.1, `egui::DroppedFile` declares `bytes_async` under `cfg(wasm32)` and eg
 
 We translate winit events into `egui::RawInput` by hand instead — about a hundred lines, one code path for both targets. A HUD needs pointer, wheel and modifiers; the IME and clipboard handling egui-winit exists for is not in play.
 
+## A canvas has two sizes, and nothing sets the one that matters
+
+`width`/`height` are the pixels drawn into; the CSS box is where those pixels are stretched to. Styling the canvas `100vw` by `100vh` sets the box only. **Nothing sets the backing store.** winit's resize observer reports the box and emits `Resized`, and wgpu configures a surface, but neither writes `canvas.width`, so it keeps whatever it had — 300×150 by default, or 1×1 once winit has applied its own zero-sized idea of the window.
+
+Do not write the canvas directly either: wgpu's WebGL backend sets the backing store to match whatever the **surface** is configured to, so a write to the canvas is undone on the next frame. Configure the surface from the canvas's client box each frame and the canvas follows it.
+
+winit's `inner_size` is no help: it starts at zero, so the surface is configured 1×1 before any resize observation lands.
+
+*Symptom:* the whole game drawn into a handful of pixels and scaled up, **and it comes right the instant you open the web inspector** — devtools changes the window size, which is what finally gets a resize past whatever guard was blocking it. That tell is worth more than any amount of reading.
+
+## `navigator.gpu` existing does not mean WebGPU works
+
+On a secure origin — `localhost` counts — Chrome exposes `navigator.gpu` and then returns **null** from `requestAdapter` whenever no GPU is usable: a blocklisted driver, a crashed GPU process, a VM, a headless browser. wgpu hands that null back as an `Adapter` anyway, and the first method called on it throws
+
+```
+TypeError: Cannot read properties of null (reading 'info')
+```
+
+which kills the page before the WebGL2 fallback is reached. Ask the browser yourself and only name `BROWSER_WEBGPU` if the answer is a real adapter.
+
+*Also:* web-sys's WebGPU bindings are behind `--cfg=web_sys_unstable_apis`, so that check goes through `js_sys::Reflect` rather than putting a build flag between the crate and compiling.
+
 ## Setting a canvas's size clears it
 
 `Window::inner_size` on the web returns a value winit updates from its **own** resize observer, so it never reflects a request in the same frame. Comparing against it means requesting a resize every frame, and setting a canvas's size clears it — the picture never survives to be shown.
