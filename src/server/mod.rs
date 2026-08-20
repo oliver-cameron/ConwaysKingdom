@@ -137,6 +137,16 @@ impl Server {
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
+                // Judged here as well as refused in the client, because a
+                // client that sends whatever it likes is the case this exists
+                // for. Ice is not liftable, so an erase naming it is not an
+                // action, whoever asks.
+                if let crate::net::Action::Erase { placement, .. } = &stamped.action {
+                    if !placement.can_be_taken() {
+                        log::info!("refused {:?}: {placement:?} cannot be taken", stamped.player);
+                        return Vec::new();
+                    }
+                }
                 // Cost is charged now, against the world as it stands, rather
                 // than when the action is applied at the tick boundary -- the
                 // client priced it against the same state, so pricing it later
@@ -365,6 +375,41 @@ mod tests {
         // Erasing empty space is neither earned nor spent.
         act(&mut s, Action::Erase { cells: vec![(90, 90)], placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
+    }
+
+    /// Ice cannot be taken back, and the server is where that is decided. The
+    /// client refuses it too, but a client that sends whatever it likes is the
+    /// case this exists for — and a pane liftable by asking twice would be no
+    /// pane at all.
+    #[test]
+    fn the_server_refuses_to_lift_ice() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        let pane = vec![(0, 0), (0, 1), (0, 2)];
+
+        s.handle(
+            Some(me),
+            ClientMessage::Act(Stamped {
+                tick: s.tick(),
+                player: me,
+                action: Action::Paint { cells: pane.clone(), placement: Placement::Ice },
+            }),
+        );
+        s.step();
+        assert!(s.world().cell_at(0, 0).unwrap().is_ice());
+        let spent = s.value_of(me);
+
+        s.handle(
+            Some(me),
+            ClientMessage::Act(Stamped {
+                tick: s.tick(),
+                player: me,
+                action: Action::Erase { cells: pane, placement: Placement::Ice },
+            }),
+        );
+        s.step();
+        assert!(s.world().cell_at(0, 0).unwrap().is_ice(), "the pane should still be there");
+        assert_eq!(s.value_of(me), spent, "and nothing should have been paid for it");
     }
 
     #[test]

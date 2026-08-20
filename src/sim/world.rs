@@ -860,17 +860,16 @@ mod tests {
         }
     }
 
-    /// A pane with a margin round the life it covers is permanent, and this
-    /// is why: every cell that could be born from the frozen pattern lies
-    /// inside the pane, where the rule returns it unchanged, so nothing is
-    /// ever born outside to touch it. Nothing in the simulation can break it
-    /// again — only a player taking it.
+    /// A pane with a margin round the life it covers is not broken by that
+    /// life, and this is why: every cell that could be born from the frozen
+    /// pattern lies inside the pane, where the rule returns it unchanged, so
+    /// nothing is ever born outside to touch it. Lay the pane tightly instead
+    /// and it breaks at once, which is `life_born_beside_a_pane_breaks_it`.
     ///
-    /// Emergent rather than designed, and the reason ice looks inert in a
-    /// game of one: walling off your own pattern, which is the obvious thing
-    /// to do with a pane, produces the one arrangement that can never shatter.
+    /// Says nothing about life arriving from elsewhere — see the test below,
+    /// which is what actually breaks a pane like this.
     #[test]
-    fn a_pane_with_a_margin_seals_what_it_covers_for_good() {
+    fn a_pane_with_a_margin_is_not_broken_by_what_it_covers() {
         let mut w = World::infinite_empty();
         for col in 40..43 {
             w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
@@ -893,6 +892,96 @@ mod tests {
             3,
             "and what it covers should be exactly as it was, frozen"
         );
+    }
+
+    /// What a pane is for. Shattering clears the ice flag and nothing else,
+    /// so a schematic drawn under one — alive here, deliberately dead there,
+    /// and whoever owns each cell — starts living exactly as it was drawn the
+    /// moment the cover goes. Anything that reset the cells underneath would
+    /// make a pane useless for laying a pattern out over several generations,
+    /// which is the whole of why it freezes rather than blocks.
+    #[test]
+    fn shattering_leaves_what_was_under_it_exactly_as_it_was() {
+        let mut w = World::infinite_empty();
+
+        // A schematic: two live cells with different owners, and a gap that
+        // has to stay a gap.
+        w.set_cell_at(11, 11, Cell::alive(PlayerId(1)));
+        w.set_cell_at(11, 13, Cell::alive(PlayerId(2)));
+        for row in 10..=12 {
+            for col in 10..=14 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_ice(true));
+            }
+        }
+        let before: Vec<Cell> = (10..=12)
+            .flat_map(|r| (10..=14).map(move |c| (r, c)))
+            .map(|(r, c)| w.cell_at(r, c).unwrap())
+            .collect();
+
+        // A block against the pane, ice-free and alive, to break it.
+        for (r, c) in [(13, 10), (13, 11), (14, 10), (14, 11)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(3)));
+        }
+
+        w.step();
+
+        assert!(!w.cell_at(10, 14).unwrap().is_ice(), "the pane should have gone");
+        let after: Vec<Cell> = (10..=12)
+            .flat_map(|r| (10..=14).map(move |c| (r, c)))
+            .map(|(r, c)| w.cell_at(r, c).unwrap())
+            .collect();
+        for (was, is) in before.iter().zip(&after) {
+            assert_eq!(
+                was.with_ice(false),
+                *is,
+                "the ice flag is the only thing shattering may change"
+            );
+        }
+    }
+
+    /// And what breaks it: anything alive that arrives. A glider is the
+    /// cheapest way to reach a pane you cannot get next to, and it shatters
+    /// the whole run the moment it touches — sealing a pattern in buys you
+    /// time, not safety.
+    #[test]
+    fn a_glider_shatters_a_pane_it_reaches() {
+        let mut w = World::infinite_empty();
+        for col in 40..43 {
+            w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
+        }
+        for row in 39..42 {
+            for col in 39..44 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_ice(true).with_player(PlayerId(1)));
+            }
+        }
+
+        // A glider up and to the left, travelling down and to the right: one
+        // cell each way every four generations.
+        for (r, c) in [(30, 31), (31, 32), (32, 30), (32, 31), (32, 32)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(2)));
+        }
+
+        let mut broke_at = None;
+        for step in 1..=60 {
+            w.step();
+            if !w.cell_at(39, 39).unwrap_or(Cell::DEAD).is_ice() {
+                broke_at = Some(step);
+                break;
+            }
+        }
+        let broke_at = broke_at.expect("the glider should have reached the pane and broken it");
+        assert!(broke_at > 1, "it should have had to travel, not start touching");
+
+        for row in 39..42 {
+            for col in 39..44 {
+                assert!(
+                    !w.cell_at(row, col).unwrap_or(Cell::DEAD).is_ice(),
+                    "({row}, {col}) survived, so the run did not break as one"
+                );
+            }
+        }
     }
 
     /// A pane is not broken by what it covers. The cell underneath is frozen,

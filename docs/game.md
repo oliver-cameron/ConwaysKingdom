@@ -39,9 +39,7 @@ Keyed on what is held rather than on whether the cell is occupied at all, becaus
 
 The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line. A stroke that crosses itself lists each cell once: the pricing compares every cell against the world rather than against the cells before it, so a repeat would be charged for twice and laid once.
 
-**Which way a drag goes is decided by the cell the press lands on**, the same rule a click follows: what you are holding is already there, so the drag takes it back; it is not, so the drag puts it down. Fixed at the press, so a sweep does not change its mind halfway because it crossed onto different ground, and the preview says which it is before the button comes up.
-
-That is what makes ice usable as scaffolding. Freezing a region to build a large pattern across several generations is only worth doing if the scaffold comes off again, and lifting a ten by ten pane one cell at a time is a hundred clicks. Press on the pane with Ice held and drag: the whole thing lifts, and what was under it starts living.
+A drag always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
 
 What will be laid is drawn while you draw it, with its size and its price beside it, and a drag that cannot be paid for is drawn as refused before the button comes up. **A drag is all or nothing.** One laid as far as the value stretched would stop somewhere the hand did not, and the player would be left working out where it ran out and why.
 
@@ -53,13 +51,15 @@ More than one cell is what makes a drag a drag. A press that travelled but staye
 
 ## Ice
 
-Ice is scaffolding. Freezing a region lets a large structure be laid out over many generations without the rule eating the half-built work, and lifting the pane starts the whole thing at once. That it also walls other players off is the same mechanic pointed outward.
+Ice is a schematic. Freezing a region lets a large pattern be laid out over many generations without the rule eating the half-built work, and **shattering clears the ice flag and nothing else** — so what was drawn underneath, alive cells and deliberate gaps alike, starts living exactly as it was drawn. That it also walls other players off is the same mechanic pointed outward.
+
+**A pane cannot be taken back.** It stops time over whatever it covers, and being able to lift one at will would make it cheap to undo as well as strong to place. What removes ice is life reaching it, which an opponent can arrange with a glider and the owner cannot simply click away — so laying one is a decision you are committed to. Holding Ice and clicking a pane says so rather than doing nothing, and the server refuses the action as well, because a client that sends whatever it likes is the case that check exists for.
 
 A pane freezes what it covers. It is a flag, not a kind, so a cell may be alive, iced, both or neither.
 
 A pane belongs to whoever laid it. There is **one owner field per cell**, so icing another player's living cell takes the cell with it — deliberate, and part of why a pane costs what it does. If ice should never transfer a cell, that needs a second owner field, which the cell has no spare bits for at sixteen.
 
-Life touching a pane shatters the whole connected run — where "touching" means a living, ice-free neighbour, so nothing under a pane can break it. A pane laid tightly over a pattern is short-lived, because life is born just outside it and breaks it at once. **A pane with one cell of margin can never shatter at all**, since everything that could be born is inside it and frozen. See [simulation](simulation.md#ice).
+Life touching a pane shatters the whole connected run — where "touching" means a living, ice-free neighbour, so nothing under a pane can break it. A pane laid tightly over a pattern is short-lived, because life is born just outside it and breaks it at once; give it a cell of margin and the pattern cannot break its own cover. That protects it from itself and from nothing else: **a glider flown into a pane shatters it on contact**, however well sealed it is. See [simulation](simulation.md#ice).
 
 ## Controls
 

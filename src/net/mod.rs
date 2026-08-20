@@ -91,6 +91,19 @@ impl Placement {
         }
     }
 
+    /// Whether a player may take this back once it is down.
+    ///
+    /// Ice may not. A pane stops time over whatever it covers, and being able
+    /// to lift one at will would make it cheap to undo as well as strong to
+    /// place. What removes ice is life reaching it — something an opponent can
+    /// arrange with a glider and the owner cannot simply click away.
+    pub const fn can_be_taken(self) -> bool {
+        match self {
+            Self::Life => true,
+            Self::Ice => false,
+        }
+    }
+
     /// Take this away, and leave everything else alone.
     ///
     /// The inverse of [`Self::apply_to`], and the reason clicking a living
