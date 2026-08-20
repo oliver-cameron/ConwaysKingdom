@@ -59,7 +59,7 @@ A pane freezes what it covers. It is a flag, not a kind, so a cell may be alive,
 
 A pane belongs to whoever laid it. There is **one owner field per cell**, so icing another player's living cell takes the cell with it — deliberate, and part of why a pane costs what it does. If ice should never transfer a cell, that needs a second owner field, which the cell has no spare bits for at sixteen.
 
-Life touching a pane shatters the whole connected run — where "touching" means a living, ice-free neighbour, so nothing under a pane can break it. A pane laid tightly over a pattern is short-lived, because life is born just outside it and breaks it at once; give it a cell of margin and the pattern cannot break its own cover. That protects it from itself and from nothing else: **a glider flown into a pane shatters it on contact**, however well sealed it is. See [simulation](simulation.md#ice).
+Any live cell in the eight neighbours shatters the whole connected run — placed or born, yours or anyone's. The one exception is a cell that is itself under ice, which is frozen and cannot break what covers it. A pane laid tightly over a pattern is short-lived, because life is born just outside it and breaks it at once; give it a cell of margin and the pattern cannot break its own cover. That protects it from itself and from nothing else: **a glider flown into a pane shatters it on contact**, however well sealed it is. See [simulation](simulation.md#ice).
 
 ## Controls
 

@@ -102,7 +102,7 @@ When a pane goes, **the ice flag is the only thing that changes**. What was unde
 
 It buys time, not safety. Anything alive arriving from elsewhere breaks it on contact, and a glider is the cheapest way to reach a pane nothing can get beside — `a_glider_shatters_a_pane_it_reaches` flies one in and watches the whole run go. Sealing a pattern in protects it from itself and from nothing else.
 
-The lever, if that is not the game wanted, is the seed test in `World::shatter_ice`: it asks for a neighbour that is alive **and ice-free**, so nothing under a pane can break it.
+The rule is that simple and has one exception. **Any live cell in the eight neighbours breaks a pane** — placed by a player or born of the rule, yours or anyone's, one cell or a glider. The exception is a cell that is itself under ice: it is frozen, and a pane must not be broken by what it covers, or no pane could be laid over life at all. That is the whole of the seed test in `World::shatter_ice`.
 
 ## Worlds
 

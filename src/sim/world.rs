@@ -365,9 +365,14 @@ impl World {
 
     /// Break every pane that life has reached.
     ///
-    /// A pane touched by a living, ice-free cell shatters, and takes the whole
-    /// connected run of ice with it — a pane is one object, so cracking a
-    /// corner of it does not leave the rest standing.
+    /// Any live cell in the eight neighbours breaks a pane — placed or born,
+    /// whoever owns it — and takes the whole connected run of ice with it,
+    /// because a pane is one object and cracking a corner of it does not leave
+    /// the rest standing.
+    ///
+    /// One exception: a cell that is itself under ice. It is frozen, and a
+    /// pane must not be broken by what it covers, or none could be laid over
+    /// life at all.
     ///
     /// Connectivity is orthogonal. Panes are laid as rectangles, and two that
     /// meet only at a corner are two panes rather than one; joining them
