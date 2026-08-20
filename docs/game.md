@@ -39,7 +39,9 @@ Keyed on what is held rather than on whether the cell is occupied at all, becaus
 
 The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line. A stroke that crosses itself lists each cell once: the pricing compares every cell against the world rather than against the cells before it, so a repeat would be charged for twice and laid once.
 
-A drag always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
+**Which way a drag goes is decided by the cell the press lands on**, the same rule a click follows: what you are holding is already there, so the drag takes it back; it is not, so the drag puts it down. Fixed at the press, so a sweep does not change its mind halfway because it crossed onto different ground, and the preview says which it is before the button comes up.
+
+That is what makes ice usable as scaffolding. Freezing a region to build a large pattern across several generations is only worth doing if the scaffold comes off again, and lifting a ten by ten pane one cell at a time is a hundred clicks. Press on the pane with Ice held and drag: the whole thing lifts, and what was under it starts living.
 
 What will be laid is drawn while you draw it, with its size and its price beside it, and a drag that cannot be paid for is drawn as refused before the button comes up. **A drag is all or nothing.** One laid as far as the value stretched would stop somewhere the hand did not, and the player would be left working out where it ran out and why.
 
@@ -50,6 +52,8 @@ One drag lays at most 4096 cells. A rectangle at one pixel per cell can cover mi
 More than one cell is what makes a drag a drag. A press that travelled but stayed inside one cell would place where a click would take, so which of the two happens must not turn on a few pixels of hand shake at high zoom.
 
 ## Ice
+
+Ice is scaffolding. Freezing a region lets a large structure be laid out over many generations without the rule eating the half-built work, and lifting the pane starts the whole thing at once. That it also walls other players off is the same mechanic pointed outward.
 
 A pane freezes what it covers. It is a flag, not a kind, so a cell may be alive, iced, both or neither.
 

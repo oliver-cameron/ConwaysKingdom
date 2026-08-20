@@ -116,6 +116,11 @@ struct Drag {
     /// the press rather than read each frame, so changing slot mid-stroke does
     /// not change the shape of a line already half drawn.
     stroke: hotbar::Stroke,
+    /// Whether this drag takes rather than puts down, decided by the cell the
+    /// press landed on — the same rule a click follows. Fixed at the press for
+    /// the same reason the shape is: a sweep must not change its mind halfway
+    /// because it crossed onto different ground.
+    taking: bool,
     /// Every cell the pointer has crossed, in order. A pencil only.
     path: Vec<(i32, i32)>,
     /// The same cells as a set. A stroke that crosses itself would otherwise
@@ -126,12 +131,13 @@ struct Drag {
 }
 
 impl Drag {
-    fn begin(px: (f64, f64), cell: (i32, i32), stroke: hotbar::Stroke) -> Self {
+    fn begin(px: (f64, f64), cell: (i32, i32), stroke: hotbar::Stroke, taking: bool) -> Self {
         let mut drag = Self {
             from: cell,
             from_px: px,
             moved: false,
             stroke,
+            taking,
             path: Vec::new(),
             seen: std::collections::HashSet::new(),
         };
@@ -350,10 +356,21 @@ impl BattleApp {
         DRAG_SLOP * self.camera.scale.max(1.0) as f64
     }
 
-    /// Start drawing, with the shape the held slot lays.
+    /// Start drawing, with the shape the held slot lays and the direction the
+    /// cell under the press implies.
     fn begin_drawing(&mut self, at: (f64, f64)) {
         let stroke = hotbar::SLOTS[self.slot].stroke;
-        self.gesture = Gesture::Drawing(Drag::begin(at, self.camera.cell_at(at), stroke));
+        let cell = self.camera.cell_at(at);
+        self.gesture =
+            Gesture::Drawing(Drag::begin(at, cell, stroke, self.already_there(cell.0, cell.1)));
+    }
+
+    /// Whether what the hotbar holds is already on this cell. Taking it away
+    /// would change something, which is exactly what "already there" means.
+    fn already_there(&self, row: i32, col: i32) -> bool {
+        let placement = hotbar::SLOTS[self.slot].placement;
+        let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
+        placement.remove_from(existing) != existing
     }
 
     fn begin_pan(&mut self, button: Option<winit::event::MouseButton>) {
@@ -500,9 +517,9 @@ impl BattleApp {
     /// likely to be building over it than a request to clear it cell by cell,
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
-    fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
+    fn lay(&mut self, cells: Vec<(i32, i32)>, taking: bool, shape: String) {
         let count = cells.len();
-        let (stamped, delta) = self.quote(cells);
+        let (stamped, delta) = self.quote(cells, taking);
 
         // All or nothing. A stroke laid as far as the value stretched would
         // stop somewhere the hand did not, and the player would be left
@@ -531,12 +548,13 @@ impl BattleApp {
     /// cannot draw one thing and the release lay another.
     fn drag_cells(&self, drag: &Drag, to: (i32, i32)) -> Result<(Vec<(i32, i32)>, String), String> {
         let name = hotbar::SLOTS[self.slot].name;
+        let verb = if drag.taking { "took" } else { "drew" };
         match drag.stroke {
             hotbar::Stroke::Pencil => {
                 let full = if drag.full() { ", full" } else { "" };
                 Ok((
                     drag.path.clone(),
-                    format!("drew {} cells of {name}{full}", drag.path.len()),
+                    format!("{verb} {} cells of {name}{full}", drag.path.len()),
                 ))
             }
             hotbar::Stroke::Rectangle => {
@@ -547,28 +565,30 @@ impl BattleApp {
                 }
                 let (r0, r1) = (drag.from.0.min(to.0), drag.from.0.max(to.0));
                 let (c0, c1) = (drag.from.1.min(to.1), drag.from.1.max(to.1));
+                let verb = if drag.taking { "lifted" } else { "laid" };
                 Ok((
                     (r0..=r1)
                         .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
                         .collect(),
-                    format!("laid {rows}x{cols} of {name}"),
+                    format!("{verb} {rows}x{cols} of {name}"),
                 ))
             }
         }
     }
 
-    /// Price a paint of these cells: the action that would be sent, and what
-    /// it would cost. Shared by the fill and by the preview of it, so the
-    /// preview cannot promise something the release then refuses.
-    fn quote(&self, cells: Vec<(i32, i32)>) -> (Stamped, i32) {
-        let stamped = Stamped {
-            tick: self.world.generation,
-            player: self.player(),
-            action: Action::Paint {
-                cells,
-                placement: hotbar::SLOTS[self.slot].placement,
-            },
+    /// Price an action on these cells: what would be sent, and what it costs.
+    ///
+    /// Shared by the click, by a drag, and by the preview of a drag, so the
+    /// preview cannot promise something the release then refuses and a drag
+    /// cannot be priced differently from the click it is made of.
+    fn quote(&self, cells: Vec<(i32, i32)>, taking: bool) -> (Stamped, i32) {
+        let placement = hotbar::SLOTS[self.slot].placement;
+        let action = if taking {
+            Action::Erase { cells, placement }
+        } else {
+            Action::Paint { cells, placement }
         };
+        let stamped = Stamped { tick: self.world.generation, player: self.player(), action };
         let delta = crate::net::value_delta(&self.world, &stamped);
         (stamped, delta)
     }
@@ -601,7 +621,7 @@ impl BattleApp {
         let (cells, label, allowed) = match self.drag_cells(drag, to) {
             Err(why) => (Vec::new(), why, false),
             Ok((cells, shape)) => {
-                let (_, delta) = self.quote(cells.clone());
+                let (_, delta) = self.quote(cells.clone(), drag.taking);
                 if self.value + delta < 0 {
                     let why = format!("{shape}   costs {}, you have {}", -delta, self.value);
                     (cells, why, false)
@@ -654,32 +674,20 @@ impl BattleApp {
     /// will not match and the resync puts it right.
     fn click(&mut self, row: i32, col: i32) {
         let player = self.player();
-        let cells = vec![(row, col)];
-        let slot = &hotbar::SLOTS[self.slot];
-        let placement = slot.placement;
-
+        let name = hotbar::SLOTS[self.slot].name;
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
-        // Already there is exactly "taking it away would change something".
-        let already_there = placement.remove_from(existing) != existing;
-        let action = if already_there {
-            Action::Erase { cells, placement }
-        } else {
-            Action::Paint { cells, placement }
-        };
-        let stamped = Stamped { tick: self.world.generation, player, action };
+        let already_there = self.already_there(row, col);
 
         // Priced against the world as it stands, before the action changes it,
         // and refused here on the same terms the server would refuse it. Doing
         // it locally means the refusal is instant rather than a round trip
         // away, and the two cannot disagree because it is the same function.
-        let delta = crate::net::value_delta(&self.world, &stamped);
+        let (stamped, delta) = self.quote(vec![(row, col)], already_there);
         if self.value + delta < 0 {
             self.notice = Some(format!("costs {}, you have {}", -delta, self.value));
             return;
         }
         self.notice = None;
-
-        let name = slot.name;
         self.last_action = Some(match (already_there, existing.player()) {
             (false, _) => format!("placed {name} at ({row}, {col}), {delta:+}"),
             (true, owner) if owner == player => {
@@ -851,7 +859,9 @@ impl App for BattleApp {
             // where a click would take, so which of the two happens must not
             // turn on a few pixels of hand shake at high zoom.
             match self.drag_cells(&drag, to) {
-                Ok((cells, shape)) if drag.moved && cells.len() > 1 => self.lay(cells, shape),
+                Ok((cells, shape)) if drag.moved && cells.len() > 1 => {
+                    self.lay(cells, drag.taking, shape)
+                }
                 Ok(_) => self.click(to.0, to.1),
                 Err(why) => self.notice = Some(why),
             }
@@ -1214,7 +1224,7 @@ mod tests {
     /// and a dragged pane came out as a single cell at the release point.
     #[test]
     fn a_slow_sweep_is_a_drag() {
-        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle, false);
         for step in 1..=60 {
             drag.reached((100.0 + step as f64, 100.0), DRAG_SLOP, (0, 0));
             assert!(
@@ -1229,7 +1239,7 @@ mod tests {
     /// still clicking, however many events it produces.
     #[test]
     fn a_shaky_press_is_a_click() {
-        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle, false);
         for at in [(102.0, 100.0), (98.0, 101.0), (100.0, 98.0), (101.0, 101.0)] {
             drag.reached(at, DRAG_SLOP, (0, 0));
         }
@@ -1240,7 +1250,7 @@ mod tests {
     /// mid-sweep must not turn the gesture back into a click.
     #[test]
     fn a_drag_does_not_become_a_click_again() {
-        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
+        let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle, false);
         drag.reached((400.0, 400.0), DRAG_SLOP, (0, 0));
         drag.reached((100.0, 100.0), DRAG_SLOP, (0, 0));
         assert!(drag.moved);
@@ -1278,7 +1288,7 @@ mod tests {
     /// before it, so a repeat would be charged for twice and laid once.
     #[test]
     fn a_stroke_that_crosses_itself_lists_each_cell_once() {
-        let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil);
+        let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil, false);
         // Out along a row, back along it, and out again.
         for cell in [(0, 6), (0, 0), (0, 6)] {
             drag.reached((100.0, 100.0), DRAG_SLOP, cell);
@@ -1292,7 +1302,7 @@ mod tests {
     /// is drawn is what is laid.
     #[test]
     fn a_stroke_stops_at_its_limit() {
-        let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil);
+        let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil, false);
         drag.reached((100.0, 100.0), DRAG_SLOP, (0, MAX_DRAG_CELLS as i32 * 2));
         assert!(drag.full());
         assert_eq!(drag.path.len() as i64, MAX_DRAG_CELLS);
