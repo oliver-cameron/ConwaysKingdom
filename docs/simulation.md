@@ -94,7 +94,11 @@ A pane touched by a **living, ice-free** cell shatters, and takes the whole conn
 
 Shattering runs after the rules, in absolute coordinates, so a pane spanning chunks breaks as one.
 
-One consequence is emergent rather than designed, and worth knowing: **a frozen cell still counts as a neighbour**, so a pane laid over life causes life to be born around itself, and that newborn breaks the pane. Ice shelters what is under it without sealing it off from the world. If that is not wanted, the change is to stop frozen cells counting as neighbours, in `Halo::step_into`.
+One consequence is emergent rather than designed, and worth knowing: **a frozen cell still counts as a neighbour**, so a pane laid *exactly* on a pattern causes life to be born immediately outside itself, and that newborn breaks the pane.
+
+Note the "exactly". Give the pane one cell of margin — which is the obvious way to wall something off — and every cell that could be born from the frozen pattern lies inside the pane, where the rule returns it unchanged. Nothing is ever born outside to touch it, and **no pane with a margin can ever shatter**. Only a player taking it will remove it. That is why ice looks inert in a game of one: the natural gesture produces the one arrangement the simulation can never break. `a_pane_with_a_margin_seals_what_it_covers_for_good` pins it.
+
+The lever, if that is not the game wanted, is the seed test in `World::shatter_ice`: it asks for a neighbour that is alive **and ice-free**, so nothing under the pane can break it. Dropping the ice-free half means a pane can never be laid over life at all. Making frozen cells stop counting as neighbours, in `Halo::step_into`, goes the other way and seals panes harder still.
 
 ## Worlds
 

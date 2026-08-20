@@ -860,6 +860,41 @@ mod tests {
         }
     }
 
+    /// A pane with a margin round the life it covers is permanent, and this
+    /// is why: every cell that could be born from the frozen pattern lies
+    /// inside the pane, where the rule returns it unchanged, so nothing is
+    /// ever born outside to touch it. Nothing in the simulation can break it
+    /// again — only a player taking it.
+    ///
+    /// Emergent rather than designed, and the reason ice looks inert in a
+    /// game of one: walling off your own pattern, which is the obvious thing
+    /// to do with a pane, produces the one arrangement that can never shatter.
+    #[test]
+    fn a_pane_with_a_margin_seals_what_it_covers_for_good() {
+        let mut w = World::infinite_empty();
+        for col in 40..43 {
+            w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
+        }
+        // One cell of margin on every side.
+        for row in 39..42 {
+            for col in 39..44 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_ice(true).with_player(PlayerId(1)));
+            }
+        }
+
+        for _ in 0..40 {
+            w.step();
+        }
+
+        assert!(w.cell_at(39, 39).unwrap().is_ice(), "the pane should still stand");
+        assert_eq!(
+            w.live_cells().len(),
+            3,
+            "and what it covers should be exactly as it was, frozen"
+        );
+    }
+
     /// A pane is not broken by what it covers. The cell underneath is frozen,
     /// and frozen is not "alive and ice-free", so it cannot be the seed --
     /// otherwise every pane laid over life would shatter on the next tick.
@@ -879,10 +914,10 @@ mod tests {
         assert!(c.is_alive(), "and what it covers should be frozen, not dead");
     }
 
-    /// Frozen cells still count as neighbours, so a pane laid over life makes
-    /// life around itself -- and that newborn breaks the pane. Emergent rather
-    /// than designed, and worth pinning down: it means ice shelters what is
-    /// under it without sealing it off from the world.
+    /// Frozen cells still count as neighbours, so a pane laid *exactly* on
+    /// life makes life immediately outside itself -- and that newborn breaks
+    /// the pane. Note the "exactly": see the test below for what one cell of
+    /// margin does, which is the opposite.
     #[test]
     fn life_born_beside_a_pane_breaks_it() {
         let mut w = World::infinite_empty();
