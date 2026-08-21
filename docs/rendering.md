@@ -48,7 +48,17 @@ A tile per state rather than compositing a pane over a cell. That is partly an a
 
 The sheet in the repo is **provisional**: four flat tiles so the states are told apart. Redraw it and drop it in; no code changes, because the mapping is the tile byte and nothing else.
 
-The PNGs are the source, and `cargo run --bin cnvt -- in.png out.png` makes one. The atlas is not a picture: its channels are the arguments to `shade()` — R saturation, G lightness, B hue, A coverage — so art is drawn in ordinary colours in any editor and converted, rather than authored channel by channel in a space nobody can see. The tool reports the worst round trip it caused, because the format cannot express everything: `shade` tapers chroma towards black and white, so a vivid colour at an extreme lightness clamps to full saturation and comes back duller. The shader ignores B today, taking hue from the cell's player instead; the channel is written anyway because it is the honest decomposition and costs nothing.
+The PNGs are the source, and `cnvt` converts between what you draw and what the shader reads, in both directions:
+
+```
+cargo run --bin cnvt -- art.png assets/sprites/sheet.png            # forward
+cargo run --bin cnvt -- --back assets/sprites/sheet.png art.png     # and back
+cargo run --bin cnvt -- --back --player 3 sheet.png as-p3.png       # as the game draws it
+```
+
+The reverse exists because a sheet cannot be opened: three of its channels are numbers fed to a colour model, so a paint program shows something that looks nothing like the art. Converting back gives a picture you can look at, edit, and convert forward again — a round trip is exact to within a step of rounding, and a test in the tool pins that, because the pair silently stops being a pair if its `shade` and the shader's ever drift.
+
+`--player N` reverses it the way the game will draw it, taking hue and saturation tier from player N rather than from the sheet. `--player 0` is unowned, which is grey. The atlas is not a picture: its channels are the arguments to `shade()` — R saturation, G lightness, B hue, A coverage — so art is drawn in ordinary colours in any editor and converted, rather than authored channel by channel in a space nobody can see. The tool reports the worst round trip it caused, because the format cannot express everything: `shade` tapers chroma towards black and white, so a vivid colour at an extreme lightness clamps to full saturation and comes back duller. The shader ignores B today, taking hue from the cell's player instead; the channel is written anyway because it is the honest decomposition and costs nothing.
 
  There was a generator that drew them from ASCII art, in Python because the crate embeds these files with `include_bytes!` and so cannot build until they exist — which rules out a cargo example. It is gone: the art is edited directly now, and a generator that nobody runs is a second definition of the sprites waiting to disagree with the first.
 

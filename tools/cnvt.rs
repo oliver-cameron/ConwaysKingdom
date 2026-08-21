@@ -1,8 +1,22 @@
-//! Convert an ordinary RGBA sprite sheet into the one the shader reads.
+//! Convert an ordinary RGBA sprite sheet into the one the shader reads, and
+//! back again.
 //!
 //! ```text
-//! cargo run --bin cnvt -- sheet.png assets/sprites/alive.png
+//! cargo run --bin cnvt -- art.png assets/sprites/sheet.png
+//! cargo run --bin cnvt -- --back assets/sprites/sheet.png art.png
+//! cargo run --bin cnvt -- --back --player 3 assets/sprites/sheet.png as-p3.png
 //! ```
+//!
+//! The reverse exists so a sheet can be opened. In the atlas format a sheet is
+//! unreadable — three of its channels are numbers fed to a colour model, so a
+//! paint program shows something that looks nothing like the art. Converting
+//! back gives you a picture you can look at, edit, and convert forward again.
+//!
+//! `--player N` reverses it the way the *game* will draw it: taking the hue
+//! and saturation tier from player N rather than from the sheet, since that is
+//! what the shader does. `--player 0` is unowned, which is grey. Without it
+//! the sheet's own hue is used, which is the true inverse of the forward pass
+//! and so is what a round trip should reproduce.
 //!
 //! The atlas is not a picture. Its channels are the arguments to `shade()` in
 //! `render/shaders/grid.wgsl`, which builds a colour in OKLab so that one sheet
@@ -112,6 +126,31 @@ fn shade(lightness: f32, saturation: f32, hue: f32) -> [f32; 3] {
     oklab_to_linear([lightness, c * dx, c * dy]).map(|v| v.clamp(0.0, 1.0))
 }
 
+/// Golden ratio: consecutive player numbers land far apart on the hue circle.
+/// Mirrors `player_hue` in the shader.
+const HUE_STEP: f32 = 0.618_033_99;
+
+/// What the shader will draw a sheet's pixel as, for a given player.
+///
+/// Mirrors `player_hue` and `player_saturation` in `grid.wgsl`. Player zero is
+/// nobody: unclaimed ground has no colour of its own, so it is grey however
+/// much saturation the art asks for.
+fn player_shade(sheet: [u8; 4], player: u8) -> [f32; 3] {
+    let hue = (player as f32 * HUE_STEP).fract() * TAU;
+    let tier = if player == 0 {
+        0.0
+    } else if player % 2 == 1 {
+        1.0
+    } else {
+        0.55
+    };
+    shade(
+        sheet[1] as f32 / 255.0,
+        sheet[0] as f32 / 255.0 * tier,
+        hue,
+    )
+}
+
 /// One pixel, from sRGB bytes to the sheet's four channels.
 ///
 /// Saturation is the pixel's chroma as a fraction of what `shade()` would ask
@@ -138,8 +177,11 @@ fn convert(px: [u8; 4]) -> [u8; 4] {
     ]
 }
 
-/// What the shader would draw from a converted pixel, back in sRGB bytes.
-/// Used only to report how faithful the conversion was.
+/// A sheet pixel back to sRGB bytes, using the sheet's own hue.
+///
+/// The true inverse of [`convert`], which is what makes it worth reporting a
+/// round trip against: any drift between this and `shade()` in the shader
+/// shows up as an error here rather than as art that looks wrong on screen.
 fn back(sheet: [u8; 4]) -> [u8; 3] {
     let rgb = shade(
         sheet[1] as f32 / 255.0,
@@ -147,6 +189,25 @@ fn back(sheet: [u8; 4]) -> [u8; 3] {
         sheet[2] as f32 / 255.0 * TAU,
     );
     rgb.map(|v| (linear_to_srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// A whole sheet back to something you can look at. `player` picks whose hue
+/// to draw it in; `None` uses the hue the sheet carries.
+fn reverse(pixels: &[u8], player: Option<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixels.len());
+    for px in pixels.chunks_exact(4) {
+        let sheet = [px[0], px[1], px[2], px[3]];
+        let rgb = match player {
+            Some(p) => player_shade(sheet, p)
+                .map(|v| (linear_to_srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8),
+            None => back(sheet),
+        };
+        out.extend_from_slice(&rgb);
+        // Coverage is kept rather than composited, so the result can be edited
+        // and converted forward again without a background baked into it.
+        out.push(sheet[3]);
+    }
+    out
 }
 
 fn read_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
@@ -183,13 +244,38 @@ fn write_rgba(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<(),
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let [input, output] = args.as_slice() else {
-        eprintln!("usage: cnvt <in.png> <out.png>");
-        eprintln!("  Converts an RGBA sheet into the atlas format: R saturation,");
-        eprintln!("  G lightness, B hue, A coverage. See the top of tools/cnvt.rs.");
+    let mut back_wards = false;
+    let mut player: Option<u8> = None;
+    let mut paths: Vec<String> = Vec::new();
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--back" => back_wards = true,
+            "--player" => match args.next().and_then(|v| v.parse::<u8>().ok()) {
+                Some(p) if p <= 31 => player = Some(p),
+                _ => {
+                    eprintln!("cnvt: --player takes a number from 0 to 31");
+                    std::process::exit(2);
+                }
+            },
+            other => paths.push(other.to_string()),
+        }
+    }
+
+    let [input, output] = paths.as_slice() else {
+        eprintln!("usage: cnvt [--back [--player N]] <in.png> <out.png>");
+        eprintln!("  Forward: an RGBA sheet into the atlas format -- R saturation,");
+        eprintln!("  G lightness, B hue, A coverage.");
+        eprintln!("  --back:  the atlas format into something you can look at.");
+        eprintln!("  --player N: draw it the way the game will, in player N's");
+        eprintln!("  colour. 0 is unowned, which is grey.");
         std::process::exit(2);
     };
+    if player.is_some() && !back_wards {
+        eprintln!("cnvt: --player only means anything with --back");
+        std::process::exit(2);
+    }
 
     let (width, height, pixels) = match read_rgba(Path::new(input)) {
         Ok(v) => v,
@@ -199,11 +285,34 @@ fn main() {
         }
     };
 
+    let (out, report) = if back_wards {
+        let what = match player {
+            Some(p) => format!("as player {p} sees it"),
+            None => "in the sheet's own hue".to_string(),
+        };
+        (reverse(&pixels, player), format!("reversed {what}"))
+    } else {
+        forward(&pixels, width)
+    };
+
+    if let Err(e) = write_rgba(Path::new(output), width, height, &out) {
+        eprintln!("cnvt: {e}");
+        std::process::exit(1);
+    }
+
+    println!("{input} -> {output}  {width}x{height}");
+    println!("{report}");
+}
+
+/// The forward pass, and how faithful it was.
+///
+/// The worst error any visible pixel takes on a round trip, so a sheet that
+/// will not survive one says so here rather than on screen.
+fn forward(pixels: &[u8], width: u32) -> (Vec<u8>, String) {
     let mut out = Vec::with_capacity(pixels.len());
-    // The largest error any visible pixel takes on the round trip, so a sheet
-    // that will not survive it says so here rather than on screen.
     let mut worst = 0i32;
     let mut worst_at = (0u32, 0u32);
+
     for (i, px) in pixels.chunks_exact(4).enumerate() {
         let px = [px[0], px[1], px[2], px[3]];
         let sheet = convert(px);
@@ -224,20 +333,104 @@ fn main() {
         }
     }
 
-    if let Err(e) = write_rgba(Path::new(output), width, height, &out) {
-        eprintln!("cnvt: {e}");
-        std::process::exit(1);
-    }
-
-    println!("{input} -> {output}  {width}x{height}");
-    println!(
+    let mut report = format!(
         "worst round trip: {worst}/255 at ({}, {})",
         worst_at.0, worst_at.1
     );
     if worst > 8 {
-        println!(
-            "  Colours past what OKLab can show at that lightness clamp to full\n  \
-             saturation and come back duller. Lighten or desaturate to fix."
+        report.push_str(
+            "\n  Colours past what OKLab can show at that lightness clamp to full\n  \
+             saturation and come back duller. Lighten or desaturate to fix.",
         );
+    }
+    (out, report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two directions are inverses. This is the property the pair exists
+    /// for, and the one that quietly breaks if `shade` here and `shade` in the
+    /// shader ever drift apart.
+    #[test]
+    fn a_colour_survives_the_round_trip() {
+        // Greys and moderate colours, which is what the art is. Vivid colours
+        // at extreme lightness are outside what the format can say and are
+        // covered by the test below.
+        for &px in &[
+            [0u8, 0, 0, 255],
+            [255, 255, 255, 255],
+            [128, 128, 128, 255],
+            [140, 90, 70, 255],
+            [70, 110, 140, 255],
+            [90, 140, 90, 255],
+        ] {
+            let there = convert(px);
+            let and_back = back(there);
+            for (a, b) in and_back.iter().zip(&px[..3]) {
+                assert!(
+                    (*a as i32 - *b as i32).abs() <= 2,
+                    "{px:?} came back {and_back:?}"
+                );
+            }
+        }
+    }
+
+    /// A grey has no hue to lose, so it must come back exactly — any drift
+    /// here is arithmetic error rather than the format running out of room.
+    #[test]
+    fn greys_are_exact() {
+        for level in [0u8, 17, 64, 128, 200, 255] {
+            let px = [level, level, level, 255];
+            let and_back = back(convert(px));
+            assert_eq!(and_back, [level, level, level], "grey {level} drifted");
+            assert_eq!(convert(px)[0], 0, "a grey has no saturation");
+        }
+    }
+
+    /// Colour the format cannot hold says so, rather than pretending.
+    #[test]
+    fn a_colour_too_vivid_to_hold_comes_back_duller() {
+        // Full green: far more chroma than `MAX_CHROMA` allows at that
+        // lightness, so saturation clamps and the trip loses some of it.
+        let px = [0u8, 255, 0, 255];
+        assert_eq!(convert(px)[0], 255, "clamped to full saturation");
+        let and_back = back(convert(px));
+        let error = and_back
+            .iter()
+            .zip(&px[..3])
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap();
+        assert!(error > 8, "this one is meant to be lossy, got {error}");
+    }
+
+    /// Player zero is nobody, and nobody's ground is grey. Mirrors the rule in
+    /// the shader, so `--back --player 0` shows what unclaimed ground looks
+    /// like rather than a hue nobody has.
+    #[test]
+    fn player_zero_reverses_to_grey() {
+        let sheet = convert([150, 90, 60, 255]);
+        let rgb = player_shade(sheet, 0);
+        assert!(
+            (rgb[0] - rgb[1]).abs() < 1e-4 && (rgb[1] - rgb[2]).abs() < 1e-4,
+            "unowned should have no colour, got {rgb:?}"
+        );
+        // And a real player does have one.
+        let owned = player_shade(sheet, 1);
+        assert!((owned[0] - owned[2]).abs() > 1e-3, "player one should be coloured");
+    }
+
+    /// Coverage is carried through untouched in both directions, so a sheet
+    /// can be reversed, edited and converted forward without a background
+    /// being baked into it.
+    #[test]
+    fn coverage_is_carried_not_composited() {
+        for alpha in [0u8, 1, 128, 255] {
+            assert_eq!(convert([10, 20, 30, alpha])[3], alpha);
+            let reversed = reverse(&[10, 20, 30, alpha], None);
+            assert_eq!(reversed[3], alpha);
+        }
     }
 }
