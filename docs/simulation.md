@@ -16,26 +16,29 @@ Two places this is enforced rather than hoped for. The active-chunk list is **so
 
 ## The cell
 
-Four bytes, little-endian, uploaded as `Rgba8Uint`.
+Two bytes, uploaded as `Rg8Uint`. The second of them is a sprite.
 
 ```
- 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-|   player    |F |G |       kind        | A |     <- R and G
-                                                  <- B and A: the tile's u, v
+ byte 0 (R)                byte 1 (G)
+| player  | spare |       |    kind     |I |A |
+ 7 6 5 4 3  2 1 0          7 6 5 4 3 2   1  0
 ```
 
-| field | bits | meaning |
+| field | where | meaning |
 |---|---|---|
-| alive | 0 | living or not |
-| kind | 1..9 | what it is, and the index of its sprite |
-| ice | 9 | a pane covers it; independent of alive |
-| flags | 10 | spare |
-| player | 11..16 | owner, 0 = unowned, so 31 players |
-| u, v | bytes 2 and 3 | which tile of its sheet it draws |
+| alive | G bit 0 | living or not |
+| ice | G bit 1 | a pane covers it; independent of alive |
+| kind | G bits 2..8 | what it is |
+| spare | R bits 0..3 | nothing yet |
+| player | R bits 3..8 | owner, 0 = unowned, so 31 players |
 
-The player sits at the top of the word, so extracting it is a shift with no mask, and raw cell values order by player first.
+**Byte 1 is the tile this cell draws**, whole and unshifted: low nibble across the sheet, high nibble down it. Alive and ice sit in its bottom bits and the kind in the rest, so a kind's four states are four consecutive tiles and finding a cell's picture is arithmetic rather than a lookup. There is no layer to choose and no UV to carry — what a cell looks like is one number.
 
-Stored as `[u8; 4]` rather than a `u16` and two `u8`s, so the byte order is ours rather than the host's **and alignment stays 1** — which is what lets a chunk be cast straight out of a save file or a wire frame at any offset. A `u16` field would force alignment 2 and panic on an odd offset.
+The player sits at the top of its byte, so extracting it is a shift with no mask.
+
+`Uint` rather than `Unorm` because these are bit fields, not colours: `Unorm` hands the shader floats in 0..1, so reading a field means multiplying by 255 and rounding, and a driver rounding one step the other way silently changes a cell's kind. Nothing samples this texture — the shader only `textureLoad`s it — so filtering, the one thing `Unorm` buys, is not in play.
+
+Stored as `[u8; 2]` rather than a `u16`, so the byte order is ours rather than the host's **and alignment stays 1** — which is what lets a chunk be cast straight out of a save file or a wire frame at any offset. A `u16` field would force alignment 2 and panic on an odd offset.
 
 A zeroed cell is dead, unowned and clear of ice, so zeroed memory is a valid empty world. Never give bit 0 clear a live meaning.
 
@@ -114,4 +117,4 @@ The rule is that simple and has one exception. **Any live cell in the eight neig
 
 `World::infinite` is an unbounded plane. `World::toroidal(rows, cols)` is a fixed grid in one contiguous allocation, with coordinates wrapping.
 
-`World::demo` is what the app and server open with: two Gosper glider guns owned by different players, facing each other so their streams collide. Guns rather than a still life for a specific reason — a still life or an oscillator looks identical whether it arrived from the server or the client regenerated it, so it cannot tell a working join from a broken one. A gun's trail of gliders says how long the server has been up, and a client starting from nothing cannot invent it.
+The world opens empty. Every player brings a 2×2 block on granted ground, so what a join produces is another player's territory and block appearing — which a client starting from nothing cannot invent, and which is what the Gosper guns used to be there to prove.

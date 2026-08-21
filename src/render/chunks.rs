@@ -33,7 +33,7 @@ pub const KIND_BACKDROP: u32 = 1;
 
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
-/// `Rgba8Uint`: R and G are the cell's sixteen bits, B and A its tile UV. Four
+/// `Rg8Uint`: R is the cell's owner byte, G its tile byte. Two
 /// bytes is also the narrowest storage-capable size, so moving the simulation
 /// to a compute shader later stays a dispatch change rather than a storage
 /// rewrite.
@@ -44,7 +44,7 @@ pub struct ChunkTexture {
 }
 
 impl ChunkTexture {
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Uint;
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Uint;
 
     /// Layers to allocate, the guaranteed floor for `max_texture_array_layers`.
     /// Allocated up front because an array texture cannot be resized.
@@ -188,7 +188,7 @@ pub fn world_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
                 count: None,

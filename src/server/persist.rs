@@ -10,7 +10,11 @@ use std::path::Path;
 use crate::sim::{Chunk, Player, PlayerId, World, WorldKind, CHUNK_N};
 
 const MAGIC: &[u8; 4] = b"CKW\0";
-const VERSION: u8 = 2;
+/// Bumped to 3 when a cell went from four bytes to two: the chunk bytes are a
+/// raw cast, so a version 2 file read as version 3 is not a corrupt world but
+/// a plausible one, twice as large and wrong in every cell. The version is
+/// what turns that into a refusal.
+const VERSION: u8 = 3;
 
 const KIND_INFINITE: u8 = 0;
 const KIND_TOROIDAL: u8 = 1;

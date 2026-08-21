@@ -6,18 +6,18 @@
 // block is the one thing kept in step by hand; changing the split means
 // changing both.
 //
-//  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-// |   player    |F |G |       kind        | A |
-const ALIVE_BIT:    u32 = 1u;
-const KIND_SHIFT:   u32 = 1u;   const KIND_MASK: u32 = 255u;
-const FLAG_ICE:   u32 = 512u; // 1 << 9
-const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
+//  byte 0 (R)                byte 1 (G)
+// | player  | spare |       |    kind     |I |A |
+//  7 6 5 4 3  2 1 0          7 6 5 4 3 2   1  0
+//
+// Only the player is read here. Alive, ice and kind are read as one number --
+// byte 1 is the tile index into the sheet, so this shader never takes them
+// apart, and that is the point of the layout.
+const PLAYER_SHIFT: u32 = 3u;   // top of its byte, so no mask is needed
 
-// See render::atlas. One layer per cell state; a cell's own UV picks the tile
-// within that layer's sheet.
+// See render::atlas. One sheet; a cell's tile byte is the index into it.
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
-const SHEET_TILES: f32 = 16.0;   // tiles across a sheet
-const STATES: u32 = 4u;          // dead, alive, dead+ice, alive+ice
+const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
 
 struct Camera {
@@ -29,8 +29,8 @@ struct Camera {
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
-@group(0) @binding(1) var chunks: texture_2d_array<u32>;   // rg = cell bits, ba = uv
-@group(0) @binding(2) var sprites: texture_2d_array<f32>;
+@group(0) @binding(1) var chunks: texture_2d_array<u32>;   // r = owner, g = tile
+@group(0) @binding(2) var sprites: texture_2d<f32>;
 @group(0) @binding(3) var sprite_sampler: sampler;
 
 // --- colour -----------------------------------------------------------------
@@ -199,29 +199,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let cell_coord = vec2<i32>(floor(local / f32(TILE_N)));
     let within = local % f32(TILE_N);
 
-    // rg holds the cell's sixteen bits, ba the tile it draws.
+    // r is the owner byte, g the tile byte -- and the tile byte *is* the index
+    // into the sheet, kind and alive and ice already folded into it. Nothing
+    // to look up and nothing to branch on, which is what keeps this one
+    // unconditional sample: WGSL forbids implicit derivatives in non-uniform
+    // control flow, so a sample inside an `if` on what a cell is would be
+    // undefined on the GL path and rejected outright by Tint.
     let texel = textureLoad(chunks, cell_coord, i32(in.layer), 0);
-    let cell = texel.r | (texel.g << 8u);
-    let uv = vec2<f32>(f32(texel.b), f32(texel.a));
+    let tile = f32(texel.g);
 
-    let alive = (cell & ALIVE_BIT) != 0u;
-    let ice = (cell & FLAG_ICE) != 0u;
-
-    // Every combination of alive and ice has its own picture, so this is one
-    // sample with no branch. That matters beyond tidiness: sampling inside a
-    // conditional is sampling in non-uniform control flow, which WGSL forbids
-    // for anything using implicit derivatives.
-    let kind = (cell >> KIND_SHIFT) & KIND_MASK;
-    let state = u32(alive) + u32(ice) * 2u;
-    let layer = i32(kind * STATES + state);
-
-    // Tile within the sheet, then the texel within that tile.
-    let sheet_uv = (uv + within / f32(TILE_N)) / SHEET_TILES;
-    let sprite = textureSample(sprites, sprite_sampler, sheet_uv, layer);
+    // Low nibble across the sheet, high nibble down it.
+    let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
+    let sheet_uv = (tile_xy + within / f32(TILE_N)) / SHEET_TILES;
+    let sprite = textureSample(sprites, sprite_sampler, sheet_uv);
 
     var colour = grid_tint(vec2<f32>(cell_coord), n);
 
-    let player = cell >> PLAYER_SHIFT;
+    let player = texel.r >> PLAYER_SHIFT;
     colour = mix(
         colour,
         shade(sprite.g, sprite.r * player_saturation(player), player_hue(player)),
