@@ -202,14 +202,35 @@ pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     world.cell_at(row, col).is_some_and(|c| c.player() == player)
 }
 
+/// How many grants sit along one edge of the square they are laid out in.
+/// Six covers all 31 players a five-bit field can hold.
+const SPAWN_ACROSS: i32 = 6;
+
+/// Centre to centre between neighbouring grants, in cells. Four times the
+/// patch, so there is three patches' worth of unclaimed ground between any two
+/// players — enough to build in before anyone's territory meets.
+const SPAWN_PITCH: i32 = SPAWN_N * 4;
+
 /// The ground a player is granted on joining: a square of claimed but empty
 /// cells, far enough from everyone else's to be their own.
 ///
-/// Laid out along a line by player number rather than searched for, because
-/// both sides have to agree on where it is without exchanging anything, and a
+/// Laid out in a **square** rather than a line. A line puts the last player
+/// thirty patches from the first, so the two could never reach each other and
+/// the map is a corridor; a square keeps every player within a few patches of
+/// several others, which is the only arrangement in which territory meeting
+/// territory is something that happens.
+///
+/// Centred on the origin, so the world grows in every direction rather than
+/// off into one quadrant, and no player is privileged by being at the corner.
+///
+/// Computed from the player number rather than searched for, because both
+/// sides have to agree on where a grant is without exchanging anything, and a
 /// search depends on what a peer happens to hold.
 pub fn spawn_for(player: PlayerId) -> (i32, i32) {
-    (0, player.0 as i32 * SPAWN_N * 4)
+    let n = player.0 as i32;
+    let (row, col) = (n / SPAWN_ACROSS, n % SPAWN_ACROSS);
+    let middle = SPAWN_ACROSS / 2;
+    ((row - middle) * SPAWN_PITCH, (col - middle) * SPAWN_PITCH)
 }
 
 /// Claim a player's starting ground, with a block standing on it.
@@ -503,15 +524,47 @@ mod tests {
         assert!(!may_place(&world, me, 10_000, 10_000));
     }
 
+    /// Every player is within reach of several others. A line put the last
+    /// player thirty patches from the first, which is a corridor rather than a
+    /// map: two players at opposite ends could never meet.
+    #[test]
+    fn grants_are_laid_out_in_a_square() {
+        let spots: Vec<(i32, i32)> = (1..=PlayerId::MAX).map(|p| spawn_for(PlayerId(p))).collect();
+        let rows: Vec<i32> = spots.iter().map(|s| s.0).collect();
+        let cols: Vec<i32> = spots.iter().map(|s| s.1).collect();
+
+        let span = |v: &[i32]| v.iter().max().unwrap() - v.iter().min().unwrap();
+        assert!(span(&rows) > 0, "a line has no second axis");
+        assert!(
+            span(&rows).abs_diff(span(&cols)) <= SPAWN_PITCH as u32,
+            "the layout should be square, got {}x{}",
+            span(&rows),
+            span(&cols)
+        );
+
+        // Every player has a neighbour one pitch away, which a line only gives
+        // to the two beside you.
+        for &(row, col) in &spots {
+            let touching = spots
+                .iter()
+                .filter(|&&(r, c)| {
+                    let (dr, dc) = ((r - row).abs(), (c - col).abs());
+                    (dr, dc) != (0, 0) && dr <= SPAWN_PITCH && dc <= SPAWN_PITCH
+                })
+                .count();
+            assert!(touching >= 2, "({row}, {col}) has only {touching} neighbours");
+        }
+    }
+
     /// Two players' grants must not overlap, or one would be building on the
     /// other from the first move.
     #[test]
     fn grants_do_not_overlap() {
         let mut world = World::infinite_empty();
-        for id in 1..=4 {
+        for id in 1..=PlayerId::MAX {
             grant(&mut world, PlayerId(id));
         }
-        for id in 1..=4 {
+        for id in 1..=PlayerId::MAX {
             let (row, col) = spawn_for(PlayerId(id));
             for r in row..row + SPAWN_N {
                 for c in col..col + SPAWN_N {
