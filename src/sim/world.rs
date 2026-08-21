@@ -329,7 +329,7 @@ impl World {
 
         self.active = active;
         self.generation += 1;
-        self.shatter_glass();
+        self.shatter_ice();
         self.dirty = true;
         self.prune();
     }
@@ -365,9 +365,14 @@ impl World {
 
     /// Break every pane that life has reached.
     ///
-    /// A pane touched by a living, unglassed cell shatters, and takes the whole
-    /// connected run of glass with it — a pane is one object, so cracking a
-    /// corner of it does not leave the rest standing.
+    /// Any live cell in the eight neighbours breaks a pane — placed or born,
+    /// whoever owns it — and takes the whole connected run of ice with it,
+    /// because a pane is one object and cracking a corner of it does not leave
+    /// the rest standing.
+    ///
+    /// One exception: a cell that is itself under ice. It is frozen, and a
+    /// pane must not be broken by what it covers, or none could be laid over
+    /// life at all.
     ///
     /// Connectivity is orthogonal. Panes are laid as rectangles, and two that
     /// meet only at a corner are two panes rather than one; joining them
@@ -376,16 +381,16 @@ impl World {
     /// Run after the rules, so it sees the generation that actually did the
     /// touching. Absolute coordinates throughout, so a pane spanning chunks
     /// breaks as one rather than stopping at a boundary.
-    fn shatter_glass(&mut self) {
+    fn shatter_ice(&mut self) {
         // Life reaches diagonally, so a pane is touched by any of the eight.
         let seeds: Vec<(i32, i32)> = self
-            .glass_cells()
+            .ice_cells()
             .into_iter()
             .filter(|&(row, col)| {
                 Dir::ALL.iter().any(|dir| {
                     let (dr, dc) = dir.delta();
                     self.cell_at(row + dr, col + dc)
-                        .is_some_and(|c| c.is_alive() && !c.is_glass())
+                        .is_some_and(|c| c.is_alive() && !c.is_ice())
                 })
             })
             .collect();
@@ -402,7 +407,7 @@ impl World {
             for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
                 let next = (at.0 + dr, at.1 + dc);
                 if !broken.contains(&next)
-                    && self.cell_at(next.0, next.1).is_some_and(|c| c.is_glass())
+                    && self.cell_at(next.0, next.1).is_some_and(|c| c.is_ice())
                 {
                     queue.push(next);
                 }
@@ -411,18 +416,18 @@ impl World {
 
         for (row, col) in broken {
             if let Some(cell) = self.cell_at(row, col) {
-                self.set_cell_at(row, col, cell.with_glass(false));
+                self.set_cell_at(row, col, cell.with_ice(false));
             }
         }
     }
 
-    /// Every glassed cell, in absolute coordinates.
-    fn glass_cells(&self) -> Vec<(i32, i32)> {
+    /// Every iced cell, in absolute coordinates.
+    fn ice_cells(&self) -> Vec<(i32, i32)> {
         let mut out = Vec::new();
         for ((crow, ccol), chunk) in self.stored() {
             for row in 0..CHUNK_N {
                 for col in 0..CHUNK_N {
-                    if chunk[(row, col)].is_glass() {
+                    if chunk[(row, col)].is_ice() {
                         out.push((
                             crow * CHUNK_N as i32 + row as i32,
                             ccol * CHUNK_N as i32 + col as i32,
@@ -799,22 +804,22 @@ mod tests {
     #[test]
     fn touching_a_pane_shatters_the_whole_run() {
         let mut w = World::infinite_empty();
-        // A run of glass 40 cells long, which spans three chunks at 16 wide.
+        // A run of ice 40 cells long, which spans three chunks at 16 wide.
         for col in 0..40 {
-            w.set_cell_at(0, col, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+            w.set_cell_at(0, col, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
         }
         // A block far along it, so the break has to travel back to the start.
         for (r, c) in [(1, 38), (1, 39), (2, 38), (2, 39)] {
             w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
         }
-        assert!(w.cell_at(0, 0).unwrap().is_glass());
+        assert!(w.cell_at(0, 0).unwrap().is_ice());
 
         w.step();
 
         for col in 0..40 {
             assert!(
-                !w.cell_at(0, col).map(|c| c.is_glass()).unwrap_or(false),
-                "glass at column {col} survived"
+                !w.cell_at(0, col).map(|c| c.is_ice()).unwrap_or(false),
+                "ice at column {col} survived"
             );
         }
     }
@@ -825,11 +830,11 @@ mod tests {
     fn a_break_does_not_jump_a_diagonal_join() {
         let mut w = World::infinite_empty();
         for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-            w.set_cell_at(r, c, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+            w.set_cell_at(r, c, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
         }
         // Touching only at (1,1)'s corner.
         for (r, c) in [(2, 2), (2, 3), (3, 2), (3, 3)] {
-            w.set_cell_at(r, c, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+            w.set_cell_at(r, c, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
         }
         // Life against the first pane only.
         for (r, c) in [(-1, -1), (-1, 0), (-2, -1), (-2, 0)] {
@@ -838,60 +843,184 @@ mod tests {
 
         w.step();
 
-        assert!(!w.cell_at(0, 0).unwrap().is_glass(), "the touched pane breaks");
+        assert!(!w.cell_at(0, 0).unwrap().is_ice(), "the touched pane breaks");
         assert!(
-            w.cell_at(3, 3).unwrap().is_glass(),
+            w.cell_at(3, 3).unwrap().is_ice(),
             "the pane it only meets at a corner should stand"
         );
     }
 
-    /// Glass with nothing alive beside it is left alone.
+    /// Ice with nothing alive beside it is left alone.
     #[test]
     fn an_untouched_pane_stands() {
         let mut w = World::infinite_empty();
         for col in 0..8 {
-            w.set_cell_at(0, col, Cell::DEAD.with_glass(true).with_player(PlayerId(2)));
+            w.set_cell_at(0, col, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
         }
         for _ in 0..10 {
             w.step();
         }
         for col in 0..8 {
-            assert!(w.cell_at(0, col).unwrap().is_glass(), "column {col} broke");
+            assert!(w.cell_at(0, col).unwrap().is_ice(), "column {col} broke");
+        }
+    }
+
+    /// A pane with a margin round the life it covers is not broken by that
+    /// life, and this is why: every cell that could be born from the frozen
+    /// pattern lies inside the pane, where the rule returns it unchanged, so
+    /// nothing is ever born outside to touch it. Lay the pane tightly instead
+    /// and it breaks at once, which is `life_born_beside_a_pane_breaks_it`.
+    ///
+    /// Says nothing about life arriving from elsewhere — see the test below,
+    /// which is what actually breaks a pane like this.
+    #[test]
+    fn a_pane_with_a_margin_is_not_broken_by_what_it_covers() {
+        let mut w = World::infinite_empty();
+        for col in 40..43 {
+            w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
+        }
+        // One cell of margin on every side.
+        for row in 39..42 {
+            for col in 39..44 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_ice(true).with_player(PlayerId(1)));
+            }
+        }
+
+        for _ in 0..40 {
+            w.step();
+        }
+
+        assert!(w.cell_at(39, 39).unwrap().is_ice(), "the pane should still stand");
+        assert_eq!(
+            w.live_cells().len(),
+            3,
+            "and what it covers should be exactly as it was, frozen"
+        );
+    }
+
+    /// What a pane is for. Shattering clears the ice flag and nothing else,
+    /// so a schematic drawn under one — alive here, deliberately dead there,
+    /// and whoever owns each cell — starts living exactly as it was drawn the
+    /// moment the cover goes. Anything that reset the cells underneath would
+    /// make a pane useless for laying a pattern out over several generations,
+    /// which is the whole of why it freezes rather than blocks.
+    #[test]
+    fn shattering_leaves_what_was_under_it_exactly_as_it_was() {
+        let mut w = World::infinite_empty();
+
+        // A schematic: two live cells with different owners, and a gap that
+        // has to stay a gap.
+        w.set_cell_at(11, 11, Cell::alive(PlayerId(1)));
+        w.set_cell_at(11, 13, Cell::alive(PlayerId(2)));
+        for row in 10..=12 {
+            for col in 10..=14 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_ice(true));
+            }
+        }
+        let before: Vec<Cell> = (10..=12)
+            .flat_map(|r| (10..=14).map(move |c| (r, c)))
+            .map(|(r, c)| w.cell_at(r, c).unwrap())
+            .collect();
+
+        // A block against the pane, ice-free and alive, to break it.
+        for (r, c) in [(13, 10), (13, 11), (14, 10), (14, 11)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(3)));
+        }
+
+        w.step();
+
+        assert!(!w.cell_at(10, 14).unwrap().is_ice(), "the pane should have gone");
+        let after: Vec<Cell> = (10..=12)
+            .flat_map(|r| (10..=14).map(move |c| (r, c)))
+            .map(|(r, c)| w.cell_at(r, c).unwrap())
+            .collect();
+        for (was, is) in before.iter().zip(&after) {
+            assert_eq!(
+                was.with_ice(false),
+                *is,
+                "the ice flag is the only thing shattering may change"
+            );
+        }
+    }
+
+    /// And what breaks it: anything alive that arrives. A glider is the
+    /// cheapest way to reach a pane you cannot get next to, and it shatters
+    /// the whole run the moment it touches — sealing a pattern in buys you
+    /// time, not safety.
+    #[test]
+    fn a_glider_shatters_a_pane_it_reaches() {
+        let mut w = World::infinite_empty();
+        for col in 40..43 {
+            w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
+        }
+        for row in 39..42 {
+            for col in 39..44 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_ice(true).with_player(PlayerId(1)));
+            }
+        }
+
+        // A glider up and to the left, travelling down and to the right: one
+        // cell each way every four generations.
+        for (r, c) in [(30, 31), (31, 32), (32, 30), (32, 31), (32, 32)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(2)));
+        }
+
+        let mut broke_at = None;
+        for step in 1..=60 {
+            w.step();
+            if !w.cell_at(39, 39).unwrap_or(Cell::DEAD).is_ice() {
+                broke_at = Some(step);
+                break;
+            }
+        }
+        let broke_at = broke_at.expect("the glider should have reached the pane and broken it");
+        assert!(broke_at > 1, "it should have had to travel, not start touching");
+
+        for row in 39..42 {
+            for col in 39..44 {
+                assert!(
+                    !w.cell_at(row, col).unwrap_or(Cell::DEAD).is_ice(),
+                    "({row}, {col}) survived, so the run did not break as one"
+                );
+            }
         }
     }
 
     /// A pane is not broken by what it covers. The cell underneath is frozen,
-    /// and frozen is not "alive and unglassed", so it cannot be the seed --
+    /// and frozen is not "alive and ice-free", so it cannot be the seed --
     /// otherwise every pane laid over life would shatter on the next tick.
     #[test]
     fn a_pane_is_not_broken_by_the_cell_it_covers() {
         let mut w = World::infinite_empty();
         // Alone, so nothing can be born next to it: a single live cell gives
         // any neighbour one live neighbour, and a birth needs three.
-        w.set_cell_at(0, 0, Cell::alive(PlayerId(1)).with_glass(true));
+        w.set_cell_at(0, 0, Cell::alive(PlayerId(1)).with_ice(true));
 
         for _ in 0..10 {
             w.step();
         }
 
         let c = w.cell_at(0, 0).unwrap();
-        assert!(c.is_glass(), "the pane broke from the inside");
+        assert!(c.is_ice(), "the pane broke from the inside");
         assert!(c.is_alive(), "and what it covers should be frozen, not dead");
     }
 
-    /// Frozen cells still count as neighbours, so a pane laid over life makes
-    /// life around itself -- and that newborn breaks the pane. Emergent rather
-    /// than designed, and worth pinning down: it means glass shelters what is
-    /// under it without sealing it off from the world.
+    /// Frozen cells still count as neighbours, so a pane laid *exactly* on
+    /// life makes life immediately outside itself -- and that newborn breaks
+    /// the pane. Note the "exactly": see the test below for what one cell of
+    /// margin does, which is the opposite.
     #[test]
     fn life_born_beside_a_pane_breaks_it() {
         let mut w = World::infinite_empty();
         for col in 0..6 {
-            w.set_cell_at(0, col, Cell::alive(PlayerId(1)).with_glass(true));
+            w.set_cell_at(0, col, Cell::alive(PlayerId(1)).with_ice(true));
         }
         w.step();
         assert!(
-            !w.cell_at(0, 0).unwrap().is_glass(),
+            !w.cell_at(0, 0).unwrap().is_ice(),
             "a cell born beside the pane should have broken it"
         );
     }

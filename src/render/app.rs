@@ -85,6 +85,16 @@ pub trait App: 'static {
     /// A finger touched, moved, or left. `id` distinguishes fingers, which is
     /// what makes a pinch tellable from a drag.
     fn on_touch(&mut self, _id: u64, _phase: TouchPhase, _x: f64, _y: f64) {}
+
+    /// What the pointer should look like. Read after every `update`, and sent
+    /// to the window only when it changes — a cursor set every frame flickers
+    /// on some platforms and is a call into the compositor on all of them.
+    ///
+    /// Here rather than in the app because only the loop holds the window, and
+    /// handing the window out would let anything resize or retitle it.
+    fn cursor_icon(&self) -> winit::window::CursorIcon {
+        winit::window::CursorIcon::Default
+    }
 }
 
 pub async fn run<A: App>() {
@@ -116,6 +126,8 @@ struct Running<A> {
     /// Control held. A trackpad pinch arrives as ctrl+wheel nearly everywhere,
     /// so the wheel needs to know.
     ctrl: bool,
+    /// What the cursor was last set to, so it is only set again on a change.
+    cursor: winit::window::CursorIcon,
 }
 
 struct Harness<A> {
@@ -144,7 +156,14 @@ impl<A: App> Harness<A> {
         };
         let app = A::init(&gpu);
         let last_frame = now_secs();
-        self.running = Some(Running { window, gpu, app, last_frame, ctrl: false });
+        self.running = Some(Running {
+            window,
+            gpu,
+            app,
+            last_frame,
+            ctrl: false,
+            cursor: winit::window::CursorIcon::Default,
+        });
         if let Some(r) = &self.running {
             r.window.request_redraw();
         }
@@ -177,7 +196,6 @@ impl<A: App> ApplicationHandler for Harness<A> {
                     Some(())
                 })
                 .expect("couldn't append canvas to document body");
-            fit_canvas_to_window(&window);
         }
 
         let pending = self.pending.clone();
@@ -234,17 +252,39 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 r.app.on_touch(t.id, t.phase, t.location.x, t.location.y)
             }
             WindowEvent::RedrawRequested => {
-                // The browser gives no resize event for the canvas element,
-                // only for its own window, and the devtools pane changes the
-                // space available with no event a canvas would see.
+                // Keep the surface the size of the box the canvas is shown
+                // in, checked every frame because that box changes with no
+                // event this would otherwise see -- a devtools pane opening,
+                // for one.
+                //
+                // The *surface* rather than the canvas, because wgpu's WebGL
+                // backend sets the canvas's backing store to match whatever
+                // the surface is configured to: write the canvas and it is
+                // undone on the next frame, write the surface and the canvas
+                // follows. winit's own `inner_size` is no use here either --
+                // it starts at zero, so the surface is configured 1x1 before
+                // any resize observation lands, and the whole game is drawn
+                // into one pixel and stretched over the window.
                 #[cfg(target_arch = "wasm32")]
-                fit_canvas_to_window(&r.window);
+                if let Some(want) = wanted_canvas_size(&r.window) {
+                    if want != r.gpu.size {
+                        log::info!("surface {:?} -> {want:?}", r.gpu.size);
+                        r.gpu.resize(want.0, want.1);
+                        r.app.resize(&r.gpu);
+                    }
+                }
 
                 let now = now_secs();
                 let dt = (now - r.last_frame).max(0.0) as f32;
                 r.last_frame = now;
 
                 r.app.update(&r.gpu, dt);
+
+                let cursor = r.app.cursor_icon();
+                if cursor != r.cursor {
+                    r.cursor = cursor;
+                    r.window.set_cursor(cursor);
+                }
 
                 match Frame::begin(&r.gpu) {
                     FrameAcquire::Ready(frame) => {
@@ -275,34 +315,27 @@ impl<A: App> ApplicationHandler for Harness<A> {
     }
 }
 
-/// Keep the canvas the size of the window it sits in, at the device's real
-/// pixel density.
+/// The backing store the canvas ought to have, in physical pixels.
 ///
-/// Compares against the last size *requested*, not the canvas's current size.
-/// `Window::inner_size` on the web returns a value winit updates from its own
-/// resize observer, so it does not reflect a request until a later frame —
-/// comparing against it means requesting again every frame, and setting a
-/// canvas's size clears it, so the picture never survives to be shown.
+/// A canvas has two sizes: the `width`/`height` attributes, which are the
+/// pixels drawn into, and the CSS box those pixels are stretched across. The
+/// page styles the canvas `100vw` by `100vh`, so the box is right from the
+/// start; this is the size the pixels have to match it with.
+///
+/// Measured from the canvas's own client box rather than from
+/// `window.innerWidth`, because the box is what the pixels are stretched
+/// across. `None` before it has been laid out, when there is nothing to match.
 #[cfg(target_arch = "wasm32")]
-fn fit_canvas_to_window(window: &Window) {
-    use std::cell::Cell;
-    use winit::dpi::PhysicalSize;
+fn wanted_canvas_size(window: &Window) -> Option<(u32, u32)> {
+    use winit::platform::web::WindowExtWebSys;
 
-    thread_local! {
-        static REQUESTED: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
-    }
-
-    let Some(win) = web_sys::window() else { return };
+    let (win, canvas) = (web_sys::window()?, window.canvas()?);
     let dpr = win.device_pixel_ratio().max(1.0);
-    let w = win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
-    let h = win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(600.0);
-    let want = ((w * dpr).round() as u32, (h * dpr).round() as u32);
-    if want.0 == 0 || want.1 == 0 || REQUESTED.get() == want {
-        return;
+    let (w, h) = (canvas.client_width(), canvas.client_height());
+    if w <= 0 || h <= 0 {
+        return None;
     }
-    REQUESTED.set(want);
-    log::info!("canvas -> {}x{} (dpr {dpr})", want.0, want.1);
-    let _ = window.request_inner_size(PhysicalSize::new(want.0, want.1));
+    Some(((w as f64 * dpr).round() as u32, (h as f64 * dpr).round() as u32))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

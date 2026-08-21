@@ -131,7 +131,15 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
     }
     log::info!("ws://{host}/ws  websocket");
     if config.addr.ip().is_unspecified() {
-        log::info!("bound to {} — reachable from other machines", config.addr);
+        // Not "reachable from other machines". Binding to an unspecified
+        // address means the socket accepts on every interface; whether a
+        // packet ever arrives is the firewall's business and the network's,
+        // and neither is visible from here. Print the address to try instead
+        // of a claim that cannot be checked.
+        match outward_address(config.addr.port()) {
+            Some(addr) => log::info!("http://{addr}/  from another machine, if the network allows"),
+            None => log::info!("listening on every interface; no outward address found"),
+        }
     }
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -142,6 +150,20 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
 
     sim.abort();
     Ok(())
+}
+
+/// The address another machine would reach this one on, if it can.
+///
+/// Asks the routing table rather than enumerating interfaces: connecting a UDP
+/// socket sends no packet, it only resolves which local address would be used
+/// to reach that destination. The destination is a documentation address, so
+/// there is nothing to reach even if something did go out.
+fn outward_address(port: u16) -> Option<SocketAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let mut addr = socket.local_addr().ok()?;
+    addr.set_port(port);
+    (!addr.ip().is_loopback()).then_some(addr)
 }
 
 async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
