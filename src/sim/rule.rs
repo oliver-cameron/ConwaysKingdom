@@ -51,13 +51,48 @@ impl Cell {
     /// an arm that inspects [`Cell::meta`] and the default falls through to
     /// Conway, so a new type costs one arm and disturbs nothing else.
     #[inline]
-    pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
+    pub fn update(mut self, neighbours: &Neighbours, seed: u64) -> Cell {
         // Under ice is time-stopped, whatever the cell is and whether or not
         // it is alive. Checked before the kind, so a pane freezes anything
         // without every kind having to remember to honour it.
         if self.is_ice() {
             return self;
         }
+        // Spread Territory: a dead cell has a chance to become of ownership of a live neighbour, but stays dead
+        // Also, territories have a small chance to spread to adjacent dead cells, but only if they are not ice
+        // Territory spreading is not a birth, so it does not set the alive bit, but it does set the owner
+        // Territories also have a small chance to die off, turning into a dead cell with no owner.
+        // This will work with all dead cells, not just those with no type.
+        
+        if !self.is_alive() {
+            // // Check if there are any live neighbours
+            let live_neighbours: Vec<&Cell> = neighbours.iter().filter(|n| n.is_alive()).collect();
+            if live_neighbours.is_empty() {
+                // Chose random neighbour
+                let neighbour_index = (seed & 7) as usize;
+                let neighbour = &neighbours[neighbour_index];
+                if neighbour.is_alive() {
+                    if ((seed >> 3) & 15) <= 3 {
+                        if neighbour.player().is_owned() {
+                            self = self.with_player(neighbour.player());
+                        }
+                    } else if (seed >> 3) & 15 == 4 {
+                        // 5% chance to die off
+                        self = self.with_player(PlayerId::UNOWNED);
+                    }
+                }   
+            } else {
+                // Choose random live neighbour
+                let neighbour_index = (seed % live_neighbours.len() as u64) as usize;
+                let neighbour = live_neighbours[neighbour_index];
+                if ((seed >> 3) & 15) <= 9 {
+                    // if neighbour.player().is_owned() {
+                        self = self.with_player(neighbour.player());
+                    // }
+                }
+            }
+    }
+
         match self.kind() {
             // No kind-specific rules yet; everything follows Conway.
             _ => self.conway(neighbours, seed),
