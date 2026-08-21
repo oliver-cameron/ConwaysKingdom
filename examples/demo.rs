@@ -1,6 +1,6 @@
 use conwayskingdom::sim::{World, CHUNK_N};
 fn main() {
-    let mut w = World::demo();
+    let mut w = World::infinite();
     println!("{:>5} {:>7} {:>5}  {:>6} {:>6}  contested", "gen", "chunks", "live", "p1", "p2");
     for g in 0..=400 {
         if g % 50 == 0 {

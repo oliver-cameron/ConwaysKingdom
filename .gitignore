@@ -1,1 +1,4 @@
 target/
+pkg/
+world.ckw
+.DS_Store

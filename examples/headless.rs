@@ -13,7 +13,7 @@ fn main() {
 
     let mut world = match kind.as_str() {
         "torus" | "toroidal" | "tiled" => World::toroidal(rows, cols),
-        _ => World::demo(),
+        _ => World::infinite(),
     };
     println!("{:?}", world.kind());
     println!("{:>6} {:>7} {:>7} {:>5}", "gen", "stored", "active", "live");

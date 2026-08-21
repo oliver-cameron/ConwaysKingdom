@@ -16,6 +16,13 @@ name = "server"
 path = "src/bin/server.rs"
 required-features = ["server"]
 
+# Art tooling. Needs only `png`, so it builds under any feature set -- which
+# matters because the crate embeds the sprites with `include_bytes!` and so
+# cannot build until they exist.
+[[bin]]
+name = "cnvt"
+path = "tools/cnvt.rs"
+
 [features]
 default = ["render"]
 # Everything that touches the GPU or a window. Off, the server builds with

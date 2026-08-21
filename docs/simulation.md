@@ -86,6 +86,12 @@ A travelling glider holds one to four chunks indefinitely.
 
 Every non-empty chunk, plus any neighbour it carries life towards. A chunk with no life on the edge facing its neighbour cannot cause a birth there.
 
+## Territory
+
+A dead cell next to living ones takes the owner of one of them, chosen by the seed, most generations. It stays dead: the rule sets the owner and nothing else. Ice is checked first, so a pane's cover is not claimed while it stands.
+
+This makes ownership meaningful on dead ground, which changes what an empty chunk is. `Chunk::is_empty` now asks about ownership as well as life and ice — without that, `prune` would drop a chunk on the very step its ground was claimed, and territory outside a chunk that also held life could never last a generation. The cost is that an infinite world grows with territory as well as with life, and there is no die-off yet, so it only grows.
+
 ## Ice
 
 A pane freezes what it covers, whether or not that is alive. Alive and ice are independent: a cell may be either, both, or neither.

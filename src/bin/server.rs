@@ -2,7 +2,7 @@
 //!
 //!     cargo run --no-default-features --features server --bin server -- [OPTIONS]
 //!
-//!     --addr  ADDR   listen address           (default 0.0.0.0:8080)
+//!     --addr  ADDR   listen address           (default [::]:8080)
 //!     --world PATH   save file                (default world.ckw)
 //!     --serve DIR    static files at /        (default: none)
 //!     --span  MS     milliseconds per generation (default 250)
@@ -21,7 +21,13 @@ use conwayskingdom::sim::World;
 fn main() -> std::io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let mut addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
+    // `[::]` rather than `0.0.0.0`: unspecified **IPv6**, which on Linux
+    // accepts IPv4 as well because `net.ipv6.bindv6only` is 0 by default. An
+    // IPv4-only socket refuses every connection that arrives over IPv6, and a
+    // machine that resolves this host by name will get its AAAA record and
+    // come in that way -- which looks exactly like the server being
+    // unreachable while anything bound to `::` answers fine.
+    let mut addr: SocketAddr = "[::]:8080".parse().unwrap();
     let mut world_path = PathBuf::from("world.ckw");
     let mut static_dir: Option<PathBuf> = None;
     let mut span = Duration::from_millis(250);
@@ -47,7 +53,7 @@ fn main() -> std::io::Result<()> {
     // and the gun never appears.
     let server = if fresh {
         log::info!("--fresh: ignoring any world at {}", world_path.display());
-        Server::new(World::demo())
+        Server::new(World::infinite_empty())
     } else {
         Server::load_or_new(&world_path, World::demo)?
     };

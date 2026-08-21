@@ -58,40 +58,24 @@ impl Cell {
         if self.is_ice() {
             return self;
         }
-        // Spread Territory: a dead cell has a chance to become of ownership of a live neighbour, but stays dead
-        // Also, territories have a small chance to spread to adjacent dead cells, but only if they are not ice
-        // Territory spreading is not a birth, so it does not set the alive bit, but it does set the owner
-        // Territories also have a small chance to die off, turning into a dead cell with no owner.
-        // This will work with all dead cells, not just those with no type.
-        
+        // Territory. A dead cell takes the owner of a living neighbour, most
+        // of the time, so ground is claimed by the life that grows over it.
+        // It stays dead: this sets the owner and nothing else.
+        //
+        // Ice is handled above, so a pane's cover is not claimed while it
+        // stands. Territory only ever spreads for now -- there is no die-off,
+        // so ground once claimed stays claimed until someone else's life
+        // reaches it.
         if !self.is_alive() {
-            // // Check if there are any live neighbours
-            let live_neighbours: Vec<&Cell> = neighbours.iter().filter(|n| n.is_alive()).collect();
-            if live_neighbours.is_empty() {
-                // Chose random neighbour
-                let neighbour_index = (seed & 7) as usize;
-                let neighbour = &neighbours[neighbour_index];
-                if neighbour.is_alive() {
-                    if ((seed >> 3) & 15) <= 3 {
-                        if neighbour.player().is_owned() {
-                            self = self.with_player(neighbour.player());
-                        }
-                    } else if (seed >> 3) & 15 == 4 {
-                        // 5% chance to die off
-                        self = self.with_player(PlayerId::UNOWNED);
-                    }
-                }   
-            } else {
-                // Choose random live neighbour
-                let neighbour_index = (seed % live_neighbours.len() as u64) as usize;
-                let neighbour = live_neighbours[neighbour_index];
-                if ((seed >> 3) & 15) <= 9 {
-                    // if neighbour.player().is_owned() {
-                        self = self.with_player(neighbour.player());
-                    // }
-                }
+            let live: Vec<&Cell> = neighbours.iter().filter(|n| n.is_alive()).collect();
+            if !live.is_empty() && ((seed >> 3) & 15) <= 9 {
+                // A random living neighbour, so a cell between two players
+                // goes to one of them rather than always to the first in
+                // `Dir::ALL` order.
+                let claimant = live[(seed % live.len() as u64) as usize];
+                self = self.with_player(claimant.player());
             }
-    }
+        }
 
         match self.kind() {
             // No kind-specific rules yet; everything follows Conway.

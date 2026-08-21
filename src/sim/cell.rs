@@ -241,8 +241,20 @@ impl Chunk {
     /// Those are inert -- nothing counts a dead cell, and a birth takes its
     /// owner from live neighbours -- so discarding them changes nothing, and
     /// refusing to would let an infinite world grow without bound again.
+    /// Nothing here worth keeping: no life, no ice, and nobody's ground.
+    ///
+    /// Ownership counts because territory lives on dead cells. Without it a
+    /// chunk holding nothing but claimed ground reads as empty, and `prune`
+    /// drops it on the very step it was claimed — so territory outside a
+    /// chunk that also holds life could never last a generation, and a player
+    /// granted ground on joining would lose it before their first move.
+    ///
+    /// The cost is that an infinite world now grows with territory as well as
+    /// with life, and territory has no die-off yet, so it only ever grows.
     pub fn is_empty(&self) -> bool {
-        self.cells.iter().all(|c| !c.is_alive() && !c.is_ice())
+        self.cells
+            .iter()
+            .all(|c| !c.is_alive() && !c.is_ice() && !c.player().is_owned())
     }
 
     /// Exactly the `&[u8]` `Queue::write_texture` wants. No conversion.
