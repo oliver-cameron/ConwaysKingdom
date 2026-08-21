@@ -18,6 +18,15 @@
       width: 100vw;
       height: 100vh;
       outline: none;
+
+      /* The browser decides what a gesture means from this, and it decides
+         before it delivers an event anyone can cancel. Left at `auto` it takes
+         a two-finger pinch as page zoom and a drag as a scroll, and winit's
+         preventDefault never gets a say -- the events arrive non-cancelable,
+         or as a pointercancel once the browser has claimed the gesture. `none`
+         says the page wants every touch itself, which is what makes pinch and
+         drag reach the game at all. */
+      touch-action: none;
     }
 
     #error {
