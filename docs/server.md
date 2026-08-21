@@ -27,6 +27,8 @@ The subscribe line is the useful one when a client sees nothing: it says whether
 
 Every 30 seconds and on a clean shutdown. Writes go to a temporary beside the target and are renamed into place, so a crash mid-write cannot leave a half-written world where the real one was.
 
+A player record carries their token, so a restart does not hand every returning player a new number and leave their ground standing there, theirs and unreachable.
+
 A missing file starts fresh. A corrupt or mismatched one is an **error**, not a silent reset — discarding a world is the worst possible response to a bad read.
 
 ### The `.ckw` format

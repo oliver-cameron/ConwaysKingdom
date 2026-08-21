@@ -468,7 +468,12 @@ impl BattleApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick, spawn } => {
+                ServerMessage::Welcome { you, tick, spawn, token } => {
+                    // Kept first, before anything else can go wrong: the whole
+                    // value of it is being able to come back, and a client that
+                    // crashes on its first frame is exactly the case that needs
+                    // to.
+                    crate::net::token::store(&token);
                     log::info!("joined as {you:?} at tick {tick}; adopting the server's world");
                     self.value = Player::STARTING_VALUE;
                     self.me = Some(you);
@@ -1241,7 +1246,7 @@ fn open_link() -> Option<Link> {
     let url = Link::origin_url("/ws")?;
     log::info!("connecting to {url}");
     let link = Link::connect(&url)?;
-    link.send(ClientMessage::Join { name: "web".into() });
+    link.send(ClientMessage::Join { name: "web".into(), token: crate::net::token::load() });
     Some(link)
 }
 
@@ -1250,7 +1255,7 @@ fn open_link() -> Option<Link> {
 fn open_link() -> Option<Link> {
     let (url, name) = CONNECTION.lock().unwrap().take()?;
     let link = Link::connect(url?);
-    link.send(ClientMessage::Join { name });
+    link.send(ClientMessage::Join { name, token: crate::net::token::load() });
     Some(link)
 }
 

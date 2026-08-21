@@ -59,3 +59,13 @@ The client applies its own actions immediately **and** sends them, rather than s
 ## Not done yet
 
 Territory limits on where a player may place, and any authority over the actions the server accepts beyond affordability.
+
+## Coming back
+
+`Welcome` hands out a **token**: a random 128-bit secret the client keeps, in `localStorage` in a browser and under `$XDG_DATA_HOME/conwayskingdom/token` natively. Present it on a later `Join` and you get your player back — the same number, the same value, the same ground.
+
+It is not authentication. It proves nothing to anybody else, and whoever holds it *is* that player. That is the right strength for a game with no accounts: what it buys is that a dropped connection is not a new life. A name would not do, since two players may pick the same one and anybody could claim yours. An IP address would be worse — two people in a house share one, and a phone changes its own between reconnects.
+
+**A player number is never reused.** It used to fill the gap a departing player left, which was harmless when a number only meant some live cells. It is not harmless now: territory *is* the owner field, so handing a number on hands over everything that player claimed, and the ground outlives the connection. A player who leaves is marked gone and kept. Thirty-one numbers is therefore a limit on players a world has ever seen rather than on players connected at once, and coming back is what the token is for.
+
+A token nobody holds is not an error — it joins you as somebody new. Anything else would lock a player out over a stale file.

@@ -14,7 +14,11 @@ const MAGIC: &[u8; 4] = b"CKW\0";
 /// raw cast, so a version 2 file read as version 3 is not a corrupt world but
 /// a plausible one, twice as large and wrong in every cell. The version is
 /// what turns that into a refusal.
-const VERSION: u8 = 3;
+///
+/// And to 4 when a player record gained its token. Without it a restart
+/// would hand every returning player a new number and leave their ground
+/// standing there, theirs and unreachable.
+const VERSION: u8 = 4;
 
 const KIND_INFINITE: u8 = 0;
 const KIND_TOROIDAL: u8 = 1;
@@ -83,6 +87,9 @@ pub fn save(path: &Path, world: &World, players: &[Player], tick: u64) -> io::Re
         out.extend_from_slice(name);
         out.extend_from_slice(&p.last_seen.to_le_bytes());
         out.extend_from_slice(&p.value.to_le_bytes());
+        let token = p.token.as_bytes();
+        out.extend_from_slice(&(token.len() as u16).to_le_bytes());
+        out.extend_from_slice(token);
     }
 
     // Write beside the target and rename, so a crash mid-write cannot leave a
@@ -145,6 +152,8 @@ pub fn load(path: &Path) -> io::Result<Snapshot> {
         let mut p = Player::new(id, name);
         p.last_seen = r.u64()?;
         p.value = r.i32()?;
+        let len = r.u16()? as usize;
+        p.token = String::from_utf8_lossy(r.take(len)?).into_owned();
         players.push(p);
     }
 
