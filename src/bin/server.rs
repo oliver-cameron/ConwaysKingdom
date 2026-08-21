@@ -74,7 +74,10 @@ fn main() -> std::io::Result<()> {
             c0.div_euclid(conwayskingdom::sim::CHUNK_N as i32),
             c1.div_euclid(conwayskingdom::sim::CHUNK_N as i32),
         ),
-        None => log::warn!("the world is EMPTY — nothing to send a client. Try --fresh"),
+        // Not a warning any more. An empty world is where a new one starts:
+        // there is no seeded pattern, and the first life arrives with the
+        // first player, who is granted ground and a block on joining.
+        None => log::info!("the world is empty; the first player to join will bring a block"),
     }
 
     let rt = tokio::runtime::Runtime::new()?;
