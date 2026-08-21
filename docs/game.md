@@ -49,6 +49,16 @@ One drag lays at most 4096 cells. A rectangle at one pixel per cell can cover mi
 
 More than one cell is what makes a drag a drag. A press that travelled but stayed inside one cell would place where a click would take, so which of the two happens must not turn on a few pixels of hand shake at high zoom.
 
+## Territory
+
+Every dead cell carries an owner, and that is territory. The rule spreads it: a dead cell next to living ones takes one of their owners most generations, so ground is claimed by the life that grows over it. It stays dead — this sets the owner and nothing else. Ice is exempt while it stands, since a pane's cover is not claimed out from under it.
+
+**A player may only place inside their own territory.** Ground nobody has reached belongs to nobody and is closed to everyone, so reach grows where life goes and nowhere else. `net::may_place` is the whole rule, and the client refuses on the same terms the server does — instantly, and with the same answer.
+
+That makes a grant necessary. A player who owned nothing could place nothing and so could never come to own anything, so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it: four cells that hold their shape forever, the same for everyone, so nobody begins ahead. The block is also what keeps the ground, since territory spreads from living cells and a bare patch would never grow. An offline client grants itself the same thing, or a game of one would have no opening move.
+
+Territory has no die-off yet, so it only ever spreads. A glider therefore leaves a permanent trail of claimed ground, and the world grows with it — deliberately, since territory that vanished the moment life moved on would be no territory at all.
+
 ## Ice
 
 Ice is a schematic. Freezing a region lets a large pattern be laid out over many generations without the rule eating the half-built work, and **shattering clears the ice flag and nothing else** — so what was drawn underneath, alive cells and deliberate gaps alike, starts living exactly as it was drawn. That it also walls other players off is the same mechanic pointed outward.

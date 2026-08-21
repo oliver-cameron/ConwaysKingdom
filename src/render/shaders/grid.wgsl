@@ -175,18 +175,22 @@ fn grid_tint(cell_in_chunk: vec2<f32>, n: f32) -> vec3<f32> {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = cam.chunk_n;
 
-    // Unloaded ground: every chunk of it looks the same, so it is one quad and
-    // the pattern comes from the world position rather than from a texture.
+    // Unloaded ground is ground where every cell is dead, and `chunks` holds a
+    // layer of exactly that -- see ChunkStore::init_unloaded_layer. So the
+    // backdrop is not a special case with a pattern of its own: it is one quad
+    // spanning thousands of chunks, with the world position wrapped onto that
+    // one dead chunk. Everything below then runs unchanged, which is what puts
+    // a dead cell's sprite on unloaded ground. Drawing the chunk ring and
+    // nothing else left it blank however the dead sprite was drawn.
+    var local = in.local;
     if in.kind == KIND_BACKDROP {
-        let cell = floor(in.world);
-        let within_chunk = cell - floor(cell / n) * n;
-        return vec4<f32>(grid_tint(within_chunk, n), 1.0);
+        local = (in.world - floor(in.world / n) * n) * f32(TILE_N);
     }
 
     // local is in texels across the chunk; the cell is that divided by a
     // tile's width, and where we are inside the cell is the remainder.
-    let cell_coord = vec2<i32>(floor(in.local / f32(TILE_N)));
-    let within = in.local % f32(TILE_N);
+    let cell_coord = vec2<i32>(floor(local / f32(TILE_N)));
+    let within = local % f32(TILE_N);
 
     // rg holds the cell's sixteen bits, ba the tile it draws.
     let texel = textureLoad(chunks, cell_coord, i32(in.layer), 0);

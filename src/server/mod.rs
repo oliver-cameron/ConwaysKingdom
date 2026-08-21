@@ -25,7 +25,6 @@ pub struct Server {
     subscriptions: HashMap<PlayerId, Vec<ChunkId>>,
     /// Actions received for a tick that has not been simulated yet.
     pending: Vec<Stamped>,
-    tick: Tick,
 }
 
 impl Server {
@@ -35,12 +34,21 @@ impl Server {
             players: HashMap::new(),
             subscriptions: HashMap::new(),
             pending: Vec::new(),
-            tick: 0,
         }
     }
 
+    /// The generation the world is on, which is the only tick there is.
+    ///
+    /// It used to be a counter of its own, incremented beside `World::step`.
+    /// Two numbers that must agree is one too many: `load_or_new` restored the
+    /// saved tick into the counter and left the world's generation at zero, so
+    /// a server started from a save simulated with a different seed sequence
+    /// from the one that produced the save — and a client, which adopts *this*
+    /// number on `Welcome`, then disagreed with the server about the
+    /// generation from its very first step. Every birth's owner is seeded from
+    /// it, so the two drifted apart permanently and invisibly.
     pub fn tick(&self) -> Tick {
-        self.tick
+        self.world.generation
     }
 
     pub fn world(&self) -> &World {
@@ -74,16 +82,28 @@ impl Server {
             return Err(format!("server full ({} players)", PlayerId::MAX));
         };
         let mut player = Player::new(id, name);
-        player.last_seen = self.tick;
+        player.last_seen = self.tick();
         log::info!(
             "join: {:?} \"{}\" at tick {} ({} online)",
             id,
             player.name,
-            self.tick,
+            self.tick(),
             self.players.len() + 1
         );
         self.players.insert(id, player);
+        self.grant_territory(id);
         Ok(id)
+    }
+
+    /// Claim a player's starting ground, so they have somewhere to place.
+    ///
+    /// Granted again on a rejoin, deliberately: a player whose life was wiped
+    /// out while they were away would otherwise come back with nowhere to
+    /// stand, and re-marking ground they already hold costs nothing.
+    fn grant_territory(&mut self, id: PlayerId) {
+        crate::net::grant(&mut self.world, id);
+        let (row, col) = crate::net::spawn_for(id);
+        log::info!("{id:?} granted ground at ({row}, {col})");
     }
 
     /// Restore from a save, or start a fresh world if there is no file yet.
@@ -93,8 +113,10 @@ impl Server {
     pub fn load_or_new(path: &Path, fresh: impl FnOnce() -> World) -> std::io::Result<Self> {
         match persist::load(path) {
             Ok(snap) => {
-                let mut s = Self::new(snap.world);
-                s.tick = snap.tick;
+                let mut world = snap.world;
+                // The tick *is* the generation, so restoring one restores both.
+                world.set_generation(snap.tick);
+                let mut s = Self::new(world);
                 for p in snap.players {
                     s.players.insert(p.id, p);
                 }
@@ -107,7 +129,7 @@ impl Server {
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let players: Vec<_> = self.players.values().cloned().collect();
-        persist::save(path, &self.world, &players, self.tick)
+        persist::save(path, &self.world, &players, self.tick())
     }
 
     pub fn leave(&mut self, id: PlayerId) {
@@ -116,7 +138,7 @@ impl Server {
                 "leave: {:?} \"{}\" after {} ticks ({} online)",
                 id,
                 p.name,
-                self.tick.saturating_sub(p.last_seen),
+                self.tick().saturating_sub(p.last_seen),
                 self.players.len()
             );
         }
@@ -126,14 +148,14 @@ impl Server {
     /// Decoded message in, replies out. Deliberately transport-agnostic.
     pub fn handle(&mut self, from: Option<PlayerId>, msg: ClientMessage) -> Vec<ServerMessage> {
         if let Some(id) = from {
-            let tick = self.tick;
+            let tick = self.tick();
             if let Some(p) = self.players.get_mut(&id) {
                 p.last_seen = tick;
             }
         }
         match msg {
             ClientMessage::Join { name } => match self.join(name) {
-                Ok(you) => vec![ServerMessage::Welcome { you, tick: self.tick }],
+                Ok(you) => vec![ServerMessage::Welcome { you, tick: self.tick() }],
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
@@ -144,6 +166,21 @@ impl Server {
                 if let crate::net::Action::Erase { placement, .. } = &stamped.action {
                     if !placement.can_be_taken() {
                         log::info!("refused {:?}: {placement:?} cannot be taken", stamped.player);
+                        return Vec::new();
+                    }
+                }
+                // Placing is confined to a player's own territory. All or
+                // nothing, matching how the client prices and previews it: a
+                // paint half applied is a shape nobody drew.
+                if let crate::net::Action::Paint { cells, .. } = &stamped.action {
+                    if let Some(&(row, col)) = cells
+                        .iter()
+                        .find(|&&(r, c)| !crate::net::may_place(&self.world, stamped.player, r, c))
+                    {
+                        log::info!(
+                            "refused {:?}: ({row}, {col}) is not their territory",
+                            stamped.player
+                        );
                         return Vec::new();
                     }
                 }
@@ -194,7 +231,7 @@ impl Server {
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.
-                if tick != self.tick {
+                if tick != self.tick() {
                     return Vec::new();
                 }
                 // Answer with the chunks that disagree, and with any the client
@@ -217,7 +254,7 @@ impl Server {
 
     fn chunk_message(&self, chunk: ChunkId) -> Option<ServerMessage> {
         self.world.chunk_at(chunk).map(|c| ServerMessage::ChunkData {
-            tick: self.tick,
+            tick: self.tick(),
             chunk,
             cells: c.as_bytes().to_vec(),
         })
@@ -231,7 +268,6 @@ impl Server {
             self.apply(stamped);
         }
         self.world.step();
-        self.tick += 1;
 
         if applied.is_empty() {
             Vec::new()
@@ -248,8 +284,15 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cells inside a player's granted ground. Placing anywhere else is
+    /// refused now, so a test that wants a placement to land has to say where
+    /// relative to the grant rather than picking a coordinate off the map.
+    fn mine(id: PlayerId, offsets: &[(i32, i32)]) -> Vec<(i32, i32)> {
+        let (row, col) = crate::net::spawn_for(id);
+        offsets.iter().map(|&(r, c)| (row + r, col + c)).collect()
+    }
     use crate::net::{Action, Placement};
-    use crate::sim::CHUNK_N;
 
     #[test]
     fn player_numbers_start_at_one_and_are_reused() {
@@ -275,24 +318,68 @@ mod tests {
     fn a_painted_cell_belongs_to_the_player_who_painted_it() {
         let mut s = Server::new(World::infinite());
         let me = s.join("me").unwrap();
-        // A blinker well away from the starting glider.
+        // A blinker in the middle of this player's own ground, which is the
+        // only place they may put one.
+        let cells = mine(me, &[(5, 4), (5, 5), (5, 6)]);
         s.handle(
             Some(me),
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(100, 100), (100, 101), (100, 102)], placement: Placement::Life },
+                action: Action::Paint { cells: cells.clone(), placement: Placement::Life },
             }),
         );
         s.step();
         let live = s.world().live_cells();
-        assert!(live.contains(&(99, 101)), "the blinker should have rotated");
-        let owner = s
-            .world()
-            .chunk_at((99 / CHUNK_N as i32, 101 / CHUNK_N as i32))
-            .map(|c| c[((99 % CHUNK_N as i32) as usize, (101 % CHUNK_N as i32) as usize)])
-            .unwrap();
+        let (row, col) = (cells[1].0 - 1, cells[1].1);
+        assert!(live.contains(&(row, col)), "the blinker should have rotated");
+        let owner = s.world().cell_at(row, col).unwrap();
         assert_eq!(owner.player(), me, "live cells carry the painter's number");
+    }
+
+    /// The tick and the world's generation are the same number, and a load
+    /// has to restore it into the world rather than into a counter beside it.
+    ///
+    /// Pinned on its own because the failure is silent: every seed is derived
+    /// from the generation, so a server restarted from a save rolls a
+    /// different sequence from the one that made the save, and a client — which
+    /// takes *this* number from `Welcome` — disagrees with the server from its
+    /// first step. `a_world_survives_a_save_and_load` catches it eventually,
+    /// as a divergence dozens of steps later that says nothing about why.
+    #[test]
+    fn a_loaded_world_is_on_the_tick_it_was_saved_at() {
+        let dir = std::env::temp_dir().join("ck-tick-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tick.ckw");
+
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("alice").unwrap();
+        s.handle(
+            Some(me),
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: me,
+                action: Action::Paint {
+                    cells: mine(me, &[(0, 0), (0, 1), (0, 2)]),
+                    placement: Placement::Life,
+                },
+            }),
+        );
+        for _ in 0..7 {
+            s.step();
+        }
+        assert_eq!(s.tick(), s.world().generation, "they are one number");
+        s.save(&path).unwrap();
+
+        let back = Server::load_or_new(&path, World::infinite_empty).unwrap();
+        assert_eq!(back.tick(), 7);
+        assert_eq!(
+            back.world().generation,
+            7,
+            "the world must come back on the generation it was saved on, or \
+             every seed derived from it differs from here on"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -308,7 +395,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: vec![(40, 40), (40, 41), (40, 42)], placement: Placement::Life },
+                action: Action::Paint { cells: mine(me, &[(4, 4), (4, 5), (4, 6)]), placement: Placement::Life },
             }),
         );
         for _ in 0..25 {
@@ -364,16 +451,16 @@ mod tests {
 
         // A 2x2 block: a still life, so it is still where it was put when the
         // next assertion looks. A blinker would have rotated out from under it.
-        act(&mut s, Action::Paint { cells: vec![(0, 0), (0, 1), (1, 0), (1, 1)], placement: Placement::Life });
+        act(&mut s, Action::Paint { cells: mine(me, &[(0, 0), (0, 1), (1, 0), (1, 1)]), placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost()));
 
         // Reclaiming two of your own pays two back.
         // Reclaiming pays one each, well short of what they cost to place.
-        act(&mut s, Action::Erase { cells: vec![(0, 0), (0, 1)], placement: Placement::Life });
+        act(&mut s, Action::Erase { cells: mine(me, &[(0, 0), (0, 1)]), placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
 
         // Erasing empty space is neither earned nor spent.
-        act(&mut s, Action::Erase { cells: vec![(90, 90)], placement: Placement::Life });
+        act(&mut s, Action::Erase { cells: mine(me, &[(9, 9)]), placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
     }
 
@@ -385,7 +472,7 @@ mod tests {
     fn the_server_refuses_to_lift_ice() {
         let mut s = Server::new(World::infinite_empty());
         let me = s.join("me").unwrap();
-        let pane = vec![(0, 0), (0, 1), (0, 2)];
+        let pane = mine(me, &[(0, 0), (0, 1), (0, 2)]);
 
         s.handle(
             Some(me),
@@ -396,7 +483,8 @@ mod tests {
             }),
         );
         s.step();
-        assert!(s.world().cell_at(0, 0).unwrap().is_ice());
+        let (row, col) = pane[0];
+        assert!(s.world().cell_at(row, col).unwrap().is_ice());
         let spent = s.value_of(me);
 
         s.handle(
@@ -408,7 +496,10 @@ mod tests {
             }),
         );
         s.step();
-        assert!(s.world().cell_at(0, 0).unwrap().is_ice(), "the pane should still be there");
+        assert!(
+            s.world().cell_at(row, col).unwrap().is_ice(),
+            "the pane should still be there"
+        );
         assert_eq!(s.value_of(me), spent, "and nothing should have been paid for it");
     }
 
@@ -421,14 +512,15 @@ mod tests {
         s.handle(Some(a), ClientMessage::Act(Stamped {
             tick: 0,
             player: a,
-            action: Action::Paint { cells: vec![(50, 50), (50, 51), (51, 50), (51, 51)], placement: Placement::Life },
+            action: Action::Paint { cells: mine(a, &[(0, 0), (0, 1), (1, 0), (1, 1)]), placement: Placement::Life },
         }));
         s.step();
-        assert_eq!(s.world().cell_at(50, 50).map(|c| c.player()), Some(a));
+        let (row, col) = mine(a, &[(0, 0)])[0];
+        assert_eq!(s.world().cell_at(row, col).map(|c| c.player()), Some(a));
 
         let before = s.value_of(b).unwrap();
         s.handle(Some(b), ClientMessage::Act(Stamped {
-            tick: s.tick(), player: b, action: Action::Erase { cells: vec![(50, 50)], placement: Placement::Life },
+            tick: s.tick(), player: b, action: Action::Erase { cells: mine(a, &[(0, 0)]), placement: Placement::Life },
         }));
         s.step();
         assert_eq!(s.value_of(b), Some(before - 1), "taking ground is not free");
@@ -439,14 +531,29 @@ mod tests {
         let mut s = Server::new(World::infinite_empty());
         let me = s.join("me").unwrap();
         let purse = s.value_of(me).unwrap();
-        let too_many: Vec<_> = (0..purse / Placement::Life.cost() + 1).map(|i| (0, i)).collect();
+        let granted = s.world().live_cells();
+        assert_eq!(granted.len(), 4, "the grant is a block, and only that");
+
+        // Inside their own ground, so it is affordability being tested and
+        // not the territory rule -- and skipping the block they already own,
+        // since painting over what is already there is free and so would not
+        // count towards the bill.
+        let n = crate::net::SPAWN_N;
+        let (row, col) = crate::net::spawn_for(me);
+        let block = n / 2 - 1;
+        let too_many: Vec<_> = (0..n)
+            .flat_map(|r| (0..n).map(move |c| (r, c)))
+            .filter(|&(r, c)| !((block..block + 2).contains(&r) && (block..block + 2).contains(&c)))
+            .take((purse / Placement::Life.cost() + 1) as usize)
+            .map(|(r, c)| (row + r, col + c))
+            .collect();
 
         s.handle(Some(me), ClientMessage::Act(Stamped {
             tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Life },
         }));
         s.step();
         assert_eq!(s.value_of(me), Some(purse), "nothing was spent");
-        assert!(s.world().live_cells().is_empty(), "and nothing was placed");
+        assert_eq!(s.world().live_cells(), granted, "and nothing was placed");
     }
 
     #[test]

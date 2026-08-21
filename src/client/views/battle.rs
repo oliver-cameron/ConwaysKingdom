@@ -22,9 +22,6 @@ use crate::sim::{Player, PlayerId};
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
 
-/// Where the camera starts looking, in cells, as (x, y) — that is, (col, row).
-const START_CENTRE: (f32, f32) = (CHUNK_N as f32 / 2.0, CHUNK_N as f32 / 2.0);
-
 /// Screen pixels per cell at startup.
 const START_ZOOM: f32 = 16.0;
 
@@ -170,6 +167,20 @@ impl Drag {
     /// Whether the stroke has reached its limit and stopped growing.
     fn full(&self) -> bool {
         self.path.len() as i64 >= MAX_DRAG_CELLS
+    }
+
+    /// How many cells this drag covers, without listing them. More than one is
+    /// what makes it a drag rather than a click, and that has to be decided
+    /// before the cells are priced -- otherwise a click that lands somewhere
+    /// it may not build is refused in a drag's words.
+    fn cell_count(&self, to: (i32, i32)) -> i64 {
+        match self.stroke {
+            hotbar::Stroke::Pencil => self.path.len() as i64,
+            hotbar::Stroke::Rectangle => {
+                let (rows, cols) = span(self.from, to);
+                rows * cols
+            }
+        }
     }
 }
 
@@ -461,6 +472,12 @@ impl BattleApp {
                     // different choices from identical cells.
                     self.world.set_generation(tick);
                     self.subscribed.clear();
+                    // Look at our own ground, which is the only place we may
+                    // build. Derived rather than sent: `spawn_for` is the same
+                    // function on both sides, so the client can work out where
+                    // it was put without being told.
+                    self.camera.centre = home(you);
+                    self.camera.dirty = true;
                 }
                 ServerMessage::Rejected { reason } => {
                     log::error!("server refused the connection: {reason}");
@@ -539,8 +556,18 @@ impl BattleApp {
     /// cannot draw one thing and the release lay another.
     fn drag_cells(&self, drag: &Drag, to: (i32, i32)) -> Result<(Vec<(i32, i32)>, String), String> {
         let name = hotbar::SLOTS[self.slot].name;
+        let outside = |cells: &[(i32, i32)]| {
+            cells
+                .iter()
+                .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
+                .count()
+        };
         match drag.stroke {
             hotbar::Stroke::Pencil => {
+                let stray = outside(&drag.path);
+                if stray > 0 {
+                    return Err(format!("{stray} of those cells are not your territory"));
+                }
                 let full = if drag.full() { ", full" } else { "" };
                 Ok((
                     drag.path.clone(),
@@ -555,12 +582,14 @@ impl BattleApp {
                 }
                 let (r0, r1) = (drag.from.0.min(to.0), drag.from.0.max(to.0));
                 let (c0, c1) = (drag.from.1.min(to.1), drag.from.1.max(to.1));
-                Ok((
-                    (r0..=r1)
-                        .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
-                        .collect(),
-                    format!("laid {rows}x{cols} of {name}"),
-                ))
+                let cells: Vec<(i32, i32)> = (r0..=r1)
+                    .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+                    .collect();
+                let stray = outside(&cells);
+                if stray > 0 {
+                    return Err(format!("{stray} of those cells are not your territory"));
+                }
+                Ok((cells, format!("laid {rows}x{cols} of {name}")))
             }
         }
     }
@@ -668,6 +697,15 @@ impl BattleApp {
         let placement = hotbar::SLOTS[self.slot].placement;
         let already_there = self.already_there(row, col);
 
+        // Placing is confined to a player's own territory, which grows where
+        // their life goes. Refused here on the same terms the server refuses
+        // it, so the answer is instant rather than a round trip away.
+        if !already_there && !crate::net::may_place(&self.world, player, row, col) {
+            self.notice = Some(format!("({row}, {col}) is not your territory"));
+            self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
+            return;
+        }
+
         // Ice is not liftable. A pane stops time over whatever it covers, and
         // being able to take one back at will would make it cheap to undo as
         // well as strong to place -- what removes ice is life reaching it.
@@ -736,10 +774,15 @@ impl App for BattleApp {
         // all and looks broken. A socket object exists long before it
         // connects, and may never connect, so its mere existence is no reason
         // to blank the view. `Welcome` is what replaces this.
-        let world = match WORLD {
-            WorldMode::Infinite => World::demo(),
+        let mut world = match WORLD {
+            WorldMode::Infinite => World::infinite_empty(),
             WorldMode::Torus => World::toroidal(TORUS_CHUNKS.0, TORUS_CHUNKS.1),
         };
+        // Placing is confined to a player's own territory, so an offline game
+        // needs the grant a server would have made. Without it there is no
+        // opening move: nothing is owned, so nothing may be placed, so nothing
+        // ever comes to own anything.
+        crate::net::grant(&mut world, PlayerId(1));
         let mut chunks = ChunkStore::new(&gpu.device);
         let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
@@ -807,7 +850,7 @@ impl App for BattleApp {
             chunks,
             _atlas: atlas,
             world,
-            camera: camera::Camera::new(START_CENTRE, START_ZOOM),
+            camera: camera::Camera::new(home(PlayerId(1)), START_ZOOM),
             gesture: Gesture::None,
             space: false,
             shift: false,
@@ -859,12 +902,13 @@ impl App for BattleApp {
             // A press that travelled but stayed inside one cell would place
             // where a click would take, so which of the two happens must not
             // turn on a few pixels of hand shake at high zoom.
-            match self.drag_cells(&drag, to) {
-                Ok((cells, shape)) if drag.moved && cells.len() > 1 => {
-                    self.lay(cells, shape)
+            if drag.moved && drag.cell_count(to) > 1 {
+                match self.drag_cells(&drag, to) {
+                    Ok((cells, shape)) => self.lay(cells, shape),
+                    Err(why) => self.notice = Some(why),
                 }
-                Ok(_) => self.click(to.0, to.1),
-                Err(why) => self.notice = Some(why),
+            } else {
+                self.click(to.0, to.1);
             }
         }
 
@@ -1323,6 +1367,14 @@ mod tests {
         assert_eq!(pinch_span(&one), None);
         assert_eq!(pinch_span(&[]), None);
     }
+}
+
+/// The middle of a player's granted ground, as the camera wants it: (x, y),
+/// which is (col, row) the other way round.
+fn home(player: PlayerId) -> (f32, f32) {
+    let (row, col) = crate::net::spawn_for(player);
+    let half = crate::net::SPAWN_N as f32 / 2.0;
+    (col as f32 + half, row as f32 + half)
 }
 
 /// How many rows and columns a rectangle covers, both ends included.

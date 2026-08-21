@@ -71,35 +71,6 @@ impl World {
 
     /// The world the app and the server open with.
     ///
-    /// Two Gosper glider guns facing each other, owned by different players.
-    /// They stay put, so there is always something to join to; they emit a
-    /// glider every thirty generations, so the trail says how long the server
-    /// has been up; and the two streams collide, so births happen with parents
-    /// of different colours and the random attribution is visible.
-    ///
-    /// That second property is the point of a gun over a still life or an
-    /// oscillator, which look identical whether they arrived from the server or
-    /// the client regenerated them and so cannot tell a working join from a
-    /// broken one.
-    pub fn demo() -> Self {
-        let mut w = Self::infinite_empty();
-        w.seed_gun(0, 0, PlayerId(1), false);
-        // Mirrored and set opposite, so its gliders travel the other way and
-        // the two streams meet.
-        w.seed_gun(0, 80, PlayerId(2), true);
-        w.generation = 0;
-        w
-    }
-
-    /// A Gosper gun with its top-left at (row, col). Mirrored horizontally it
-    /// is still a gun, just firing the other way.
-    fn seed_gun(&mut self, row: i32, col: i32, player: PlayerId, mirrored: bool) {
-        for (r, c) in GOSPER_GUN {
-            let c = if mirrored { 35 - c } else { c };
-            self.set_cell_at(row + r, col + c, Cell::alive(player));
-        }
-    }
-
     pub fn infinite() -> Self {
         let mut chunk = Chunk::dead();
         seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
@@ -585,17 +556,7 @@ fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
 /// Gosper's glider gun: 36 cells, period 30, stationary, emitting a glider
 /// south-east every cycle. Rows and columns are chunk-local, and it is 36 wide
 /// so it straddles chunk boundaries at any sane chunk size.
-const GOSPER_GUN: [(i32, i32); 36] = [
-    (0, 24),
-    (1, 22), (1, 24),
-    (2, 12), (2, 13), (2, 20), (2, 21), (2, 34), (2, 35),
-    (3, 11), (3, 15), (3, 20), (3, 21), (3, 34), (3, 35),
-    (4, 0), (4, 1), (4, 10), (4, 16), (4, 20), (4, 21),
-    (5, 0), (5, 1), (5, 10), (5, 14), (5, 16), (5, 17), (5, 22), (5, 24),
-    (6, 10), (6, 16), (6, 24),
-    (7, 11), (7, 15),
-    (8, 12), (8, 13),
-];
+
 
 /// The standard glider, travelling south-east.
 ///
@@ -638,21 +599,36 @@ mod tests {
     }
 
     #[test]
-    fn an_infinite_world_stores_only_chunks_that_hold_life() {
+    fn an_infinite_world_stores_only_chunks_that_hold_something() {
         let mut w = World::infinite();
         for _ in 0..400 {
             w.step();
         }
-        // A five-cell glider spans at most four chunks. Without pruning this
-        // grew without bound as the glider left empties in its wake.
-        assert!(
-            w.stored_count() <= 4,
-            "expected the trail to be dropped, got {} chunks",
-            w.stored_count()
-        );
+        // Nothing wholly empty is kept: that is what pruning is for, and
+        // without it the glider's wake grew without bound.
         for (coord, chunk) in w.stored() {
             assert!(!chunk.is_empty(), "chunk {coord:?} is empty but stored");
         }
+
+        // But the wake is no longer empty. A glider claims the ground it
+        // crosses, and territory has no die-off, so every chunk it has ever
+        // passed through is kept for the owner marks left on its dead cells.
+        // The world therefore grows with the glider -- deliberately, since
+        // territory that vanished the moment life moved on would be no
+        // territory at all, but it is unbounded until a die-off bounds it.
+        assert!(
+            w.stored_count() > 4,
+            "a glider crossing 400 generations should have claimed a trail, got {}",
+            w.stored_count()
+        );
+        let claimed = w
+            .stored()
+            .iter()
+            .filter(|(_, c)| {
+                (0..CHUNK_N).any(|r| (0..CHUNK_N).any(|k| c[(r, k)].player().is_owned()))
+            })
+            .count();
+        assert_eq!(claimed, w.stored_count(), "every chunk kept is kept for a reason");
     }
 
     /// Every one of a 1x1 torus's eight neighbours is the chunk itself. A
@@ -783,8 +759,15 @@ mod tests {
         }
         assert_eq!(a.digest(), b.digest());
 
-        // Same cells alive, different owner.
-        let coord = b.stored()[0].0;
+        // Same cells alive, different owner. Any chunk will do so long as it
+        // holds life -- most of them now hold only claimed ground, since a
+        // glider's trail is kept for its owner marks.
+        let coord = b
+            .stored()
+            .iter()
+            .find(|(_, c)| (0..CHUNK_N).any(|r| (0..CHUNK_N).any(|k| c[(r, k)].is_alive())))
+            .expect("something should still be alive")
+            .0;
         let mut edited = *b.chunk_at(coord).unwrap();
         'outer: for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {

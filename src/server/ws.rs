@@ -123,6 +123,17 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
     } else {
         config.addr.to_string()
     };
+    // The one bind that cannot be reached from another machine, called out
+    // because the symptom is indistinguishable from a network problem and the
+    // cause is a flag: `--addr 127.0.0.1:8080` serves this machine only.
+    if config.addr.ip().is_loopback() {
+        log::warn!(
+            "bound to {} -- loopback only, so no other machine can reach this. \
+             Use --addr [::]:{} to listen on every interface.",
+            config.addr,
+            config.addr.port()
+        );
+    }
     match &config.static_dir {
         Some(dir) => log::info!("http://{host}/  serving {}", dir.display()),
         None => log::warn!(
@@ -139,6 +150,14 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
         match outward_address(config.addr.port()) {
             Some(addr) => log::info!("http://{addr}/  from another machine, if the network allows"),
             None => log::info!("listening on every interface; no outward address found"),
+        }
+        // Worth saying out loud, because the failure it prevents is invisible:
+        // a client that resolves this host by name gets its AAAA record and
+        // arrives over IPv6, and an IPv4-only socket refuses it.
+        if config.addr.is_ipv6() {
+            log::info!("accepting IPv4 and IPv6");
+        } else {
+            log::warn!("IPv4 only; a client arriving over IPv6 will be refused");
         }
     }
     axum::serve(listener, app)

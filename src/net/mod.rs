@@ -181,6 +181,73 @@ pub enum ServerMessage {
     Resync { tick: Tick, chunks: Vec<ChunkId> },
 }
 
+/// How wide a patch of ground a player is granted when they join, in cells.
+///
+/// Placing is confined to your own territory, so a player who owned nothing
+/// could never place a first cell and so could never grow any. The grant is
+/// the seed the rest spreads from.
+pub const SPAWN_N: i32 = 12;
+
+/// Whether `player` may put something down on this cell.
+///
+/// Only inside their own territory: the cell must already carry their number.
+/// Territory is the owner field on dead cells, which the rule spreads outward
+/// from living ones, so reach grows where life goes and nowhere else — and
+/// ground nobody has ever reached belongs to nobody and is closed to everyone.
+///
+/// Unheld ground reads as unowned, and so as closed. That is the honest answer
+/// rather than a hopeful one: a client cannot know what it does not hold, and
+/// guessing yes there would let it predict a placement the server refuses.
+pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
+    world.cell_at(row, col).is_some_and(|c| c.player() == player)
+}
+
+/// The ground a player is granted on joining: a square of claimed but empty
+/// cells, far enough from everyone else's to be their own.
+///
+/// Laid out along a line by player number rather than searched for, because
+/// both sides have to agree on where it is without exchanging anything, and a
+/// search depends on what a peer happens to hold.
+pub fn spawn_for(player: PlayerId) -> (i32, i32) {
+    (0, player.0 as i32 * SPAWN_N * 4)
+}
+
+/// Claim a player's starting ground, with a block standing on it.
+///
+/// Here rather than on the server because an offline client needs the same
+/// grant — placing is confined to territory, so a player who owns nothing can
+/// place nothing, and a game of one would have no opening move at all.
+///
+/// The block is a 2x2 still life: four cells that hold their shape forever
+/// under Conway's rules. Everyone starts with the same one, so nobody begins
+/// ahead, and because it never changes it costs nothing to leave alone while
+/// you decide what to build. It is also what keeps the ground: territory
+/// spreads from living cells, so a grant with nothing alive on it would never
+/// grow past the patch it was given.
+pub fn grant(world: &mut World, player: PlayerId) {
+    let (row, col) = spawn_for(player);
+    for r in row..row + SPAWN_N {
+        for c in col..col + SPAWN_N {
+            let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+            // Never over someone else's: territory is taken by life reaching
+            // it, not handed out on top of what is already held.
+            if !cell.player().is_owned() {
+                world.set_cell_at(r, c, cell.with_player(player));
+            }
+        }
+    }
+
+    // In the middle, so it has room to grow in any direction the player
+    // chooses and is not against an edge of what they own.
+    let middle = (row + SPAWN_N / 2 - 1, col + SPAWN_N / 2 - 1);
+    for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        let at = (middle.0 + r, middle.1 + c);
+        if world.cell_at(at.0, at.1).is_some_and(|c| c.player() == player) {
+            world.set_cell_at(at.0, at.1, Cell::alive(player));
+        }
+    }
+}
+
 /// What reclaiming your own costs, or rather pays.
 pub const RECLAIM: i32 = 1;
 
@@ -406,6 +473,56 @@ mod tests {
         let five: Vec<_> = (0..5).map(|c| (0, c)).collect();
         assert_eq!(value_delta(&world, &paint(five.clone(), Placement::Life)), -5);
         assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
+    }
+
+    /// Placing is confined to a player's own ground, and the grant is what
+    /// gives them any. Without it a new player owns nothing, may place
+    /// nothing, and so can never come to own anything.
+    #[test]
+    fn a_player_may_build_only_on_their_own_ground() {
+        let mut world = World::infinite_empty();
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        let (row, col) = spawn_for(me);
+
+        assert!(!may_place(&world, me, row, col), "nothing is owned yet");
+        grant(&mut world, me);
+        assert!(may_place(&world, me, row, col), "granted ground is buildable");
+        assert!(!may_place(&world, them, row, col), "and only by its owner");
+
+        // Ground at the edges, and a block standing in the middle of it.
+        assert!(!world.cell_at(row, col).unwrap().is_alive(), "the corner is bare");
+        let middle = (row + SPAWN_N / 2 - 1, col + SPAWN_N / 2 - 1);
+        let block: Vec<_> = [(0, 0), (0, 1), (1, 0), (1, 1)]
+            .iter()
+            .map(|(r, c)| world.cell_at(middle.0 + r, middle.1 + c).unwrap())
+            .collect();
+        assert!(block.iter().all(|c| c.is_alive() && c.player() == me), "a 2x2 block");
+
+        // Beyond the patch is nobody's, and nobody's is closed to everyone.
+        assert!(!may_place(&world, me, row, col + SPAWN_N));
+        assert!(!may_place(&world, me, 10_000, 10_000));
+    }
+
+    /// Two players' grants must not overlap, or one would be building on the
+    /// other from the first move.
+    #[test]
+    fn grants_do_not_overlap() {
+        let mut world = World::infinite_empty();
+        for id in 1..=4 {
+            grant(&mut world, PlayerId(id));
+        }
+        for id in 1..=4 {
+            let (row, col) = spawn_for(PlayerId(id));
+            for r in row..row + SPAWN_N {
+                for c in col..col + SPAWN_N {
+                    assert_eq!(
+                        world.cell_at(r, c).unwrap().player(),
+                        PlayerId(id),
+                        "({r}, {c}) should belong to {id}"
+                    );
+                }
+            }
+        }
     }
 
     /// Ground nobody holds prices as empty, which is what `apply` writes into
