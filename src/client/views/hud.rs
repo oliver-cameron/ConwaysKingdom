@@ -110,7 +110,15 @@ pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
     const TAU: f32 = std::f32::consts::TAU;
 
     let hue = (player.0 as f32 * HUE_STEP).fract() * TAU;
-    let saturation = if player.0 % 2 == 1 { 1.0 } else { 0.55 };
+    // Player zero is nobody, and nobody's ground is grey. Mirrors the shader,
+    // which is the one that has to be right -- this only has to agree with it.
+    let saturation = if player.0 == 0 {
+        0.0
+    } else if player.0 % 2 == 1 {
+        1.0
+    } else {
+        0.55
+    };
     let lightness = 0.62f32;
 
     let oklab_to_linear = |l: f32, a: f32, b: f32| {
