@@ -18,7 +18,29 @@ pub enum Stroke {
     /// Every cell between the two corners. A pane is a shape you place, and
     /// dragging one out says how big before it exists.
     Rectangle,
+    /// A fixed pattern, dropped where you point. The drag positions it and
+    /// the release commits it, so you can see where it lands before it does.
+    ///
+    /// Cells are offsets from the pointer, so a pattern is written the way it
+    /// looks. Nothing new reaches the wire: a stamp is a `Paint` of the cells
+    /// it covers, judged against territory and value like any other.
+    Stamp(&'static [(i32, i32)]),
 }
+
+/// A 2x2 block: the still life everyone starts with. Holds its shape forever,
+/// which makes it the thing to build against rather than with.
+const BLOCK: [(i32, i32); 4] = [(0, 0), (0, 1), (1, 0), (1, 1)];
+
+/// A blinker: three in a row, flipping between horizontal and vertical. The
+/// cheapest thing that moves, and the cheapest way to see a generation pass.
+const BLINKER: [(i32, i32); 3] = [(0, 0), (0, 1), (0, 2)];
+
+/// A glider, travelling down and to the right one cell every four
+/// generations.
+///
+/// The only ranged answer to somebody's ice: a pane is broken by life
+/// reaching it, and a glider is how life reaches somewhere you cannot.
+const GLIDER: [(i32, i32); 5] = [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)];
 
 /// One thing a player can place.
 pub struct Slot {
@@ -30,12 +52,23 @@ pub struct Slot {
     pub stroke: Stroke,
 }
 
-pub const SLOTS: [Slot; 2] = [
+pub const SLOTS: [Slot; 5] = [
     Slot { name: "Life", placement: Placement::Life, stroke: Stroke::Pencil },
     // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
     Slot { name: "Ice", placement: Placement::Ice, stroke: Stroke::Rectangle },
+    // Patterns, which are Life laid in a shape worth knowing. They are the
+    // vocabulary the rules actually reward: something that holds, something
+    // that moves in place, and something that travels.
+    Slot { name: "Block", placement: Placement::Life, stroke: Stroke::Stamp(&BLOCK) },
+    Slot { name: "Blinker", placement: Placement::Life, stroke: Stroke::Stamp(&BLINKER) },
+    Slot { name: "Glider", placement: Placement::Life, stroke: Stroke::Stamp(&GLIDER) },
 ];
+
+/// Where a pattern's cells land when it is dropped at `at`.
+pub fn stamp_at(pattern: &[(i32, i32)], at: (i32, i32)) -> Vec<(i32, i32)> {
+    pattern.iter().map(|&(r, c)| (at.0 + r, at.1 + c)).collect()
+}
 
 /// Which slot a digit selects, if any. `1` is the first.
 pub fn slot_for_digit(digit: u32) -> Option<usize> {

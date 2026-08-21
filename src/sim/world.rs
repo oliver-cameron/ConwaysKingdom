@@ -51,6 +51,47 @@ pub struct World {
     pub dirty: bool,
 }
 
+/// Which world the app opens, and how big it is if it wraps.
+///
+/// A runtime choice rather than a const. As a const, whichever arm was not
+/// selected was dead code the compiler had to be told to ignore — a world you
+/// cannot pick is a world nobody plays and nobody notices breaking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WorldMode {
+    /// Grows as life reaches new ground.
+    Infinite,
+    /// Wraps, `rows` by `cols` chunks. Small enough and a player's granted
+    /// ground wraps onto somebody else's.
+    Torus { rows: i32, cols: i32 },
+}
+
+impl WorldMode {
+    pub fn build(self) -> World {
+        match self {
+            Self::Infinite => World::infinite_empty(),
+            Self::Torus { rows, cols } => World::toroidal_empty(rows, cols),
+        }
+    }
+}
+
+/// Read a torus size written as `ROWSxCOLS`, in chunks.
+///
+/// Shared by both binaries so `--torus 18x18` means the same thing to each,
+/// and so the error does too.
+pub fn parse_torus(text: &str) -> Result<WorldMode, String> {
+    let (rows, cols) = text
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("expected ROWSxCOLS, got {text:?}"))?;
+    let parse = |v: &str, what: &str| {
+        v.trim()
+            .parse::<i32>()
+            .ok()
+            .filter(|&n| n > 0)
+            .ok_or_else(|| format!("{what} must be a positive number of chunks, got {v:?}"))
+    };
+    Ok(WorldMode::Torus { rows: parse(rows, "rows")?, cols: parse(cols, "cols")? })
+}
+
 impl World {
     /// An unbounded plane with nothing in it. Loading a saved world starts
     /// here and fills the chunks back in.
@@ -84,9 +125,19 @@ impl World {
     /// world, and buy nothing here since the dimensions are never used in a
     /// type-level computation.
     pub fn toroidal(rows: i32, cols: i32) -> Self {
+        let mut w = Self::toroidal_empty(rows, cols);
+        if let Storage::Toroidal { chunks, .. } = &mut w.storage {
+            seed_glider(&mut chunks[0], CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
+        }
+        w
+    }
+
+    /// A torus with nothing on it, which is what a game starts from: the
+    /// world opens empty and every player brings a block. `toroidal` seeds a
+    /// glider on top, and the tests that want something already moving use it.
+    pub fn toroidal_empty(rows: i32, cols: i32) -> Self {
         assert!(rows > 0 && cols > 0, "a torus needs at least one chunk");
-        let mut chunks = vec![Chunk::dead(); (rows * cols) as usize].into_boxed_slice();
-        seed_glider(&mut chunks[0], CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
+        let chunks = vec![Chunk::dead(); (rows * cols) as usize].into_boxed_slice();
         Self::new(Storage::Toroidal { rows, cols, chunks })
     }
 
@@ -969,6 +1020,38 @@ mod tests {
                     "({row}, {col}) survived, so the run did not break as one"
                 );
             }
+        }
+    }
+
+    /// `--torus 18x18` has to mean the same thing to the client and the
+    /// server, so the parsing is one function and its refusals are pinned.
+    #[test]
+    fn a_torus_size_is_read_the_same_way_everywhere() {
+        assert_eq!(parse_torus("18x18"), Ok(WorldMode::Torus { rows: 18, cols: 18 }));
+        assert_eq!(parse_torus("4X7"), Ok(WorldMode::Torus { rows: 4, cols: 7 }));
+        assert_eq!(parse_torus(" 4 x 7 "), Ok(WorldMode::Torus { rows: 4, cols: 7 }));
+
+        // A world with no chunks in it is not a world.
+        assert!(parse_torus("0x4").is_err());
+        assert!(parse_torus("-3x4").is_err());
+        assert!(parse_torus("18").is_err());
+        assert!(parse_torus("axb").is_err());
+        assert!(parse_torus("").is_err());
+    }
+
+    /// The shape is a choice made at startup, and both shapes have to work.
+    #[test]
+    fn either_shape_builds_and_steps() {
+        for mode in [WorldMode::Infinite, WorldMode::Torus { rows: 4, cols: 4 }] {
+            let mut w = mode.build();
+            w.set_cell_at(2, 2, Cell::alive(PlayerId(1)));
+            w.set_cell_at(2, 3, Cell::alive(PlayerId(1)));
+            w.set_cell_at(3, 2, Cell::alive(PlayerId(1)));
+            w.set_cell_at(3, 3, Cell::alive(PlayerId(1)));
+            for _ in 0..5 {
+                w.step();
+            }
+            assert_eq!(w.live_cells().len(), 4, "{mode:?}: a block should hold");
         }
     }
 

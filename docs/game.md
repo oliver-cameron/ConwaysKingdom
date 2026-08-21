@@ -99,6 +99,10 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 
 ## The hotbar
 
+Five slots. **Life** and **Ice** put down one thing at a time; **Block**, **Blinker** and **Glider** stamp a pattern where you point, positioned by the drag and committed on release so you see where it lands before it does. A pattern always places and never takes — a shape is a thing you put down, and taking one back cell by cell is what Life is for.
+
+Patterns need nothing new on the wire: a stamp is a `Paint` of the cells it covers, judged against territory and value like anything else, and priced per cell. That the three are a still life, an oscillator and a spaceship is the point — they are the vocabulary the rules reward. The glider especially: **born life reaching a pane is the only thing that breaks ice**, so a glider is the one ranged answer to somebody's wall.
+
 Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The two are `Life` and `Ice`: the placement is named for what is put down, since a cell is the square and life is one of the two things that can be on it.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.

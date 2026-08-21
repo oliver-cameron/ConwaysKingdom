@@ -3,6 +3,7 @@
 //!     cargo run --no-default-features --features server --bin server -- [OPTIONS]
 //!
 //!     --addr  ADDR   listen address           (default [::]:8080)
+//!     --torus RxC    a world that wraps, in chunks (default infinite)
 //!     --world PATH   save file                (default world.ckw)
 //!     --serve DIR    static files at /        (default: none)
 //!     --span  MS     milliseconds per generation (default 250)
@@ -16,7 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use conwayskingdom::server::{ws, Server};
-use conwayskingdom::sim::World;
 
 fn main() -> std::io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -32,6 +32,7 @@ fn main() -> std::io::Result<()> {
     let mut static_dir: Option<PathBuf> = None;
     let mut span = Duration::from_millis(250);
     let mut fresh = false;
+    let mut world_mode = conwayskingdom::sim::WorldMode::Infinite;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -44,18 +45,25 @@ fn main() -> std::io::Result<()> {
                 span = Duration::from_millis(ms);
             }
             "--fresh" => fresh = true,
+            "--torus" => {
+                let text = args.next().expect("--torus needs ROWSxCOLS");
+                world_mode = conwayskingdom::sim::parse_torus(&text)
+                    .unwrap_or_else(|e| panic!("--torus: {e}"));
+            }
             other => panic!("unknown argument {other}"),
         }
     }
 
     // Without --fresh a save is authoritative, which is easy to forget: a
-    // world file left over from an earlier run means World::demo never runs
-    // and the gun never appears.
+    // world file left over from an earlier run is the world, whatever --torus
+    // says, because the shape of a world is not something a flag can change
+    // after cells have been written into it.
+    conwayskingdom::net::warn_if_cramped(world_mode);
     let server = if fresh {
         log::info!("--fresh: ignoring any world at {}", world_path.display());
-        Server::new(World::infinite_empty())
+        Server::new(world_mode.build())
     } else {
-        Server::load_or_new(&world_path, World::infinite_empty)?
+        Server::load_or_new(&world_path, || world_mode.build())?
     };
 
     let world = server.world();
