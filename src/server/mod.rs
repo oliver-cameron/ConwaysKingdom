@@ -27,6 +27,20 @@ pub struct Server {
     pending: Vec<Stamped>,
 }
 
+/// A secret nobody can guess, for a player to come back with.
+///
+/// `RandomState` is seeded by the operating system for every instance, which
+/// is what hashing relies on to resist collision attacks — two of them give
+/// 128 bits without a dependency. Strong enough for what this is: a claim
+/// ticket for a game with no accounts, not a credential worth attacking.
+fn new_token() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let half = || RandomState::new().build_hasher().finish();
+    format!("{:016x}{:016x}", half(), half())
+}
+
 impl Server {
     pub fn new(world: World) -> Self {
         Self {
@@ -69,10 +83,56 @@ impl Server {
 
     /// The lowest unused number. Zero is reserved for unowned cells, and the
     /// cell only has room for [`PlayerId::MAX`], so a full server refuses.
+    /// The lowest number nobody has ever been given here.
+    ///
+    /// Never reused, even once its player has gone. A number is written into
+    /// every cell they own, so reissuing one hands their territory to a
+    /// stranger — and the ground stays after the connection does not. Thirty
+    /// one numbers is therefore a limit on players a world has ever seen, not
+    /// on players connected at once, which is what a bearer token is for: a
+    /// returning player asks for the number they already have.
     fn next_player_id(&self) -> Option<PlayerId> {
         (1..=PlayerId::MAX)
             .map(PlayerId)
             .find(|id| !self.players.contains_key(id))
+    }
+
+    /// Let a player in, or let them back in.
+    ///
+    /// A token that matches a player already here is that player returning:
+    /// they get their number, their value and their ground back, and their
+    /// name is refreshed in case they changed it. Anything else is a new
+    /// player, who gets a new number and a new secret.
+    ///
+    /// The grant runs either way. A returning player whose life was wiped out
+    /// while they were away would otherwise come back with nowhere to stand,
+    /// and re-marking ground they already hold costs nothing.
+    pub fn join_with(
+        &mut self,
+        name: impl Into<String>,
+        token: Option<&str>,
+    ) -> Result<(PlayerId, String), String> {
+        let name = name.into();
+        if let Some(token) = token.filter(|t| !t.is_empty()) {
+            if let Some(p) = self.players.values_mut().find(|p| p.token == token) {
+                p.name = name;
+                p.last_seen = 0;
+                p.online = true;
+                let (id, token) = (p.id, p.token.clone());
+                log::info!("rejoin: {id:?} \"{}\" came back", self.players[&id].name);
+                self.grant_territory(id);
+                return Ok((id, token));
+            }
+            log::info!("a token nobody here holds; joining as somebody new");
+        }
+        let id = self.join(name)?;
+        let token = new_token();
+        self.players
+            .get_mut(&id)
+            .expect("just joined")
+            .token
+            .clone_from(&token);
+        Ok((id, token))
     }
 
     pub fn join(&mut self, name: impl Into<String>) -> Result<PlayerId, String> {
@@ -132,14 +192,20 @@ impl Server {
         persist::save(path, &self.world, &players, self.tick())
     }
 
+    /// Mark a player gone, and keep them.
+    ///
+    /// Not removed: their number is their identity, since every cell they own
+    /// carries it, so giving it to the next player to arrive would give away
+    /// their territory with it. They come back to it with their token.
     pub fn leave(&mut self, id: PlayerId) {
-        if let Some(p) = self.players.remove(&id) {
+        if let Some(p) = self.players.get_mut(&id) {
+            p.online = false;
+            let (name, since) = (p.name.clone(), p.last_seen);
             log::info!(
-                "leave: {:?} \"{}\" after {} ticks ({} online)",
+                "leave: {:?} \"{name}\" after {} ticks ({} still on)",
                 id,
-                p.name,
-                self.tick().saturating_sub(p.last_seen),
-                self.players.len()
+                self.tick().saturating_sub(since),
+                self.players.values().filter(|p| p.online).count()
             );
         }
         self.subscriptions.remove(&id);
@@ -154,11 +220,11 @@ impl Server {
             }
         }
         match msg {
-            ClientMessage::Join { name } => match self.join(name) {
-                Ok(you) => {
+            ClientMessage::Join { name, token } => match self.join_with(name, token.as_deref()) {
+                Ok((you, token)) => {
                     let spawn = crate::net::spawn_for(you, &self.world);
-                    vec![ServerMessage::Welcome { you, tick: self.tick(), spawn }]
-                },
+                    vec![ServerMessage::Welcome { you, tick: self.tick(), spawn, token }]
+                }
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
@@ -302,14 +368,25 @@ mod tests {
     use crate::net::{Action, Placement};
 
     #[test]
-    fn player_numbers_start_at_one_and_are_reused() {
+    /// Numbers start at one and are **never** reused, which is a change: they
+    /// used to fill the gap a departing player left. A number is written into
+    /// every cell that player owns, so handing it on hands over their
+    /// territory, and the ground outlives the connection. Coming back is what
+    /// the token is for.
+    fn player_numbers_start_at_one_and_are_never_reused() {
         let mut s = Server::new(World::infinite());
         let a = s.join("a").unwrap();
         let b = s.join("b").unwrap();
         assert_eq!((a, b), (PlayerId(1), PlayerId(2)));
         assert!(a.is_owned(), "zero is reserved for unowned cells");
+
         s.leave(a);
-        assert_eq!(s.join("c").unwrap(), PlayerId(1), "the gap is filled");
+        assert_eq!(
+            s.join("c").unwrap(),
+            PlayerId(3),
+            "a departed player's number is theirs still"
+        );
+        assert!(!s.players().find(|p| p.id == a).unwrap().online, "and they are marked gone");
     }
 
     #[test]
@@ -469,6 +546,58 @@ mod tests {
         // Erasing empty space is neither earned nor spent.
         act(&mut s, Action::Erase { cells: mine(me, &[(9, 9)]), placement: Placement::Life });
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
+    }
+
+    /// The whole point of the token: a player who drops comes back to their
+    /// own number, their own value and their own ground, rather than to a
+    /// fresh number beside a patch they can see and cannot build on.
+    #[test]
+    fn a_token_brings_a_player_back_to_themselves() {
+        let mut s = Server::new(World::infinite_empty());
+        let (me, token) = s.join_with("alice", None).unwrap();
+
+        // Spend some, so there is state worth coming back to.
+        s.handle(
+            Some(me),
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: me,
+                action: Action::Paint { cells: mine(me, &[(0, 0), (0, 1)]), placement: Placement::Life },
+            }),
+        );
+        s.step();
+        let spent = s.value_of(me).unwrap();
+        assert!(spent < Player::STARTING_VALUE, "something should have been spent");
+
+        s.leave(me);
+        let (again, same_token) = s.join_with("alice", Some(&token)).unwrap();
+        assert_eq!(again, me, "the same number");
+        assert_eq!(same_token, token, "and the same secret, so it keeps working");
+        assert_eq!(s.value_of(me), Some(spent), "and the value they had");
+    }
+
+    /// A token nobody holds is not an error, it is a new player. Anything else
+    /// would lock somebody out over a stale file.
+    #[test]
+    fn an_unknown_token_joins_as_somebody_new() {
+        let mut s = Server::new(World::infinite_empty());
+        let (first, token) = s.join_with("alice", None).unwrap();
+        let (second, other) = s.join_with("bob", Some("not a token anybody has")).unwrap();
+        assert_ne!(first, second);
+        assert_ne!(token, other, "and gets a secret of its own");
+    }
+
+    /// Two players must never be handed the same secret, or either could
+    /// claim the other.
+    #[test]
+    fn tokens_are_not_shared() {
+        let mut s = Server::new(World::infinite_empty());
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..8 {
+            let (_, token) = s.join_with(format!("p{i}"), None).unwrap();
+            assert_eq!(token.len(), 32, "128 bits, written as hex");
+            assert!(seen.insert(token), "a token was handed out twice");
+        }
     }
 
     /// Ice cannot be taken back, and the server is where that is decided. The

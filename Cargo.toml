@@ -62,6 +62,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Document", "Element", "Window", "HtmlCanvasElement", "Performance",
     "WebSocket", "MessageEvent", "BinaryType", "Location", "CloseEvent", "Event",
+    "Storage",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1.0"

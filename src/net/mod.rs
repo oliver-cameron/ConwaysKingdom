@@ -15,6 +15,7 @@
 //! Nothing here may depend on [`crate::render`].
 
 pub mod codec;
+pub mod token;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
 #[cfg(target_arch = "wasm32")]
@@ -154,7 +155,13 @@ pub struct Stamped {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Join { name: String },
+    /// Asking to play. `token` is the secret a previous `Welcome` handed out,
+    /// if this client has one — presenting it asks for that player back rather
+    /// than a new one.
+    Join {
+        name: String,
+        token: Option<String>,
+    },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
     /// The chunks the client now needs, because its viewport moved.
@@ -180,6 +187,9 @@ pub enum ServerMessage {
         you: PlayerId,
         tick: Tick,
         spawn: (i32, i32),
+        /// Keep this. Presenting it on a later `Join` asks for this player
+        /// back — the same number, the same value, the same ground.
+        token: String,
     },
     Rejected { reason: String },
     /// Actions by other players, to be applied at the tick they carry.

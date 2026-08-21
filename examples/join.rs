@@ -15,7 +15,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let url = std::env::args().nth(1).expect("usage: join <ws url>");
     let mut link = Link::connect(url);
-    link.send(ClientMessage::Join { name: "late".into() });
+    link.send(ClientMessage::Join { name: "late".into(), token: None });
 
     let mut world = World::infinite_empty();
     let (mut tick, mut chunks, mut checkpointed, mut verdict) = (0, 0, false, None);
