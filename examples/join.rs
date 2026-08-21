@@ -24,7 +24,7 @@ fn main() {
     while Instant::now() < deadline && verdict.is_none() {
         for msg in link.drain() {
             match msg {
-                ServerMessage::Welcome { you, tick: t } => {
+                ServerMessage::Welcome { you, tick: t, .. } => {
                     println!("joined as {you:?} at tick {t}");
                     tick = t;
                     world.set_generation(t);

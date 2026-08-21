@@ -189,10 +189,6 @@ impl Drag {
                 let (rows, cols) = span(self.from, to);
                 rows * cols
             }
-            // A stamp is the same pattern wherever it lands, so a drag that
-            // moved and one that did not lay exactly the same cells. Counting
-            // it as one keeps the click path, which is where a stamp belongs.
-            hotbar::Stroke::Stamp(_) => 1,
         }
     }
 }
@@ -472,7 +468,7 @@ impl BattleApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick } => {
+                ServerMessage::Welcome { you, tick, spawn } => {
                     log::info!("joined as {you:?} at tick {tick}; adopting the server's world");
                     self.value = Player::STARTING_VALUE;
                     self.me = Some(you);
@@ -489,7 +485,7 @@ impl BattleApp {
                     // build. Derived rather than sent: `spawn_for` is the same
                     // function on both sides, so the client can work out where
                     // it was put without being told.
-                    self.camera.centre = home(you);
+                    self.camera.centre = middle_of(spawn);
                     self.camera.dirty = true;
                 }
                 ServerMessage::Rejected { reason } => {
@@ -587,16 +583,6 @@ impl BattleApp {
                     format!("drew {} cells of {name}{full}", drag.path.len()),
                 ))
             }
-            // Positioned by where the pointer is now, not where it went
-            // down: a stamp is dropped, and you drag to aim it.
-            hotbar::Stroke::Stamp(pattern) => {
-                let cells = hotbar::stamp_at(pattern, to);
-                let stray = outside(&cells);
-                if stray > 0 {
-                    return Err(format!("{stray} of those cells are not your territory"));
-                }
-                Ok((cells, format!("stamped a {name}")))
-            }
             hotbar::Stroke::Rectangle => {
                 let (rows, cols) = span(drag.from, to);
                 let area = rows * cols;
@@ -673,9 +659,9 @@ impl BattleApp {
         };
 
         let rects: Vec<egui::Rect> = match drag.stroke {
-            // A stroke and a stamp are their cells; there is no outline that
-            // describes a line doubling back on itself, or a glider.
-            hotbar::Stroke::Pencil | hotbar::Stroke::Stamp(_) => cells
+            // A stroke is its cells; there is no outline to draw round a line
+            // that doubles back on itself.
+            hotbar::Stroke::Pencil => cells
                 .iter()
                 .map(|&at| self.camera.cell_rect(at, at))
                 .collect(),
@@ -683,21 +669,8 @@ impl BattleApp {
         };
 
         let (r, g, b) = hud::player_colour(self.player());
-        let bounds = match drag.stroke {
-            // From where the pattern actually is, not from where the press
-            // began -- a stamp does not stretch, so the press point is not a
-            // corner of anything.
-            hotbar::Stroke::Stamp(_) => cells
-                .iter()
-                .fold(None::<egui::Rect>, |acc, &at| {
-                    let r = self.camera.cell_rect(at, at);
-                    Some(acc.map_or(r, |a| a.union(r)))
-                })
-                .unwrap_or_else(|| self.camera.cell_rect(to, to)),
-            _ => self.camera.cell_rect(drag.from, to),
-        };
         Some(overlay::Selection {
-            bounds,
+            bounds: self.camera.cell_rect(drag.from, to),
             cells: rects,
             outlined: drag.stroke == hotbar::Stroke::Rectangle,
             tint: egui::Color32::from_rgb(r, g, b),
@@ -729,23 +702,6 @@ impl BattleApp {
     fn click(&mut self, row: i32, col: i32) {
         let player = self.player();
         let name = hotbar::SLOTS[self.slot].name;
-
-        // A pattern is dropped whole. It always places and never takes: a
-        // shape is a thing you put down, and taking one back cell by cell is
-        // what the Life slot is for.
-        if let hotbar::Stroke::Stamp(pattern) = hotbar::SLOTS[self.slot].stroke {
-            let cells = hotbar::stamp_at(pattern, (row, col));
-            let stray = cells
-                .iter()
-                .filter(|&&(r, c)| !crate::net::may_place(&self.world, player, r, c))
-                .count();
-            if stray > 0 {
-                self.notice = Some(format!("{stray} of those cells are not your territory"));
-                return;
-            }
-            self.lay(cells, format!("stamped a {name}"));
-            return;
-        }
 
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
         let placement = hotbar::SLOTS[self.slot].placement;
@@ -828,14 +784,19 @@ impl App for BattleApp {
         // all and looks broken. A socket object exists long before it
         // connects, and may never connect, so its mere existence is no reason
         // to blank the view. `Welcome` is what replaces this.
-        let mode = chosen_world();
-        crate::net::warn_if_cramped(mode);
-        let mut world = mode.build();
+        let mut world = chosen_world().build();
+        if crate::net::too_cramped_for_grants(&world) {
+            log::warn!("this world is too small for every player to get a square of their own");
+        }
         // Placing is confined to a player's own territory, so an offline game
         // needs the grant a server would have made. Without it there is no
         // opening move: nothing is owned, so nothing may be placed, so nothing
         // ever comes to own anything.
         crate::net::grant(&mut world, PlayerId(1));
+        // And look at it. Where a grant lands depends on the shape of the
+        // world, so this is read back rather than assumed -- the same reason
+        // `Welcome` carries the spawn for a connected client.
+        let home = middle_of(crate::net::spawn_for(PlayerId(1), &world));
         let mut chunks = ChunkStore::new(&gpu.device);
         let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
@@ -904,7 +865,7 @@ impl App for BattleApp {
             chunks,
             _atlas: atlas,
             world,
-            camera: camera::Camera::new(home(PlayerId(1)), START_ZOOM),
+            camera: camera::Camera::new(home, START_ZOOM),
             gesture: Gesture::None,
             space: false,
             shift: false,
@@ -1423,10 +1384,9 @@ mod tests {
     }
 }
 
-/// The middle of a player's granted ground, as the camera wants it: (x, y),
-/// which is (col, row) the other way round.
-fn home(player: PlayerId) -> (f32, f32) {
-    let (row, col) = crate::net::spawn_for(player);
+/// The middle of a granted patch, as the camera wants it: (x, y), which is
+/// (col, row) the other way round.
+fn middle_of((row, col): (i32, i32)) -> (f32, f32) {
     let half = crate::net::SPAWN_N as f32 / 2.0;
     (col as f32 + half, row as f32 + half)
 }

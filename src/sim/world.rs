@@ -141,6 +141,19 @@ impl World {
         Self::new(Storage::Toroidal { rows, cols, chunks })
     }
 
+    /// How big the world is in cells, or `None` if it does not end.
+    ///
+    /// What a grant needs to know: on a torus the ground is finite and has to
+    /// be shared out, and on an infinite world it does not.
+    pub fn size_in_cells(&self) -> Option<(i32, i32)> {
+        match &self.storage {
+            Storage::Infinite(_) => None,
+            Storage::Toroidal { rows, cols, .. } => {
+                Some((rows * CHUNK_N as i32, cols * CHUNK_N as i32))
+            }
+        }
+    }
+
     fn new(storage: Storage) -> Self {
         Self {
             storage,
