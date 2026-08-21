@@ -58,13 +58,22 @@ fn main() -> std::io::Result<()> {
     // world file left over from an earlier run is the world, whatever --torus
     // says, because the shape of a world is not something a flag can change
     // after cells have been written into it.
-    conwayskingdom::net::warn_if_cramped(world_mode);
     let server = if fresh {
         log::info!("--fresh: ignoring any world at {}", world_path.display());
         Server::new(world_mode.build())
     } else {
         Server::load_or_new(&world_path, || world_mode.build())?
     };
+
+    // Asked of the world rather than of the flag, because a save is
+    // authoritative: the world that comes back may not be the shape --torus
+    // asked for, and it is the one players will actually be granted ground in.
+    if conwayskingdom::net::too_cramped_for_grants(server.world()) {
+        log::warn!(
+            "this world is too small to give every player a square of their own; \
+             the later ones will get what is left"
+        );
+    }
 
     let world = server.world();
     log::info!(

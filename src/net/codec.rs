@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn server_messages_round_trip() {
         let cases = vec![
-            ServerMessage::Welcome { you: PlayerId(2), tick: 5 },
+            ServerMessage::Welcome { you: PlayerId(2), tick: 5, spawn: (-144, -96) },
             ServerMessage::Rejected { reason: "full".into() },
             ServerMessage::Actions(vec![Stamped {
                 tick: 1,

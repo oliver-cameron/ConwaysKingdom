@@ -169,8 +169,18 @@ pub enum ClientMessage {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMessage {
-    /// Accepted, and here is the number your cells will carry.
-    Welcome { you: PlayerId, tick: Tick },
+    /// Accepted, and here is the number your cells will carry — and where the
+    /// ground you were granted is.
+    ///
+    /// The spawn is sent rather than derived because where it lands depends on
+    /// the shape of the world, and the client does not know that until it is
+    /// told. A client that guessed would look at empty ground and find it
+    /// could build on none of it.
+    Welcome {
+        you: PlayerId,
+        tick: Tick,
+        spawn: (i32, i32),
+    },
     Rejected { reason: String },
     /// Actions by other players, to be applied at the tick they carry.
     Actions(Vec<Stamped>),
@@ -211,32 +221,6 @@ const SPAWN_ACROSS: i32 = 6;
 /// players — enough to build in before anyone's territory meets.
 const SPAWN_PITCH: i32 = SPAWN_N * 4;
 
-/// How many cells the grants need along each axis to lie side by side.
-///
-/// A toroidal world smaller than this wraps one player's ground onto another's,
-/// so the grid stops being a grid.
-pub const SPAWN_EXTENT: i32 = SPAWN_ACROSS * SPAWN_PITCH;
-
-/// Say so if a world is too small to hold everyone's grant side by side.
-///
-/// It still runs — a grant skips ground already claimed, so the later players
-/// simply get less of it — but silently handing somebody a quarter of a patch
-/// would look like a bug in the grant rather than a choice about the map.
-///
-/// Here rather than on `WorldMode`, because knowing how much room a grant
-/// needs is this module's business and `sim` is not allowed to ask.
-pub fn warn_if_cramped(mode: crate::sim::WorldMode) {
-    let crate::sim::WorldMode::Torus { rows, cols } = mode else { return };
-    let (h, w) = (rows * crate::sim::CHUNK_N as i32, cols * crate::sim::CHUNK_N as i32);
-    if h < SPAWN_EXTENT || w < SPAWN_EXTENT {
-        log::warn!(
-            "a {rows}x{cols} torus is {h}x{w} cells; {SPAWN_EXTENT}x{SPAWN_EXTENT} is needed \
-             for {} grants to sit side by side, so some will wrap onto others",
-            PlayerId::MAX
-        );
-    }
-}
-
 /// The ground a player is granted on joining: a square of claimed but empty
 /// cells, far enough from everyone else's to be their own.
 ///
@@ -246,17 +230,42 @@ pub fn warn_if_cramped(mode: crate::sim::WorldMode) {
 /// several others, which is the only arrangement in which territory meeting
 /// territory is something that happens.
 ///
-/// Centred on the origin, so the world grows in every direction rather than
-/// off into one quadrant, and no player is privileged by being at the corner.
+/// The world decides the spacing. An infinite one has room, so the grid sits
+/// at a fixed pitch centred on the origin, and the world then grows in every
+/// direction rather than off into one quadrant. A torus does not: its ground
+/// is finite and has to be shared out, so the same grid is spread over
+/// whatever there is and **every player still gets their square**, on a small
+/// world as much as a large one.
 ///
-/// Computed from the player number rather than searched for, because both
-/// sides have to agree on where a grant is without exchanging anything, and a
-/// search depends on what a peer happens to hold.
-pub fn spawn_for(player: PlayerId) -> (i32, i32) {
+/// Computed rather than searched for, so the answer never depends on what a
+/// peer happens to hold. It does depend on the world's shape, which a client
+/// cannot know until it is told — and that is why `Welcome` carries the spawn
+/// rather than leaving the client to work it out and be wrong.
+pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
     let n = player.0 as i32;
     let (row, col) = (n / SPAWN_ACROSS, n % SPAWN_ACROSS);
-    let middle = SPAWN_ACROSS / 2;
-    ((row - middle) * SPAWN_PITCH, (col - middle) * SPAWN_PITCH)
+
+    match world.size_in_cells() {
+        None => {
+            let middle = SPAWN_ACROSS / 2;
+            ((row - middle) * SPAWN_PITCH, (col - middle) * SPAWN_PITCH)
+        }
+        Some((height, width)) => {
+            // Never closer together than the patch is wide, or grants would
+            // overlap before they even wrapped. On a world too small for even
+            // that they do overlap, and `grant` leaves claimed ground alone,
+            // so the earlier players simply keep theirs.
+            let pitch = |extent: i32| (extent / SPAWN_ACROSS).max(SPAWN_N);
+            (row * pitch(height), col * pitch(width))
+        }
+    }
+}
+
+/// Whether a world is too small to give every player a square of their own.
+pub fn too_cramped_for_grants(world: &World) -> bool {
+    world
+        .size_in_cells()
+        .is_some_and(|(h, w)| h < SPAWN_N * SPAWN_ACROSS || w < SPAWN_N * SPAWN_ACROSS)
 }
 
 /// Claim a player's starting ground, with a block standing on it.
@@ -272,7 +281,7 @@ pub fn spawn_for(player: PlayerId) -> (i32, i32) {
 /// spreads from living cells, so a grant with nothing alive on it would never
 /// grow past the patch it was given.
 pub fn grant(world: &mut World, player: PlayerId) {
-    let (row, col) = spawn_for(player);
+    let (row, col) = spawn_for(player, world);
     for r in row..row + SPAWN_N {
         for c in col..col + SPAWN_N {
             let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
@@ -529,7 +538,7 @@ mod tests {
     fn a_player_may_build_only_on_their_own_ground() {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(1), PlayerId(2));
-        let (row, col) = spawn_for(me);
+        let (row, col) = spawn_for(me, &world);
 
         assert!(!may_place(&world, me, row, col), "nothing is owned yet");
         grant(&mut world, me);
@@ -555,7 +564,9 @@ mod tests {
     /// map: two players at opposite ends could never meet.
     #[test]
     fn grants_are_laid_out_in_a_square() {
-        let spots: Vec<(i32, i32)> = (1..=PlayerId::MAX).map(|p| spawn_for(PlayerId(p))).collect();
+        let world = World::infinite_empty();
+        let spots: Vec<(i32, i32)> =
+            (1..=PlayerId::MAX).map(|p| spawn_for(PlayerId(p), &world)).collect();
         let rows: Vec<i32> = spots.iter().map(|s| s.0).collect();
         let cols: Vec<i32> = spots.iter().map(|s| s.1).collect();
 
@@ -582,6 +593,44 @@ mod tests {
         }
     }
 
+    /// Every player gets their square on a torus too, which is what a torus
+    /// makes hard: the ground is finite, so a fixed pitch would run off the
+    /// end and wrap one player's grant onto another's. The grid is spread over
+    /// whatever ground there is instead.
+    #[test]
+    fn a_torus_still_gives_everyone_a_square() {
+        // Big enough that the grid fits without crowding.
+        let mut world = World::toroidal_empty(24, 24);
+        assert!(!too_cramped_for_grants(&world));
+        for id in 1..=PlayerId::MAX {
+            grant(&mut world, PlayerId(id));
+        }
+
+        for id in 1..=PlayerId::MAX {
+            let (row, col) = spawn_for(PlayerId(id), &world);
+            let mine = (row..row + SPAWN_N)
+                .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
+                .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == PlayerId(id))
+                .count();
+            assert_eq!(
+                mine,
+                (SPAWN_N * SPAWN_N) as usize,
+                "player {id} did not get a whole square"
+            );
+        }
+    }
+
+    /// And a world too small to go round says so rather than pretending. The
+    /// earlier players keep theirs; the later ones get what is left.
+    #[test]
+    fn a_torus_too_small_is_reported() {
+        let small = World::toroidal_empty(2, 2);
+        assert!(too_cramped_for_grants(&small), "32x32 cells cannot hold 31 squares");
+        let roomy = World::toroidal_empty(24, 24);
+        assert!(!too_cramped_for_grants(&roomy));
+        assert!(!too_cramped_for_grants(&World::infinite_empty()), "infinite has room");
+    }
+
     /// Two players' grants must not overlap, or one would be building on the
     /// other from the first move.
     #[test]
@@ -591,7 +640,7 @@ mod tests {
             grant(&mut world, PlayerId(id));
         }
         for id in 1..=PlayerId::MAX {
-            let (row, col) = spawn_for(PlayerId(id));
+            let (row, col) = spawn_for(PlayerId(id), &world);
             for r in row..row + SPAWN_N {
                 for c in col..col + SPAWN_N {
                     assert_eq!(

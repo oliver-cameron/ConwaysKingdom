@@ -55,7 +55,11 @@ Every dead cell carries an owner, and that is territory. The rule spreads it: a 
 
 **A player may only place inside their own territory.** Ground nobody has reached belongs to nobody and is closed to everyone, so reach grows where life goes and nowhere else. `net::may_place` is the whole rule, and the client refuses on the same terms the server does — instantly, and with the same answer.
 
-That makes a grant necessary. A player who owned nothing could place nothing and so could never come to own anything, so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it. Grants are laid out in a **square** centred on the origin, not a line: a line puts the last player thirty patches from the first, so the two could never reach each other and the map is a corridor. A square keeps everyone within a few patches of several others, which is the only arrangement in which territory meeting territory is something that happens: four cells that hold their shape forever, the same for everyone, so nobody begins ahead. The block is also what keeps the ground, since territory spreads from living cells and a bare patch would never grow. An offline client grants itself the same thing, or a game of one would have no opening move.
+That makes a grant necessary. A player who owned nothing could place nothing and so could never come to own anything, so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it. Grants are laid out in a **square**, not a line: a line puts the last player thirty patches from the first, so the two could never reach each other and the map is a corridor. A square keeps everyone within a few patches of several others, which is the only arrangement in which territory meeting territory is something that happens.
+
+The world decides the spacing. An infinite one has room, so the grid sits at a fixed pitch centred on the origin and the world grows in every direction rather than off into one quadrant. A torus does not — its ground is finite and has to be shared out — so the same grid is spread over whatever there is and **every player still gets their square**, on a small world as much as a large one. A world too small even for that says so at startup; the earlier players keep theirs and the later ones get what is left.
+
+Which means the client cannot work out where its own ground is: that depends on the shape of the world, and it does not know the shape until it is told. `Welcome` carries the spawn: four cells that hold their shape forever, the same for everyone, so nobody begins ahead. The block is also what keeps the ground, since territory spreads from living cells and a bare patch would never grow. An offline client grants itself the same thing, or a game of one would have no opening move.
 
 Territory has no die-off yet, so it only ever spreads. A glider therefore leaves a permanent trail of claimed ground, and the world grows with it — deliberately, since territory that vanished the moment life moved on would be no territory at all.
 
@@ -98,10 +102,6 @@ Letting go of a pan while still moving lets the view coast and settle. A press, 
 A gesture that began on the world keeps the pointer until it ends, even if it strays over a panel. Otherwise a drag released over the hotbar is swallowed, the rectangle is never filled, and the gesture stays open with nothing to close it.
 
 ## The hotbar
-
-Five slots. **Life** and **Ice** put down one thing at a time; **Block**, **Blinker** and **Glider** stamp a pattern where you point, positioned by the drag and committed on release so you see where it lands before it does. A pattern always places and never takes — a shape is a thing you put down, and taking one back cell by cell is what Life is for.
-
-Patterns need nothing new on the wire: a stamp is a `Paint` of the cells it covers, judged against territory and value like anything else, and priced per cell. That the three are a still life, an oscillator and a spaceship is the point — they are the vocabulary the rules reward. The glider especially: **born life reaching a pane is the only thing that breaks ice**, so a glider is the one ranged answer to somebody's wall.
 
 Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The two are `Life` and `Ice`: the placement is named for what is put down, since a cell is the square and life is one of the two things that can be on it.
 

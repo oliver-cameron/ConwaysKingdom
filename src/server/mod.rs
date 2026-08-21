@@ -102,7 +102,7 @@ impl Server {
     /// stand, and re-marking ground they already hold costs nothing.
     fn grant_territory(&mut self, id: PlayerId) {
         crate::net::grant(&mut self.world, id);
-        let (row, col) = crate::net::spawn_for(id);
+        let (row, col) = crate::net::spawn_for(id, &self.world);
         log::info!("{id:?} granted ground at ({row}, {col})");
     }
 
@@ -155,7 +155,10 @@ impl Server {
         }
         match msg {
             ClientMessage::Join { name } => match self.join(name) {
-                Ok(you) => vec![ServerMessage::Welcome { you, tick: self.tick() }],
+                Ok(you) => {
+                    let spawn = crate::net::spawn_for(you, &self.world);
+                    vec![ServerMessage::Welcome { you, tick: self.tick(), spawn }]
+                },
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
@@ -289,7 +292,11 @@ mod tests {
     /// refused now, so a test that wants a placement to land has to say where
     /// relative to the grant rather than picking a coordinate off the map.
     fn mine(id: PlayerId, offsets: &[(i32, i32)]) -> Vec<(i32, i32)> {
-        let (row, col) = crate::net::spawn_for(id);
+        // Every test here runs on an infinite world, whose grid of grants does
+        // not depend on the world at all -- only a torus has to share out what
+        // ground there is. So one is made here rather than threaded through
+        // every call and fought with the borrow checker over.
+        let (row, col) = crate::net::spawn_for(id, &World::infinite_empty());
         offsets.iter().map(|&(r, c)| (row + r, col + c)).collect()
     }
     use crate::net::{Action, Placement};
@@ -539,7 +546,7 @@ mod tests {
         // since painting over what is already there is free and so would not
         // count towards the bill.
         let n = crate::net::SPAWN_N;
-        let (row, col) = crate::net::spawn_for(me);
+        let (row, col) = crate::net::spawn_for(me, &World::infinite_empty());
         let block = n / 2 - 1;
         let too_many: Vec<_> = (0..n)
             .flat_map(|r| (0..n).map(move |c| (r, c)))
