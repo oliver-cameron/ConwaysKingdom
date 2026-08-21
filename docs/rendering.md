@@ -58,7 +58,15 @@ cargo run --bin cnvt -- --back --player 3 sheet.png as-p3.png       # as the gam
 
 The reverse exists because a sheet cannot be opened: three of its channels are numbers fed to a colour model, so a paint program shows something that looks nothing like the art. Converting back gives a picture you can look at, edit, and convert forward again — a round trip is exact to within a step of rounding, and a test in the tool pins that, because the pair silently stops being a pair if its `shade` and the shader's ever drift.
 
-`--player N` reverses it the way the game will draw it, taking hue and saturation tier from player N rather than from the sheet. `--player 0` is unowned, which is grey. The atlas is not a picture: its channels are the arguments to `shade()` — R saturation, G lightness, B hue, A coverage — so art is drawn in ordinary colours in any editor and converted, rather than authored channel by channel in a space nobody can see. The tool reports the worst round trip it caused, because the format cannot express everything: `shade` tapers chroma towards black and white, so a vivid colour at an extreme lightness clamps to full saturation and comes back duller. The shader ignores B today, taking hue from the cell's player instead; the channel is written anyway because it is the honest decomposition and costs nothing.
+`--player N` reverses it the way the game will draw it, taking hue and saturation tier from player N rather than from the sheet. `--player 0` is unowned, which is grey.
+
+`strip` clears a channel:
+
+```
+cargo run --bin strip -- b assets/sprites/sheet.png assets/sprites/sheet.png
+```
+
+Written for blue, which is hue. `cnvt` writes it because it is the honest decomposition of a pixel, but the shader never reads it — hue comes from the cell's player, so one sheet serves every player. A sheet carrying hue carries a number nothing will look at, and one that *reads* as though the art chose a colour it has no say over. It reports how much it found before clearing it, because whether a sheet carries any is a question worth an answer; in and out may be the same file. Any channel, not only blue: clearing saturation makes a sheet greyscale, which is a real thing to want. The atlas is not a picture: its channels are the arguments to `shade()` — R saturation, G lightness, B hue, A coverage — so art is drawn in ordinary colours in any editor and converted, rather than authored channel by channel in a space nobody can see. The tool reports the worst round trip it caused, because the format cannot express everything: `shade` tapers chroma towards black and white, so a vivid colour at an extreme lightness clamps to full saturation and comes back duller. The shader ignores B today, taking hue from the cell's player instead; the channel is written anyway because it is the honest decomposition and costs nothing.
 
  There was a generator that drew them from ASCII art, in Python because the crate embeds these files with `include_bytes!` and so cannot build until they exist — which rules out a cargo example. It is gone: the art is edited directly now, and a generator that nobody runs is a second definition of the sprites waiting to disagree with the first.
 
