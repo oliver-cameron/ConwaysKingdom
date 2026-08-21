@@ -55,7 +55,7 @@ fn main() -> std::io::Result<()> {
         log::info!("--fresh: ignoring any world at {}", world_path.display());
         Server::new(World::infinite_empty())
     } else {
-        Server::load_or_new(&world_path, World::demo)?
+        Server::load_or_new(&world_path, World::infinite_empty)?
     };
 
     let world = server.world();
