@@ -35,20 +35,18 @@ It used to be a quad per chunk, and the visible chunk count grows as the square 
 
 ## Sprites
 
-One file per cell **state**, in `assets/sprites/`, each a 256×256 sheet of 16×16 tiles, loaded into its own layer of a texture array.
+**One sheet**, `assets/sprites/sheet.png`: 256×256, a 16×16 grid of 16×16 tiles. A cell's tile byte is the index into it — low nibble across, high nibble down — and that byte already carries alive and ice, so there is nothing to look up.
 
-| state | file |
+| tile | state |
 |---|---|
-| dead | `dead.png` (deliberately blank) |
-| alive | `alive.png` |
-| dead under ice | `dead_ice.png` |
-| alive under ice | `alive_ice.png` |
+| `kind * 4 + 0` | dead |
+| `kind * 4 + 1` | alive |
+| `kind * 4 + 2` | dead under ice |
+| `kind * 4 + 3` | alive under ice |
 
-Four images rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One state, one unconditional sample.
+A tile per state rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One tile, one unconditional sample, and now not even a layer index to compute.
 
-The layer is `kind * 4 + state`, so a kind's four images sit together and a kind cannot name art that does not exist. `Kind::ALL` is walked by a test that fails if any state is blank.
-
-A cell's own u,v picks the tile within its sheet, so a structure spanning several cells gives each one a different tile and the parts line up. Tile (0,0) is the default; the rest of the sheet is room for multi-cell pictures.
+The sheet in the repo is **provisional**: four flat tiles so the states are told apart. Redraw it and drop it in; no code changes, because the mapping is the tile byte and nothing else.
 
 The PNGs are the source, and `cargo run --bin cnvt -- in.png out.png` makes one. The atlas is not a picture: its channels are the arguments to `shade()` — R saturation, G lightness, B hue, A coverage — so art is drawn in ordinary colours in any editor and converted, rather than authored channel by channel in a space nobody can see. The tool reports the worst round trip it caused, because the format cannot express everything: `shade` tapers chroma towards black and white, so a vivid colour at an extreme lightness clamps to full saturation and comes back duller. The shader ignores B today, taking hue from the cell's player instead; the channel is written anyway because it is the honest decomposition and costs nothing.
 

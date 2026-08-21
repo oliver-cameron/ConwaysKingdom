@@ -833,8 +833,9 @@ impl App for BattleApp {
 
         let vertex_buffers = vec![chunks.instance_buffer().clone()];
         log::info!(
-            "client ready: {} sprite layers, chunk {}x{} cells, cell {} bytes",
-            crate::render::atlas::LAYERS,
+            "client ready: one {}x{} sprite sheet, chunk {}x{} cells, cell {} bytes",
+            crate::render::atlas::SHEET_N,
+            crate::render::atlas::SHEET_N,
             CHUNK_N,
             CHUNK_N,
             size_of::<crate::sim::Cell>(),

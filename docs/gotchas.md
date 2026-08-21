@@ -54,7 +54,7 @@ wgpu-hal's GL backend picks its texture target from the **texture** descriptor, 
 wgpu-hal heuristics assumed that the view dimension will be equal to `D2` rather than `D2Array`
 ```
 
-Allocate the real layer budget. Native Vulkan does not care, so this only shows in a browser.
+Allocate the real layer budget. Native Vulkan does not care, so this only shows in a browser. Still live for the **chunk** texture, which is an array with one chunk per layer; the sprite sheet is a plain `D2` now and no longer in reach of it.
 
 *Also:* that message arrives through `log::error!`, so it is non-fatal and its console stack points at the wasm-bindgen shim that forwards it, not at anything of ours.
 
@@ -70,7 +70,7 @@ That is one reason each cell state has its own sprite rather than compositing: o
 
 ## Alignment decides whether a cast is free
 
-`[u8; 4]` has alignment 1; a `u16` field forces alignment 2. Only the first can be reinterpreted from an arbitrary byte offset, which is what a save file and a wire frame hand you. With alignment 2, `bytemuck::from_bytes` panics on an odd offset.
+`[u8; 2]` has alignment 1; a `u16` field forces alignment 2. Only the first can be reinterpreted from an arbitrary byte offset, which is what a save file and a wire frame hand you. With alignment 2, `bytemuck::from_bytes` panics on an odd offset.
 
 ## Reserved words
 

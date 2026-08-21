@@ -8,108 +8,106 @@ use std::ops::{Index, IndexMut};
 pub const CHUNK_N: usize = 16;
 pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 
-/// One cell: sixteen bits, little-endian.
+/// One cell: two bytes, and the second of them is a sprite.
 ///
 /// ```text
-///  15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
-/// |   player    |F |G |       kind        | A |
+///  byte 0 (R)                byte 1 (G)
+/// | player  | spare |       |    kind     |I |A |
+///  7 6 5 4 3  2 1 0          7 6 5 4 3 2   1  0
 /// ```
 ///
-/// Bit 0 is alive, bits 1..9 the kind, bits 9..11 flags. The top five are the
-/// player,
-/// and being the top field means the number extracts with a single shift and
-/// no mask, and that comparing two raw cells orders them by player first.
+/// Byte 0 holds the player at the top, so the number extracts with a shift and
+/// no mask, and three spare flag bits below it.
 ///
-/// Four bytes per cell, uploaded as `Rgba8Uint`: the sixteen bits above in R
-/// and G, then **U and V in B and A** — the tile this cell shows from its
-/// sprite sheet. A sheet is a 16x16 grid of 16x16 tiles, so a `u8` each is
-/// ample, and a structure spanning several cells gives each one a different
-/// tile so the parts line up.
+/// Byte 1 is **the tile this cell draws**. Alive and iced are its bottom two
+/// bits and the kind is the rest, so a kind's four states are four consecutive
+/// tiles — and the byte is the index straight into the sheet, low nibble
+/// across, high nibble down. That is the whole of the mapping: no layer to
+/// choose, no UV to carry, and nothing to keep in step but this diagram.
 ///
-/// Stored as explicit bytes rather than a `u16` and two `u8`s, so the order is
-/// ours rather than the host's, and so alignment stays 1 — which is what lets a
-/// chunk be cast straight out of a save file or a wire frame at any offset.
+/// Uploaded as `Rg8Uint`. Uint rather than Unorm because these are bit fields,
+/// not colours: Unorm hands the shader floats in 0..1 and reading a field back
+/// means multiplying by 255 and rounding, where a driver rounding one step the
+/// other way silently changes a cell's kind. Nothing samples this texture —
+/// the shader only `textureLoad`s it — so filtering, the one thing Unorm buys,
+/// is not in play.
 ///
-/// A zeroed cell is dead and unowned, which is what makes zeroed memory a valid
-/// empty world. Never give bit 0 clear a live meaning.
+/// Stored as explicit bytes rather than a `u16`, so the order is ours rather
+/// than the host's, and so alignment stays 1 — which is what lets a chunk be
+/// cast straight out of a save file or a wire frame at any offset.
+///
+/// A zeroed cell is dead, unowned and of kind zero, which is what makes zeroed
+/// memory a valid empty world. Never give a zero byte a live meaning.
 #[repr(transparent)]
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-pub struct Cell(pub [u8; 4]);
+pub struct Cell(pub [u8; 2]);
 
 /// The bit layout. Adjust here and in the matching block at the top of
 /// `render/shaders/grid.wgsl` — the shader cannot read Rust constants, so those
 /// are the one thing kept in step by hand.
 pub mod bits {
-    /// Bit 0: alive or dead.
-    pub const ALIVE: u16 = 1;
+    /// Byte 1, bit 0: alive or dead.
+    pub const ALIVE: u8 = 1;
 
-    /// Bits 1..9: what kind of cell this is. Also the index of its sprite, so
-    /// every kind necessarily has art — see `render::atlas`.
-    pub const KIND_SHIFT: u16 = 1;
-    pub const KIND_WIDTH: u16 = 8;
-    pub const KIND_MASK: u16 = (1 << KIND_WIDTH) - 1;
+    /// Byte 1, bit 1: a pane covers this cell. Independent of `ALIVE`: a cell
+    /// may be alive, iced, both, or neither. Ice freezes what it covers, so
+    /// the rule returns such a cell unchanged.
+    pub const ICE: u8 = 1 << 1;
 
-    /// Bits 9..11: flags.
-    pub const FLAG_SHIFT: u16 = 9;
-    pub const FLAG_WIDTH: u16 = 2;
-    pub const FLAG_MASK: u16 = (1 << FLAG_WIDTH) - 1;
+    /// Byte 1, bits 2..8: what kind of cell this is. Also the top six bits of
+    /// its tile index, which is why a kind's four states are consecutive.
+    pub const KIND_SHIFT: u8 = 2;
+    pub const KIND_WIDTH: u8 = 6;
+    pub const KIND_MASK: u8 = (1 << KIND_WIDTH) - 1;
 
-    /// A pane covers this cell. Independent of `ALIVE`: a cell may be alive,
-    /// iced, both, or neither. Ice freezes what it covers, so the rule
-    /// returns such a cell unchanged.
-    pub const FLAG_ICE: u16 = 1 << 9;
+    /// Byte 0, bits 3..8: the player number, at the top so it extracts with a
+    /// shift alone.
+    pub const PLAYER_SHIFT: u8 = 3;
+    pub const PLAYER_WIDTH: u8 = 5;
+    pub const PLAYER_MASK: u8 = (1 << PLAYER_WIDTH) - 1;
 
-    /// Bits 11..16: player number, at the top of the word.
-    pub const PLAYER_SHIFT: u16 = 11;
-    pub const PLAYER_WIDTH: u16 = 5;
-    pub const PLAYER_MASK: u16 = (1 << PLAYER_WIDTH) - 1;
+    /// Byte 0, bits 0..3: nothing yet. Room for three flags that are about
+    /// *whose* a cell is rather than what it looks like — anything that
+    /// changes the picture belongs in the kind byte, where the sheet can see it.
+    pub const SPARE_MASK: u8 = (1 << PLAYER_SHIFT) - 1;
 }
 
 const _: () = {
-    assert!(size_of::<Cell>() == 4 && align_of::<Cell>() == 1);
-    // The fields must tile all sixteen bits with no overlap and no gap.
+    assert!(size_of::<Cell>() == 2 && align_of::<Cell>() == 1);
+    // The kind byte must tile all eight bits with no overlap and no gap, or a
+    // state would share a tile with a kind.
     assert!(bits::ALIVE == 1);
-    assert!(bits::KIND_SHIFT == 1);
-    assert!(bits::FLAG_SHIFT == bits::KIND_SHIFT + bits::KIND_WIDTH);
-    assert!(bits::PLAYER_SHIFT == bits::FLAG_SHIFT + bits::FLAG_WIDTH);
-    assert!(bits::FLAG_ICE == 1 << bits::FLAG_SHIFT);
-    assert!(bits::PLAYER_SHIFT + bits::PLAYER_WIDTH == 16);
-    // R16Uint is read little-endian by the GPU.
-    assert!(cfg!(target_endian = "little"));
+    assert!(bits::ICE == 2);
+    assert!(bits::KIND_SHIFT == 2);
+    assert!(bits::KIND_SHIFT as u32 + bits::KIND_WIDTH as u32 == 8);
+    // And so must the player byte.
+    assert!(bits::PLAYER_SHIFT as u32 + bits::PLAYER_WIDTH as u32 == 8);
+    assert!(bits::SPARE_MASK == 0b111);
+    // A tile index is a byte, and the sheet is sixteen tiles each way.
+    assert!(u8::MAX as usize + 1 == 16 * 16);
 };
 
 impl Cell {
-    pub const DEAD: Self = Self([0, 0, 0, 0]);
+    pub const DEAD: Self = Self([0, 0]);
 
-    /// Keeps the UV: changing what a cell *is* should not move which tile it
-    /// draws, or a pane would scramble its picture every generation.
+    /// The byte that says whose this is, and the byte that says what it looks
+    /// like. Named rather than indexed, because `self.0[1]` at a call site
+    /// tells nobody which is which.
     #[inline]
-    pub const fn from_bits(bits: u16) -> Self {
-        let [lo, hi] = bits.to_le_bytes();
-        Self([lo, hi, 0, 0])
+    const fn owner_byte(self) -> u8 {
+        self.0[0]
+    }
+
+    /// Also the tile index into the sheet: low nibble across, high nibble
+    /// down. Everything that changes the picture lives here.
+    #[inline]
+    pub const fn tile(self) -> u8 {
+        self.0[1]
     }
 
     #[inline]
-    pub const fn bits(self) -> u16 {
-        u16::from_le_bytes([self.0[0], self.0[1]])
-    }
-
-    /// Replace the sixteen bits, keeping the UV.
-    #[inline]
-    const fn set_bits(self, bits: u16) -> Self {
-        let [lo, hi] = bits.to_le_bytes();
-        Self([lo, hi, self.0[2], self.0[3]])
-    }
-
-    /// Which tile of its sheet this cell draws, as (u, v).
-    #[inline]
-    pub const fn uv(self) -> (u8, u8) {
-        (self.0[2], self.0[3])
-    }
-
-    #[inline]
-    pub const fn with_uv(self, u: u8, v: u8) -> Self {
-        Self([self.0[0], self.0[1], u, v])
+    const fn with_tile(self, tile: u8) -> Self {
+        Self([self.0[0], tile])
     }
 
     /// A live cell belonging to `player`.
@@ -119,66 +117,63 @@ impl Cell {
     /// discovered later as a cell nobody can claim.
     pub const fn alive(player: PlayerId) -> Self {
         assert!(player.is_owned(), "a live cell must have a non-zero player");
-        Self::DEAD.set_bits(bits::ALIVE).with_player(player)
+        Self::DEAD.with_tile(bits::ALIVE).with_player(player)
     }
 
     #[inline]
     pub const fn is_alive(self) -> bool {
-        self.bits() & bits::ALIVE != 0
+        self.tile() & bits::ALIVE != 0
     }
 
-    /// The player field is the top of the word, so this is a shift with no
+    /// The player field is the top of its byte, so this is a shift with no
     /// mask — and arithmetic on the result is ordinary arithmetic.
     #[inline]
     pub const fn player(self) -> PlayerId {
-        PlayerId((self.bits() >> bits::PLAYER_SHIFT) as u8)
+        PlayerId(self.owner_byte() >> bits::PLAYER_SHIFT)
     }
 
-    /// What kind of cell this is, which is also its sprite index.
+    /// What kind of cell this is. Not the tile on its own: the tile carries
+    /// the state as well, which is what makes a kind's four pictures four
+    /// consecutive entries in the sheet.
     #[inline]
     pub const fn kind(self) -> Kind {
-        Kind(((self.bits() >> bits::KIND_SHIFT) & bits::KIND_MASK) as u8)
-    }
-
-    #[inline]
-    pub const fn flags(self) -> u16 {
-        (self.bits() >> bits::FLAG_SHIFT) & bits::FLAG_MASK
+        Kind((self.tile() >> bits::KIND_SHIFT) & bits::KIND_MASK)
     }
 
     /// Under ice, and therefore not updating: a pane stops time inside
     /// itself. Says nothing about whether the cell is alive.
     #[inline]
     pub const fn is_ice(self) -> bool {
-        self.bits() & bits::FLAG_ICE != 0
+        self.tile() & bits::ICE != 0
     }
 
     #[inline]
     pub const fn with_alive(self, alive: bool) -> Self {
         if alive {
-            self.set_bits(self.bits() | bits::ALIVE)
+            self.with_tile(self.tile() | bits::ALIVE)
         } else {
-            self.set_bits(self.bits() & !bits::ALIVE)
+            self.with_tile(self.tile() & !bits::ALIVE)
         }
     }
 
     #[inline]
     pub const fn with_player(self, player: PlayerId) -> Self {
-        let cleared = self.bits() & !(bits::PLAYER_MASK << bits::PLAYER_SHIFT);
-        self.set_bits(cleared | ((player.0 as u16 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT))
+        let spare = self.owner_byte() & bits::SPARE_MASK;
+        Self([spare | ((player.0 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT), self.0[1]])
     }
 
     #[inline]
     pub const fn with_kind(self, kind: Kind) -> Self {
-        let cleared = self.bits() & !(bits::KIND_MASK << bits::KIND_SHIFT);
-        self.set_bits(cleared | ((kind.0 as u16 & bits::KIND_MASK) << bits::KIND_SHIFT))
+        let state = self.tile() & !(bits::KIND_MASK << bits::KIND_SHIFT);
+        self.with_tile(state | ((kind.0 & bits::KIND_MASK) << bits::KIND_SHIFT))
     }
 
     #[inline]
     pub const fn with_ice(self, ice: bool) -> Self {
         if ice {
-            self.set_bits(self.bits() | bits::FLAG_ICE)
+            self.with_tile(self.tile() | bits::ICE)
         } else {
-            self.set_bits(self.bits() & !bits::FLAG_ICE)
+            self.with_tile(self.tile() & !bits::ICE)
         }
     }
 }
@@ -189,7 +184,7 @@ impl core::fmt::Debug for Cell {
             .field("alive", &self.is_alive())
             .field("kind", &self.kind().0)
             .field("ice", &self.is_ice())
-            .field("uv", &self.uv())
+            .field("tile", &self.tile())
             .field("player", &self.player().0)
             .finish()
     }
@@ -431,7 +426,9 @@ mod tests {
     /// Each field must round-trip, and none may disturb another.
     #[test]
     fn the_bit_fields_are_independent() {
-        for kind in [0u8, 1, 200, 255] {
+        // The kind field is six bits now: the other two carry alive and ice,
+        // which is what makes the byte a tile index.
+        for kind in [0u8, 1, 37, bits::KIND_MASK] {
             for p in 0..=PlayerId::MAX {
                 for ice in [false, true] {
                     let c = Cell::DEAD
@@ -452,53 +449,54 @@ mod tests {
                 }
             }
         }
-        // A kind uses all eight of its bits without touching the flags.
-        let c = Cell::DEAD.with_kind(Kind(255));
-        assert_eq!(c.kind(), Kind(255));
-        assert_eq!(c.flags(), 0);
+        // A kind uses all six of its bits without touching the state below.
+        let c = Cell::DEAD.with_kind(Kind(bits::KIND_MASK));
+        assert_eq!(c.kind(), Kind(bits::KIND_MASK));
         assert_eq!(c.player(), PlayerId::UNOWNED);
         assert!(!c.is_alive());
+        assert!(!c.is_ice());
     }
 
     #[test]
-    fn a_cell_is_four_bytes_little_endian() {
-        assert_eq!(size_of::<Cell>(), 4);
-        let c = Cell::from_bits(0xABCD).with_uv(7, 9);
-        assert_eq!(c.0, [0xCD, 0xAB, 7, 9], "low byte first, then u and v");
-        assert_eq!(c.bits(), 0xABCD);
-        assert_eq!(c.uv(), (7, 9));
-        assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 4);
+    fn a_cell_is_two_bytes_owner_then_tile() {
+        assert_eq!(size_of::<Cell>(), 2);
+        let c = Cell::alive(PlayerId(5)).with_kind(Kind(3)).with_ice(true);
+        assert_eq!(c.0[0], 5 << bits::PLAYER_SHIFT, "the owner byte is the player");
+        assert_eq!(
+            c.0[1],
+            (3 << bits::KIND_SHIFT) | bits::ICE | bits::ALIVE,
+            "and the tile byte is kind, ice and alive"
+        );
+        assert_eq!(Chunk::bytes_per_row(), CHUNK_N as u32 * 2);
     }
 
-    /// A cell's tile must survive everything the rules do to it, or a pane
-    /// would scramble its picture every generation.
+    /// The tile byte *is* the index into the sheet, so a kind's four states
+    /// are four consecutive tiles and the shader needs no table to find them.
     #[test]
-    fn the_uv_survives_every_change() {
-        let c = Cell::alive(PlayerId(3)).with_uv(11, 4);
-        assert_eq!(c.uv(), (11, 4));
-        for changed in [
-            c.with_alive(false),
-            c.with_alive(true),
-            c.with_player(PlayerId(9)),
-            c.with_kind(Kind(200)),
-            c.with_ice(true),
-            c.with_ice(false),
-        ] {
-            assert_eq!(changed.uv(), (11, 4), "the tile moved");
-        }
+    fn a_kinds_four_states_are_four_consecutive_tiles() {
+        let base = Cell::DEAD.with_kind(Kind(7));
+        let tiles: Vec<u8> = [(false, false), (true, false), (false, true), (true, true)]
+            .iter()
+            .map(|&(alive, ice)| base.with_alive(alive).with_ice(ice).tile())
+            .collect();
+        assert_eq!(tiles, vec![7 * 4, 7 * 4 + 1, 7 * 4 + 2, 7 * 4 + 3]);
+
+        // Low nibble across the sheet, high nibble down it.
+        let tile = tiles[3];
+        assert_eq!((tile & 15, tile >> 4), (31 % 16, 31 / 16));
     }
 
-    /// The player sits at the top of the word, so extracting it is a shift with
-    /// no mask, and raw cell values order by player before anything else.
+    /// The player sits at the top of its byte, so extracting it is a shift
+    /// with no mask, and the owner byte orders by player before anything else.
     #[test]
     fn the_player_occupies_the_high_bits() {
         let c = Cell::alive(PlayerId(5));
-        assert_eq!(c.bits() >> bits::PLAYER_SHIFT, 5);
+        assert_eq!(c.0[0] >> bits::PLAYER_SHIFT, 5);
         assert_eq!(c.player(), PlayerId(5));
 
-        let low = Cell::alive(PlayerId(1)).with_kind(Kind(255)).with_ice(true);
+        let low = Cell::alive(PlayerId(1)).with_kind(Kind(bits::KIND_MASK)).with_ice(true);
         let high = Cell::alive(PlayerId(2));
-        assert!(high.bits() > low.bits(), "player dominates the ordering");
+        assert!(high.0[0] > low.0[0], "player dominates the owner byte");
     }
 
     #[test]
