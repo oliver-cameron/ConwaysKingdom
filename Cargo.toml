@@ -23,6 +23,10 @@ required-features = ["server"]
 name = "cnvt"
 path = "tools/cnvt.rs"
 
+[[bin]]
+name = "strip"
+path = "tools/strip.rs"
+
 [features]
 default = ["render"]
 # Everything that touches the GPU or a window. Off, the server builds with

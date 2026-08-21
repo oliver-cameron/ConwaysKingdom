@@ -45,6 +45,13 @@
 use std::f32::consts::TAU;
 use std::path::Path;
 
+// Shared with the other tools rather than copied into each. A `#[path]` module
+// because these are binaries, not library code: the crate is the game, and
+// nothing the game ships should have to carry the art pipeline.
+#[path = "png_io.rs"]
+mod png_io;
+use png_io::{read_rgba, write_rgba};
+
 /// What `shade()` multiplies saturation by before it becomes chroma. Taper
 /// towards black and white, where no hue has any chroma to spare.
 fn taper(lightness: f32) -> f32 {
@@ -208,39 +215,6 @@ fn reverse(pixels: &[u8], player: Option<u8>) -> Vec<u8> {
         out.push(sheet[3]);
     }
     out
-}
-
-fn read_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut reader = png::Decoder::new(std::io::BufReader::new(file))
-        .read_info()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
-    let frame = reader
-        .next_frame(&mut buf)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    if frame.color_type != png::ColorType::Rgba || frame.bit_depth != png::BitDepth::Eight {
-        return Err(format!(
-            "{}: expected 8-bit RGBA, found {:?} at {:?}",
-            path.display(),
-            frame.color_type,
-            frame.bit_depth
-        ));
-    }
-    buf.truncate(frame.buffer_size());
-    Ok((frame.width, frame.height, buf))
-}
-
-fn write_rgba(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .write_image_data(pixels)
-        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn main() {
