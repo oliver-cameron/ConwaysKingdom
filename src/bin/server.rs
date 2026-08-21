@@ -62,7 +62,22 @@ fn main() -> std::io::Result<()> {
         log::info!("--fresh: ignoring any world at {}", world_path.display());
         Server::new(world_mode.build())
     } else {
-        Server::load_or_new(&world_path, || world_mode.build())?
+        // Spelled out rather than `?`. A world file from an older build is
+        // the most likely thing to go wrong here, and `Error: Custom { kind:
+        // InvalidData, .. }` on the way out tells a person nothing about what
+        // to do -- which reads as saving being broken rather than as a file
+        // needing to be moved out of the way.
+        match Server::load_or_new(&world_path, || world_mode.build()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("cannot read {}: {e}", world_path.display());
+                log::error!(
+                    "if it is from an older build, the format has changed and it cannot be \
+                     converted. Move it aside, or pass --fresh to start a new world."
+                );
+                std::process::exit(1);
+            }
+        }
     };
 
     // Asked of the world rather than of the flag, because a save is

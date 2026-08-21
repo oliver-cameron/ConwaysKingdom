@@ -68,4 +68,6 @@ It is not authentication. It proves nothing to anybody else, and whoever holds i
 
 **A player number is never reused.** It used to fill the gap a departing player left, which was harmless when a number only meant some live cells. It is not harmless now: territory *is* the owner field, so handing a number on hands over everything that player claimed, and the ground outlives the connection. A player who leaves is marked gone and kept. Thirty-one numbers is therefore a limit on players a world has ever seen rather than on players connected at once, and coming back is what the token is for.
 
-A token nobody holds is not an error — it joins you as somebody new. Anything else would lock a player out over a stale file.
+A token nobody holds is not an error — it joins you as somebody new. Anything else would lock a player out over a stale file. **Nor does a token in use bring you back**: two clients on one machine share a token file and two browser tabs share one storage, so a token whose player is already connected also joins you as somebody new. Nobody may be two people at once, and nobody may be one person twice — without that rule the second player to arrive simply becomes the first, which is not a multiplayer game but one player with two windows.
+
+Running two clients on one machine as two people therefore wants `--token PATH` on each, so they keep their secrets apart and both can come back.

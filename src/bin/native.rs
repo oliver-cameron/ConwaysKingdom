@@ -1,13 +1,17 @@
 //! Native client.
 //!
 //!     cargo run --bin native -- [--ws ws://host:8080/ws] [--name NAME]
-//!                                [--torus ROWSxCOLS]
+//!                                [--torus ROWSxCOLS] [--token PATH]
 //!
 //! Without `--ws` it runs entirely locally: the simulation is deterministic, so
 //! an unconnected client is a complete game, just a solitary one.
 //!
 //! `--torus` opens a world that wraps, sized in chunks. Only meaningful
 //! offline: connected, the world is whatever the server is running.
+//!
+//! `--token` says where to keep the secret this client comes back with.
+//! Two clients on one machine otherwise share one file and so try to be the
+//! same player; give them a path each to run them as two people.
 
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +26,9 @@ fn main() {
             match arg.as_str() {
                 "--ws" => ws = Some(args.next().expect("--ws needs a URL")),
                 "--name" => name = args.next().expect("--name needs a value"),
+                "--token" => conwayskingdom::net::token::keep_at(
+                    args.next().expect("--token needs a path").into(),
+                ),
                 "--torus" => {
                     let text = args.next().expect("--torus needs ROWSxCOLS");
                     world = conwayskingdom::sim::parse_torus(&text)
