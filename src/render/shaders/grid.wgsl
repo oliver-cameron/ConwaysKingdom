@@ -116,6 +116,13 @@ fn player_hue(player: u32) -> f32 {
 /// 0.119. Spreading saturation smoothly instead is worse than doing nothing,
 /// since lowering it shrinks the chroma radius and pulls colours together.
 fn player_saturation(player: u32) -> f32 {
+    // Player zero is nobody. Unclaimed ground has no colour of its own, so it
+    // is grey, and territory reads as colour against it -- which is the whole
+    // of how a player sees what is theirs. Without this, unowned cells take
+    // hue zero at the muted tier and unclaimed ground is a dull red field.
+    if player == 0u {
+        return 0.0;
+    }
     if (player & 1u) == 1u {
         return 1.0;
     }
