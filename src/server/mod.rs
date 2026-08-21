@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::net::{ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
-use crate::sim::{Player, PlayerId, World};
+use crate::sim::{Chunk, Player, PlayerId, World, CHUNK_N};
 
 pub struct Server {
     world: World,
@@ -69,6 +69,14 @@ impl Server {
         &self.world
     }
 
+    /// For tests that need to arrange a world the rules would not produce on
+    /// their own. Not on the message path: everything a client can do goes
+    /// through `handle`, which is what judges it.
+    #[cfg(test)]
+    fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
     pub fn value_of(&self, id: PlayerId) -> Option<i32> {
         self.players.get(&id).map(|p| p.value)
     }
@@ -114,16 +122,30 @@ impl Server {
     ) -> Result<(PlayerId, String), String> {
         let name = name.into();
         if let Some(token) = token.filter(|t| !t.is_empty()) {
-            if let Some(p) = self.players.values_mut().find(|p| p.token == token) {
-                p.name = name;
-                p.last_seen = 0;
-                p.online = true;
-                let (id, token) = (p.id, p.token.clone());
-                log::info!("rejoin: {id:?} \"{}\" came back", self.players[&id].name);
-                self.grant_territory(id);
-                return Ok((id, token));
+            match self.players.values_mut().find(|p| p.token == token) {
+                // Theirs, and they are not using it: this is them coming back.
+                Some(p) if !p.online => {
+                    p.name = name;
+                    p.last_seen = 0;
+                    p.online = true;
+                    let (id, token) = (p.id, p.token.clone());
+                    log::info!("rejoin: {id:?} \"{}\" came back", self.players[&id].name);
+                    self.grant_territory(id);
+                    return Ok((id, token));
+                }
+                // Theirs, and somebody is already playing as them. Nobody gets
+                // to be two people at once, and nobody gets to be one person
+                // twice: two clients on one machine share a token file, and
+                // two tabs share a browser's storage, so without this the
+                // second player to arrive simply becomes the first -- which is
+                // not a multiplayer game, it is one player with two windows.
+                Some(p) => log::info!(
+                    "{:?} \"{}\" is already connected; joining as somebody new",
+                    p.id,
+                    p.name
+                ),
+                None => log::info!("a token nobody here holds; joining as somebody new"),
             }
-            log::info!("a token nobody here holds; joining as somebody new");
         }
         let id = self.join(name)?;
         let token = new_token();
@@ -281,7 +303,7 @@ impl Server {
                     .filter_map(|&chunk| self.chunk_message(chunk))
                     .collect();
                 log::info!(
-                    "subscribe: {:?} asked for {} chunks, sending {} that hold life",
+                    "subscribe: {:?} asked for {} chunks, sending {} the world holds",
                     from,
                     chunks.len(),
                     out.len()
@@ -574,6 +596,73 @@ mod tests {
         assert_eq!(again, me, "the same number");
         assert_eq!(same_token, token, "and the same secret, so it keeps working");
         assert_eq!(s.value_of(me), Some(spent), "and the value they had");
+    }
+
+    /// Another player's territory has to reach you, or you cannot see whose
+    /// ground you are standing next to — and, worse, your own does not reach
+    /// you either: `may_place` reads the owner off the cell, so a client that
+    /// never receives the chunk refuses to build on ground that is its own.
+    ///
+    /// The case that nearly slipped through is a chunk holding *only*
+    /// territory. Chunks are sent when the world holds them, and it holds
+    /// anything not empty — which counts ownership now. A filter on liveness
+    /// would have dropped exactly the chunks this is about.
+    #[test]
+    fn territory_reaches_the_clients_that_ask_for_it() {
+        let mut s = Server::new(World::infinite_empty());
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (bob, _) = s.join_with("bob", None).unwrap();
+
+        let (row, col) = crate::net::spawn_for(alice, s.world());
+        let chunk = (row.div_euclid(CHUNK_N as i32), col.div_euclid(CHUNK_N as i32));
+
+        let sent = s.handle(Some(bob), ClientMessage::Subscribe { chunks: vec![chunk] });
+        let [ServerMessage::ChunkData { cells, .. }] = sent.as_slice() else {
+            panic!("bob should have been sent alice's chunk, got {sent:?}");
+        };
+        let cells: &Chunk = bytemuck::from_bytes(cells);
+        let hers = (0..CHUNK_N)
+            .flat_map(|r| (0..CHUNK_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| cells[(r, c)].player() == alice)
+            .count();
+        assert!(hers > 0, "alice's ground should be in what bob was sent");
+
+        // And once her life has gone, the ground still is: a chunk of bare
+        // territory is exactly what a returning player needs to be able to
+        // build on, and it has no life to be sent for.
+        for r in 0..CHUNK_N as i32 {
+            for c in 0..CHUNK_N as i32 {
+                let at = (chunk.0 * CHUNK_N as i32 + r, chunk.1 * CHUNK_N as i32 + c);
+                let cell = s.world().cell_at(at.0, at.1).unwrap();
+                s.world_mut().set_cell_at(at.0, at.1, cell.with_alive(false));
+            }
+        }
+        let sent = s.handle(Some(bob), ClientMessage::Subscribe { chunks: vec![chunk] });
+        assert!(
+            matches!(sent.as_slice(), [ServerMessage::ChunkData { .. }]),
+            "bare territory must still be sent, got {sent:?}"
+        );
+    }
+
+    /// Nobody may be two people at once, and nobody may be one person twice.
+    ///
+    /// Two clients on one machine share a token file and two tabs share a
+    /// browser's storage, so a token already in use has to mean a new player.
+    /// Without this the second to arrive simply becomes the first, which is
+    /// not a multiplayer game — it is one player with two windows.
+    #[test]
+    fn a_token_already_in_use_joins_as_somebody_new() {
+        let mut s = Server::new(World::infinite_empty());
+        let (alice, token) = s.join_with("alice", None).unwrap();
+
+        let (bob, other) = s.join_with("bob", Some(&token)).unwrap();
+        assert_ne!(bob, alice, "alice is still playing as alice");
+        assert_ne!(other, token, "and bob gets a secret of his own");
+
+        // Once she has gone, her own token brings her back.
+        s.leave(alice);
+        let (back, _) = s.join_with("alice", Some(&token)).unwrap();
+        assert_eq!(back, alice);
     }
 
     /// A token nobody holds is not an error, it is a new player. Anything else

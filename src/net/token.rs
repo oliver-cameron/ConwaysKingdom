@@ -9,6 +9,21 @@
 //! and your old ground sits there, yours and out of reach. Which is exactly
 //! why it is written down at all.
 
+/// Where the token is kept, when somewhere other than the usual place is
+/// wanted. Native only, and set before the client starts.
+///
+/// Two clients on one machine otherwise share one file and so try to be one
+/// player. The server refuses that — the second joins as somebody new — but
+/// then neither can come back to the right player afterwards, and testing two
+/// players on one machine wants two identities that both persist.
+#[cfg(not(target_arch = "wasm32"))]
+static OVERRIDE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn keep_at(path: std::path::PathBuf) {
+    *OVERRIDE.lock().unwrap() = Some(path);
+}
+
 /// What we last kept, if anything.
 pub fn load() -> Option<String> {
     imp::load().filter(|t| !t.is_empty())
@@ -53,6 +68,9 @@ mod imp {
     /// Beside the rest of a user's data rather than in the working directory,
     /// so running the client from somewhere else does not lose the player.
     fn path() -> Option<PathBuf> {
+        if let Some(chosen) = super::OVERRIDE.lock().unwrap().clone() {
+            return Some(chosen);
+        }
         let base = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
