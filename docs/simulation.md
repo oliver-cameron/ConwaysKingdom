@@ -28,7 +28,7 @@ Four bytes, little-endian, uploaded as `Rgba8Uint`.
 |---|---|---|
 | alive | 0 | living or not |
 | kind | 1..9 | what it is, and the index of its sprite |
-| glass | 9 | a pane covers it; independent of alive |
+| ice | 9 | a pane covers it; independent of alive |
 | flags | 10 | spare |
 | player | 11..16 | owner, 0 = unowned, so 31 players |
 | u, v | bytes 2 and 3 | which tile of its sheet it draws |
@@ -37,7 +37,7 @@ The player sits at the top of the word, so extracting it is a shift with no mask
 
 Stored as `[u8; 4]` rather than a `u16` and two `u8`s, so the byte order is ours rather than the host's **and alignment stays 1** — which is what lets a chunk be cast straight out of a save file or a wire frame at any offset. A `u16` field would force alignment 2 and panic on an odd offset.
 
-A zeroed cell is dead, unowned and unglassed, so zeroed memory is a valid empty world. Never give bit 0 clear a live meaning.
+A zeroed cell is dead, unowned and clear of ice, so zeroed memory is a valid empty world. Never give bit 0 clear a live meaning.
 
 `Cell::alive` asserts the player is non-zero: **a live cell always has an owner**, because unowned life would have nobody to attribute a birth to.
 
@@ -49,7 +49,7 @@ A zeroed cell is dead, unowned and unglassed, so zeroed memory is a valid empty 
 cell.update(&neighbours, seed) -> Cell
 ```
 
-- A glassed cell is returned unchanged. Checked before the kind, so a pane freezes anything without every kind having to remember to honour it.
+- An iced cell is returned unchanged. Checked before the kind, so a pane freezes anything without every kind having to remember to honour it.
 - Otherwise Conway. Survival and death change **only the alive bit**, so a dead cell keeps its owner and metadata — "recently died, and whose it was" exists without a field for it. Those corpses are inert: nothing counts a dead cell.
 - A birth sets the owner, because it has none to keep.
 
@@ -86,15 +86,23 @@ A travelling glider holds one to four chunks indefinitely.
 
 Every non-empty chunk, plus any neighbour it carries life towards. A chunk with no life on the edge facing its neighbour cannot cause a birth there.
 
-## Glass
+## Ice
 
-A pane freezes what it covers, whether or not that is alive. Alive and glass are independent: a cell may be either, both, or neither.
+A pane freezes what it covers, whether or not that is alive. Alive and ice are independent: a cell may be either, both, or neither.
 
-A pane touched by a **living, unglassed** cell shatters, and takes the whole connected run with it — a pane is one object, so cracking a corner does not leave the rest standing. Connectivity is **orthogonal**: panes are laid as rectangles, and two meeting only at a corner are two panes, so a diagonal join would let a break travel between panes that merely touch.
+A pane touched by a **living, ice-free** cell shatters, and takes the whole connected run with it — a pane is one object, so cracking a corner does not leave the rest standing. Connectivity is **orthogonal**: panes are laid as rectangles, and two meeting only at a corner are two panes, so a diagonal join would let a break travel between panes that merely touch.
 
 Shattering runs after the rules, in absolute coordinates, so a pane spanning chunks breaks as one.
 
-One consequence is emergent rather than designed, and worth knowing: **a frozen cell still counts as a neighbour**, so a pane laid over life causes life to be born around itself, and that newborn breaks the pane. Glass shelters what is under it without sealing it off from the world. If that is not wanted, the change is to stop frozen cells counting as neighbours, in `Halo::step_into`.
+One consequence is emergent rather than designed, and worth knowing: **a frozen cell still counts as a neighbour**, so a pane laid *exactly* on a pattern causes life to be born immediately outside itself, and that newborn breaks the pane.
+
+Note the "exactly". Give the pane one cell of margin and every cell that could be born from the frozen pattern lies inside the pane, where the rule returns it unchanged — so **a pane with a margin is not broken by what it covers**. That is what makes ice work as scaffolding: seal a region and the half-built pattern inside it will not break its own cover.
+
+When a pane goes, **the ice flag is the only thing that changes**. What was under it — alive, dead, and whose — is exactly as it was, which is what makes a pane a schematic rather than a lid: draw the pattern frozen over as many generations as it takes, and it starts living the instant the cover breaks. `shattering_leaves_what_was_under_it_exactly_as_it_was` pins it.
+
+It buys time, not safety. Anything alive arriving from elsewhere breaks it on contact, and a glider is the cheapest way to reach a pane nothing can get beside — `a_glider_shatters_a_pane_it_reaches` flies one in and watches the whole run go. Sealing a pattern in protects it from itself and from nothing else.
+
+The rule is that simple and has one exception. **Any live cell in the eight neighbours breaks a pane** — placed by a player or born of the rule, yours or anyone's, one cell or a glider. The exception is a cell that is itself under ice: it is frozen, and a pane must not be broken by what it covers, or no pane could be laid over life at all. That is the whole of the seed test in `World::shatter_ice`.
 
 ## Worlds
 

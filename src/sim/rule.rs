@@ -51,13 +51,48 @@ impl Cell {
     /// an arm that inspects [`Cell::meta`] and the default falls through to
     /// Conway, so a new type costs one arm and disturbs nothing else.
     #[inline]
-    pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
-        // Under glass is time-stopped, whatever the cell is and whether or not
+    pub fn update(mut self, neighbours: &Neighbours, seed: u64) -> Cell {
+        // Under ice is time-stopped, whatever the cell is and whether or not
         // it is alive. Checked before the kind, so a pane freezes anything
         // without every kind having to remember to honour it.
-        if self.is_glass() {
+        if self.is_ice() {
             return self;
         }
+        // Spread Territory: a dead cell has a chance to become of ownership of a live neighbour, but stays dead
+        // Also, territories have a small chance to spread to adjacent dead cells, but only if they are not ice
+        // Territory spreading is not a birth, so it does not set the alive bit, but it does set the owner
+        // Territories also have a small chance to die off, turning into a dead cell with no owner.
+        // This will work with all dead cells, not just those with no type.
+        
+        if !self.is_alive() {
+            // // Check if there are any live neighbours
+            let live_neighbours: Vec<&Cell> = neighbours.iter().filter(|n| n.is_alive()).collect();
+            if live_neighbours.is_empty() {
+                // Chose random neighbour
+                let neighbour_index = (seed & 7) as usize;
+                let neighbour = &neighbours[neighbour_index];
+                if neighbour.is_alive() {
+                    if ((seed >> 3) & 15) <= 3 {
+                        if neighbour.player().is_owned() {
+                            self = self.with_player(neighbour.player());
+                        }
+                    } else if (seed >> 3) & 15 == 4 {
+                        // 5% chance to die off
+                        self = self.with_player(PlayerId::UNOWNED);
+                    }
+                }   
+            } else {
+                // Choose random live neighbour
+                let neighbour_index = (seed % live_neighbours.len() as u64) as usize;
+                let neighbour = live_neighbours[neighbour_index];
+                if ((seed >> 3) & 15) <= 9 {
+                    // if neighbour.player().is_owned() {
+                        self = self.with_player(neighbour.player());
+                    // }
+                }
+            }
+    }
+
         match self.kind() {
             // No kind-specific rules yet; everything follows Conway.
             _ => self.conway(neighbours, seed),
@@ -213,42 +248,42 @@ mod tests {
         }
     }
 
-    /// Glass freezes what it covers, whatever surrounds it.
+    /// Ice freezes what it covers, whatever surrounds it.
     #[test]
-    fn a_cell_under_glass_never_changes() {
+    fn a_cell_under_ice_never_changes() {
         for live in 0..=8 {
             let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
             for me in [
-                // Alive under glass: would otherwise die or survive.
-                Cell::alive(PlayerId(3)).with_glass(true),
-                // Dead under glass: would otherwise be born at three.
-                Cell::DEAD.with_glass(true),
+                // Alive under ice: would otherwise die or survive.
+                Cell::alive(PlayerId(3)).with_ice(true),
+                // Dead under ice: would otherwise be born at three.
+                Cell::DEAD.with_ice(true),
                 // Carrying a kind as well, to show the flag wins over it.
-                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_glass(true),
+                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_ice(true),
             ] {
                 assert_eq!(next_cell(me, &n, 0), me, "{live} live neighbours");
             }
         }
     }
 
-    /// Glass and alive are independent: all four combinations are meaningful.
+    /// Ice and alive are independent: all four combinations are meaningful.
     #[test]
-    fn glass_and_alive_are_independent() {
+    fn ice_and_alive_are_independent() {
         for alive in [false, true] {
-            for glass in [false, true] {
+            for ice in [false, true] {
                 let c = Cell::DEAD
                     .with_alive(alive)
                     .with_player(if alive { PlayerId(1) } else { PlayerId::UNOWNED })
-                    .with_glass(glass);
+                    .with_ice(ice);
                 assert_eq!(c.is_alive(), alive);
-                assert_eq!(c.is_glass(), glass);
+                assert_eq!(c.is_ice(), ice);
             }
         }
-        // A dead cell under glass stays dead even with three live neighbours,
-        // where without the glass it would be born.
+        // A dead cell under ice stays dead even with three live neighbours,
+        // where without the ice it would be born.
         let n = neighbours(&[0, 1, 2], 4);
         assert!(next_cell(Cell::DEAD, &n, 0).is_alive());
-        assert!(!next_cell(Cell::DEAD.with_glass(true), &n, 0).is_alive());
+        assert!(!next_cell(Cell::DEAD.with_ice(true), &n, 0).is_alive());
     }
 
     #[test]

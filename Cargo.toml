@@ -70,5 +70,16 @@ opt-level = "s"
 lto = true
 panic = "abort"
 
+# wasm-pack runs wasm-opt over the module after wasm-bindgen, and on a build
+# this size that is most of the wall clock: about ninety seconds against a
+# minute and a half of compiling. It earns it for a build that ships -- 12.1 MB
+# down to 7.5 MB -- and does not for one served from localhost, so the
+# profiling build skips it. Same release codegen, no second optimiser:
+#
+#     wasm-pack build --profiling --target web   # iterating
+#     wasm-pack build --target web               # shipping
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = false
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

@@ -55,19 +55,19 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 42,
                 player: PlayerId(3),
-                action: Action::Paint { cells: vec![(1, 2), (-3, 4)], placement: Placement::Cell },
+                action: Action::Paint { cells: vec![(1, 2), (-3, 4)], placement: Placement::Life },
             }),
             ClientMessage::Act(Stamped {
                 tick: 7,
                 player: PlayerId(1),
-                action: Action::Erase { cells: vec![(0, 0)] },
+                action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
             }),
             ClientMessage::Act(Stamped {
                 tick: 8,
                 player: PlayerId(2),
                 action: Action::Paint {
                     cells: vec![(3, 3)],
-                    placement: Placement::Glass,
+                    placement: Placement::Ice,
                 },
             }),
             ClientMessage::Subscribe { chunks: vec![(0, 0), (-1, 5)] },
@@ -88,7 +88,7 @@ mod tests {
             ServerMessage::Actions(vec![Stamped {
                 tick: 1,
                 player: PlayerId(1),
-                action: Action::Paint { cells: vec![(5, 5)], placement: Placement::Cell },
+                action: Action::Paint { cells: vec![(5, 5)], placement: Placement::Life },
             }]),
             ServerMessage::ChunkData { tick: 3, chunk: (-2, 7), cells: vec![1, 2, 3, 4] },
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },

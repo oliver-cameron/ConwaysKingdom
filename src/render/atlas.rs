@@ -24,8 +24,8 @@ pub const SHEET_TILES: u32 = 16;
 /// A sheet's edge in texels.
 pub const SHEET_N: u32 = TILE_N * SHEET_TILES;
 
-/// The states a cell can be drawn in. Alive and glassed are independent, so
-/// there are four, and **each has its own image** — a glassed cell is not the
+/// The states a cell can be drawn in. Alive and iced are independent, so
+/// there are four, and **each has its own image** — an iced cell is not the
 /// living sprite with a pane composited on top, it is its own picture.
 ///
 /// That is not only an art decision. Compositing means sampling one sprite
@@ -37,21 +37,21 @@ pub const STATES: u32 = 4;
 /// Layer for a cell, from its kind and state. States are consecutive within a
 /// kind, so a kind's four images sit together.
 #[inline]
-pub const fn layer_for(kind: Kind, alive: bool, glass: bool) -> u32 {
-    kind.0 as u32 * STATES + (alive as u32) + (glass as u32) * 2
+pub const fn layer_for(kind: Kind, alive: bool, ice: bool) -> u32 {
+    kind.0 as u32 * STATES + (alive as u32) + (ice as u32) * 2
 }
 
 /// Every layer: four states for every kind.
 pub const LAYERS: u32 = Kind::COUNT as u32 * STATES;
 
 /// The file behind each layer, in `layer_for` order: for each kind, dead,
-/// alive, dead under glass, alive under glass. Adding a kind without adding
+/// alive, dead under ice, alive under ice. Adding a kind without adding
 /// its four images fails to compile.
 const SPRITE_FILES: [&[u8]; LAYERS as usize] = [
     include_bytes!("../../assets/sprites/dead.png"),
     include_bytes!("../../assets/sprites/alive.png"),
-    include_bytes!("../../assets/sprites/dead_glass.png"),
-    include_bytes!("../../assets/sprites/alive_glass.png"),
+    include_bytes!("../../assets/sprites/dead_ice.png"),
+    include_bytes!("../../assets/sprites/alive_ice.png"),
 ];
 
 pub struct Atlas {
@@ -176,16 +176,16 @@ mod tests {
     use super::*;
 
     /// Every kind in every state must have art, sized exactly 16x16. Dead and
-    /// unglassed is allowed to be blank; the others are not, since a state you
+    /// ice-free is allowed to be blank; the others are not, since a state you
     /// cannot see is a state you cannot play against.
     #[test]
     fn every_state_of_every_kind_has_a_sprite() {
         assert_eq!(SPRITE_FILES.len(), LAYERS as usize);
         for kind in Kind::ALL {
-            for (alive, glass) in [(false, false), (true, false), (false, true), (true, true)] {
-                let layer = layer_for(kind, alive, glass) as usize;
+            for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                let layer = layer_for(kind, alive, ice) as usize;
                 let texels = decode(SPRITE_FILES[layer]).unwrap_or_else(|e| {
-                    panic!("Kind({}) alive={alive} glass={glass}: {e}", kind.0)
+                    panic!("Kind({}) alive={alive} ice={ice}: {e}", kind.0)
                 });
                 assert_eq!(texels.len(), (SHEET_N * SHEET_N * 4) as usize);
 
@@ -194,10 +194,10 @@ mod tests {
                     .flat_map(|y| (0..TILE_N).map(move |x| (x, y)))
                     .filter(|&(x, y)| texels[(((y * SHEET_N + x) * 4) + 3) as usize] > 8)
                     .count();
-                if alive || glass {
+                if alive || ice {
                     assert!(
                         covered > (TILE_N * TILE_N / 8) as usize,
-                        "Kind({}) alive={alive} glass={glass}: tile (0,0) is blank",
+                        "Kind({}) alive={alive} ice={ice}: tile (0,0) is blank",
                         kind.0
                     );
                 }
@@ -211,8 +211,8 @@ mod tests {
     fn every_state_gets_its_own_layer() {
         let mut seen = Vec::new();
         for kind in Kind::ALL {
-            for (alive, glass) in [(false, false), (true, false), (false, true), (true, true)] {
-                seen.push(layer_for(kind, alive, glass));
+            for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                seen.push(layer_for(kind, alive, ice));
             }
         }
         seen.sort_unstable();
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn a_pane_is_a_frame_you_can_see_through() {
         let texels = decode(SPRITE_FILES[layer_for(Kind::NORMAL, false, true) as usize])
-            .expect("dead under glass");
+            .expect("dead under ice");
         let at = |x: usize, y: usize| texels[(y * SHEET_N as usize + x) * 4 + 3];
         assert_eq!(at(0, 0), 255, "the frame should be solid");
         assert!(at(8, 8) < 128, "the middle should show what is under it");

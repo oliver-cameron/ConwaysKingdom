@@ -5,7 +5,7 @@
 | [architecture.md](architecture.md) | The module split, who depends on whom, and how the build enforces it |
 | [simulation.md](simulation.md) | Cells, chunks, worlds, the rules, and the determinism contract |
 | [rendering.md](rendering.md) | The pipeline, sprites, colour, and the camera |
-| [game.md](game.md) | Value, placement, glass, and the controls |
+| [game.md](game.md) | Value, placement, ice, and the controls |
 | [networking.md](networking.md) | The protocol, prediction, and desync detection |
 | [server.md](server.md) | Running it, and the save format |
 | [gotchas.md](gotchas.md) | Things that cost a day, so they only cost one |

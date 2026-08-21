@@ -10,14 +10,14 @@
 // |   player    |F |G |       kind        | A |
 const ALIVE_BIT:    u32 = 1u;
 const KIND_SHIFT:   u32 = 1u;   const KIND_MASK: u32 = 255u;
-const FLAG_GLASS:   u32 = 512u; // 1 << 9
+const FLAG_ICE:   u32 = 512u; // 1 << 9
 const PLAYER_SHIFT: u32 = 11u;  // top field, so no mask is needed
 
 // See render::atlas. One layer per cell state; a cell's own UV picks the tile
 // within that layer's sheet.
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across a sheet
-const STATES: u32 = 4u;          // dead, alive, dead+glass, alive+glass
+const STATES: u32 = 4u;          // dead, alive, dead+ice, alive+ice
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
 
 struct Camera {
@@ -194,14 +194,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let uv = vec2<f32>(f32(texel.b), f32(texel.a));
 
     let alive = (cell & ALIVE_BIT) != 0u;
-    let glass = (cell & FLAG_GLASS) != 0u;
+    let ice = (cell & FLAG_ICE) != 0u;
 
-    // Every combination of alive and glass has its own picture, so this is one
+    // Every combination of alive and ice has its own picture, so this is one
     // sample with no branch. That matters beyond tidiness: sampling inside a
     // conditional is sampling in non-uniform control flow, which WGSL forbids
     // for anything using implicit derivatives.
     let kind = (cell >> KIND_SHIFT) & KIND_MASK;
-    let state = u32(alive) + u32(glass) * 2u;
+    let state = u32(alive) + u32(ice) * 2u;
     let layer = i32(kind * STATES + state);
 
     // Tile within the sheet, then the texel within that tile.

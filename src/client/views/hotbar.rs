@@ -9,19 +9,32 @@
 use crate::client::views::theme::Theme;
 use crate::net::Placement;
 
+/// What a drag lays.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stroke {
+    /// Every cell the pointer crosses. Drawing, rather than specifying: you
+    /// watch the line appear under your hand and stop when it looks right.
+    Pencil,
+    /// Every cell between the two corners. A pane is a shape you place, and
+    /// dragging one out says how big before it exists.
+    Rectangle,
+}
+
 /// One thing a player can place.
 pub struct Slot {
     pub name: &'static str,
     /// What the server is asked for. A name rather than cell bits, so the
     /// server can judge the request.
     pub placement: Placement,
+    /// What dragging with this slot held lays down.
+    pub stroke: Stroke,
 }
 
 pub const SLOTS: [Slot; 2] = [
-    Slot { name: "Cell", placement: Placement::Cell },
-    // Glass is a flag rather than a kind, so a pane lies over a living cell as
+    Slot { name: "Life", placement: Placement::Life, stroke: Stroke::Pencil },
+    // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
-    Slot { name: "Glass", placement: Placement::Glass },
+    Slot { name: "Ice", placement: Placement::Ice, stroke: Stroke::Rectangle },
 ];
 
 /// Which slot a digit selects, if any. `1` is the first.
