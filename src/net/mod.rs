@@ -211,6 +211,32 @@ const SPAWN_ACROSS: i32 = 6;
 /// players — enough to build in before anyone's territory meets.
 const SPAWN_PITCH: i32 = SPAWN_N * 4;
 
+/// How many cells the grants need along each axis to lie side by side.
+///
+/// A toroidal world smaller than this wraps one player's ground onto another's,
+/// so the grid stops being a grid.
+pub const SPAWN_EXTENT: i32 = SPAWN_ACROSS * SPAWN_PITCH;
+
+/// Say so if a world is too small to hold everyone's grant side by side.
+///
+/// It still runs — a grant skips ground already claimed, so the later players
+/// simply get less of it — but silently handing somebody a quarter of a patch
+/// would look like a bug in the grant rather than a choice about the map.
+///
+/// Here rather than on `WorldMode`, because knowing how much room a grant
+/// needs is this module's business and `sim` is not allowed to ask.
+pub fn warn_if_cramped(mode: crate::sim::WorldMode) {
+    let crate::sim::WorldMode::Torus { rows, cols } = mode else { return };
+    let (h, w) = (rows * crate::sim::CHUNK_N as i32, cols * crate::sim::CHUNK_N as i32);
+    if h < SPAWN_EXTENT || w < SPAWN_EXTENT {
+        log::warn!(
+            "a {rows}x{cols} torus is {h}x{w} cells; {SPAWN_EXTENT}x{SPAWN_EXTENT} is needed \
+             for {} grants to sit side by side, so some will wrap onto others",
+            PlayerId::MAX
+        );
+    }
+}
+
 /// The ground a player is granted on joining: a square of claimed but empty
 /// cells, far enough from everyone else's to be their own.
 ///

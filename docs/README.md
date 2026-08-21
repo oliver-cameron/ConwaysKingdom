@@ -25,10 +25,13 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--serve DIR` | static files at `/` | none, so `/` 404s |
 | `--span MS` | milliseconds per generation | 250 |
 | `--fresh` | ignore an existing save | off |
+| `--torus RxC` | a world that wraps, sized in chunks | infinite |
 
-A save is authoritative, so `World::demo` only runs when there is no file. Restarting against an old world is the usual reason the gun is missing; `--fresh` skips it. The startup log says what is actually there and where.
+A save is authoritative, so the shape a `--torus` asks for only applies when there is no file — the shape of a world is not something a flag can change after cells have been written into it. Restarting against an old world is the usual reason a change seems not to have taken; `--fresh` skips it. The startup log says what is actually there and where.
 
-The native client takes `--ws URL` and `--name NAME`. Without `--ws` it runs offline. The browser client needs neither: it derives its socket from the page's own origin.
+A world opens empty either way. There is no seeded pattern: the first life arrives with the first player, who is granted ground and a block on joining.
+
+The native client takes `--ws URL`, `--name NAME`, and `--torus RxC` for an offline world that wraps. Without `--ws` it runs offline; connected, the server's world is the world and `--torus` is ignored with a note saying so. The browser client needs neither: it derives its socket from the page's own origin.
 
 Rebuild the browser client with `wasm-pack build --target web`.
 

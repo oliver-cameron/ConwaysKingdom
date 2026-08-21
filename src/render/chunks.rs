@@ -268,17 +268,28 @@ impl ChunkStore {
         repeats: i32,
         visible: ((i32, i32), (i32, i32)),
     ) {
-        let present: HashSet<Coord> = world.stored().iter().map(|&(c, _)| c).collect();
+        // Only what is on screen gets a layer. Uploading every stored chunk
+        // made the budget a limit on the size of the *world*, which an
+        // infinite world hides -- it holds only what life has reached -- and a
+        // torus does not: a 20x20 torus stores four hundred chunks whether you
+        // are looking at them or not, and asked for a layer for each.
+        let (min, max) = visible;
+        let wanted: HashSet<Coord> = World::chunks_covering(min, max)
+            .into_iter()
+            .map(|c| world.canonical(c))
+            .filter(|c| world.chunk_at(*c).is_some())
+            .collect();
+
         let free = &mut self.free;
         self.layers.retain(|coord, layer| {
-            let keep = present.contains(coord);
+            let keep = wanted.contains(coord);
             if !keep {
                 free.push(*layer);
             }
             keep
         });
 
-        for (coord, chunk) in world.stored() {
+        for (coord, chunk) in world.stored().into_iter().filter(|(c, _)| wanted.contains(c)) {
             let layer = match self.layers.get(&coord) {
                 Some(&l) => l,
                 None => {
