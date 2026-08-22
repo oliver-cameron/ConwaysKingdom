@@ -25,6 +25,15 @@ use crate::sim::{Player, PlayerId};
 /// wheel.
 const WHEEL_NOTCH: f64 = 40.0;
 
+/// How often a client asks the server whether they still agree, in
+/// generations. Four a second, so this is every few seconds.
+const CHECKPOINT_EVERY: u64 = 12;
+
+/// The most chunks one checkpoint carries. Sixteen bytes each, so even the
+/// cap is a small message; it exists so a client holding an enormous world
+/// cannot send an enormous one.
+const MAX_CHECKPOINT_CHUNKS: usize = 512;
+
 /// The most generations a client will step at once to catch up before giving
 /// up and taking the server's number. A stall long enough to exceed this has
 /// already cost more than the catching up would fix.
@@ -568,11 +577,24 @@ impl BattleApp {
                         crate::net::apply(&mut self.world, stamped);
                     }
                     self.advance_to(tick);
+
+                    // Every so often, ask whether we still agree. Cheap
+                    // enough to do often, and the sooner a divergence is found
+                    // the less of the world has been built on top of it.
+                    if self.world.generation % CHECKPOINT_EVERY == 0 {
+                        self.send_checkpoint();
+                    }
                 }
                 ServerMessage::Resync { tick, chunks } => {
                     log::warn!("desynced at tick {tick}; refetching {} chunks", chunks.len());
-                    for c in chunks {
-                        self.subscribed.remove(&c);
+                    // Asked for again at once rather than left to the viewport
+                    // to notice: a wrong chunk off screen is still wrong, and
+                    // it will be back on screen eventually.
+                    for c in &chunks {
+                        self.subscribed.remove(c);
+                    }
+                    if let Some(link) = &self.link {
+                        link.send(ClientMessage::Subscribe { chunks });
                     }
                 }
             }
@@ -660,35 +682,56 @@ impl BattleApp {
         }
     }
 
-    /// Send an action, and apply it only if there is nobody to apply it for us.
+    /// Apply an action here, and send it if there is anyone to send it to.
     ///
-    /// Offline the local world is the only world, so it is applied here.
-    /// Connected it is **not**, and that is the difference between a shared
-    /// world and two similar ones. The client applies at the generation it is
-    /// on; the server applies whenever the message lands, which is that
-    /// generation if it arrives before the next step and the one after if it
-    /// arrives later. A click is a coin flip between the two, and on the
-    /// losing side the client has evolved those cells a generation earlier
-    /// than the server did — permanently, invisibly, and differently for every
-    /// other player.
+    /// Applied straight away, connected or not, so what you draw appears under
+    /// your hand rather than a quarter of a second later. The rules are
+    /// deterministic and the server runs the same `net::apply`, so acting
+    /// immediately shows the right answer a round trip early.
     ///
-    /// So the server applies it and says so, and the world moves when told.
-    /// The cost is up to one generation of waiting to see your own cells,
-    /// which at four generations a second is a quarter of a second. Predicting
-    /// it properly means being able to take it back when the server disagrees
-    /// — rollback and replay — and that is a great deal of machinery to buy
-    /// back 250ms.
+    /// Usually. The server applies it whenever the message lands, which is
+    /// this generation if it arrives before the next step and the one after if
+    /// it arrives later — so a click is a coin flip, and on the losing side
+    /// this world has evolved those cells a generation earlier than the
+    /// server's. That is what `Checkpoint` is for: the divergence is real,
+    /// rare, and found by comparing digests rather than prevented by waiting.
     fn commit(&mut self, stamped: &Stamped) {
-        match &self.link {
-            Some(link) => link.send(ClientMessage::Act(stamped.clone())),
-            None => {
-                crate::net::apply(&mut self.world, stamped);
-                self.world.dirty = true;
-            }
+        crate::net::apply(&mut self.world, stamped);
+        self.world.dirty = true;
+        if let Some(link) = &self.link {
+            link.send(ClientMessage::Act(stamped.clone()));
         }
     }
 
-    /// Price an action on these cells: what would be sent, and what it costs.
+    /// Tell the server what this client thinks it holds, so the two can find
+    /// out cheaply whether they agree.
+    ///
+    /// A chunk is 512 bytes and its digest is eight, so a whole world's worth
+    /// of state fits in a message that costs nothing to send — which is the
+    /// point: agreement can be checked constantly, and only the chunks that
+    /// actually disagree are ever sent back.
+    ///
+    /// Stamped with the generation the digests were taken at, because a chunk
+    /// compared against the wrong tick disagrees for a reason that is not a
+    /// bug. The server ignores a checkpoint from any tick but its own, so one
+    /// that arrives late is skipped rather than answered wrongly, and the next
+    /// one is only seconds away.
+    fn send_checkpoint(&self) {
+        let Some(link) = &self.link else { return };
+        let chunks: Vec<(crate::sim::Coord, u64)> = self
+            .world
+            .stored()
+            .iter()
+            .filter_map(|&(coord, _)| Some((coord, self.world.chunk_digest(coord)?)))
+            .take(MAX_CHECKPOINT_CHUNKS)
+            .collect();
+        if chunks.is_empty() {
+            return;
+        }
+        link.send(ClientMessage::Checkpoint { tick: self.world.generation, chunks });
+    }
+
+    /// Price an action on these cells    /// Price an action on these cells: what would be sent, and what it costs.
     ///
     /// Shared by the click, by a drag, and by the preview of a drag, so the
     /// preview cannot promise something the release then refuses and a drag
