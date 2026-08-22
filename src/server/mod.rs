@@ -245,7 +245,8 @@ impl Server {
             ClientMessage::Join { name, token } => match self.join_with(name, token.as_deref()) {
                 Ok((you, token)) => {
                     let spawn = crate::net::spawn_for(you, &self.world);
-                    vec![ServerMessage::Welcome { you, tick: self.tick(), spawn, token }]
+                    let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
+                    vec![ServerMessage::Welcome { you, tick: self.tick(), spawn, token, value }]
                 }
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
@@ -592,10 +593,24 @@ mod tests {
         assert!(spent < Player::STARTING_VALUE, "something should have been spent");
 
         s.leave(me);
-        let (again, same_token) = s.join_with("alice", Some(&token)).unwrap();
-        assert_eq!(again, me, "the same number");
-        assert_eq!(same_token, token, "and the same secret, so it keeps working");
-        assert_eq!(s.value_of(me), Some(spent), "and the value they had");
+
+        // Coming back the way a client does, so the welcome itself is what is
+        // checked: it has to carry the number, the secret *and* the value, or
+        // the client returns believing it has the starting figure and offers
+        // to spend money the server knows is gone.
+        let welcome = s.handle(
+            None,
+            ClientMessage::Join { name: "alice".into(), token: Some(token.clone()) },
+        );
+        match welcome.as_slice() {
+            [ServerMessage::Welcome { you, token: back, value, .. }] => {
+                assert_eq!(*you, me, "the same number");
+                assert_eq!(*back, token, "and the same secret, so it keeps working");
+                assert_eq!(*value, spent, "and the value they had");
+            }
+            other => panic!("expected a welcome, got {other:?}"),
+        }
+        assert_eq!(s.value_of(me), Some(spent));
     }
 
     /// Another player's territory has to reach you, or you cannot see whose

@@ -84,6 +84,7 @@ Any live cell in the eight neighbours shatters the whole connected run — place
 | middle drag, right drag, space + left drag | pan |
 | arrows / WASD, shift to hurry | pan |
 | mouse wheel | zoom |
+| ctrl + wheel, trackpad pinch | zoom, on any device |
 | trackpad scroll | pan |
 | ctrl + scroll, trackpad pinch | zoom |
 | one finger | draw |

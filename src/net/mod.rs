@@ -190,6 +190,14 @@ pub enum ServerMessage {
         /// Keep this. Presenting it on a later `Join` asks for this player
         /// back — the same number, the same value, the same ground.
         token: String,
+        /// What this player has to spend.
+        ///
+        /// Sent, because a returning player has a value already and the client
+        /// has no way to know it. Assuming the starting figure left the two
+        /// disagreeing from the first frame: the client would offer to spend
+        /// money the server knows is gone, and the server would refuse the
+        /// difference without the client having anything to show for it.
+        value: i32,
     },
     Rejected { reason: String },
     /// One generation happened. `tick` is the generation the world is on
