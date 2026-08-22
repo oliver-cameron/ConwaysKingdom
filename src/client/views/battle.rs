@@ -19,11 +19,11 @@ use crate::net::link::Link;
 use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
 use crate::sim::{Player, PlayerId};
 
-/// How large a pixel scroll has to be, in a browser, to be a wheel notch
-/// rather than a trackpad swipe. Chrome sends 100 or 120 for a notch and a
-/// stream of much smaller values for a swipe, so anything from here up is a
-/// wheel.
-const WHEEL_NOTCH: f64 = 40.0;
+/// How large a purely vertical pixel scroll has to be, in a browser, to be a
+/// wheel notch rather than a trackpad swipe. Chrome sends 100 or 120 for a
+/// notch; a swipe is a stream of much smaller values, and a fast one only
+/// gets near this at its peak.
+const WHEEL_NOTCH: f64 = 60.0;
 
 /// How often a client asks the server whether they still agree, in
 /// generations. Four a second, so this is every few seconds.
@@ -514,14 +514,18 @@ impl BattleApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick, spawn, token } => {
+                ServerMessage::Welcome { you, tick, spawn, token, value } => {
                     // Kept first, before anything else can go wrong: the whole
                     // value of it is being able to come back, and a client that
                     // crashes on its first frame is exactly the case that needs
                     // to.
                     crate::net::token::store(&token);
                     log::info!("joined as {you:?} at tick {tick}; adopting the server's world");
-                    self.value = Player::STARTING_VALUE;
+                    // Taken from the server, not assumed: a player coming
+                    // back has a value already, and guessing the starting
+                    // figure would have this client offering to spend money
+                    // the server knows is gone.
+                    self.value = value;
                     self.me = Some(you);
                     // Now, and only now, drop the local world. Until Welcome
                     // arrives there is nothing authoritative to replace it
@@ -1269,15 +1273,29 @@ impl App for BattleApp {
                 self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0))
             }
             // In a browser a mouse wheel is pixels too, so the unit no longer
-            // separates the two and a wheel panned instead of zooming. What
-            // does separate them is size: a wheel arrives as one large jump a
-            // notch -- Chrome sends 100 or 120 -- while a trackpad sends a
-            // stream of small continuous ones. A heuristic, and named as one,
-            // but it is the only signal the platform gives. Firefox is not
-            // affected either way: it reports lines for a wheel, so that path
-            // is taken above.
-            D::PixelDelta(p) if cfg!(target_arch = "wasm32") && p.y.abs() >= WHEEL_NOTCH => {
-                self.zoom_about_cursor(1.15f32.powf((p.y / WHEEL_NOTCH) as f32))
+            // separates it from a trackpad and a wheel panned instead of
+            // zooming. Two things separate them, and neither alone is enough:
+            //
+            // - A wheel is **purely vertical**. A trackpad swipe almost always
+            //   carries some sideways drift, because fingers do.
+            // - A wheel arrives as one large jump a notch, 100 or 120 in
+            //   Chrome, where a swipe is a stream of small ones.
+            //
+            // And the number of notches is clamped, because being wrong must
+            // stay cheap: a fast swipe read as a wheel then nudges the zoom
+            // instead of leaping several levels a frame. Firefox is not
+            // affected either way -- it reports lines for a wheel, which the
+            // arm above takes.
+            //
+            // A heuristic, and named as one. `ctrl` is not: a pinch always
+            // zooms, so there is a way to zoom that never guesses.
+            D::PixelDelta(p)
+                if cfg!(target_arch = "wasm32")
+                    && p.x == 0.0
+                    && p.y.abs() >= WHEEL_NOTCH =>
+            {
+                let notches = (p.y / WHEEL_NOTCH).clamp(-1.0, 1.0) as f32;
+                self.zoom_about_cursor(1.15f32.powf(notches))
             }
             D::PixelDelta(p) => self.camera.pan_by_pixels(p.x, p.y),
         }

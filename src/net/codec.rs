@@ -88,6 +88,7 @@ mod tests {
                 tick: 5,
                 spawn: (-144, -96),
                 token: "0123456789abcdef".into(),
+                value: 73,
             },
             ServerMessage::Rejected { reason: "full".into() },
             ServerMessage::Step { tick: 9, actions: vec![Stamped {
