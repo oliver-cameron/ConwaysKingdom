@@ -68,6 +68,16 @@ That is not a refinement, it is the whole of whether multiplayer works. A step i
 
 A client that finds itself somewhere other than one step behind says so and takes the server's number. Papering over it quietly would hide exactly the case worth knowing about, since by then the worlds have already diverged.
 
+## The server applies, the client waits
+
+A connected client **does not apply its own action locally**. It sends it and waits for the `Step` that carries it back.
+
+That looks like a step backwards — it costs up to a generation, a quarter of a second, before you see your own cells — and it is the difference between a shared world and two similar ones. The client would apply at the generation it is on; the server applies whenever the message lands, which is that same generation if it arrives before the next step and the one after if it arrives later. Every click is a coin flip between the two, and on the losing side the client has evolved those cells a generation earlier than the server did: permanently, invisibly, and differently for every other player watching.
+
+Predicting properly means being able to take a prediction back when the server disagrees — rollback and replay — which is a great deal of machinery to buy back 250ms. Offline there is nobody to wait for, so the action is applied on the spot.
+
+Chunk data does not move the clock either. A chunk reply and a step broadcast reach the socket by different routes, so a chunk can arrive from a tick either side of the one a client is on; setting the generation from it without stepping would leave the world's state and its label disagreeing, quietly and for good. The step stream owns the clock and chunk data carries only cells.
+
 ## Coming back
 
 `Welcome` hands out a **token**: a random 128-bit secret the client keeps, in `localStorage` in a browser and under `$XDG_DATA_HOME/conwayskingdom/token` natively. Present it on a later `Join` and you get your player back — the same number, the same value, the same ground.
