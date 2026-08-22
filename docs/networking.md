@@ -68,17 +68,19 @@ That is not a refinement, it is the whole of whether multiplayer works. A step i
 
 A client that finds itself somewhere other than one step behind says so and takes the server's number. Papering over it quietly would hide exactly the case worth knowing about, since by then the worlds have already diverged.
 
-## The server applies, the client waits
+## Predicting, and finding out when it was wrong
 
-A connected client **does not apply its own action locally**. It sends it and waits for the `Step` that carries it back.
+A client applies its own action straight away, connected or not, so what you draw appears under your hand. The rules are deterministic and the server runs the same `net::apply`, so acting immediately shows the right answer a round trip early.
 
-That looks like a step backwards — it costs up to a generation, a quarter of a second, before you see your own cells — and it is the difference between a shared world and two similar ones. The client would apply at the generation it is on; the server applies whenever the message lands, which is that same generation if it arrives before the next step and the one after if it arrives later. Every click is a coin flip between the two, and on the losing side the client has evolved those cells a generation earlier than the server did: permanently, invisibly, and differently for every other player watching.
+Usually. The server applies it whenever the message lands — this generation if it arrives before the next step, the one after if it arrives later — so a click is a coin flip, and on the losing side that client has evolved those cells a generation earlier than everyone else. Waiting for the server instead would remove it, at the cost of a quarter of a second before you see your own cells, which is a poor trade for something rare.
 
-Predicting properly means being able to take a prediction back when the server disagrees — rollback and replay — which is a great deal of machinery to buy back 250ms. Offline there is nobody to wait for, so the action is applied on the spot.
+So it is found rather than prevented. Every few seconds a client sends a **`Checkpoint`**: one FNV-1a digest per chunk it holds, stamped with the generation they were taken at. A chunk is 512 bytes and its digest is eight, so a whole world's worth of state fits in a message that costs nothing — which is what lets agreement be checked constantly, with only the chunks that actually disagree ever sent back.
 
-Chunk data does not move the clock either. A chunk reply and a step broadcast reach the socket by different routes, so a chunk can arrive from a tick either side of the one a client is on; setting the generation from it without stepping would leave the world's state and its label disagreeing, quietly and for good. The step stream owns the clock and chunk data carries only cells.
+The server compares against its own chunks and answers `Resync` with the ones that differ; the client asks for those again at once rather than waiting for the viewport to notice, because a wrong chunk off screen is still wrong. A checkpoint from any tick but the server's current one is ignored rather than answered wrongly — comparing against the wrong generation would disagree for a reason that is not a bug — and the next checkpoint is only seconds away.
 
-## Coming back
+Measured with `examples/two.rs`, which runs two peers over the real protocol and compares digests every shared generation. Plain, they agree on all of about four hundred. With `LIE=1` one peer invents a block nobody sent it — a still life, since a lone cell dies of loneliness and heals the lie before anyone notices — and the disagreement is found and put right within a checkpoint interval, nine to eleven generations.
+
+## Coming back## Coming back
 
 `Welcome` hands out a **token**: a random 128-bit secret the client keeps, in `localStorage` in a browser and under `$XDG_DATA_HOME/conwayskingdom/token` natively. Present it on a later `Join` and you get your player back — the same number, the same value, the same ground.
 
