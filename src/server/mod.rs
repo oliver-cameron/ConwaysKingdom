@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::net::{ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
-use crate::sim::{Chunk, Player, PlayerId, World, CHUNK_N};
+use crate::sim::{Player, PlayerId, World};
 
 pub struct Server {
     world: World,
@@ -360,11 +360,9 @@ impl Server {
         }
         self.world.step();
 
-        if applied.is_empty() {
-            Vec::new()
-        } else {
-            vec![ServerMessage::Actions(applied)]
-        }
+        // Every generation, even an empty one: the tick is what keeps clients
+        // in step, and a quiet generation still moves the world on.
+        vec![ServerMessage::Step { tick: self.tick(), actions: applied }]
     }
 
     fn apply(&mut self, stamped: &Stamped) {
@@ -375,6 +373,8 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests take a chunk apart; the server passes them through whole.
+    use crate::sim::{Chunk, CHUNK_N};
 
     /// Cells inside a player's granted ground. Placing anywhere else is
     /// refused now, so a test that wants a placement to land has to say where

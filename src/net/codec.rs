@@ -90,11 +90,11 @@ mod tests {
                 token: "0123456789abcdef".into(),
             },
             ServerMessage::Rejected { reason: "full".into() },
-            ServerMessage::Actions(vec![Stamped {
+            ServerMessage::Step { tick: 9, actions: vec![Stamped {
                 tick: 1,
                 player: PlayerId(1),
                 action: Action::Paint { cells: vec![(5, 5)], placement: Placement::Life },
-            }]),
+            }] },
             ServerMessage::ChunkData { tick: 3, chunk: (-2, 7), cells: vec![1, 2, 3, 4] },
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },
         ];
