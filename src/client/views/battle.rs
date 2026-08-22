@@ -19,6 +19,17 @@ use crate::net::link::Link;
 use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
 use crate::sim::{Player, PlayerId};
 
+/// How large a pixel scroll has to be, in a browser, to be a wheel notch
+/// rather than a trackpad swipe. Chrome sends 100 or 120 for a notch and a
+/// stream of much smaller values for a swipe, so anything from here up is a
+/// wheel.
+const WHEEL_NOTCH: f64 = 40.0;
+
+/// The most generations a client will step at once to catch up before giving
+/// up and taking the server's number. A stall long enough to exceed this has
+/// already cost more than the catching up would fix.
+const CATCH_UP: u64 = 32;
+
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
 
@@ -460,6 +471,32 @@ impl BattleApp {
         self.cursor = focus;
     }
 
+    /// Step the world up to the generation the server is on.
+    ///
+    /// Normally exactly one step: the server sends one of these per
+    /// generation, and a websocket does not lose or reorder them. Anything
+    /// else means this client and the server disagree about where in the
+    /// sequence they are, which is not something to paper over quietly — the
+    /// worlds have already diverged, and the honest thing is to say so and
+    /// take the server's number, because it is the one everybody else has.
+    fn advance_to(&mut self, tick: crate::net::Tick) {
+        let here = self.world.generation;
+        if tick == here + 1 {
+            self.world.step();
+            return;
+        }
+        if tick > here && tick - here <= CATCH_UP {
+            log::debug!("{} generations behind; catching up", tick - here);
+            for _ in here..tick {
+                self.world.step();
+            }
+            return;
+        }
+        log::warn!("out of step: the server is at {tick} and this client at {here}");
+        self.world.set_generation(tick);
+        self.world.dirty = true;
+    }
+
     /// Drain the socket and fold what arrived into the local world.
     fn pump_link(&mut self) {
         let Some(link) = &mut self.link else { return };
@@ -507,10 +544,16 @@ impl BattleApp {
                         Err(e) => log::warn!("chunk {chunk:?} was the wrong size: {e}"),
                     }
                 }
-                ServerMessage::Actions(actions) => {
+                ServerMessage::Step { tick, actions } => {
+                    // Applied at the generation the server applied them at,
+                    // then stepped to the generation it stepped to. Order and
+                    // timing both matter: the step is a pure function of state
+                    // and tick, so doing this a generation early or late is
+                    // the same as doing something else.
                     for stamped in &actions {
                         crate::net::apply(&mut self.world, stamped);
                     }
+                    self.advance_to(tick);
                 }
                 ServerMessage::Resync { tick, chunks } => {
                     log::warn!("desynced at tick {tick}; refetching {} chunks", chunks.len());
@@ -932,7 +975,12 @@ impl App for BattleApp {
             }
         }
 
-        self.world.update(dt, GENERATION_SPAN);
+        // Only offline. Connected, the world advances when the server says a
+        // generation happened, and never on this client's own clock -- see
+        // `advance_to`.
+        if self.link.is_none() {
+            self.world.update(dt, GENERATION_SPAN);
+        }
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);
             self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
@@ -1147,6 +1195,17 @@ impl App for BattleApp {
             // than a notch or the smallest pinch jumps several levels.
             D::PixelDelta(p) if ctrl => {
                 self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0))
+            }
+            // In a browser a mouse wheel is pixels too, so the unit no longer
+            // separates the two and a wheel panned instead of zooming. What
+            // does separate them is size: a wheel arrives as one large jump a
+            // notch -- Chrome sends 100 or 120 -- while a trackpad sends a
+            // stream of small continuous ones. A heuristic, and named as one,
+            // but it is the only signal the platform gives. Firefox is not
+            // affected either way: it reports lines for a wheel, so that path
+            // is taken above.
+            D::PixelDelta(p) if cfg!(target_arch = "wasm32") && p.y.abs() >= WHEEL_NOTCH => {
+                self.zoom_about_cursor(1.15f32.powf((p.y / WHEEL_NOTCH) as f32))
             }
             D::PixelDelta(p) => self.camera.pan_by_pixels(p.x, p.y),
         }

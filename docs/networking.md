@@ -60,6 +60,14 @@ The client applies its own actions immediately **and** sends them, rather than s
 
 Territory limits on where a player may place, and any authority over the actions the server accepts beyond affordability.
 
+## The server is the clock
+
+`ServerMessage::Step { tick, actions }` goes out once a generation, even a quiet one. A connected client applies the actions and then advances to `tick` — it does **not** step on its own clock.
+
+That is not a refinement, it is the whole of whether multiplayer works. A step is a pure function of state and tick, and every seed is derived from the generation, so two peers stay identical only while they step at the same ticks. A client that kept its own timer drifted immediately: same nominal rate, different phase, nothing correcting it. Measured at four generations apart within a minute, and growing. Births then chose different owners on each side and territory spread differently, so the two worlds separated while both looked plausible. Late joining still worked, because that is a snapshot — everything after it was one world each.
+
+A client that finds itself somewhere other than one step behind says so and takes the server's number. Papering over it quietly would hide exactly the case worth knowing about, since by then the worlds have already diverged.
+
 ## Coming back
 
 `Welcome` hands out a **token**: a random 128-bit secret the client keeps, in `localStorage` in a browser and under `$XDG_DATA_HOME/conwayskingdom/token` natively. Present it on a later `Join` and you get your player back — the same number, the same value, the same ground.

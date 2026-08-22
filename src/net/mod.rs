@@ -192,8 +192,22 @@ pub enum ServerMessage {
         token: String,
     },
     Rejected { reason: String },
-    /// Actions by other players, to be applied at the tick they carry.
-    Actions(Vec<Stamped>),
+    /// One generation happened. `tick` is the generation the world is on
+    /// **after** it, and `actions` is what was applied on the way there.
+    ///
+    /// The unit of lockstep, and the reason it carries the tick rather than
+    /// just the actions: a step is a pure function of state and tick, so two
+    /// peers only stay identical while they step at the same ticks. A client
+    /// that kept its own clock drifted from the server within seconds — same
+    /// nominal rate, different phase, nothing correcting it — and every seed
+    /// is derived from the generation, so births chose different owners and
+    /// territory spread differently on each side. Late joining still looked
+    /// right, because that is a snapshot; everything after it was one world
+    /// each.
+    ///
+    /// So the server is the clock. A connected client advances when told and
+    /// never on its own.
+    Step { tick: Tick, actions: Vec<Stamped> },
     /// Full contents of a chunk the client does not hold. Bytes are a chunk's
     /// cells exactly as `Chunk::as_bytes` produces them.
     ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
