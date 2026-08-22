@@ -538,7 +538,21 @@ impl BattleApp {
                 ServerMessage::ChunkData { tick, chunk, cells } => {
                     match bytemuck::try_from_bytes::<crate::sim::Chunk>(&cells) {
                         Ok(c) => {
-                            self.world.set_generation(tick);
+                            // The generation is not taken from here. A chunk
+                            // reply and the step broadcast reach the socket by
+                            // different routes, so a chunk can arrive from a
+                            // tick either side of the one this client is on --
+                            // and setting the clock from it without stepping
+                            // would leave the world's state and its label
+                            // disagreeing, quietly, for good. The step stream
+                            // owns the clock; this only carries cells.
+                            if tick != self.world.generation {
+                                log::debug!(
+                                    "chunk {chunk:?} is from tick {tick}, and this client is \
+                                     on {}",
+                                    self.world.generation
+                                );
+                            }
                             self.world.put_chunk(chunk, *c);
                         }
                         Err(e) => log::warn!("chunk {chunk:?} was the wrong size: {e}"),
@@ -598,13 +612,8 @@ impl BattleApp {
         }
         self.notice = None;
         self.value += delta;
-        crate::net::apply(&mut self.world, &stamped);
-        self.world.dirty = true;
+        self.commit(&stamped);
         self.last_action = Some(format!("{shape}, {delta:+}"));
-
-        if let Some(link) = &self.link {
-            link.send(ClientMessage::Act(stamped));
-        }
     }
 
     /// What a drag would lay, and how to describe it.
@@ -647,6 +656,34 @@ impl BattleApp {
                     return Err(format!("{stray} of those cells are not your territory"));
                 }
                 Ok((cells, format!("laid {rows}x{cols} of {name}")))
+            }
+        }
+    }
+
+    /// Send an action, and apply it only if there is nobody to apply it for us.
+    ///
+    /// Offline the local world is the only world, so it is applied here.
+    /// Connected it is **not**, and that is the difference between a shared
+    /// world and two similar ones. The client applies at the generation it is
+    /// on; the server applies whenever the message lands, which is that
+    /// generation if it arrives before the next step and the one after if it
+    /// arrives later. A click is a coin flip between the two, and on the
+    /// losing side the client has evolved those cells a generation earlier
+    /// than the server did — permanently, invisibly, and differently for every
+    /// other player.
+    ///
+    /// So the server applies it and says so, and the world moves when told.
+    /// The cost is up to one generation of waiting to see your own cells,
+    /// which at four generations a second is a quarter of a second. Predicting
+    /// it properly means being able to take it back when the server disagrees
+    /// — rollback and replay — and that is a great deal of machinery to buy
+    /// back 250ms.
+    fn commit(&mut self, stamped: &Stamped) {
+        match &self.link {
+            Some(link) => link.send(ClientMessage::Act(stamped.clone())),
+            None => {
+                crate::net::apply(&mut self.world, stamped);
+                self.world.dirty = true;
             }
         }
     }
@@ -795,16 +832,8 @@ impl BattleApp {
             }
         });
         self.value += delta;
-
-        crate::net::apply(&mut self.world, &stamped);
-        self.world.dirty = true;
+        self.commit(&stamped);
         log::debug!("clicked ({row}, {col}); value {}", self.value);
-
-        match &self.link {
-            Some(link) => link.send(ClientMessage::Act(stamped)),
-            // Offline, the local world is the only world, so it is done.
-            None => {}
-        }
     }
 
     fn subscribe_to_view(&mut self) {
