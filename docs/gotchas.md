@@ -114,6 +114,16 @@ The same bug, one layer down, and worth knowing before spending an afternoon on 
 
 `xdotool windowfocus --sync $(xdotool search --name Conway | tail -1)` sets it directly, and everything works. Clicks need no such thing, which is what makes it confusing: the pointer works, so the window looks alive.
 
+## Frame times come in bursts, and it is the event loop, not the GPU
+
+The loop runs on `ControlFlow::Wait` and re-arms itself with a `request_redraw()` at the end of each frame, so it sleeps in between. Meanwhile `Frame::begin` calls `surface.get_current_texture()`, and with `PresentMode::Fifo` that **blocks the same thread that dispatches input** until the compositor releases a buffer.
+
+So: the thread stalls inside present, input events pile up in the OS queue, the draw finishes and re-arms, and the loop comes back to find several cheap input events *and* a redraw request. The input drains in microseconds and the redraw fires immediately behind it. A wait, then two frames almost together.
+
+*Symptom:* frame times that look like the GPU is stuttering when nothing about the GPU has changed, and which get worse the more you move the mouse.
+
+`dt` inherits all of it, and it used to be handed to `World::update` unclamped — so a long stall (a window drag, devtools opening, a backgrounded tab) became `MAX_CATCHUP_STEPS` generations in one frame and the *world* lurched too, not just the picture. It is clamped to one generation's worth now. Connected, the server is the clock and this only paces the interface; offline it is the difference between a hitch and a jump.
+
 ## Serving over plain HTTP costs you WebGPU
 
 `navigator.gpu` requires a secure context. `http://host:8080` is not one, so a browser falls back to WebGL2 — which works, but is a different backend with lower limits. `localhost` **is** a secure context, so an SSH tunnel gets you WebGPU without TLS.

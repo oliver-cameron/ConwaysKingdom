@@ -256,16 +256,22 @@ impl ChunkStore {
     }
 
     /// Push every chunk the world holds to the GPU and rebuild the instance
-    /// list. `repeats` is how many copies of a toroidal world to draw either
-    /// side of the original; it is ignored for infinite worlds.
-    /// `visible` is the region on screen, in absolute cells, as (min, max).
-    /// Everything in it that the world does not hold is covered by one
-    /// backdrop quad rather than a quad per chunk.
+    /// list. `visible` is the region on screen, in absolute cells, as
+    /// (min, max). Everything in it that the world does not hold is covered by
+    /// one backdrop quad rather than a quad per chunk.
+    ///
+    /// **A wrapping world is drawn by folding, not by tiling.** Every chunk
+    /// position the viewport covers is asked which chunk actually fills it,
+    /// which on a torus is many-to-one — so the world repeats for as far as
+    /// anyone can pan, and the work is proportional to the screen rather than
+    /// to the world. It used to draw a fixed number of copies either side of
+    /// the original, which meant panning off the third copy fell into blank
+    /// space forever, and a large torus paid for nine copies of every chunk
+    /// whether or not any of them were on screen.
     pub fn sync(
         &mut self,
         queue: &wgpu::Queue,
         world: &World,
-        repeats: i32,
         visible: ((i32, i32), (i32, i32)),
     ) {
         // Only what is on screen gets a layer. Uploading every stored chunk
@@ -325,8 +331,10 @@ impl ChunkStore {
             meta: [UNLOADED_LAYER, KIND_BACKDROP, 0, 0],
         });
 
-        for (global, canonical) in world.render_tiles(repeats) {
-            let Some(&layer) = self.layers.get(&canonical) else {
+        // The same positions the layers were chosen from, so anything with a
+        // layer has a quad and anything without one is left to the backdrop.
+        for global in World::chunks_covering(min, max) {
+            let Some(&layer) = self.layers.get(&world.canonical(global)) else {
                 continue;
             };
             if self.instances.len() == MAX_INSTANCES {

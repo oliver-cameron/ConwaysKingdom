@@ -77,10 +77,6 @@ const MAX_DRAG_CELLS: i64 = 4096;
 /// off screen is already held rather than popping in a chunk late.
 const VIEW_MARGIN: i32 = CHUNK_N as i32;
 
-/// How many copies of a toroidal world to draw either side of the original, so
-/// the tiling can be seen tiling. Ignored for infinite worlds.
-const TORUS_REPEATS: i32 = 1;
-
 /// Set before the event loop starts, like the connection and for the same
 /// reason: `App::init` takes no arguments of its own.
 #[cfg(not(target_arch = "wasm32"))]
@@ -886,10 +882,25 @@ impl BattleApp {
     /// one is only seconds away.
     fn send_checkpoint(&self) {
         let Some(link) = &self.link else { return };
+        // Only the chunks this client has actually asked for.
+        //
+        // `stored()` is the wrong set on a wrapping world: a torus is
+        // allocated whole, so every chunk exists from the moment the world is
+        // built and the client would claim to hold hundreds it has never been
+        // sent. They read as empty, the server disagrees with every one of
+        // them, and it answers with a `Resync` naming the lot -- every
+        // checkpoint, until the whole world has been dragged across. An
+        // infinite world hid this, because there `stored()` is only what has
+        // been fetched or grown.
+        //
+        // Asked-for rather than received, because the two differ only where
+        // the server had nothing to send, and a chunk it says nothing about is
+        // one it agrees is empty.
         let chunks: Vec<(crate::sim::Coord, u64)> = self
             .world
             .stored()
             .iter()
+            .filter(|(coord, _)| self.subscribed.contains(coord))
             .filter_map(|&(coord, _)| Some((coord, self.world.chunk_digest(coord)?)))
             .take(MAX_CHECKPOINT_CHUNKS)
             .collect();
@@ -1219,7 +1230,7 @@ impl App for BattleApp {
         let mut chunks = ChunkStore::new(&gpu.device);
         let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
-        chunks.sync(&gpu.queue, &world, TORUS_REPEATS, ((0, 0), (0, 0)));
+        chunks.sync(&gpu.queue, &world, ((0, 0), (0, 0)));
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
@@ -1360,7 +1371,7 @@ impl App for BattleApp {
         }
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);
-            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
+            self.chunks.sync(&gpu.queue, &self.world, visible);
             self.world.dirty = false;
         }
         self.elapsed += dt as f64;
@@ -1368,7 +1379,10 @@ impl App for BattleApp {
             player: self.player(),
             value: self.value,
             generation: self.world.generation,
-            chunks_held: self.world.stored_count(),
+            // What this client has been sent, not what its world has room for.
+            // A torus is allocated whole, so `stored_count` there is the size
+            // of the world and says nothing about what has arrived.
+            chunks_held: self.subscribed.len(),
             chunks_drawn: self.chunks.instance_count(),
             zoom: self.camera.zoom,
             connected: self.link.is_some(),
@@ -1431,7 +1445,7 @@ impl App for BattleApp {
             // Panning changes the region the backdrop has to cover, so the
             // instance list follows the camera.
             let visible = self.camera.visible_cells(VIEW_MARGIN);
-            self.chunks.sync(&gpu.queue, &self.world, TORUS_REPEATS, visible);
+            self.chunks.sync(&gpu.queue, &self.world, visible);
         }
     }
 

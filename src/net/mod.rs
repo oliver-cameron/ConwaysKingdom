@@ -410,26 +410,73 @@ pub fn too_cramped_for_grants(world: &World) -> bool {
 /// grow past the patch it was given.
 pub fn grant(world: &mut World, player: PlayerId) {
     let (row, col) = spawn_for(player, world);
+
+    // **Dead ground is claimed whoever it belonged to.** It used to be claimed
+    // only where nobody held it, on the principle that territory is taken by
+    // life reaching it rather than handed out over what is already held. That
+    // principle costs a player the game.
+    //
+    // Territory only ever spreads -- there is no die-off -- so on a world with
+    // an edge it eventually covers everything. A player joining after that got
+    // a patch of nothing: no ground, and therefore no block, since the block
+    // is only placed on ground they own. Placing is confined to your own
+    // territory, so they could place nothing, could never come to own
+    // anything, and were locked out of a world they were looking at. On a
+    // torus that is not an edge case, it is what happens to the second player
+    // to arrive at a world that has been running.
+    //
+    // Living cells are still untouched. A grant takes ground, never anybody's
+    // life or their panes -- and dead ground is the thing the rule hands
+    // around freely anyway, since a corpse's owner flips to whoever grows over
+    // it.
     for r in row..row + SPAWN_N {
         for c in col..col + SPAWN_N {
             let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
-            // Never over someone else's: territory is taken by life reaching
-            // it, not handed out on top of what is already held.
-            if !cell.player().is_owned() {
+            if !cell.is_alive() && !cell.is_ice() {
                 world.set_cell_at(r, c, cell.with_player(player));
             }
         }
     }
 
-    // In the middle, so it has room to grow in any direction the player
-    // chooses and is not against an edge of what they own.
-    let middle = (row + SPAWN_N / 2 - 1, col + SPAWN_N / 2 - 1);
-    for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-        let at = (middle.0 + r, middle.1 + c);
-        if world.cell_at(at.0, at.1).is_some_and(|c| c.player() == player) {
-            world.set_cell_at(at.0, at.1, Cell::alive(player));
+    // A 2x2 block, as near the middle as there is room for: in the middle it
+    // has space to grow in any direction and is not against an edge of what
+    // they own. Searched rather than placed blind, because the middle four may
+    // be somebody's life or under their pane, and a block with a cell missing
+    // is not a still life -- it is three cells that die.
+    if let Some((r0, c0)) = block_site(world, player, row, col) {
+        for (dr, dc) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            world.set_cell_at(r0 + dr, c0 + dc, Cell::alive(player));
         }
+    } else {
+        log::warn!("{player:?} was granted ground with nowhere to stand a block");
     }
+}
+
+/// Where in a granted patch a 2x2 block will fit: four cells that are dead,
+/// free of ice, and now this player's.
+///
+/// Nearest the middle first, so the usual answer is the middle and the search
+/// only matters on ground somebody else is already using.
+fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i32, i32)> {
+    let middle = (row + SPAWN_N / 2 - 1, col + SPAWN_N / 2 - 1);
+    let free = |r: i32, c: i32| {
+        world
+            .cell_at(r, c)
+            .is_some_and(|cell| cell.player() == player && !cell.is_alive() && !cell.is_ice())
+    };
+    let fits = |r: i32, c: i32| free(r, c) && free(r, c + 1) && free(r + 1, c) && free(r + 1, c + 1);
+
+    let mut sites: Vec<(i32, i32)> = (row..row + SPAWN_N - 1)
+        .flat_map(|r| (col..col + SPAWN_N - 1).map(move |c| (r, c)))
+        .filter(|&(r, c)| fits(r, c))
+        .collect();
+    // Sorted by distance from the middle, and by coordinate to break ties, so
+    // the answer never depends on iteration order -- the client works this out
+    // for an offline game and must reach the same one.
+    sites.sort_unstable_by_key(|&(r, c)| {
+        ((r - middle.0).abs() + (c - middle.1).abs(), r, c)
+    });
+    sites.first().copied()
 }
 
 /// What reclaiming your own costs, or rather pays.
@@ -725,6 +772,99 @@ mod tests {
     /// makes hard: the ground is finite, so a fixed pitch would run off the
     /// end and wrap one player's grant onto another's. The grid is spread over
     /// whatever ground there is instead.
+    /// The bug that locked a player out of a world they were looking at.
+    ///
+    /// Territory only ever spreads, so a world with an edge eventually
+    /// belongs to whoever got there first. A player joining after that used to
+    /// be granted nothing -- no ground, and so no block, since the block goes
+    /// only on ground they own -- and placing is confined to your own
+    /// territory, so they could never come to own anything.
+    #[test]
+    fn a_grant_on_ground_somebody_else_has_spread_over_still_works() {
+        let mut world = World::toroidal_empty(12, 12);
+        let first = PlayerId(1);
+
+        // The first player's territory covers the whole world, as it does on
+        // any torus that has been running.
+        let (rows, cols) = world.size_in_cells().unwrap();
+        for r in 0..rows {
+            for c in 0..cols {
+                world.set_cell_at(r, c, Cell::DEAD.with_player(first));
+            }
+        }
+
+        let second = PlayerId(2);
+        grant(&mut world, second);
+
+        let (row, col) = spawn_for(second, &world);
+        let mine = (row..row + SPAWN_N)
+            .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == second)
+            .count();
+        assert_eq!(mine, (SPAWN_N * SPAWN_N) as usize, "the whole patch is theirs");
+
+        let alive: Vec<(i32, i32)> = (row..row + SPAWN_N)
+            .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| world.cell_at(r, c).unwrap().is_alive())
+            .collect();
+        assert_eq!(alive.len(), 4, "and a block stands on it: {alive:?}");
+        assert!(
+            alive.iter().all(|&(r, c)| world.cell_at(r, c).unwrap().player() == second),
+            "the block is theirs"
+        );
+
+        // And they can actually place, which is the whole point.
+        assert!(may_place(&world, second, row, col));
+    }
+
+    /// A grant takes ground and never anybody's life or panes -- those are
+    /// won by playing, not by arriving.
+    #[test]
+    fn a_grant_steps_around_life_and_ice() {
+        let mut world = World::infinite_empty();
+        let second = PlayerId(2);
+        let (row, col) = spawn_for(second, &world);
+
+        // Somebody else's living cell and pane, right in the middle where the
+        // block wants to go.
+        let middle = (row + SPAWN_N / 2 - 1, col + SPAWN_N / 2 - 1);
+        world.set_cell_at(middle.0, middle.1, Cell::alive(PlayerId(1)));
+        world.set_cell_at(middle.0, middle.1 + 1, Cell::DEAD.with_ice(true).with_player(PlayerId(1)));
+
+        grant(&mut world, second);
+
+        let theirs = world.cell_at(middle.0, middle.1).unwrap();
+        assert!(theirs.is_alive() && theirs.player() == PlayerId(1), "their life is untouched");
+        let pane = world.cell_at(middle.0, middle.1 + 1).unwrap();
+        assert!(pane.is_ice() && pane.player() == PlayerId(1), "and their pane");
+
+        // The block went somewhere else in the patch rather than nowhere.
+        let alive: Vec<(i32, i32)> = (row..row + SPAWN_N)
+            .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == second
+                && world.cell_at(r, c).unwrap().is_alive())
+            .collect();
+        assert_eq!(alive.len(), 4, "a whole block, not three cells that die: {alive:?}");
+    }
+
+    /// Both sides work it out independently -- the server on a join, the
+    /// client for an offline game -- so it must not depend on iteration order.
+    #[test]
+    fn a_grant_lands_in_the_same_place_every_time() {
+        let build = || {
+            let mut world = World::toroidal_empty(8, 8);
+            for r in 0..40 {
+                world.set_cell_at(r, r, Cell::alive(PlayerId(1)));
+            }
+            grant(&mut world, PlayerId(3));
+            world.live_cells()
+        };
+        let first = build();
+        for _ in 0..8 {
+            assert_eq!(build(), first);
+        }
+    }
+
     #[test]
     fn a_torus_still_gives_everyone_a_square() {
         // Big enough that the grid fits without crowding.

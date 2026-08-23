@@ -78,7 +78,11 @@ Every dead cell carries an owner, and that is territory. The rule spreads it: a 
 
 **A player may only place inside their own territory.** Ground nobody has reached belongs to nobody and is closed to everyone, so reach grows where life goes and nowhere else. `net::may_place` is the whole rule, and the client refuses on the same terms the server does — instantly, and with the same answer.
 
-That makes a grant necessary. A player who owned nothing could place nothing and so could never come to own anything, so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it. Grants are laid out in a **square**, not a line: a line puts the last player thirty patches from the first, so the two could never reach each other and the map is a corridor. A square keeps everyone within a few patches of several others, which is the only arrangement in which territory meeting territory is something that happens.
+That makes a grant necessary. A player who owned nothing could place nothing and so could never come to own anything, so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it.
+
+A grant claims **dead ground whoever held it**. It used to claim only cells nobody held, on the principle that territory is taken by life reaching it rather than handed out over what is already held — and that principle costs a player the game. Territory only ever spreads, so a world with an edge eventually belongs to whoever got there first, and a player joining after that was granted nothing: no ground, and therefore no block, since the block only stands on ground they own. They could place nothing, could never come to own anything, and were locked out of a world they were looking at. On a torus that is not an edge case; it is what happens to the second player to arrive at a world that has been running.
+
+Living cells and panes are still untouched — a grant takes ground, never anybody's life. And dead ground is what the rule hands around freely anyway, since a corpse's owner flips to whoever grows over it. The block is then placed on the nearest 2×2 of free ground to the middle rather than blindly in it, because the middle four may be somebody's life, and a block with a cell missing is not a still life — it is three cells that die. Grants are laid out in a **square**, not a line: a line puts the last player thirty patches from the first, so the two could never reach each other and the map is a corridor. A square keeps everyone within a few patches of several others, which is the only arrangement in which territory meeting territory is something that happens.
 
 The world decides the spacing. An infinite one has room, so the grid sits at a fixed pitch centred on the origin and the world grows in every direction rather than off into one quadrant. A torus does not — its ground is finite and has to be shared out — so the same grid is spread over whatever there is and **every player still gets their square**, on a small world as much as a large one. A world too small even for that says so at startup; the earlier players keep theirs and the later ones get what is left.
 
@@ -144,6 +148,8 @@ On the web the server is shown but not editable: the socket is derived from the 
 ## The HUD
 
 Player and their colour, value, generation, chunks held and drawn, zoom, connection state, which room, whether the world wraps, and why the last action was refused.
+
+"Chunks held" is what the client has **asked the server for**, not what its world has room for. A torus is allocated whole, so the second number there would be the size of the world and would say nothing about what has arrived.
 
 The room and the world's shape are there because both are invisible otherwise. A room is a whole separate world, so two players who cannot find each other are far more likely to be in different rooms than at different ends of one; and nothing on the board says whether walking east far enough brings you back.
 

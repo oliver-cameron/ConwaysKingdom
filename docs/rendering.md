@@ -27,6 +27,14 @@ At 16×16 chunks a 4K screen at one pixel per cell wants 160 layers. The floor o
 
 `Queue::write_texture` is exempt from the 256-byte `bytes_per_row` alignment that `copy_buffer_to_texture` imposes, which is what makes a 64-byte chunk row a legal upload.
 
+## A wrapping world is folded, not tiled
+
+Every chunk position the viewport covers is asked which chunk actually fills it. On an infinite world that is the identity; on a torus it is many-to-one, so **the world repeats for as far as anyone can pan** and the work is proportional to the screen rather than to the world.
+
+It used to draw a fixed number of copies either side of the original — `World::render_tiles(repeats)`, with `repeats` at 1. Two things were wrong with that. Panning off the third copy fell into blank space forever, which is not what a world with no edge should do. And a large torus paid for nine copies of every chunk whether or not any of them were on screen: a 12×12 world produced 1296 instances against a budget of 1024, and warned about it, while a viewport at normal zoom needs a couple of dozen.
+
+The texture side already worked this way — `sync` chose which chunks get a layer by folding the visible region — so the fix was to make the instance list agree with it. `render_tiles` is gone and so is the repeat count.
+
 ## Unloaded ground
 
 One quad for all of it, drawn first, with the grid pattern computed from world position rather than sampled.

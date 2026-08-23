@@ -67,6 +67,8 @@ The client applies its own actions immediately **and** sends them, rather than s
 
 `Checkpoint` carries **per-chunk** digests. A whole-world digest could never have worked: a client holds only what its viewport covers, so it would disagree every time. The server answers with just the chunks that differ, and silence means agreement.
 
+It digests **the chunks the client has asked for**, which is not the same as the chunks its world contains. A torus is allocated whole, so every chunk exists from the moment the world is built, and digesting all of them meant claiming to hold hundreds that had never been sent. They read as empty, the server disagreed with every one, and answered with a `Resync` naming the lot — every checkpoint interval, until the whole world had been dragged across. An infinite world hid it, because there a stored chunk is one that was fetched or grown.
+
 `cargo run --example join -- ws://…` joins, takes what the server sends, checkpoints it back, and prints MATCH or the chunks that disagree.
 
 ## The server is the clock

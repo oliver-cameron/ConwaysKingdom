@@ -349,7 +349,26 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 }
 
                 let now = now_secs();
-                let dt = (now - r.last_frame).max(0.0) as f32;
+                // Clamped, because frame pacing here is lumpy by construction
+                // and the world should not be.
+                //
+                // The loop runs on `ControlFlow::Wait` and re-arms itself with
+                // a `request_redraw` at the end of each frame, so it sleeps
+                // between frames -- and `Frame::begin` blocks the same thread
+                // on the present queue, since the surface is `Fifo`. Input
+                // arriving during that block queues up, and is then drained in
+                // one go before the next redraw fires: a wait, then a burst.
+                // Every `dt` inherits that jitter, and a long stall -- a
+                // window drag, devtools opening, a tab in the background --
+                // hands `World::update` a whole second at once, which it turns
+                // into `MAX_CATCHUP_STEPS` generations in a single frame.
+                //
+                // A quarter of a second is one generation at the default rate.
+                // Offline that means a stalled frame costs at most one step
+                // rather than eight; connected the server is the clock and
+                // this only paces the interface.
+                const LONGEST_FRAME: f32 = 0.25;
+                let dt = ((now - r.last_frame).max(0.0) as f32).min(LONGEST_FRAME);
                 r.last_frame = now;
 
                 r.app.update(&r.gpu, dt);

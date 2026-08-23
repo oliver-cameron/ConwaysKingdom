@@ -598,28 +598,6 @@ impl World {
         out
     }
 
-    /// Where to draw, as (global coordinate, the chunk that fills it). On a
-    /// torus the same chunk appears at several global coordinates, which is
-    /// what makes the tiling tile; `repeats` says how many copies each way.
-    pub fn render_tiles(&self, repeats: i32) -> Vec<(Coord, Coord)> {
-        match &self.storage {
-            Storage::Infinite(map) => map.keys().map(|&c| (c, c)).collect(),
-            Storage::Toroidal { rows, cols, .. } => {
-                let mut out = Vec::new();
-                for tr in -repeats..=repeats {
-                    for tc in -repeats..=repeats {
-                        for r in 0..*rows {
-                            for c in 0..*cols {
-                                let global = (tr * rows + r, tc * cols + c);
-                                out.push((global, (r, c)));
-                            }
-                        }
-                    }
-                }
-                out
-            }
-        }
-    }
 }
 
 /// Does this chunk carry life on the edge facing `dir`? A live cell there can
@@ -787,20 +765,39 @@ mod tests {
         }
     }
 
+    /// A wrapping world repeats for as far as anyone can pan.
+    ///
+    /// The renderer asks every chunk position the viewport covers which chunk
+    /// fills it, so this is the whole of it: fold a viewport a hundred worlds
+    /// from the origin and every position lands on a real chunk. It used to
+    /// draw a fixed number of copies either side of the original instead, and
+    /// panning off the last of them fell into blank space forever.
     #[test]
-    fn a_torus_draws_each_chunk_at_several_global_positions() {
+    fn a_torus_repeats_however_far_you_pan() {
         let w = World::toroidal(2, 3);
-        let tiles = w.render_tiles(1);
-        assert_eq!(tiles.len(), 9 * 6, "3x3 copies of a 2x3 torus");
-        for (global, canonical) in &tiles {
-            assert_eq!(w.canonical(*global), *canonical);
-        }
-        // Each chunk is drawn nine times: the many-to-one relationship.
-        for r in 0..2 {
-            for c in 0..3 {
-                assert_eq!(tiles.iter().filter(|(_, k)| *k == (r, c)).count(), 9);
+
+        // A viewport far out in both axes, and one far out negative -- the
+        // world has no origin, so east and west must behave alike.
+        for corner in [(200, 300), (-200, -300), (201, -299)] {
+            let covering: Vec<Coord> = (corner.0..corner.0 + 4)
+                .flat_map(|r| (corner.1..corner.1 + 6).map(move |c| (r, c)))
+                .collect();
+            let landed: HashSet<Coord> = covering.iter().map(|&c| w.canonical(c)).collect();
+
+            for &at in &covering {
+                let onto = w.canonical(at);
+                assert!(
+                    w.chunk_at(onto).is_some(),
+                    "{at:?} folded to {onto:?}, which is not a chunk"
+                );
             }
+            assert_eq!(landed.len(), 6, "a viewport that wide should cover every chunk");
         }
+
+        // And the many-to-one is what makes it repeat: one chunk fills many
+        // positions, exactly one world apart.
+        assert_eq!(w.canonical((0, 0)), w.canonical((2, 3)));
+        assert_eq!(w.canonical((0, 0)), w.canonical((-200, 300)));
     }
 
     /// Dimensions are chunks, and any size works down to a single chunk.
