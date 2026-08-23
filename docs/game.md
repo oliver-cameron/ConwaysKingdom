@@ -39,7 +39,16 @@ Keyed on what is held rather than on whether the cell is occupied at all, becaus
 
 **A stroke is laid as it is drawn**, not when the button comes up. Holding it back meant every line appeared a moment after the hand that drew it, which reads as lag however fast everything else is — and it is a pencil, so it should behave like one. Each frame's new cells are priced and sent as a batch, so a stroke that runs out of value stops where the money did rather than being refused whole. The cells are their own preview; only a rectangle, which does not exist until it is released, still shows one.
 
-The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line. A stroke that crosses itself lists each cell once: the pricing compares every cell against the world rather than against the cells before it, so a repeat would be charged for twice and laid once.
+The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line.
+
+Between two positions it draws a **Bresenham line**: one cell per step along the longer axis, stepping sideways where the line does. Connected at every angle, and one cell thick at every angle. Both of the obvious alternatives fail at some angle and not others, which is what makes this worth stating:
+
+- *Mark every cell a sample touches.* Near a corner that catches the cells either side, so a 45° stroke comes out two cells thick and wedge-shaped.
+- *Mark a cell only if the pointer passed through the middle of it.* This was the rule until it was measured. It draws a perfect diagonal, because at 45° the samples land on cell centres — and it falls apart at every other angle, since a shallow stroke enters most of the cells it crosses near their top or bottom edge. Nine cells swept, three placed, and a line of scattered dots.
+
+What Bresenham gives up is drawing a shape with deliberate holes in one stroke. A glider is five cells with gaps between them, and it now takes a few clicks or more than one stroke. That is how a pen behaves, and a line you cannot draw is worse than a glider you must lift the pen for.
+
+A stroke that crosses itself lists each cell once: the pricing compares every cell against the world rather than against the cells before it, so a repeat would be charged for twice and laid once.
 
 A drag always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
 

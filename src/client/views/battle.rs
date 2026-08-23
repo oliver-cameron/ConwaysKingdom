@@ -241,31 +241,54 @@ impl Drag {
     }
 }
 
-/// How much of a cell counts as being on it, across the middle.
+/// Every cell on the line between two cells, both ends included.
 ///
-/// The rest is a gap, and the gap is the point. Filling in every cell between
-/// one pointer position and the next drew a solid line: a hand crossing near a
-/// corner caught the cells either side of it, so a diagonal came out thick and
-/// a shape with holes in it could not be drawn at all. Requiring the pointer
-/// to pass through the middle of a cell instead makes a diagonal a diagonal —
-/// and a glider, which is five cells with holes between them, can be drawn in
-/// one stroke.
+/// Bresenham, which is what a pen tool does and what every raster editor
+/// draws with: exactly one cell per step along the longer axis, stepping
+/// sideways wherever the line does. **Connected, and never two cells thick.**
 ///
-/// Too small and a careful stroke misses cells it plainly crossed; too large
-/// and the gaps close up and it is a solid line again.
-const CELL_COLLIDER: f32 = 0.55;
+/// It replaced a rule that asked whether the pointer had passed through the
+/// middle of a cell, and only marked it if so. That drew a clean diagonal —
+/// at 45° the samples land on cell centres — and it fell apart at every other
+/// angle: a shallow stroke enters most of the cells it crosses near their top
+/// or bottom edge, so they were dropped and the line came out as scattered
+/// dots. Measured at nine cells swept and three placed.
+///
+/// Filling in every cell any sample touches is the other failure and the
+/// reason that rule existed: near a corner it catches the cells either side,
+/// so a diagonal comes out thick. Bresenham is neither — it picks one cell per
+/// step, so there is nothing to be thick with and nothing to fall through.
+///
+/// What is given up is drawing a shape with deliberate holes in one stroke: a
+/// glider is five cells with gaps between them, and it now takes more than one
+/// stroke or a few clicks. That is how a pen behaves, and a line you cannot
+/// draw is worse than a glider you must lift the pen for.
+fn line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (mut row, mut col) = from;
+    let dc = (to.1 - col).abs();
+    let dr = -(to.0 - row).abs();
+    let sc = if col < to.1 { 1 } else { -1 };
+    let sr = if row < to.0 { 1 } else { -1 };
+    let mut err = dc + dr;
 
-/// The cell a world position is on, if it is far enough inside one to count.
-///
-/// Fractional cell coordinates in, so it is the same arithmetic at every zoom
-/// and can be tested without a camera to point at anything.
-fn cell_under((x, y): (f32, f32)) -> Option<(i32, i32)> {
-    let edge = (1.0 - CELL_COLLIDER) / 2.0;
-    let inside = |v: f32| {
-        let fraction = v - v.floor();
-        fraction >= edge && fraction <= 1.0 - edge
-    };
-    (inside(x) && inside(y)).then(|| (y.floor() as i32, x.floor() as i32))
+    // One entry per step along the longer axis, so this is exactly as long as
+    // the line and cannot run away even if the pointer jumps the screen.
+    let mut out = Vec::with_capacity((dc.max(-dr) + 1) as usize);
+    loop {
+        out.push((row, col));
+        if (row, col) == to {
+            return out;
+        }
+        let twice = 2 * err;
+        if twice >= dr {
+            err += dr;
+            col += sc;
+        }
+        if twice <= dc {
+            err += dc;
+            row += sr;
+        }
+    }
 }
 
 /// Whether a press that landed at `from` and has reached `to` is a drag.
@@ -834,17 +857,14 @@ impl BattleApp {
         if !matches!(&self.gesture, Gesture::Drawing(d) if d.stroke == hotbar::Stroke::Pencil) {
             return;
         }
-        // A quarter of a cell, so nothing narrower than a collider is stepped
-        // over, and bounded so a pointer that jumps the screen is not sampled
-        // a quarter-cell at a time all the way across it.
-        let step = (self.camera.zoom as f64 / 4.0).max(1.0);
-        let (dx, dy) = (to_px.0 - from_px.0, to_px.1 - from_px.1);
-        let samples = ((dx.hypot(dy) / step).ceil() as usize).clamp(1, 512);
-
-        for i in 1..=samples {
-            let t = i as f64 / samples as f64;
-            let at = (from_px.0 + dx * t, from_px.1 + dy * t);
-            let Some(cell) = cell_under(self.camera.cell_at_f(at)) else { continue };
+        // Straight from one reported position to the next, in cells. Sampling
+        // the segment in pixels and asking what each sample was over is the
+        // thing this replaced: how many samples to take is a guess, and every
+        // answer to it is wrong at some angle or some zoom. A line between two
+        // cells has no such parameter.
+        let from = self.camera.cell_at(from_px);
+        let to = self.camera.cell_at(to_px);
+        for cell in line(from, to) {
             if let Gesture::Drawing(drag) = &mut self.gesture {
                 if drag.full() {
                     return;
@@ -1961,33 +1981,56 @@ mod tests {
     /// cells either side of a corner, so a diagonal came out thick and a shape
     /// with holes in it could not be drawn at all.
     #[test]
-    fn only_the_middle_of_a_cell_counts() {
-        assert_eq!(cell_under((4.5, 7.5)), Some((7, 4)), "dead centre");
-        assert_eq!(cell_under((4.02, 7.5)), None, "barely inside the left edge");
-        assert_eq!(cell_under((4.5, 7.98)), None, "barely inside the bottom");
-        assert_eq!(cell_under((4.98, 7.02)), None, "a corner, which is the case");
+    fn a_stroke_is_unbroken_at_every_angle() {
+        // The bug this replaced: a shallow sweep placed three of the nine
+        // cells it crossed, because the pointer entered most of them near an
+        // edge rather than through the middle. A pen tool draws a line.
+        let shallow = line((0, 0), (2, 9));
+        assert_eq!(shallow.len(), 10, "one cell per column: {shallow:?}");
+        assert_eq!(
+            shallow.iter().map(|&(_, c)| c).collect::<Vec<_>>(),
+            (0..=9).collect::<Vec<_>>(),
+            "and no column skipped"
+        );
 
-        // Negative coordinates behave the same: the world has no origin.
-        assert_eq!(cell_under((-3.5, -8.5)), Some((-9, -4)));
-        assert_eq!(cell_under((-3.02, -8.5)), None);
+        // Connected at every angle, and one cell thick at every angle.
+        for &to in &[
+            (9, 0),
+            (0, 9),
+            (9, 9),
+            (2, 9),
+            (9, 2),
+            (-7, 4),
+            (4, -7),
+            (-6, -6),
+            (0, 0),
+        ] {
+            let drawn = line((0, 0), to);
+            assert_eq!(drawn.first(), Some(&(0, 0)), "{to:?} starts where the pen did");
+            assert_eq!(drawn.last(), Some(&to), "{to:?} ends where the pen did");
+            for pair in drawn.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let (dr, dc) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
+                assert!(dr <= 1 && dc <= 1 && (dr + dc) > 0, "{to:?}: {a:?} to {b:?} is a jump");
+            }
+            let steps = (to.0.abs()).max(to.1.abs()) as usize + 1;
+            assert_eq!(drawn.len(), steps, "{to:?}: one step per cell of the longer axis");
+        }
     }
 
-    /// A diagonal sweep marks the cells it crosses the middle of and not the
-    /// ones either side, which is what draws a glider rather than a wedge.
+    /// A 45-degree stroke is a clean diagonal with nothing beside it. Filling
+    /// in every cell a sample touched made this two cells thick near the
+    /// corners, which is the other way to get it wrong.
     #[test]
     fn a_diagonal_sweep_marks_a_diagonal() {
-        let marked: Vec<(i32, i32)> = (0..=40)
-            .filter_map(|i| {
-                let t = i as f32 / 10.0;
-                cell_under((0.5 + t, 0.5 + t))
-            })
-            .collect();
-        let mut unique: Vec<(i32, i32)> = marked.clone();
-        unique.dedup();
         assert_eq!(
-            unique,
+            line((0, 0), (4, 4)),
             vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)],
-            "a clean diagonal, with nothing beside it"
+        );
+        // Negative coordinates behave the same: the world has no origin.
+        assert_eq!(
+            line((0, 0), (-3, -3)),
+            vec![(0, 0), (-1, -1), (-2, -2), (-3, -3)],
         );
     }
 
