@@ -97,6 +97,67 @@ pub trait App: 'static {
     }
 }
 
+/// Whether the wheel event now being delivered is a zoom gesture.
+///
+/// On the web the ctrl in a trackpad pinch is **not a modifier state**. The
+/// browser sets `ctrlKey` on the wheel event itself and no key is down —
+/// which is the universal pinch gesture, and the same one that zooms a page.
+/// Modelling it as a held key is the mistake this exists to undo.
+///
+/// winit does turn it into a `ModifiersChanged`, but only while the canvas has
+/// focus, and a freshly loaded page has none. So every pinch arrived looking
+/// exactly like a two-finger scroll: vertical, small deltas, no ctrl — and the
+/// view panned. Clicking the page fixed it, which is why it kept coming back
+/// as fixed and then broken again.
+///
+/// Read from the event instead, in the **capture** phase on `window`, so the
+/// flag is set before the canvas's own listener has queued the event it
+/// belongs to. Bubbling would run after it and be a gesture late.
+#[cfg(target_arch = "wasm32")]
+mod zoom_gesture {
+    use std::cell::Cell;
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+
+    thread_local! {
+        static CTRL: Cell<bool> = const { Cell::new(false) };
+        static WATCHING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn last() -> bool {
+        CTRL.with(Cell::get)
+    }
+
+    /// Idempotent, because `resumed` may be called more than once and two
+    /// listeners would be one too many.
+    pub fn watch() {
+        if WATCHING.with(|w| w.replace(true)) {
+            return;
+        }
+        let Some(window) = web_sys::window() else { return };
+        let handler = Closure::<dyn FnMut(web_sys::WheelEvent)>::new(|e: web_sys::WheelEvent| {
+            CTRL.with(|c| c.set(e.ctrl_key()));
+        });
+        let _ = window.add_event_listener_with_callback_and_bool(
+            "wheel",
+            handler.as_ref().unchecked_ref(),
+            true,
+        );
+        // Leaked deliberately: it listens for as long as the page lives, and
+        // dropping a `Closure` detaches it.
+        handler.forget();
+    }
+}
+
+/// Off the web there is no such thing: a pinch either arrives as a
+/// `PinchGesture` or as a genuinely held ctrl, and both are already handled.
+#[cfg(not(target_arch = "wasm32"))]
+mod zoom_gesture {
+    pub fn last() -> bool {
+        false
+    }
+}
+
 pub async fn run<A: App>() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -193,9 +254,20 @@ impl<A: App> ApplicationHandler for Harness<A> {
                     let canvas = window.canvas()?;
                     canvas.set_id("render-canvas");
                     doc.body()?.append_child(&canvas).ok()?;
+                    // Focused, or the keyboard goes nowhere. winit gives the
+                    // canvas a `tabindex` so it *can* take focus, and then
+                    // waits for something to give it: key events go to the
+                    // focused element, and until the player has clicked the
+                    // page there is not one. So WASD, the arrows, the digits
+                    // and escape all did nothing on a freshly loaded page and
+                    // began working the moment you clicked -- which, since a
+                    // click also draws, looked like the keyboard needing the
+                    // game to be "started".
+                    let _ = canvas.focus();
                     Some(())
                 })
                 .expect("couldn't append canvas to document body");
+            zoom_gesture::watch();
         }
 
         let pending = self.pending.clone();
@@ -242,7 +314,9 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 ..
             } if !consumed => r.app.on_key(code, state == ElementState::Pressed),
             WindowEvent::ModifiersChanged(state) => r.ctrl = state.state().control_key(),
-            WindowEvent::MouseWheel { delta, .. } if !consumed => r.app.on_scroll(delta, r.ctrl),
+            WindowEvent::MouseWheel { delta, .. } if !consumed => {
+                r.app.on_scroll(delta, r.ctrl || zoom_gesture::last())
+            }
             WindowEvent::PinchGesture { delta, .. } if !consumed => r.app.on_pinch(delta),
             WindowEvent::CursorMoved { position, .. } => r.app.on_cursor(position.x, position.y),
             WindowEvent::MouseInput { button, state, .. } if !consumed => {

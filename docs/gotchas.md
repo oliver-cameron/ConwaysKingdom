@@ -97,6 +97,23 @@ Deciding that a press has become a drag from the distance between **one pointer 
 
 *Symptom:* dragging out a rectangle places a single cell at the release point, and the faster you drag the more likely it is to work. It reads as the fill being broken rather than the classification.
 
+## The canvas has to be *focused*, and winit will not focus it
+
+winit gives the canvas a `tabindex` so it **can** take focus, then waits for something to give it. A freshly loaded page has focused nothing, so the canvas is not the active element, and two things follow from that one fact:
+
+- **Keyboard events go nowhere.** They are delivered to the focused element, and there is not one. WASD, the arrows, the digits and escape all do nothing.
+- **A trackpad pinch pans instead of zooming.** In a browser the ctrl in a pinch is not a modifier state: the browser sets `ctrlKey` on the wheel event itself and no key is down. winit turns that into a `ModifiersChanged` — but only while the canvas has focus, so unfocused, every pinch arrives looking exactly like a two-finger scroll: vertical, small deltas, no ctrl.
+
+*Symptom:* both start working the moment you click the page, and a click also draws a cell — so it reads as the game needing to be "started" rather than as focus, and the pinch bug in particular keeps coming back as fixed-then-broken depending on whether the tester clicked before trying it.
+
+`canvas.focus()` after appending it fixes the keyboard. The pinch is fixed separately and more thoroughly, by reading `ctrlKey` off the wheel event in a **capture**-phase listener on `window` — capture, so it runs before the canvas's own listener has queued the event it belongs to. Bubbling would run after it and be a gesture late. Modelling a per-event flag as a held key is the actual mistake; the focus call only hid it.
+
+## Under Xvfb with no window manager, nothing has keyboard focus either
+
+The same bug, one layer down, and worth knowing before spending an afternoon on a keyboard translation that was correct all along. `Xvfb` with no window manager never sets X input focus, so winit's X11 backend reports no key events at all. `xdotool key` appears to do nothing.
+
+`xdotool windowfocus --sync $(xdotool search --name Conway | tail -1)` sets it directly, and everything works. Clicks need no such thing, which is what makes it confusing: the pointer works, so the window looks alive.
+
 ## Serving over plain HTTP costs you WebGPU
 
 `navigator.gpu` requires a secure context. `http://host:8080` is not one, so a browser falls back to WebGL2 — which works, but is a different backend with lower limits. `localhost` **is** a secure context, so an SSH tunnel gets you WebGPU without TLS.

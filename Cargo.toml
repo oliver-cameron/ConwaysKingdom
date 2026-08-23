@@ -60,9 +60,9 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
-    "Document", "Element", "Window", "HtmlCanvasElement", "Performance",
+    "Document", "Element", "Window", "HtmlCanvasElement", "HtmlElement", "Performance",
     "WebSocket", "MessageEvent", "BinaryType", "Location", "CloseEvent", "Event",
-    "Storage",
+    "EventTarget", "WheelEvent", "Storage",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1.0"
