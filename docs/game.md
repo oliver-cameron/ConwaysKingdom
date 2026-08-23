@@ -12,7 +12,7 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | place a mine | −10 each |
 | place ice | −5 each |
 | **a mine of yours is born** | **+1** |
-| **a dead mine of yours, each generation it lies there** | **−1**, one generation in eight |
+| **a dead mine of yours, each generation it lies there** | **−1**, one generation in four |
 | reclaim your own | +1 |
 | take another player's | −1, because taking ground should not be free |
 | take what is not there | nothing |
@@ -31,25 +31,25 @@ Cost is read **before** the action is applied, since it depends on what is there
 
 A **mine** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a mine's children are mines — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
 
-**A mine's corpse costs while it lies there**, one generation in eight, for as long as the ground is still yours. Not once when it falls — a standing charge. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
+**A mine's corpse costs while it lies there**, one generation in four, for as long as the ground is still yours. Not once when it falls — a standing charge. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
 
 So income is births minus the upkeep of everything you have let die, and the thing being rewarded is a **compact machine**. `cargo run --no-default-features --example balance` prints the table, in value per generation at steady state:
 
 | upkeep | block | blinker | glider | r-pentomino |
 |---|---|---|---|---|
 | 1 in 1 | 0.0 | 0.0 | −20.0 | −695.0 |
-| 1 in 4 | 0.0 | 1.5 | −3.5 | −116.8 |
-| **1 in 8** | **0.0** | **1.8** | **−0.8** | **−20.4** |
+| **1 in 4** | **0.0** | **1.5** | **−3.5** | **−116.8** |
+| 1 in 8 | 0.0 | 1.8 | −0.8 | −20.4 |
 | 1 in 16 | 0.0 | 1.9 | 0.6 | 27.8 |
 | 1 in 32 | 0.0 | 1.9 | 1.3 | 51.9 |
 
-Eight is the knee, and it was chosen by measuring rather than by argument. A blinker — three cells, two corpses — pays. A glider dragging a trail behind it roughly breaks even. An r-pentomino, which is two hundred live cells and eight hundred corpses of sprawl, bleeds about twenty a generation. Above sixteen everything pays and *sprawl pays best*, which is where this started. At one even a blinker only breaks even and building anything that moves is ruinous.
+Four is the line where **a blinker pays and a glider does not**, and that is the rule the number was chosen to satisfy. A machine that stays where you put it earns; anything that wanders off dragging a trail of corpses costs. Over three hundred generations that is +432 for the blinker against −1049 for the glider, both placed for less than fifty. Above sixteen everything pays and *sprawl pays best*, which is where this started; at one even a blinker only breaks even.
 
 A block of mines is the honest edge case: nothing is ever born and nothing ever dies, so it neither earns nor costs. It is simply forty spent on nothing.
 
 The drain is bounded by territory decay rather than by a timer. A corpse with nothing alive beside it loses its owner within about sixteen generations and stops costing anybody, so abandoned ground bleeds you briefly and then goes quiet — while corpses inside a living colony are re-claimed every generation and go on costing. There is no other way to clear them: a dead cell cannot be reclaimed, so a mine field you regret is a liability until the life on it goes out.
 
-Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `rule::MINE_UPKEEP_ODDS` decides how much a mess costs to hold.
+Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_UPKEEP_ODDS` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
 
 Value is floored at zero. A cost that comes from an action is refused when it cannot be paid; a drain arrives whether or not there is anything to take it from, and a player in debt would be one who cannot act and has no way to stop owing.
 

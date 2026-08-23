@@ -70,14 +70,10 @@ pub struct Player {
 }
 
 impl Player {
-    /// What a player joins with.
-    ///
-    /// Provisional. The intended opening is a small block of cells to mine
-    /// rather than a number in hand, so this only needs to be enough to build
-    /// something before the mining loop takes over -- twenty cells at the
-    /// current price. Reclaiming pays one against a cost of five, so the ratio
-    /// is what actually sets the pace; this only sets where it starts.
-    pub const STARTING_VALUE: i32 = 100;
+    /// What a player joins with. The number itself lives with the other prices
+    /// in [`crate::sim::rule`], which is where anybody balancing the game
+    /// looks.
+    pub const STARTING_VALUE: i32 = super::rule::STARTING_VALUE;
 
     pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
         Self {

@@ -1,35 +1,29 @@
-//! The rule, evaluated one cell at a time.
+//! The numbers, and the rules they feed — in the order the rules are applied.
 //!
-//! [`next_cell`] takes a cell and its eight neighbours — whole cells, not just
-//! whether they are alive — so a rule can branch on what a cell *is*, not only
-//! on how many live things surround it. That is the seam for behaviour that
-//! varies by cell type: everything a rule needs is in its arguments, and it
-//! knows nothing about chunks, worlds or topology.
+//! This file is meant to read like a config, because that is what it is. Every
+//! tunable number in the game is a constant here: the survival counts, how fast
+//! ground changes hands, what everything costs and what mining pays. Every rule
+//! is one entry in [`RULES`], applied in order, each taking the cell as the one
+//! before it left it. Nothing else is in here — the dice are [`super::seed`]'s
+//! problem and the tests are next door — so the rules of the game can be read
+//! on one screen and changed by editing a number.
 //!
-//! Survival and death touch **only the alive bit**. A cell that dies keeps its
-//! owner and its kind, so "recently died, and whose it was" survives without a
-//! field to store it. That is inert as far as the rules go: nothing counts a
-//! dead cell, and a birth takes everything it is from a living parent rather
-//! than from the corpse it lands on.
+//! What a rule gets is a cell and its eight neighbours, whole cells rather than
+//! a count, so it can branch on what a cell *is*. It knows nothing about
+//! chunks, worlds or topology.
 //!
-//! One invariant holds throughout: **a live cell always has a non-zero player**.
-//! Player zero means unowned, and unowned life would have nobody to attribute a
-//! birth to.
-//!
-//! A birth is a **copy of one of its three parents**, kind included, so what
-//! a cell is passes down a line rather than sitting on the ground. That is
-//! what makes [`super::Kind::MINE`] work: a mine's children are mines, and
-//! because the parent is chosen at random the kind spreads through a mixed
-//! population rather than being handed down whole.
-//!
-//! A birth picks that parent at random — but *seeded* random, not `rand`. Client-side prediction needs the step to be a pure
-//! function of state and tick, and a client that rolled its own dice would
-//! diverge from the server on the first contested birth. The seed is derived
-//! from the tick and the cell's absolute position, so every peer rolls the same
-//! number without exchanging one.
+//! Two invariants hold throughout. **A live cell always has a non-zero
+//! player**, because unowned life would have nobody to attribute a birth to.
+//! And survival and death touch **only the alive bit**, so a cell that dies
+//! keeps its owner and its kind — "recently died, and whose it was" exists
+//! without a field for it.
 
 use super::cell::Cell;
 use super::player::PlayerId;
+use super::seed::Roll;
+
+mod order;
+use order::rules;
 
 /// Neighbours in [`super::Dir::ALL`] order: N, NE, E, SE, S, SW, W, NW.
 pub type Neighbours = [Cell; 8];
@@ -38,40 +32,52 @@ pub type Neighbours = [Cell; 8];
 /// signature is a plain function pointer, so there is no dispatch cost.
 pub type RuleFn = fn(Cell, &Neighbours, u64) -> Cell;
 
-/// One chance in this many, per generation, that a dead cell with nothing
-/// alive beside it loses its owner.
+// --- Conway ------------------------------------------------------------------
+
+/// Live neighbours a **living** cell needs to see the next generation.
+pub const SURVIVES_ON: [usize; 2] = [2, 3];
+
+/// Live neighbours a **dead** cell needs to be born. More than one entry and a
+/// birth may have more or fewer than three parents, which `parent` handles.
+///
+/// These two arrays are the whole of the rule everything else is built on.
+/// `[2, 3]` and `[3]` is Conway; `[2, 3]` and `[3, 6]` is HighLife, where
+/// replicators exist. Changing them changes the game and nothing else has to
+/// know.
+pub const BORN_ON: [usize; 1] = [3];
+
+// --- territory ---------------------------------------------------------------
+
+/// How often a dead cell beside living ones is claimed by one of them: ten
+/// generations in sixteen.
+///
+/// Not every generation, so a cell between two players goes to whoever's life
+/// was beside it more often rather than to whoever's life was beside it last.
+pub const SPREAD_CHANCE: (u64, u64) = (10, 16);
+
+/// One chance in this many, per generation, that a dead cell with nothing alive
+/// beside it loses its owner.
 ///
 /// Sixteen is about four seconds at the default rate: long enough that a
 /// pattern flickering off and on keeps its ground, short enough that a glider's
-/// trail fades behind it rather than staking a claim across the world. The one
-/// number to move if territory feels too sticky or too slippery.
+/// trail fades behind it rather than staking a claim across the world.
 ///
 /// Granted ground is exempt — see [`super::bits::HOME`]. Without that floor a
 /// player whose life died out would lose every square they had, and placing is
 /// confined to your own territory, so they could never place again.
 pub const DECAY_ODDS: u64 = 16;
 
+// --- mines -------------------------------------------------------------------
+
 /// One chance in this many, per generation, that a **dead** mine costs its
 /// owner.
 ///
-/// A mine's corpse is not free. It pays when its line is born and it costs for
-/// as long as it lies there, so income is growth minus the upkeep of
-/// everything you have let die — which is what stops a field of mines being
-/// something you lay once and forget.
+/// A mine pays when its line is born and costs for as long as its corpse lies
+/// there, so income is growth minus the upkeep of everything you have let die.
+/// That is what stops a field of mines being something you lay once and forget.
 ///
-/// The drain is bounded by territory decay rather than by a timer: a corpse
-/// with nothing alive beside it loses its owner within about
-/// [`DECAY_ODDS`] generations and stops costing anybody. So abandoned ground
-/// bleeds you briefly and then goes quiet, while corpses inside a living
-/// colony are re-claimed every generation and go on costing.
-///
-/// The rule decides how *often* a corpse is charged; [`crate::net::MINE_DRAIN`]
-/// decides how *much*. Both have to move together to change the balance, and
-/// this is the one that has to be identical on every peer.
-///
-/// **Eight**, chosen by measuring rather than by argument — `cargo run
-/// --example balance` prints this table, in value per generation at steady
-/// state:
+/// **Four**, chosen by measuring — `cargo run --no-default-features --example
+/// balance` prints this table, in value per generation at steady state:
 ///
 /// ```text
 ///    odds     block   blinker    glider   r-pentomino
@@ -82,123 +88,152 @@ pub const DECAY_ODDS: u64 = 16;
 ///      32       0.0       1.9       1.3          51.9
 /// ```
 ///
-/// Eight is the knee. A blinker — three cells and two corpses — pays; a glider
-/// dragging a trail behind it roughly breaks even; and an r-pentomino, which is
-/// two hundred live cells and eight hundred corpses of sprawl, bleeds. That is
-/// the shape wanted: **a compact machine pays and a mess does not**, which is
-/// what stops the answer to everything being "make it all mines".
+/// A blinker — three cells, two corpses — pays; a glider, dragging a trail of
+/// twenty behind it, bleeds; and sprawl bleeds badly. **A machine that stays
+/// where you put it earns, and anything that leaves a mess does not.** Above
+/// sixteen everything pays and sprawl pays best, which is where this started.
 ///
-/// Above sixteen everything pays and sprawl pays best, which is where this
-/// started. At one even a blinker only breaks even and a glider is ruinous,
-/// which punishes building anything that moves.
-pub const MINE_UPKEEP_ODDS: u64 = 8;
+/// The drain is bounded by [`DECAY_ODDS`] rather than by a timer: a corpse with
+/// nothing alive beside it loses its owner and stops costing anybody, so
+/// abandoned ground bleeds briefly and goes quiet, while corpses inside a living
+/// colony are re-claimed every generation and go on costing.
+///
+/// This says how *often* and [`MINE_DRAIN`] says how *much*. This is the half
+/// that has to be identical on every peer.
+pub const MINE_UPKEEP_ODDS: u64 = 4;
 
-/// Mix a value into a seed. SplitMix64's finaliser: cheap, and it decorrelates
-/// the near-identical inputs (adjacent cells, consecutive ticks) that a plain
-/// hash would leave visibly patterned.
-#[inline]
-pub const fn mix(seed: u64, value: u64) -> u64 {
-    let mut z = seed ^ value.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+// --- what things cost ---------------------------------------------------------
+//
+// Here rather than beside the wire types that spend them, because a price is a
+// rule: "life costs one" is the same kind of statement as "a cell survives on
+// two or three", and somebody balancing the game should not have to find them
+// in two files. `net` names the actions and reads these numbers.
+
+/// What a player joins with. Ten mines, or a hundred cells of life.
+pub const STARTING_VALUE: i32 = 100;
+
+/// Life is cheap because it is drawn by the stroke rather than placed cell by
+/// cell: a pencil lays tens of cells in a gesture, and at five a cell that is a
+/// gesture nobody can afford.
+pub const LIFE_COST: i32 = 1;
+
+/// A mine is dear because what you are buying is a lineage, not a cell. Against
+/// [`MINE_YIELD`] this is the payback period, and it is the number that decides
+/// whether mining is worth doing at all.
+pub const MINE_COST: i32 = 10;
+
+/// A pane is a wall, and a wall that costs what a cell costs is not a decision.
+pub const ICE_COST: i32 = 5;
+
+/// What reclaiming your own living cell pays, and what destroying somebody
+/// else's costs — taking ground should not be free.
+///
+/// Equal to [`LIFE_COST`], deliberately: putting a cell down and taking it back
+/// is free, so you may rearrange your own board as much as you like. What
+/// drains value is the rule, not the act of placing.
+pub const RECLAIM: i32 = 1;
+
+/// What one birth of [`super::Kind::MINE`] pays its owner.
+pub const MINE_YIELD: i32 = 1;
+
+/// What one upkeep charge on a dead mine costs its owner. How *often* that
+/// falls due is [`MINE_UPKEEP_ODDS`].
+pub const MINE_DRAIN: i32 = 1;
+
+// --- the rules, in order -----------------------------------------------------
+
+/// What a rule left, and whether the rules after it still run.
+pub enum Then {
+    /// Carry on, with the cell as this rule left it.
+    Next(Cell),
+    /// Stop here, and let nothing else touch this cell.
+    Stop(Cell),
+}
+
+// **The rules, in the order they are applied.** Read top to bottom and that is
+// the game.
+//
+// An ordered list rather than one function with the order buried in its
+// branches, because the order is a decision and decisions should be visible.
+// Ice comes first, so a pane freezes anything without every rule after it
+// having to remember to honour it. Territory comes before life, so ground
+// changes hands on what was alive at the start of the generation rather than
+// on what that same generation's births left behind.
+rules! {
+    "ice freezes what it covers" => ice,
+    "territory is won and lost"  => territory,
+    "life and death"             => conway,
 }
 
 impl Cell {
-    /// Advance this cell one generation.
-    ///
-    /// The outer match is where behaviour that varies by cell type belongs: add
-    /// an arm that inspects [`Cell::meta`] and the default falls through to
-    /// Conway, so a new type costs one arm and disturbs nothing else.
+    /// Advance this cell one generation, by every rule in turn.
     #[inline]
-    pub fn update(mut self, neighbours: &Neighbours, seed: u64) -> Cell {
-        // Under ice is time-stopped, whatever the cell is and whether or not
-        // it is alive. Checked before the kind, so a pane freezes anything
-        // without every kind having to remember to honour it.
-        if self.is_ice() {
-            return self;
-        }
-        // Territory: claimed by life growing over it, and lost when life goes
-        // away. Either way the cell stays dead -- this sets the owner and
-        // nothing else. Ice is handled above, so a pane's cover is neither
-        // claimed nor lost while it stands.
-        if !self.is_alive() {
-            // A fixed array and a count rather than a `Vec`, because this runs
-            // for every dead cell of every active chunk of every generation
-            // and it was the one allocation in the hot loop.
-            let mut claimants = [PlayerId::UNOWNED; 8];
-            let mut found = 0usize;
-            for n in neighbours {
-                if n.is_alive() {
-                    claimants[found] = n.player();
-                    found += 1;
-                }
-            }
-
-            if found > 0 {
-                // A random living neighbour, so a cell between two players
-                // goes to one of them rather than always to the first in
-                // `Dir::ALL` order.
-                if (seed >> 3) & 15 <= 9 {
-                    self = self.with_player(claimants[(seed % found as u64) as usize]);
-                }
-            } else if self.player().is_owned() && !self.is_home() {
-                // **Decay.** Nothing alive is touching this square, so whoever
-                // holds it is holding it on memory alone. Territory used to
-                // only ever spread, which meant a glider left a permanent
-                // trail and an infinite world grew for as long as anything
-                // moved: ground was won and never lost, and a map that only
-                // fills up is not one anybody competes over.
-                //
-                // Slow, and seeded like everything else, so a patch fades over
-                // a few seconds rather than blinking out. Its own slice of the
-                // seed, so it is independent of the claim above.
-                if (seed >> 9).is_multiple_of(DECAY_ODDS) {
-                    self = self.with_player(PlayerId::UNOWNED);
-                }
-            }
-        }
-
-        match self.kind() {
-            // No kind-specific rules yet; everything follows Conway.
-            _ => self.conway(neighbours, seed),
-        }
+    pub fn update(self, neighbours: &Neighbours, seed: u64) -> Cell {
+        apply(self, neighbours, Roll::new(seed))
     }
+}
 
-    /// Conway's rules.
-    ///
-    /// Survival and death change the alive bit and nothing else. A birth also
-    /// sets the owner, because it has none to keep and a live cell must have
-    /// one.
-    #[inline]
-    pub fn conway(self, neighbours: &Neighbours, seed: u64) -> Cell {
-        debug_assert!(
-            !self.is_alive() || self.player().is_owned(),
-            "a live cell must have a non-zero player"
-        );
-
-        let live = neighbours.iter().filter(|n| n.is_alive()).count();
-
-        match (self.is_alive(), live) {
-            // Survives. Only the alive bit is in play, and it is already set.
-            (true, 2 | 3) => self,
-            // Born, as a copy of one of its parents: owner, kind and all.
-            //
-            // The dead cell's own metadata is discarded, which is the whole of
-            // how a kind spreads -- a mine's children are mines. Ice is
-            // cleared because a parent may be under a pane and count as a live
-            // neighbour while frozen, and a birth outside the pane must not
-            // inherit the pane.
-            (false, 3) => parent(neighbours, seed)
-                .with_ice(false)
-                // `HOME` marks the square, so it stays with the square. Every
-                // other thing about a newborn comes from its parent, and this
-                // is the one that must not.
-                .with_home(self.is_home()),
-            // Dies, or stays dead. Owner and metadata are left as they were.
-            _ => self.with_alive(false),
-        }
+/// Under ice is time-stopped, whatever the cell is and whether or not it is
+/// alive.
+fn ice(cell: Cell, _: &Neighbours, _: Roll) -> Then {
+    if cell.is_ice() {
+        Then::Stop(cell)
+    } else {
+        Then::Next(cell)
     }
+}
+
+/// Ground is won by life growing over it and lost when life goes away.
+///
+/// Only dead ground: a living cell's square belongs to whoever is standing on
+/// it. Sets the owner and nothing else — the cell stays as dead as it was.
+fn territory(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
+    if cell.is_alive() {
+        return Then::Next(cell);
+    }
+    let (claimants, found) = living_owners(neighbours);
+    if found > 0 {
+        if roll.chance(stream::SPREAD, SPREAD_CHANCE) {
+            return Then::Next(cell.with_player(claimants[roll.pick(stream::SPREAD, found)]));
+        }
+    } else if cell.player().is_owned()
+        && !cell.is_home()
+        && roll.one_in(stream::DECAY, DECAY_ODDS)
+    {
+        return Then::Next(cell.with_player(PlayerId::UNOWNED));
+    }
+    Then::Next(cell)
+}
+
+/// Live, die, or be born, by [`SURVIVES_ON`] and [`BORN_ON`].
+fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
+    debug_assert!(
+        !cell.is_alive() || cell.player().is_owned(),
+        "a live cell must have a non-zero player"
+    );
+    let live = neighbours.iter().filter(|n| n.is_alive()).count();
+
+    Then::Next(if cell.is_alive() {
+        if SURVIVES_ON.contains(&live) {
+            cell
+        } else {
+            cell.with_alive(false)
+        }
+    } else if BORN_ON.contains(&live) {
+        // A copy of one of its parents: owner, kind and all. The dead cell's
+        // own metadata is discarded, which is the whole of how a kind spreads
+        // — a mine's children are mines.
+        parent(neighbours, roll)
+            // Ice is cleared because a parent may be under a pane and count as
+            // a live neighbour while frozen, and a birth outside the pane must
+            // not inherit it.
+            .with_ice(false)
+            // HOME marks the square, so it stays with the square. It is the one
+            // thing about a newborn that does not come from its parent.
+            .with_home(cell.is_home())
+    } else {
+        cell
+    })
 }
 
 /// Free-function form, so [`RuleFn`] can point at the default rule.
@@ -207,203 +242,59 @@ pub fn next_cell(cell: Cell, neighbours: &Neighbours, seed: u64) -> Cell {
     cell.update(neighbours, seed)
 }
 
-/// Pick one of the three parents to own the birth.
+// --- dice --------------------------------------------------------------------
+
+/// Which stream each roll asks on, so that they are independent of each other:
+/// a square that decays must not also be the square that would have been
+/// claimed. Any distinct numbers will do — see [`super::seed`].
+mod stream {
+    pub const SPREAD: u64 = 1;
+    pub const DECAY: u64 = 2;
+    pub const PARENT: u64 = 3;
+    /// Read by [`crate::sim::Halo::step_into`], which charges the upkeep
+    /// because it is the only place holding a cell before and after.
+    pub const UPKEEP: u64 = 4;
+}
+
+pub use stream::UPKEEP as UPKEEP_STREAM;
+
+/// The owners of the living neighbours, and how many there were.
 ///
-/// Scanning in a fixed order and indexing by `seed % 3` means the choice
-/// depends only on the seed, never on iteration order — so it is the same on
-/// every peer, and reproducible when replaying a tick.
-fn parent(neighbours: &Neighbours, seed: u64) -> Cell {
-    let mut parents = [&Cell([0, 0]); 3];
-    let mut found = 0usize;
+/// A fixed array and a count rather than a `Vec`, because this runs for every
+/// dead cell of every active chunk of every generation and was the one
+/// allocation in the hot loop.
+#[inline]
+fn living_owners(neighbours: &Neighbours) -> ([PlayerId; 8], usize) {
+    let mut owners = [PlayerId::UNOWNED; 8];
+    let mut found = 0;
     for n in neighbours {
-        if n.is_alive() && found < parents.len() {
-            parents[found] = n;
+        if n.is_alive() {
+            owners[found] = n.player();
             found += 1;
         }
     }
-    debug_assert_eq!(found, 3, "a birth has exactly three parents");
-    let chosen = parents[(seed % found.max(1) as u64) as usize];
-    debug_assert!(
-        chosen.player().is_owned(),
-        "every parent is a live cell, so owned"
-    );
-    *chosen
+    (owners, found)
+}
+
+/// Which parent a birth is a copy of.
+///
+/// Scanned in a fixed order and indexed by the roll, so the choice depends only
+/// on the seed and never on iteration order — the same on every peer, and
+/// reproducible when replaying a tick.
+#[inline]
+fn parent(neighbours: &Neighbours, roll: Roll) -> Cell {
+    let mut parents = [Cell::DEAD; 8];
+    let mut found = 0;
+    for n in neighbours {
+        if n.is_alive() {
+            parents[found] = *n;
+            found += 1;
+        }
+    }
+    let chosen = parents[roll.pick(stream::PARENT, found)];
+    debug_assert!(chosen.player().is_owned(), "every parent is a live cell, so owned");
+    chosen
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sim::{Kind, PlayerId};
-
-    fn neighbours(live: &[usize], player: u8) -> Neighbours {
-        let mut n = [Cell::DEAD; 8];
-        for &i in live {
-            n[i] = Cell::alive(PlayerId(player));
-        }
-        n
-    }
-
-    #[test]
-    fn survival_changes_only_the_alive_bit() {
-        let me = Cell::alive(PlayerId(3)).with_kind(Kind(37));
-        for live in [2, 3] {
-            let next = next_cell(me, &neighbours(&(0..live).collect::<Vec<_>>(), 7), 0);
-            assert_eq!(next, me, "{live} neighbours: nothing may change");
-        }
-    }
-
-    #[test]
-    fn death_keeps_owner_and_metadata() {
-        let me = Cell::alive(PlayerId(3)).with_kind(Kind(37));
-        for live in [0, 1, 4, 5, 6, 7, 8] {
-            let next = next_cell(me, &neighbours(&(0..live).collect::<Vec<_>>(), 7), 0);
-            assert!(!next.is_alive(), "{live} neighbours: should die");
-            assert_eq!(next.player(), me.player(), "owner is kept");
-            assert_eq!(next.kind(), me.kind(), "kind is kept");
-        }
-    }
-
-    #[test]
-    fn a_birth_takes_one_of_its_three_parents() {
-        let mut n = [Cell::DEAD; 8];
-        n[0] = Cell::alive(PlayerId(4));
-        n[3] = Cell::alive(PlayerId(7));
-        n[6] = Cell::alive(PlayerId(9));
-        for seed in 0..64 {
-            let born = next_cell(Cell::DEAD, &n, seed);
-            assert!(born.is_alive());
-            assert!(
-                [PlayerId(4), PlayerId(7), PlayerId(9)].contains(&born.player()),
-                "seed {seed} gave {:?}, not a parent",
-                born.player()
-            );
-        }
-    }
-
-    /// All three parents must be reachable, or "random" is a lie.
-    #[test]
-    fn every_parent_can_win() {
-        let mut n = [Cell::DEAD; 8];
-        n[0] = Cell::alive(PlayerId(4));
-        n[3] = Cell::alive(PlayerId(7));
-        n[6] = Cell::alive(PlayerId(9));
-        let mut seen = std::collections::HashSet::new();
-        for seed in 0..64 {
-            seen.insert(next_cell(Cell::DEAD, &n, seed).player());
-        }
-        assert_eq!(seen.len(), 3, "only saw {seen:?}");
-    }
-
-    /// The same seed must always give the same answer, or clients desync.
-    #[test]
-    fn the_choice_is_reproducible() {
-        let mut n = [Cell::DEAD; 8];
-        n[0] = Cell::alive(PlayerId(4));
-        n[3] = Cell::alive(PlayerId(7));
-        n[6] = Cell::alive(PlayerId(9));
-        for seed in 0..64 {
-            let first = next_cell(Cell::DEAD, &n, seed).player();
-            for _ in 0..8 {
-                assert_eq!(next_cell(Cell::DEAD, &n, seed).player(), first);
-            }
-        }
-    }
-
-    /// The invariant the whole ownership model rests on.
-    #[test]
-    fn every_live_cell_has_an_owner() {
-        for pattern in 0u32..256 {
-            let live: Vec<usize> = (0..8).filter(|i| pattern & (1 << i) != 0).collect();
-            for player in 1..=PlayerId::MAX {
-                for me in [Cell::DEAD, Cell::alive(PlayerId(1))] {
-                    let next = next_cell(me, &neighbours(&live, player), pattern as u64);
-                    if next.is_alive() {
-                        assert!(
-                            next.player().is_owned(),
-                            "live cell with player 0 from {live:?}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Ice freezes what it covers, whatever surrounds it.
-    #[test]
-    fn a_cell_under_ice_never_changes() {
-        for live in 0..=8 {
-            let n = neighbours(&(0..live).collect::<Vec<_>>(), 7);
-            for me in [
-                // Alive under ice: would otherwise die or survive.
-                Cell::alive(PlayerId(3)).with_ice(true),
-                // Dead under ice: would otherwise be born at three.
-                Cell::DEAD.with_ice(true),
-                // Carrying a kind as well, to show the flag wins over it.
-                Cell::alive(PlayerId(2)).with_kind(Kind(9)).with_ice(true),
-            ] {
-                assert_eq!(next_cell(me, &n, 0), me, "{live} live neighbours");
-            }
-        }
-    }
-
-    /// Ice and alive are independent: all four combinations are meaningful.
-    #[test]
-    fn ice_and_alive_are_independent() {
-        for alive in [false, true] {
-            for ice in [false, true] {
-                let c = Cell::DEAD
-                    .with_alive(alive)
-                    .with_player(if alive {
-                        PlayerId(1)
-                    } else {
-                        PlayerId::UNOWNED
-                    })
-                    .with_ice(ice);
-                assert_eq!(c.is_alive(), alive);
-                assert_eq!(c.is_ice(), ice);
-            }
-        }
-        // A dead cell under ice stays dead even with three live neighbours,
-        // where without the ice it would be born.
-        let n = neighbours(&[0, 1, 2], 4);
-        assert!(next_cell(Cell::DEAD, &n, 0).is_alive());
-        assert!(!next_cell(Cell::DEAD.with_ice(true), &n, 0).is_alive());
-    }
-
-    /// A birth takes everything it is from a parent, and nothing from the
-    /// ground it lands on. That is how a kind travels down a line, which is
-    /// what makes a mine an investment rather than a square.
-    #[test]
-    fn a_birth_is_a_copy_of_a_parent_not_of_the_corpse() {
-        let corpse = Cell::DEAD.with_kind(Kind(37)).with_player(PlayerId(6));
-        let mut n = [Cell::DEAD; 8];
-        for i in 0..3 {
-            n[i] = Cell::alive(PlayerId(2)).with_kind(Kind::MINE);
-        }
-        let born = next_cell(corpse, &n, 1);
-        assert!(born.is_alive());
-        assert_eq!(born.player(), PlayerId(2), "a parent's number");
-        assert_eq!(born.kind(), Kind::MINE, "and a parent's kind");
-        assert!(!born.is_ice(), "never a parent's pane");
-    }
-
-    /// The kind is inherited from *the parent that was chosen*, so in a mixed
-    /// neighbourhood it spreads rather than being handed down whole. One mine
-    /// dropped into a growing pattern takes a share of the births, not all of
-    /// them and not none.
-    #[test]
-    fn a_kind_spreads_through_a_mixed_neighbourhood() {
-        let mut n = [Cell::DEAD; 8];
-        n[0] = Cell::alive(PlayerId(1)).with_kind(Kind::MINE);
-        n[3] = Cell::alive(PlayerId(1));
-        n[6] = Cell::alive(PlayerId(1));
-
-        let mines = (0..300)
-            .filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::MINE)
-            .count();
-        assert!(
-            (60..140).contains(&mines),
-            "one parent in three should carry it, got {mines} in 300"
-        );
-    }
-}
+mod tests;

@@ -47,7 +47,21 @@ A zeroed cell is dead, unowned and clear of ice, so zeroed memory is a valid emp
 
 ## The rules
 
-`sim::rule` evaluates one cell at a time, given whole neighbours rather than a count, so a rule can branch on what a cell *is*:
+`sim::rule` evaluates one cell at a time, given whole neighbours rather than a count, so a rule can branch on what a cell *is*. It is an **ordered list**, and reading it top to bottom is the game:
+
+```rust
+rules! {
+    "ice freezes what it covers" => ice,
+    "territory is won and lost"  => territory,
+    "life and death"             => conway,
+}
+```
+
+Each takes the cell as the one before it left it and says whether the rules after it still run — ice says they do not. The order is a decision, so it is visible rather than buried in the branches of one function: ice first, so a pane freezes anything without every rule after it having to remember to honour it; territory before life, so ground changes hands on what was alive at the *start* of the generation rather than on what that same generation's births left behind.
+
+The list is a macro rather than an array of function pointers, and that is measured rather than stylistic: an array cannot be inlined through, and three indirect calls per cell per generation cost **54%** of the stepping time — 45 µs a generation against 29. Unrolled, the list costs nothing and is still written once.
+
+The signature is:
 
 ```rust
 cell.update(&neighbours, seed) -> Cell
@@ -67,13 +81,13 @@ Ice is cleared on a birth because a parent may be *under a pane* and still count
 
 ### Mines, and what the rule counts
 
-`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner for every generation one of its corpses **lies there** — one in `rule::MINE_UPKEEP_ODDS`, which is eight. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
+`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner for every generation one of its corpses **lies there** — one in `rule::MINE_UPKEEP_ODDS`, which is four. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
 
 Note what `upkeep` counts. Not deaths — charges falling due. A square is counted many times over its life as a corpse, and a square that dies and is never counted is possible too.
 
 Counted inside `Halo::step_into`, which is the one place that holds a cell before and after in the same breath, so it costs a comparison and no second pass over the world. The tally is returned rather than applied, because a world holds cells and not purses: the server folds it into the authoritative values and a client folds it into its predicted one.
 
-What that rewards is a **compact machine**. A blinker is three cells and two corpses and pays; an r-pentomino is two hundred live cells and eight hundred corpses of sprawl and bleeds. A block of mines neither earns nor costs, because nothing is ever born on it and nothing ever dies.
+What that rewards is a **machine that stays where you put it**. A blinker is three cells and two corpses and pays; a glider drags twenty corpses behind it and bleeds; an r-pentomino of sprawl bleeds badly. A block of mines neither earns nor costs, because nothing is ever born on it and nothing ever dies.
 
 The drain is bounded by territory decay rather than by a timer: a corpse with nothing alive beside it loses its owner within about `DECAY_ODDS` generations and stops costing anybody, while corpses inside a living colony are re-claimed every generation and go on costing.
 

@@ -18,6 +18,10 @@ src/
 It runs one way, and the build enforces it rather than trusting convention.
 
 - `sim` depends on `bytemuck` and `serde` and nothing else. No wgpu, no winit, no web-sys.
+
+Inside `sim`, `rule.rs` is deliberately thin. **Every tunable number in the game is a constant there** — the survival counts, how fast ground changes hands, what everything costs, what mining pays — and every rule is one named entry in an ordered list. Nothing else is: the seeded dice are `sim::seed`, the tests are `sim/rule/tests.rs`, and the list-to-chain macro is `sim/rule/order.rs`. The point is that the rules of the game can be read on one screen and changed by editing a number.
+
+That includes the **prices**, which used to live in `net` beside the actions that spend them. "Life costs one" is the same kind of statement as "a cell survives on two or three", and somebody balancing the game should not have to look in two files. `net` names the actions and reads the numbers.
 - `net` depends on `sim`.
 - `render` depends on `sim`, and mentions egui nowhere — not in code, not in a comment. An interface is the client's business.
 - `client` depends on all of them.

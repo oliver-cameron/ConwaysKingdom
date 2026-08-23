@@ -148,8 +148,8 @@ impl Placement {
     /// rather than the act of placing.
     pub const fn cost(self) -> i32 {
         match self {
-            Self::Life => 1,
-            Self::Ice => 5,
+            Self::Life => LIFE_COST,
+            Self::Ice => ICE_COST,
             Self::Mine => MINE_COST,
         }
     }
@@ -518,42 +518,11 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
     sites.first().copied()
 }
 
-/// What reclaiming your own costs, or rather pays.
-pub const RECLAIM: i32 = 1;
-
-/// What one mine cell costs to place.
-///
-/// This and [`MINE_YIELD`] are one decision rather than two: together they are
-/// a mine's payback period, and everything about whether mining is worth doing
-/// is in that number. Ten against one means a mine pays for itself after ten
-/// births of its line — a still life never does, an oscillator does in a few
-/// seconds, and a gun does forever.
-///
-/// A starting purse of a hundred is ten mines, which is the seed investment
-/// the opening is meant to be. Provisional: the pair wants play rather than
-/// argument, and only these two constants have to move.
-pub const MINE_COST: i32 = 10;
-
-/// What one birth of [`Kind::MINE`] pays its owner.
-pub const MINE_YIELD: i32 = 1;
-
-/// What one upkeep charge on a dead [`Kind::MINE`] costs its owner.
-///
-/// Equal to the yield, deliberately, which makes a generation's income the
-/// **net change in your mine population** and nothing else. Over the life of a
-/// pattern that telescopes: what a mine earned in total is what it grew into.
-///
-/// That is what stops mining being the answer to everything. Making every cell
-/// you own a mine used to be free money, because a settled pattern gives birth
-/// constantly and each birth paid; now a settled pattern gives birth and dies
-/// in equal measure and pays nothing at all. A still life earns nothing, an
-/// oscillator earns nothing, and only something that *grows* earns — a gun, or
-/// a colony still spreading. A colony dying back costs.
-///
-/// Priced apart from the yield so that "income is net growth" stays a choice
-/// rather than an assumption baked into the counting. Lower it and churn pays
-/// again.
-pub const MINE_DRAIN: i32 = 1;
+/// The prices themselves live with the rules, in [`crate::sim::rule`] —
+/// "life costs one" is the same kind of statement as "a cell survives on two
+/// or three", and somebody balancing the game should not have to look in two
+/// files. This module names the actions and reads the numbers.
+pub use crate::sim::{ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM};
 
 /// What a generation's tally is worth to one player.
 ///

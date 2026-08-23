@@ -2,7 +2,8 @@ use bytemuck::{Pod, Zeroable};
 
 use super::dir::Dir;
 use super::player::PlayerId;
-use super::rule::{mix, next_cell, Neighbours, MINE_UPKEEP_ODDS};
+use super::rule::{next_cell, Neighbours, MINE_UPKEEP_ODDS, UPKEEP_STREAM};
+use super::seed::{mix, Roll};
 use std::ops::{Index, IndexMut};
 
 pub const CHUNK_N: usize = 16;
@@ -420,10 +421,10 @@ impl Halo {
                         if !before.is_alive() {
                             mined.born[after.player().0 as usize] += 1;
                         }
-                    } else if (cell_seed >> 17).is_multiple_of(MINE_UPKEEP_ODDS) {
+                    } else if Roll::new(cell_seed).one_in(UPKEEP_STREAM, MINE_UPKEEP_ODDS) {
                         // A corpse costs while it lies there, not once when it
-                        // falls. Its own slice of the seed, above every slice
-                        // the rule itself takes.
+                        // falls. Its own stream, so it is independent of every
+                        // roll the rule itself takes.
                         mined.upkeep[after.player().0 as usize] += 1;
                     }
                 }

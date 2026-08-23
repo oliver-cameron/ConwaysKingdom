@@ -30,7 +30,7 @@ That is a better idea than what was written here before, which was a mine as a m
 
 Two of the three open questions answered themselves. The rule counts births and `net` prices them, so the tally never taught the simulation about money. And the prediction problem went the way this section said it should: `Purse` rides on every `Checkpoint` reply, reusing the machinery that already exists for "your copy is wrong, here is mine".
 
-A mine's corpse now costs while it lies there, one generation in eight, so income is births minus the upkeep of everything you have let die. What that rewards is a compact machine: a blinker pays, a glider breaks even, and an r-pentomino of sprawl bleeds twenty a generation. `cargo run --no-default-features --example balance` prints the table, and the rate was picked off it rather than argued about.
+A mine's corpse now costs while it lies there, one generation in four, so income is births minus the upkeep of everything you have let die. What that rewards is a machine that stays where you put it: a blinker pays, and a glider dragging twenty corpses behind it bleeds. `cargo run --no-default-features --example balance` prints the table, and the rate was picked off it rather than argued about.
 
 What is left is a hole rather than a number: **there is no way to clear a mine's corpse.** A dead cell cannot be reclaimed, so the only remedy for a mine field you regret is to let the life on it go out and wait for territory decay to take the ground. That is a long punishment for a misclick, and value floors at zero so a bad enough mess simply stops you playing. Reclaiming a corpse to clear its kind — for a price, or for nothing — is the obvious fix and needs a decision about what it should cost.
 

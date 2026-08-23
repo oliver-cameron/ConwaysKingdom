@@ -23,10 +23,16 @@ mod cell;
 mod dir;
 mod player;
 mod rule;
+mod seed;
 mod world;
 
 pub use cell::{bits, Cell, Chunk, Halo, Kind, Mined, CHUNK_CELLS, CHUNK_N, HALO_N};
 pub use dir::Dir;
 pub use player::{Player, PlayerId};
-pub use rule::{next_cell, Neighbours, RuleFn, DECAY_ODDS, MINE_UPKEEP_ODDS};
+pub use rule::{
+    next_cell, Neighbours, RuleFn, Then, BORN_ON, DECAY_ODDS, ICE_COST, LIFE_COST,
+    MINE_COST, MINE_DRAIN, MINE_UPKEEP_ODDS, MINE_YIELD, RECLAIM, RULES, SPREAD_CHANCE,
+    STARTING_VALUE, SURVIVES_ON,
+};
+pub use seed::{mix, Roll};
 pub use world::{parse_torus, Coord, World, WorldKind};
