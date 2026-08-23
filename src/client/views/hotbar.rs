@@ -221,8 +221,15 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
     let response = egui::Area::new("hotbar".into())
         .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -m.margin])
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            // Top-aligned, and with the row's height stated up front.
+            //
+            // `ui.horizontal` centres each item against the row, and the row's
+            // height is whatever the tallest item turns out to be — which is
+            // not known when the first one is placed. The segments came out the
+            // same height and thirteen pixels apart.
+            ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
+                ui.set_min_height(m.slot + m.panel_padding * 1.2 + 2.0);
 
                 segment(ui, theme, |ui| {
                     for (i, tool) in DRAWN.iter().enumerate() {
@@ -313,9 +320,11 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
 /// A hairline between two squares in one segment: same group, different job.
 fn rule(ui: &mut egui::Ui, theme: &Theme) {
     let m = theme.metrics;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(1.0, m.slot * 0.7), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, theme.palette.line);
+    // Allocated a full square tall so it takes part in the row like everything
+    // else, and painted short so it reads as a divider.
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, m.slot), egui::Sense::hover());
+    let short = rect.shrink2(egui::vec2(0.0, m.slot * 0.15));
+    ui.painter().rect_filled(short, 0.0, theme.palette.line);
 }
 
 /// One boxed group of squares.
@@ -328,7 +337,14 @@ fn segment(ui: &mut egui::Ui, theme: &Theme, contents: impl FnOnce(&mut egui::Ui
         .corner_radius(m.rounding)
         .inner_margin(m.panel_padding * 0.6)
         .show(ui, |ui| {
-            ui.horizontal(contents);
+            // Every segment is one square tall, whatever is in it, so two of
+            // them side by side line up without either having to know what the
+            // other holds.
+            ui.set_min_height(m.slot);
+            ui.horizontal_top(|ui| {
+                ui.set_min_height(m.slot);
+                contents(ui);
+            });
         });
 }
 

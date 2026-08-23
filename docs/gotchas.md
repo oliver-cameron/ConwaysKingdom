@@ -134,6 +134,16 @@ That is what a client does if it applies its own actions when the server broadca
 
 *Symptom:* draw a glider, watch it thicken into a blob and settle into a still life, then snap back to a glider a few seconds later when the resync lands.
 
+## `ui.horizontal` centres against a row height it does not know yet
+
+Two panels side by side, both exactly 56 pixels tall, sat 13 pixels apart. Not a size problem — an alignment one. `ui.horizontal` is `Align::Center`, and each item is centred against the row's height, which is whatever the tallest item turns out to be. The first item is placed before the last one has been measured.
+
+*Symptom:* a row of things that are demonstrably the same height and visibly are not level, and which move when you change something in only one of them.
+
+`horizontal_top` plus `ui.set_min_height` on the row and on each panel fixes it: top alignment needs no row height, and stating the height means nothing has to be guessed. Measured back to zero pixels apart, with and without a stamp in one of them.
+
+*Also:* anything in the row that is deliberately shorter — a divider, say — should still **allocate** the full height and paint short. An item that allocates less takes part in the alignment as the short thing it is.
+
 ## Serving over plain HTTP costs you WebGPU
 
 `navigator.gpu` requires a secure context. `http://host:8080` is not one, so a browser falls back to WebGL2 — which works, but is a different backend with lower limits. `localhost` **is** a secure context, so an SSH tunnel gets you WebGPU without TLS.
