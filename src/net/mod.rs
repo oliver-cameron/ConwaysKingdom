@@ -450,9 +450,115 @@ pub fn cell_cost(world: &World, player: PlayerId, row: i32, col: i32, placement:
     placement.cost() * rate
 }
 
-/// How many grants sit along one edge of the square they are laid out in.
-/// Six covers all 31 players a five-bit field can hold.
+/// How many grants sit along one edge of a **torus's** grid. Six covers all 31
+/// players a five-bit field can hold.
+///
+/// Only the torus needs a fixed figure. Its ground is finite and has to be
+/// divided whatever the roster turns out to be, so the grid is sized for the
+/// worst case and spread over what there is. An infinite world has room, and
+/// sizes its grid to the players who actually turned up — see [`seat`].
 const SPAWN_ACROSS: i32 = 6;
+
+/// How much of somebody else's ground in a seat makes it not worth taking.
+///
+/// A bar rather than "any at all", because a seat with a few stray cells in it
+/// is still a seat: `grant` claims dead ground whoever held it and steps the
+/// block around anything alive, so a couple of a neighbour's squares cost
+/// nothing. What this is looking for is a **country** — a seat inside
+/// somebody's territory, where a new player would be unable to build without
+/// paying the outside rate for every cell.
+///
+/// A quarter of the patch's own area, against a box that is four times that,
+/// so it takes a real border to trip it.
+const SPAWN_CROWDED: usize = (SPAWN_N * SPAWN_N / 4) as usize;
+
+/// How many seats out from their own a player will look for somewhere emptier.
+///
+/// A bound rather than a sweep of the world: what is wanted is *near enough to
+/// be in the same game and far enough to be nobody's*, and a search that ran
+/// until it found perfect emptiness would put a latecomer half a map away from
+/// everybody on any world that has been running a while.
+const SPAWN_SEARCH: i32 = 64;
+
+/// Which seat in the grid a player takes, as a square **spiral** out from the
+/// origin.
+///
+/// The grid grows with the roster, which is the point. A fixed six-across grid
+/// filled in reading order puts the first six players in a **line**, and a
+/// line is the arrangement the layout exists to avoid: your only neighbours
+/// are the two beside you, the ends can never reach each other, and the map is
+/// a corridor. A spiral fills a square at every size — four players make a
+/// 2x2, nine make a 3x3, sixteen a 4x4 — so however many turn up, everybody
+/// has neighbours on more than one side.
+///
+/// A spiral rather than "lay out a grid for the players present", because a
+/// seat must never move. Positions are a function of the player's number
+/// alone, so a player's ground stays where it was put when the next person
+/// joins, and the shape of the occupied region grows around them.
+fn seat(n: i32) -> (i32, i32) {
+    let (mut row, mut col) = (0, 0);
+    let (mut dr, mut dc) = (0, 1);
+    let mut left = n.max(0);
+    let mut run = 1;
+    loop {
+        // Two sides of the square per turn of the run length: right one, up
+        // one, left two, down two, right three ... which is what makes the
+        // path close each ring before starting the next.
+        for _ in 0..2 {
+            for _ in 0..run {
+                if left == 0 {
+                    return (row, col);
+                }
+                row += dr;
+                col += dc;
+                left -= 1;
+            }
+            (dr, dc) = (dc, -dr);
+        }
+        run += 1;
+    }
+}
+
+/// The top-left of the patch a seat stands on.
+fn patch_at(seat: (i32, i32)) -> (i32, i32) {
+    (seat.0 * SPAWN_PITCH, seat.1 * SPAWN_PITCH)
+}
+
+/// Whether this patch is one this player has already been granted.
+///
+/// [`Cell::is_home`] never decays, so a patch handed out stays marked as long
+/// as its owner holds it — which is what keeps a seat still. `grant` runs
+/// again on every rejoin, and a spawn that moved would hand a returning player
+/// a second patch somewhere else every time the world around their first one
+/// changed.
+fn already_granted(world: &World, (row, col): (i32, i32), player: PlayerId) -> bool {
+    (row..row + SPAWN_N).any(|r| {
+        (col..col + SPAWN_N).any(|c| {
+            world.cell_at(r, c).is_some_and(|cell| cell.is_home() && cell.player() == player)
+        })
+    })
+}
+
+/// How much of a patch, and the ground just around it, is somebody else's.
+///
+/// The margin is there because a seat whose own squares are free but which
+/// backs onto a neighbour's border is not somewhere to start. Counted rather
+/// than tested, so "emptier" can be compared when nowhere is empty.
+fn crowding(world: &World, (row, col): (i32, i32), player: PlayerId) -> usize {
+    let margin = SPAWN_N / 2;
+    let mut taken = 0;
+    for r in row - margin..row + SPAWN_N + margin {
+        for c in col - margin..col + SPAWN_N + margin {
+            if world
+                .cell_at(r, c)
+                .is_some_and(|cell| cell.player().is_owned() && cell.player() != player)
+            {
+                taken += 1;
+            }
+        }
+    }
+    taken
+}
 
 /// No-man's-land between one grant's edge and the next, in cells.
 ///
@@ -495,12 +601,33 @@ const SPAWN_PITCH: i32 = SPAWN_N + SPAWN_GAP;
 /// rather than leaving the client to work it out and be wrong.
 pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
     let n = player.0 as i32;
-    let (row, col) = (n / SPAWN_ACROSS, n % SPAWN_ACROSS);
 
     match world.size_in_cells() {
         None => {
-            let middle = SPAWN_ACROSS / 2;
-            ((row - middle) * SPAWN_PITCH, (col - middle) * SPAWN_PITCH)
+            // Their own seat if it is still theirs, wherever the search below
+            // put it last time -- a granted patch keeps its `HOME` marks, and
+            // a spawn that moved would hand a returning player a second patch.
+            let seats = || (0..SPAWN_SEARCH).map(|k| patch_at(seat(n - 1 + k)));
+            if let Some(mine) = seats().find(|&at| already_granted(world, at, player)) {
+                return mine;
+            }
+
+            // Otherwise the nearest seat that is nobody's, and failing that
+            // the emptiest within reach. A latecomer whose seat is in the
+            // middle of somebody's country is put out where there is room,
+            // rather than inside a country they cannot build in.
+            let mut best = patch_at(seat(n - 1));
+            let mut fewest = usize::MAX;
+            for at in seats() {
+                let crowd = crowding(world, at, player);
+                if crowd <= SPAWN_CROWDED {
+                    return at;
+                }
+                if crowd < fewest {
+                    (fewest, best) = (crowd, at);
+                }
+            }
+            best
         }
         Some((height, width)) => {
             // A torus has finite ground and has to share it out, so the
@@ -513,6 +640,7 @@ pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
             // that they do overlap, and `grant` leaves claimed ground alone,
             // so the earlier players simply keep theirs.
             let pitch = |extent: i32| (extent / SPAWN_ACROSS).max(SPAWN_N);
+            let (row, col) = (n / SPAWN_ACROSS, n % SPAWN_ACROSS);
             (row * pitch(height), col * pitch(width))
         }
     }
@@ -1300,21 +1428,103 @@ mod tests {
     #[test]
     fn neighbouring_grants_are_a_gap_apart() {
         let world = World::infinite_empty();
-        // Two players side by side in the grid, so the difference is one pitch.
         let (row, col) = spawn_for(PlayerId(1), &world);
         let (next_row, next_col) = spawn_for(PlayerId(2), &world);
-        assert_eq!(next_row, row, "consecutive numbers fill a row before a column");
+        assert_eq!(next_row, row, "the first two are side by side");
         assert_eq!(next_col - col, SPAWN_PITCH);
 
         // What is between them is the gap: the pitch less the patch they each
         // stand on.
         assert_eq!(SPAWN_PITCH - SPAWN_N, SPAWN_GAP);
         assert_eq!(SPAWN_GAP, 3 * CHUNK_N as i32, "three chunks of no-man's-land");
+    }
 
-        // And the row below is the same distance away, so the grid is square
-        // rather than a corridor.
-        let (down_row, _) = spawn_for(PlayerId(1 + SPAWN_ACROSS as u8), &world);
-        assert_eq!(down_row - row, SPAWN_PITCH);
+    /// **The grid grows with the roster.** Six seats filled in reading order
+    /// put the first six players in a line, and a line is the arrangement the
+    /// layout exists to avoid: your only neighbours are the two beside you and
+    /// the ends can never reach each other. A spiral fills a square at every
+    /// size, so however many turn up everybody has neighbours on more than one
+    /// side.
+    #[test]
+    fn the_grid_is_a_square_at_every_size() {
+        let world = World::infinite_empty();
+        let seats = |n: u8| -> Vec<(i32, i32)> {
+            (1..=n).map(|p| spawn_for(PlayerId(p), &world)).collect()
+        };
+
+        for (players, side) in [(4u8, 2), (9, 3), (16, 4), (25, 5)] {
+            let spots = seats(players);
+            let span = |v: Vec<i32>| {
+                (v.iter().max().unwrap() - v.iter().min().unwrap()) / SPAWN_PITCH + 1
+            };
+            assert_eq!(span(spots.iter().map(|s| s.0).collect()), side, "{players} players");
+            assert_eq!(span(spots.iter().map(|s| s.1).collect()), side, "{players} players");
+
+            // Filled, not just bounded: a square with holes in it is a
+            // different arrangement from a square.
+            let mut distinct = spots.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert_eq!(distinct.len(), players as usize, "{players} seats should be distinct");
+        }
+    }
+
+    /// A seat inside somebody's country is not a seat. A latecomer is put out
+    /// where there is room rather than into ground they could not build on
+    /// without paying the outside rate for every cell.
+    #[test]
+    fn a_seat_inside_somebody_elses_country_is_given_up() {
+        let mut world = World::infinite_empty();
+        let (me, them) = (PlayerId(2), PlayerId(1));
+        let wanted = spawn_for(me, &world);
+
+        // Their ground over the whole of it and well past its edges.
+        for r in wanted.0 - SPAWN_N..wanted.0 + 2 * SPAWN_N {
+            for c in wanted.1 - SPAWN_N..wanted.1 + 2 * SPAWN_N {
+                world.set_cell_at(r, c, Cell::DEAD.with_player(them));
+            }
+        }
+
+        let moved = spawn_for(me, &world);
+        assert_ne!(moved, wanted, "a seat buried in their country should be given up");
+        assert_eq!(
+            crowding(&world, moved, me),
+            0,
+            "and the one taken instead should be nobody's"
+        );
+
+        // But a couple of stray cells is not a country: `grant` claims dead
+        // ground whoever held it and steps the block around anything alive, so
+        // a seat with a few of somebody's squares in it is still a seat.
+        let mut sparse = World::infinite_empty();
+        let spot = spawn_for(me, &sparse);
+        sparse.set_cell_at(spot.0 + 1, spot.1 + 1, Cell::alive(them));
+        sparse.set_cell_at(spot.0 + 2, spot.1 + 2, Cell::DEAD.with_player(them));
+        assert_eq!(spawn_for(me, &sparse), spot, "two cells should not move anybody");
+    }
+
+    /// A granted patch keeps its `HOME` marks and they never decay, so a
+    /// spawn stays put however the world around it changes — `grant` runs
+    /// again on every rejoin, and a seat that wandered would hand a returning
+    /// player a second patch every time.
+    #[test]
+    fn a_granted_seat_does_not_wander() {
+        let mut world = World::infinite_empty();
+        let (me, them) = (PlayerId(2), PlayerId(1));
+        let home = spawn_for(me, &world);
+        grant(&mut world, me);
+
+        // Their country arrives afterwards, all around and over the top of it.
+        for r in home.0 - SPAWN_N..home.0 + 2 * SPAWN_N {
+            for c in home.1 - SPAWN_N..home.1 + 2 * SPAWN_N {
+                let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+                if !cell.is_home() {
+                    world.set_cell_at(r, c, cell.with_player(them));
+                }
+            }
+        }
+
+        assert_eq!(spawn_for(me, &world), home, "their home is where it was granted");
     }
 
     /// Ground nobody holds prices as empty, which is what `apply` writes into
