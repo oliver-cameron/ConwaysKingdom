@@ -419,7 +419,7 @@ fn square(
             }
             None => draw_text(painter, inner, name, ink),
         },
-        Face::Pattern(stamp) => stamp.draw(painter, inner, look.player),
+        Face::Pattern(stamp) => stamp.draw(painter, inner, look.player, look.sheet),
         Face::Camera => icons::camera(painter, inner, ink),
         Face::Text(text) => draw_text(painter, inner, text, ink),
     }

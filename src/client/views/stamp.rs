@@ -14,6 +14,7 @@
 //! Coordinates are relative to the pattern's own top-left, so a stamp knows its
 //! shape and not where it was found.
 
+use crate::client::views::icons::Icons;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::stamps as words;
 use crate::net::Placement;
@@ -124,33 +125,59 @@ impl Stamp {
     /// `2x2` says nothing about what is about to be placed; its shape does. At
     /// button size a glider is a glider and a block is a block, which is the
     /// whole question a row of ten of them has to answer.
-    pub fn draw(&self, painter: &egui::Painter, rect: egui::Rect, player: PlayerId) {
+    ///
+    /// **And what it is made of, drawn from the sheet the world is drawn
+    /// from.** A stamp carries the kind of every cell in it — a gun built of
+    /// mines is a different thing from one built of life, and a turret is a
+    /// third — so a thumbnail that showed only the shape was hiding the half
+    /// of the pattern that decides what it costs and what it does. Every other
+    /// square on the bar already shows the cell it lays; this one now shows
+    /// the cells it lays.
+    ///
+    /// The sheet can fail to build, and then the kinds fall back to
+    /// lightness: paler for a mine, paler still for a turret. That keeps the
+    /// distinction visible without art rather than losing it.
+    pub fn draw(
+        &self,
+        painter: &egui::Painter,
+        rect: egui::Rect,
+        player: PlayerId,
+        sheet: Option<egui::TextureId>,
+    ) {
         let (rows, cols) = (self.size.0.max(1) as f32, self.size.1.max(1) as f32);
         // Square cells, sized so the longer axis just fits.
         let step = (rect.width() / cols).min(rect.height() / rows);
         let origin = rect.center() - egui::vec2(cols * step, rows * step) * 0.5;
 
         for &((r, c), what) in &self.cells {
-            // Told apart by lightness alone, since the hue is the player's
-            // and a thumbnail is too small for a shape to read.
-            let lightness = match what {
-                Placement::Turret => 0.90,
-                Placement::Mine => 0.78,
-                _ => 0.62,
-            };
-            let (red, green, blue) =
-                crate::client::views::hud::shade(lightness, 1.0, player);
             let at = egui::Rect::from_min_size(
                 origin + egui::vec2(c as f32 * step, r as f32 * step),
                 egui::vec2(step, step),
             );
             // Shrunk a hair, so neighbouring cells read as cells rather than as
             // a solid blob -- the difference between a shape and a smear.
-            painter.rect_filled(
-                at.shrink(step * 0.12),
-                0.0,
-                egui::Color32::from_rgb(red, green, blue),
-            );
+            let box_ = at.shrink(step * 0.12);
+
+            match sheet {
+                // The tile a stamp's cell would draw as once it is placed:
+                // alive, and of this placement's kind. The sheet is already in
+                // this player's colour, and the tile byte carries the state,
+                // so there is nothing here to look up.
+                Some(sheet) => {
+                    let tile = what.apply_to(Cell::DEAD, player).tile();
+                    painter.image(sheet, box_, Icons::uv(tile), egui::Color32::WHITE);
+                }
+                None => {
+                    let lightness = match what {
+                        Placement::Turret => 0.90,
+                        Placement::Mine => 0.78,
+                        _ => 0.62,
+                    };
+                    let (red, green, blue) =
+                        crate::client::views::hud::shade(lightness, 1.0, player);
+                    painter.rect_filled(box_, 0.0, egui::Color32::from_rgb(red, green, blue));
+                }
+            }
         }
     }
 
@@ -221,6 +248,7 @@ pub fn show(
     theme: &Theme,
     library: &Library,
     player: PlayerId,
+    sheet: Option<egui::TextureId>,
 ) -> (Picked, Option<egui::Rect>) {
     let p = theme.palette;
     let m = theme.metrics;
@@ -259,7 +287,7 @@ pub fn show(
                                     egui::Stroke::new(1.0, p.line),
                                     egui::StrokeKind::Inside,
                                 );
-                                stamp.draw(ui.painter(), rect.shrink(4.0), player);
+                                stamp.draw(ui.painter(), rect.shrink(4.0), player, sheet);
                                 if response.clicked() {
                                     picked = Picked::Hold(i);
                                 }

@@ -1604,7 +1604,7 @@ impl App for BattleApp {
                 let bar = hotbar::show(ctx, &look, held, &self.stamps);
                 picked = bar.picked;
                 if picking {
-                    let (chose, rect) = stamp::show(ctx, &theme, &self.stamps, me);
+                    let (chose, rect) = stamp::show(ctx, &theme, &self.stamps, me, sheet);
                     from_library = chose;
                     return [hud_rect, bar.rect, rect].into_iter().flatten().collect();
                 }
