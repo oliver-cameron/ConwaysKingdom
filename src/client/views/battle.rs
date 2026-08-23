@@ -233,54 +233,56 @@ impl Drag {
     }
 }
 
-/// Every cell on the line between two cells, both ends included.
+/// How much of a cell counts as being on it, across the middle.
 ///
-/// Bresenham, which is what a pen tool does and what every raster editor
-/// draws with: exactly one cell per step along the longer axis, stepping
-/// sideways wherever the line does. **Connected, and never two cells thick.**
+/// The rest is a gap, and **the gap is the point**. Filling in every cell the
+/// pointer passes over draws a solid line, and a solid line is not what you
+/// want to draw: the patterns worth placing have holes in them. A glider is
+/// five cells with gaps between them, and it should be one motion of the hand
+/// rather than five clicks.
 ///
-/// It replaced a rule that asked whether the pointer had passed through the
-/// middle of a cell, and only marked it if so. That drew a clean diagonal —
-/// at 45° the samples land on cell centres — and it fell apart at every other
-/// angle: a shallow stroke enters most of the cells it crosses near their top
-/// or bottom edge, so they were dropped and the line came out as scattered
-/// dots. Measured at nine cells swept and three placed.
+/// So a cell counts only if the pointer went through the middle of it, and
+/// this is how much of the middle. What that buys is that a stroke passing
+/// diagonally between two cells does not catch the two beside the corner —
+/// which is what makes a diagonal a diagonal, and a glider a glider.
 ///
-/// Filling in every cell any sample touches is the other failure and the
-/// reason that rule existed: near a corner it catches the cells either side,
-/// so a diagonal comes out thick. Bresenham is neither — it picks one cell per
-/// step, so there is nothing to be thick with and nothing to fall through.
+/// **Measured against drawing a glider in one motion**, with a hand that
+/// wobbles a quarter of a cell and cuts its corners:
 ///
-/// What is given up is drawing a shape with deliberate holes in one stroke: a
-/// glider is five cells with gaps between them, and it now takes more than one
-/// stroke or a few clicks. That is how a pen behaves, and a line you cannot
-/// draw is worse than a glider you must lift the pen for.
-fn line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
-    let (mut row, mut col) = from;
-    let dc = (to.1 - col).abs();
-    let dr = -(to.0 - row).abs();
-    let sc = if col < to.1 { 1 } else { -1 };
-    let sr = if row < to.0 { 1 } else { -1 };
-    let mut err = dc + dr;
+/// ```text
+///   0.35    2% land it exactly, 2.4 of the five cells missed
+///   0.55   57%                  0.4 missed
+///   0.70   96%                  none missed, and none extra
+///   0.80   64%                  none missed, 0.35 cells extra
+/// ```
+///
+/// Below 0.7 the misses are the problem: you have to pass nearer the centre
+/// of every cell than a hand reliably can, and the shape comes out with holes
+/// in the wrong places. Above it the extras are, because the band grows wide
+/// enough to catch the cells beside a corner and the gaps close up.
+///
+/// A 45° stroke is one cell thick and unbroken at every value in that range,
+/// so it is not what this number is for. Angled strokes **do** break here, and
+/// that is wanted rather than tolerated — an unbroken angled line is a thing
+/// you can draw with two strokes, and a shape with holes is not.
+///
+/// Not every pattern is one motion. A lightweight spaceship has nine cells,
+/// one of them not touching the other eight and three of them with a single
+/// neighbour, so no tolerance makes it a single stroke: a stroke is a path,
+/// and a path has two ends.
+const CELL_COLLIDER: f32 = 0.7;
 
-    // One entry per step along the longer axis, so this is exactly as long as
-    // the line and cannot run away even if the pointer jumps the screen.
-    let mut out = Vec::with_capacity((dc.max(-dr) + 1) as usize);
-    loop {
-        out.push((row, col));
-        if (row, col) == to {
-            return out;
-        }
-        let twice = 2 * err;
-        if twice >= dr {
-            err += dr;
-            col += sc;
-        }
-        if twice <= dc {
-            err += dc;
-            row += sr;
-        }
-    }
+/// The cell a world position is on, if it is far enough inside one to count.
+///
+/// Fractional cell coordinates in, so it is the same arithmetic at every zoom
+/// and can be tested without a camera to point at anything.
+fn cell_under((x, y): (f32, f32)) -> Option<(i32, i32)> {
+    let edge = (1.0 - CELL_COLLIDER) / 2.0;
+    let inside = |v: f32| {
+        let fraction = v - v.floor();
+        fraction >= edge && fraction <= 1.0 - edge
+    };
+    (inside(x) && inside(y)).then(|| (y.floor() as i32, x.floor() as i32))
 }
 
 /// Whether a press that landed at `from` and has reached `to` is a drag.
@@ -849,14 +851,17 @@ impl BattleApp {
         if !matches!(&self.gesture, Gesture::Drawing(d) if d.stroke == hotbar::Stroke::Pencil) {
             return;
         }
-        // Straight from one reported position to the next, in cells. Sampling
-        // the segment in pixels and asking what each sample was over is the
-        // thing this replaced: how many samples to take is a guess, and every
-        // answer to it is wrong at some angle or some zoom. A line between two
-        // cells has no such parameter.
-        let from = self.camera.cell_at(from_px);
-        let to = self.camera.cell_at(to_px);
-        for cell in line(from, to) {
+        // A quarter of a cell, so nothing narrower than a collider is stepped
+        // over, and bounded so a pointer that jumps the screen is not sampled
+        // a quarter-cell at a time all the way across it.
+        let step = (self.camera.zoom as f64 / 4.0).max(1.0);
+        let (dx, dy) = (to_px.0 - from_px.0, to_px.1 - from_px.1);
+        let samples = ((dx.hypot(dy) / step).ceil() as usize).clamp(1, 512);
+
+        for i in 1..=samples {
+            let t = i as f64 / samples as f64;
+            let at = (from_px.0 + dx * t, from_px.1 + dy * t);
+            let Some(cell) = cell_under(self.camera.cell_at_f(at)) else { continue };
             if let Gesture::Drawing(drag) = &mut self.gesture {
                 if drag.full() {
                     return;
@@ -1931,56 +1936,70 @@ mod tests {
     /// cells either side of a corner, so a diagonal came out thick and a shape
     /// with holes in it could not be drawn at all.
     #[test]
-    fn a_stroke_is_unbroken_at_every_angle() {
-        // The bug this replaced: a shallow sweep placed three of the nine
-        // cells it crossed, because the pointer entered most of them near an
-        // edge rather than through the middle. A pen tool draws a line.
-        let shallow = line((0, 0), (2, 9));
-        assert_eq!(shallow.len(), 10, "one cell per column: {shallow:?}");
-        assert_eq!(
-            shallow.iter().map(|&(_, c)| c).collect::<Vec<_>>(),
-            (0..=9).collect::<Vec<_>>(),
-            "and no column skipped"
-        );
+    fn only_the_middle_of_a_cell_counts() {
+        assert_eq!(cell_under((4.5, 7.5)), Some((7, 4)), "dead centre");
+        assert_eq!(cell_under((4.02, 7.5)), None, "barely inside the left edge");
+        assert_eq!(cell_under((4.5, 7.98)), None, "barely inside the bottom");
+        assert_eq!(cell_under((4.98, 7.02)), None, "a corner, which is the case");
 
-        // Connected at every angle, and one cell thick at every angle.
-        for &to in &[
-            (9, 0),
-            (0, 9),
-            (9, 9),
-            (2, 9),
-            (9, 2),
-            (-7, 4),
-            (4, -7),
-            (-6, -6),
-            (0, 0),
-        ] {
-            let drawn = line((0, 0), to);
-            assert_eq!(drawn.first(), Some(&(0, 0)), "{to:?} starts where the pen did");
-            assert_eq!(drawn.last(), Some(&to), "{to:?} ends where the pen did");
-            for pair in drawn.windows(2) {
-                let (a, b) = (pair[0], pair[1]);
-                let (dr, dc) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
-                assert!(dr <= 1 && dc <= 1 && (dr + dc) > 0, "{to:?}: {a:?} to {b:?} is a jump");
-            }
-            let steps = (to.0.abs()).max(to.1.abs()) as usize + 1;
-            assert_eq!(drawn.len(), steps, "{to:?}: one step per cell of the longer axis");
-        }
+        // Negative coordinates behave the same: the world has no origin.
+        assert_eq!(cell_under((-3.5, -8.5)), Some((-9, -4)));
+        assert_eq!(cell_under((-3.02, -8.5)), None);
     }
 
-    /// A 45-degree stroke is a clean diagonal with nothing beside it. Filling
-    /// in every cell a sample touched made this two cells thick near the
-    /// corners, which is the other way to get it wrong.
+    /// What the tolerance is actually for: **a glider in one motion.**
+    ///
+    /// Five cells with gaps between them, drawn by dragging through their
+    /// middles in one stroke. Every cell has to be caught and none of the four
+    /// beside them may be, or it is not a glider — so this pins both halves at
+    /// once, which no test of a straight line can.
+    #[test]
+    fn a_glider_is_one_motion() {
+        // . # .
+        // . . #
+        // # # #
+        let glider = [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)];
+        // Through the middle of each, in the order a hand would take them.
+        let path = [(1.5, 0.5), (2.5, 1.5), (2.5, 2.5), (1.5, 2.5), (0.5, 2.5)];
+
+        let mut marked: Vec<(i32, i32)> = Vec::new();
+        for pair in path.windows(2) {
+            let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+            let steps = 16;
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let at = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+                if let Some(cell) = cell_under(at) {
+                    if !marked.contains(&cell) {
+                        marked.push(cell);
+                    }
+                }
+            }
+        }
+
+        marked.sort_unstable();
+        assert_eq!(marked, glider, "not a glider");
+    }
+
+    /// A diagonal sweep marks the cells it crosses the middle of and not the
+    /// ones either side, which is what draws a glider rather than a wedge.
+    ///
+    /// True at every tolerance tried, which is the point: a 45° stroke is not
+    /// what the constant is for, because both fractions move together.
     #[test]
     fn a_diagonal_sweep_marks_a_diagonal() {
+        let marked: Vec<(i32, i32)> = (0..=40)
+            .filter_map(|i| {
+                let t = i as f32 / 10.0;
+                cell_under((0.5 + t, 0.5 + t))
+            })
+            .collect();
+        let mut unique: Vec<(i32, i32)> = marked.clone();
+        unique.dedup();
         assert_eq!(
-            line((0, 0), (4, 4)),
+            unique,
             vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)],
-        );
-        // Negative coordinates behave the same: the world has no origin.
-        assert_eq!(
-            line((0, 0), (-3, -3)),
-            vec![(0, 0), (-1, -1), (-2, -2), (-3, -3)],
+            "a clean diagonal, with nothing beside it"
         );
     }
 

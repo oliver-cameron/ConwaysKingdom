@@ -41,14 +41,24 @@ Keyed on what is held rather than on whether the cell is occupied at all, becaus
 
 It was the other way round for a while: a stroke laid itself cell by cell as it was drawn, on the reasoning that a pencil should behave like one and that holding it back reads as lag. What that cost was everything a preview buys. Escape could not abandon a stroke, because most of it was already down. A refusal arrived partway through, so a sweep that left your territory laid the cells before the boundary and stopped. And the pricing had to be per batch, so a stroke that ran out of value stopped where the money did — somewhere the hand had not — instead of being refused whole. Committing on release makes the pencil obey the same rule as everything else: **a drag is all or nothing**, and you can see what it will do before it does it.
 
-The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line.
+The pencil marks the cells between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line.
 
-Between two positions it draws a **Bresenham line**: one cell per step along the longer axis, stepping sideways where the line does. Connected at every angle, and one cell thick at every angle. Both of the obvious alternatives fail at some angle and not others, which is what makes this worth stating:
+But not *every* cell it passes over, and **the gaps are the point**. A cell counts only if the pointer went through the middle of it, `CELL_COLLIDER` wide. A solid line is not what you want to draw here: the patterns worth placing have holes in them, and a stroke that fills everything it touches can only make walls. What the rule buys is that a stroke passing diagonally between two cells does not catch the two beside the corner — which is what makes a diagonal a diagonal, and **a glider one motion of the hand rather than five clicks**.
 
-- *Mark every cell a sample touches.* Near a corner that catches the cells either side, so a 45° stroke comes out two cells thick and wedge-shaped.
-- *Mark a cell only if the pointer passed through the middle of it.* This was the rule until it was measured. It draws a perfect diagonal, because at 45° the samples land on cell centres — and it falls apart at every other angle, since a shallow stroke enters most of the cells it crosses near their top or bottom edge. Nine cells swept, three placed, and a line of scattered dots.
+That is what the width was measured against, with a hand that wobbles a quarter of a cell and cuts its corners:
 
-What Bresenham gives up is drawing a shape with deliberate holes in one stroke. A glider is five cells with gaps between them, and it now takes a few clicks or more than one stroke. That is how a pen behaves, and a line you cannot draw is worse than a glider you must lift the pen for.
+| tolerance | lands a glider exactly | cells missed | cells extra |
+|---|---|---|---|
+| 0.35 | 2% | 2.4 | — |
+| 0.55 | 57% | 0.4 | — |
+| **0.70** | **96%** | none | none |
+| 0.80 | 64% | none | 0.35 |
+
+Below 0.7 the misses are the problem: you have to pass nearer the centre of every cell than a hand reliably can. Above it the extras are, because the band grows wide enough to catch the cells beside a corner and the gaps close up.
+
+A 45° stroke is one cell thick and unbroken at every value in that range, so it is not what the number is for. Angled strokes **do** break, and that is wanted rather than tolerated — an unbroken angled line is a thing you can draw with two strokes, and a shape with holes is not.
+
+Not every pattern is one motion. A lightweight spaceship has nine cells, one of them touching none of the other eight and three of them with a single neighbour, so no tolerance makes it a single stroke: a stroke is a path, and a path has two ends.
 
 A stroke that crosses itself lists each cell once: the pricing compares every cell against the world rather than against the cells before it, so a repeat would be charged for twice and laid once.
 
