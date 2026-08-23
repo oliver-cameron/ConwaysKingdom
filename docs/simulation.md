@@ -99,6 +99,8 @@ This makes ownership meaningful on dead ground, which changes what an empty chun
 
 A pane freezes what it covers, whether or not that is alive. Alive and ice are independent: a cell may be either, both, or neither.
 
+The seeds are taken before the rule runs and the flood happens after it, so a cell breaks a pane even in the generation it dies in, while what a pane covered does not evolve in the same breath as being uncovered.
+
 A pane touched by a **living, ice-free** cell shatters, and takes the whole connected run with it — a pane is one object, so cracking a corner does not leave the rest standing. Connectivity is **orthogonal**: panes are laid as rectangles, and two meeting only at a corner are two panes, so a diagonal join would let a break travel between panes that merely touch.
 
 Shattering runs after the rules, in absolute coordinates, so a pane spanning chunks breaks as one.

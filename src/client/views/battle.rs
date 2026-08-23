@@ -149,6 +149,13 @@ struct Drag {
     /// world rather than against the entries before it — so the crossing
     /// would be charged for twice and paid for once.
     seen: std::collections::HashSet<(i32, i32)>,
+    /// How much of the path has been laid down already.
+    ///
+    /// A stroke is laid as it is drawn rather than when the button comes up.
+    /// Holding it back meant every line appeared a moment after the hand that
+    /// drew it, which reads as lag however fast the rest is — and it is a
+    /// pencil, so it should behave like one.
+    laid: usize,
 }
 
 impl Drag {
@@ -160,6 +167,7 @@ impl Drag {
             stroke,
             path: Vec::new(),
             seen: std::collections::HashSet::new(),
+            laid: 0,
         };
         if stroke == hotbar::Stroke::Pencil {
             drag.mark(cell);
@@ -707,6 +715,41 @@ impl BattleApp {
         }
     }
 
+    /// Lay down whatever the pencil has crossed since the last frame.
+    ///
+    /// Priced and refused a batch at a time, so a stroke that runs out of
+    /// value stops where the money did rather than being refused whole. That
+    /// is the natural reading of a pencil: you draw until you cannot.
+    fn flush_stroke(&mut self) {
+        let Gesture::Drawing(drag) = &self.gesture else { return };
+        if drag.stroke != hotbar::Stroke::Pencil || !drag.moved || drag.laid == drag.path.len() {
+            return;
+        }
+        let fresh: Vec<(i32, i32)> = drag.path[drag.laid..].to_vec();
+        let stray = fresh
+            .iter()
+            .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
+            .count();
+
+        if let Gesture::Drawing(drag) = &mut self.gesture {
+            drag.laid = drag.path.len();
+        }
+        if stray > 0 {
+            self.notice = Some(format!("{stray} of those cells are not your territory"));
+            return;
+        }
+
+        let (stamped, delta) = self.quote(fresh, false);
+        if self.value + delta < 0 {
+            self.notice = Some(format!("costs {}, you have {}", -delta, self.value));
+            return;
+        }
+        self.notice = None;
+        self.value += delta;
+        self.commit(&stamped);
+        self.last_action = Some(format!("drew {} of {}", -delta, hotbar::SLOTS[self.slot].name));
+    }
+
     /// Tell the server what this client thinks it holds, so the two can find
     /// out cheaply whether they agree.
     ///
@@ -772,6 +815,13 @@ impl BattleApp {
     fn selection_mark(&self) -> Option<overlay::Selection> {
         let Gesture::Drawing(drag) = &self.gesture else { return None };
         if !drag.moved {
+            return None;
+        }
+        // A stroke is laid as it is drawn, so the cells are their own preview.
+        // A wash over the top of them would only say a second time what is
+        // already on the board. A rectangle does not exist until it is
+        // released, so it still needs showing.
+        if drag.stroke == hotbar::Stroke::Pencil {
             return None;
         }
         let to = self.cell_under_cursor(self.cursor);
@@ -1030,6 +1080,7 @@ impl App for BattleApp {
         }
 
         self.apply_pan(dt);
+        self.flush_stroke();
 
         if self.link.is_some() {
             self.pump_link();
@@ -1041,12 +1092,17 @@ impl App for BattleApp {
             // A press that travelled but stayed inside one cell would place
             // where a click would take, so which of the two happens must not
             // turn on a few pixels of hand shake at high zoom.
+            let laid_already = drag.stroke == hotbar::Stroke::Pencil && drag.laid > 0;
             if drag.moved && drag.cell_count(to) > 1 {
-                match self.drag_cells(&drag, to) {
-                    Ok((cells, shape)) => self.lay(cells, shape),
-                    Err(why) => self.notice = Some(why),
+                if laid_already {
+                    // Already down, cell by cell, as it was drawn.
+                } else {
+                    match self.drag_cells(&drag, to) {
+                        Ok((cells, shape)) => self.lay(cells, shape),
+                        Err(why) => self.notice = Some(why),
+                    }
                 }
-            } else {
+            } else if !laid_already {
                 self.click(to.0, to.1);
             }
         }

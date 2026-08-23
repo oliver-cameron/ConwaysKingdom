@@ -331,6 +331,17 @@ impl World {
     }
 
     pub fn step(&mut self) {
+        // Taken before the rule runs, so a cell touching a pane breaks it even
+        // if this is the generation it dies in. It is alive now and it is
+        // against the ice now, and that is the whole of what breaking means --
+        // a cell that is about to die has still crashed into it.
+        //
+        // Taken before but acted on after, which is the point of splitting it:
+        // shattering here as well would unfreeze what the pane covered in time
+        // for this generation's rule, and a pattern drawn under ice would take
+        // its first step in the same breath as being uncovered rather than
+        // starting from exactly what was drawn.
+        let seeds = self.ice_seeds();
         self.compute_active();
         let active = std::mem::take(&mut self.active);
 
@@ -364,7 +375,7 @@ impl World {
 
         self.active = active;
         self.generation += 1;
-        self.shatter_ice();
+        self.break_ice_from(seeds);
         self.dirty = true;
         self.prune();
     }
@@ -416,10 +427,9 @@ impl World {
     /// Run after the rules, so it sees the generation that actually did the
     /// touching. Absolute coordinates throughout, so a pane spanning chunks
     /// breaks as one rather than stopping at a boundary.
-    fn shatter_ice(&mut self) {
+    fn ice_seeds(&self) -> Vec<(i32, i32)> {
         // Life reaches diagonally, so a pane is touched by any of the eight.
-        let seeds: Vec<(i32, i32)> = self
-            .ice_cells()
+        self.ice_cells()
             .into_iter()
             .filter(|&(row, col)| {
                 Dir::ALL.iter().any(|dir| {
@@ -428,7 +438,12 @@ impl World {
                         .is_some_and(|c| c.is_alive() && !c.is_ice())
                 })
             })
-            .collect();
+            .collect()
+    }
+
+    /// Break every pane reached from these cells, and everything each pane is
+    /// joined to.
+    fn break_ice_from(&mut self, seeds: Vec<(i32, i32)>) {
         if seeds.is_empty() {
             return;
         }
@@ -992,6 +1007,34 @@ mod tests {
         }
     }
 
+    /// A cell against a pane breaks it even if this is the generation it dies
+    /// in. It is alive now and it is touching now, and that is the whole of
+    /// what breaking means — a cell about to die has still crashed into it.
+    ///
+    /// This is what taking the seeds before the rule buys. Taken after, a cell
+    /// that died on the way would already be gone and the pane would stand,
+    /// which reads as ice ignoring something that plainly hit it.
+    #[test]
+    fn a_cell_that_dies_this_generation_still_breaks_the_pane() {
+        let mut w = World::infinite_empty();
+        for col in 0..6 {
+            w.set_cell_at(0, col, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
+        }
+        // One cell, alone, against the pane: it dies of loneliness on the very
+        // step it would break it.
+        w.set_cell_at(1, 2, Cell::alive(PlayerId(1)));
+
+        w.step();
+
+        assert!(!w.cell_at(1, 2).unwrap().is_alive(), "it should have died");
+        for col in 0..6 {
+            assert!(
+                !w.cell_at(0, col).unwrap().is_ice(),
+                "and taken the pane with it: ice at column {col} survived"
+            );
+        }
+    }
+
     /// And what breaks it: anything alive that arrives. A glider is the
     /// cheapest way to reach a pane you cannot get next to, and it shatters
     /// the whole run the moment it touches — sealing a pattern in buys you
@@ -1097,6 +1140,12 @@ mod tests {
         for col in 0..6 {
             w.set_cell_at(0, col, Cell::alive(PlayerId(1)).with_ice(true));
         }
+
+        // Two steps, not one. Seeds are taken before the rule runs, so a cell
+        // born during a generation is against the pane from the *next* one --
+        // it crashes into it a beat after it appears.
+        w.step();
+        assert!(w.cell_at(0, 0).unwrap().is_ice(), "nothing was beside it yet");
         w.step();
         assert!(
             !w.cell_at(0, 0).unwrap().is_ice(),
