@@ -408,23 +408,46 @@ pub enum ServerMessage {
 
 /// How wide a patch of ground a player is granted when they join, in cells.
 ///
-/// Placing is confined to your own territory, so a player who owned nothing
-/// could never place a first cell and so could never grow any. The grant is
-/// the seed the rest spreads from.
+/// Placing outside your own territory costs ten times as much, so a player who
+/// owned nothing could still act but would pay a mine's price for a cell of
+/// life. The grant is the ground the cheap rate applies on, and the seed the
+/// rest spreads from.
 pub const SPAWN_N: i32 = 12;
 
-/// Whether `player` may put something down on this cell.
+/// Whether this cell is inside `player`'s own territory — the cell carries
+/// their number.
 ///
-/// Only inside their own territory: the cell must already carry their number.
 /// Territory is the owner field on dead cells, which the rule spreads outward
-/// from living ones, so reach grows where life goes and nowhere else — and
-/// ground nobody has ever reached belongs to nobody and is closed to everyone.
+/// from living ones, so a player's ground grows where their life goes.
 ///
-/// Unheld ground reads as unowned, and so as closed. That is the honest answer
-/// rather than a hopeful one: a client cannot know what it does not hold, and
-/// guessing yes there would let it predict a placement the server refuses.
-pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
+/// This used to be `may_place`, and placing anywhere else was refused. It is a
+/// **price** now: outside costs [`OUTSIDE_MULTIPLIER`] times as much, and the
+/// question this asks is which of the two rates applies. Refusing made
+/// territory a wall — a player whose life went out could never place again,
+/// and reaching a neighbour meant growing all the way to them — where a price
+/// lets somebody buy their way somewhere and feel it.
+///
+/// Somebody else's ground and ground nobody has reached are the same answer,
+/// because they cost the same: what is being paid for is putting something
+/// where your own life has not got to.
+///
+/// Unheld ground reads as outside, which is the honest answer rather than a
+/// hopeful one: a client cannot know what it does not hold, and guessing yes
+/// there would let it predict a cheaper price than the server charges.
+pub fn own_ground(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     world.cell_at(row, col).is_some_and(|c| c.player() == player)
+}
+
+/// What one cell of a placement costs here: the placement's own price inside
+/// the player's territory, and [`OUTSIDE_MULTIPLIER`] times it outside.
+///
+/// Per cell rather than per action, because a drag crosses the boundary all
+/// the time — a stroke that starts on your ground and runs off it is the
+/// ordinary case, and charging the whole of it at either rate would be wrong
+/// in one direction or the other.
+pub fn cell_cost(world: &World, player: PlayerId, row: i32, col: i32, placement: Placement) -> i32 {
+    let rate = if own_ground(world, player, row, col) { 1 } else { OUTSIDE_MULTIPLIER };
+    placement.cost() * rate
 }
 
 /// How many grants sit along one edge of the square they are laid out in.
@@ -576,7 +599,8 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM, TURRET_COST,
+    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, OUTSIDE_MULTIPLIER, RECLAIM,
+    TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
@@ -609,16 +633,16 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
         // holds rather than against all of them. That is already true of
         // `Erase`, and a player can only paint where they can point, which is
         // on screen and therefore held.
-        Action::Paint { cells, placement } => {
-            let changed = cells
-                .iter()
-                .filter(|&&(row, col)| {
-                    let existing = world.cell_at(row, col).unwrap_or(Cell::DEAD);
-                    placement.apply_to(existing, stamped.player) != existing
-                })
-                .count();
-            -(changed as i32) * placement.cost()
-        }
+        Action::Paint { cells, placement } => -cells
+            .iter()
+            .map(|&(row, col)| {
+                let existing = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+                if placement.apply_to(existing, stamped.player) == existing {
+                    return 0;
+                }
+                cell_cost(world, stamped.player, row, col, *placement)
+            })
+            .sum::<i32>(),
         // What counts as "there" depends on what is being taken, since life
         // and ice are independent: removing ice from a living cell with no
         // pane on it is as much a no-op as erasing empty ground.
@@ -719,12 +743,25 @@ mod tests {
         );
     }
 
+    /// Ground already held by `player`, so a price is the base rate rather
+    /// than the outside one. Most of these tests are about what a placement
+    /// costs, not about where it is, and everywhere is outside on an empty
+    /// world.
+    fn hold(world: &mut World, cells: &[(i32, i32)], player: PlayerId) {
+        for &(row, col) in cells {
+            let cell = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+            world.set_cell_at(row, col, cell.with_player(player));
+        }
+    }
+
     /// The reason the pricing reads the world at all. A drag is extended by
     /// sweeping the whole rectangle again, so every cell already laid would be
     /// paid for a second time.
     #[test]
     fn painting_what_is_already_there_is_free() {
         let mut world = World::infinite_empty();
+        let cells = vec![(0, 0), (0, 1), (0, 2), (0, 3)];
+        hold(&mut world, &cells, PlayerId(1));
         let cells = vec![(0, 0), (0, 1), (0, 2)];
 
         let first = paint(cells.clone(), Placement::Ice);
@@ -779,6 +816,7 @@ mod tests {
 
         let mut world = World::infinite_empty();
         let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
+        hold(&mut world, &block, PlayerId(1));
         assert_eq!(
             value_delta(&world, &paint(block.clone(), Placement::Turret)),
             -4 * TURRET_COST,
@@ -854,7 +892,12 @@ mod tests {
             action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         apply(&mut world, &theirs);
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -Placement::Ice.cost());
+        // Their pane, so their ground: laying over it is a change, and it is
+        // one bought at the outside rate.
+        assert_eq!(
+            value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)),
+            -Placement::Ice.cost() * OUTSIDE_MULTIPLIER
+        );
     }
 
     /// The reason `Erase` carries a placement at all. Life and ice are
@@ -952,25 +995,83 @@ mod tests {
         assert_eq!(Placement::Life.cost(), 1);
         assert_eq!(Placement::Ice.cost(), 5);
 
-        let world = World::infinite_empty();
+        let mut world = World::infinite_empty();
         let five: Vec<_> = (0..5).map(|c| (0, c)).collect();
+        hold(&mut world, &five, PlayerId(1));
         assert_eq!(value_delta(&world, &paint(five.clone(), Placement::Life)), -5);
         assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
     }
 
-    /// Placing is confined to a player's own ground, and the grant is what
-    /// gives them any. Without it a new player owns nothing, may place
-    /// nothing, and so can never come to own anything.
+    /// Placing outside your own ground costs [`OUTSIDE_MULTIPLIER`] times as
+    /// much — a price rather than a wall, so a player whose life went out can
+    /// still act, and reaching a neighbour is something you can buy instead of
+    /// having to grow all the way there.
+    ///
+    /// Somebody else's ground and ground nobody has reached are the same
+    /// answer, because what is being paid for is the same thing.
     #[test]
-    fn a_player_may_build_only_on_their_own_ground() {
+    fn placing_outside_your_own_ground_costs_ten_times() {
+        let mut world = World::infinite_empty();
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        hold(&mut world, &[(0, 0)], me);
+        hold(&mut world, &[(0, 1)], them);
+
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), -LIFE_COST);
+        assert_eq!(
+            value_delta(&world, &paint(vec![(0, 1)], Placement::Life)),
+            -LIFE_COST * OUTSIDE_MULTIPLIER,
+            "somebody else's ground"
+        );
+        assert_eq!(
+            value_delta(&world, &paint(vec![(0, 2)], Placement::Life)),
+            -LIFE_COST * OUTSIDE_MULTIPLIER,
+            "and ground nobody has reached, at the same rate"
+        );
+
+        // Per cell, not per action: a stroke that runs off your own ground is
+        // the ordinary case, and charging the whole of it at either rate would
+        // be wrong in one direction or the other.
+        assert_eq!(
+            value_delta(&world, &paint(vec![(0, 0), (0, 1), (0, 2)], Placement::Life)),
+            -LIFE_COST * (1 + 2 * OUTSIDE_MULTIPLIER)
+        );
+    }
+
+    /// Taking is not what changed. Erasing is priced on whose it is, at the
+    /// reclaim rate, wherever it is.
+    #[test]
+    fn taking_is_not_charged_the_outside_rate() {
+        let mut world = World::infinite_empty();
+        let them = PlayerId(2);
+        apply(
+            &mut world,
+            &Stamped {
+                tick: 0,
+                player: them,
+                action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Life },
+            },
+        );
+        let mine = Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
+        };
+        assert_eq!(value_delta(&world, &mine), -RECLAIM);
+    }
+
+    /// The grant is still what a player starts from — not because it is the
+    /// only ground they may build on any more, but because it is the ground
+    /// the cheap rate applies on.
+    #[test]
+    fn a_grant_is_ground_at_the_base_rate() {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(1), PlayerId(2));
         let (row, col) = spawn_for(me, &world);
 
-        assert!(!may_place(&world, me, row, col), "nothing is owned yet");
+        assert!(!own_ground(&world, me, row, col), "nothing is owned yet");
         grant(&mut world, me);
-        assert!(may_place(&world, me, row, col), "granted ground is buildable");
-        assert!(!may_place(&world, them, row, col), "and only by its owner");
+        assert!(own_ground(&world, me, row, col), "granted ground is buildable");
+        assert!(!own_ground(&world, them, row, col), "and only by its owner");
 
         // Ground at the edges, and a block standing in the middle of it.
         assert!(!world.cell_at(row, col).unwrap().is_alive(), "the corner is bare");
@@ -982,8 +1083,8 @@ mod tests {
         assert!(block.iter().all(|c| c.is_alive() && c.player() == me), "a 2x2 block");
 
         // Beyond the patch is nobody's, and nobody's is closed to everyone.
-        assert!(!may_place(&world, me, row, col + SPAWN_N));
-        assert!(!may_place(&world, me, 10_000, 10_000));
+        assert!(!own_ground(&world, me, row, col + SPAWN_N));
+        assert!(!own_ground(&world, me, 10_000, 10_000));
     }
 
     /// Every player is within reach of several others. A line put the last
@@ -1066,7 +1167,7 @@ mod tests {
         );
 
         // And they can actually place, which is the whole point.
-        assert!(may_place(&world, second, row, col));
+        assert!(own_ground(&world, second, row, col));
     }
 
     /// A grant takes ground and never anybody's life or panes -- those are
@@ -1181,6 +1282,13 @@ mod tests {
         let world = World::infinite_empty();
         let far = vec![(100_000, 100_000)];
         assert!(world.cell_at(far[0].0, far[0].1).is_none());
-        assert_eq!(value_delta(&world, &paint(far, Placement::Life)), -Placement::Life.cost());
+        // Empty, so the cell is a change and is charged for; and outside, so
+        // it is charged at the outside rate. A client cannot know what it does
+        // not hold, and reading unheld ground as its own would predict a
+        // cheaper price than the server charges.
+        assert_eq!(
+            value_delta(&world, &paint(far, Placement::Life)),
+            -Placement::Life.cost() * OUTSIDE_MULTIPLIER
+        );
     }
 }

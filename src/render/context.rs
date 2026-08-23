@@ -172,11 +172,19 @@ impl GpuState {
         // expected is the usual reason a page renders wrong rather than not at
         // all.
         log::info!(
-            "surface: {width}x{height} {:?}, present {:?}, {} format(s) offered",
+            "surface: {width}x{height} {:?}, present {:?}, {} format(s) offered, \
+             shader encodes sRGB: {}",
             config.format,
             config.present_mode,
-            surface_caps.formats.len()
+            surface_caps.formats.len(),
+            !config.format.is_srgb()
         );
+        // Every format the adapter offered, not just the one taken. Which of
+        // them exist is the whole of what separates the backends here -- the
+        // WebGL2 path offers sRGB formats and converts in its own present
+        // blit, so a surface that came back Unorm there means something has
+        // changed underneath us rather than that the browser cannot do it.
+        log::debug!("formats offered: {:?}", surface_caps.formats);
 
         Self {
             surface,

@@ -628,10 +628,9 @@ impl World {
     /// for reaching.
     ///
     /// A dead turret is the mirror and takes its owner's own squares, alive or
-    /// not. `HOME` is exempt for the same reason it never decays: placing is
-    /// confined to your own territory, so a player who lost the last of it
-    /// could never place again, and a machine of theirs that failed should not
-    /// be what locks them out.
+    /// not. `HOME` is exempt for the same reason it never decays: it is the
+    /// ground its owner can still build on at the base rate, and a machine of
+    /// theirs that failed should not be what takes that away.
     ///
     /// Ice is exempt either way. A pane stops time over what it covers, and a
     /// pane's cover is not claimed out from under it.
@@ -982,9 +981,9 @@ mod tests {
         assert_eq!(hit.player(), PlayerId::UNOWNED);
     }
 
-    /// Granted ground is exempt, for the reason it never decays: placing is
-    /// confined to your own territory, so a machine of yours that failed must
-    /// not be what locks you out of the game.
+    /// Granted ground is exempt, for the reason it never decays: it is the
+    /// ground its owner still builds on at the base rate, so a machine of
+    /// theirs that failed must not be what takes that away.
     #[test]
     fn a_dead_turret_does_not_eat_home_ground() {
         let mut w = World::infinite_empty();

@@ -146,7 +146,7 @@ Territory used to only ever spread, which meant a glider left a permanent trail 
 
 Life holds the ground around it, because a square touching something alive is claimed by the rule above before creep or decay ever see it. So territory is a halo around your life that fluctuates at its edge — `cargo run --no-default-features --example territory` draws it.
 
-The exception is **granted ground**, marked by `bits::HOME` and exempt. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. The mark is on the *square*, not the lineage, which is why a birth keeps the dead cell's copy of it while taking everything else from its parent. It travels with the ground when the ground changes hands.
+The exception is **granted ground**, marked by `bits::HOME` and exempt. Without a floor, a player whose life died out would lose every square they had, and with it the only ground they can build on at the base rate — placing outside costs `rule::OUTSIDE_MULTIPLIER` times as much, so they would not be locked out, but a hundred of value would buy them ten cells. The mark is on the *square*, not the lineage, which is why a birth keeps the dead cell's copy of it while taking everything else from its parent. It travels with the ground when the ground changes hands.
 
 This makes ownership meaningful on dead ground, which changes what an empty chunk is. `Chunk::is_empty` now asks about ownership as well as life and ice — without that, `prune` would drop a chunk on the very step its ground was claimed, and territory outside a chunk that also held life could never last a generation. The cost is that an infinite world grows with territory as well as with life, and there is no die-off yet, so it only grows.
 
@@ -182,7 +182,7 @@ Two passes over the box rather than a list of candidates: the first finds the ne
 
 A live turret takes **ground**, so it wants a dead square that is not its owner's. Not the life standing on one: there is a single owner field, so claiming a living cell would hand over the cell rather than the square under it, and territory has never worked that way. Ground nobody holds counts, and so does ground in a chunk that was never allocated — an absent chunk reads as dead and unowned, which is exactly what a turret is for reaching.
 
-A dead turret is the mirror and takes its owner's own squares, alive or not. **`HOME` is exempt**, for the reason it never decays: placing is confined to your own territory, so a player who lost the last of it could never place again, and a machine of theirs that failed must not be what locks them out.
+A dead turret is the mirror and takes its owner's own squares, alive or not. **`HOME` is exempt**, for the reason it never decays: it is the ground its owner can still build on at the base rate, and a machine of theirs that failed must not be what takes that away.
 
 Ice is exempt either way, and a turret under a pane does not fire at all. A pane stops time over whatever it covers, and that is every rule rather than only the ones inside `rule`.
 

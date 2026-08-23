@@ -54,7 +54,7 @@ What is left is numbers rather than mechanism.
 
 **A turret under ice** is the same open question as a mine under ice, and sharper. A frozen turret does not fire, so a pane is a cheap way to switch off somebody's territory engine without taking any ground from them. Whether that is a feature or a hole is for whoever sets the rate.
 
-**The remedy for a corpse is in tension with what the corpse does.** A dead turret is cleared by building on it — placing life sets the kind back to ordinary, as it does over a dead mine — but placing is confined to your own territory, and what the corpse is doing is taking that territory away from you a square at a time. So the fix is cheap if you get to it quickly and gone if you do not, which may be exactly the right shape or may be a trap. It has not been played enough to say.
+**The remedy for a corpse gets dearer the longer it is left.** A dead turret is cleared by building on it — placing life sets the kind back to ordinary, as it does over a dead mine — and what the corpse is doing is taking your ground away a square at a time, so the square you need to build on stops being yours and the fix goes from one to ten. That may be exactly the right shape and it has not been played enough to say.
 
 **The art is a stand-in** like the rest of the sheet: the ordinary cell with a solid plus stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 8–11 with the mine's own mark colours so the two read as siblings. It is legible against all four states and in any player's hue, and it is not what anybody would draw on purpose.
 

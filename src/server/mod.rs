@@ -303,21 +303,10 @@ impl Server {
                         return Vec::new();
                     }
                 }
-                // Placing is confined to a player's own territory. All or
-                // nothing, matching how the client prices and previews it: a
-                // paint half applied is a shape nobody drew.
-                if let crate::net::Action::Paint { cells, .. } = &stamped.action {
-                    if let Some(&(row, col)) = cells
-                        .iter()
-                        .find(|&&(r, c)| !crate::net::may_place(&self.world, stamped.player, r, c))
-                    {
-                        log::info!(
-                            "refused {:?}: ({row}, {col}) is not their territory",
-                            stamped.player
-                        );
-                        return Vec::new();
-                    }
-                }
+                // Placing outside a player's own territory is no longer
+                // refused, it is charged ten times over -- so there is nothing
+                // to check here and `net::value_delta` below does the whole of
+                // it, cell by cell, on the same terms the client priced it on.
                 // Cost is charged now, against the world as it stands, rather
                 // than when the action is applied at the tick boundary -- the
                 // client priced it against the same state, so pricing it later
@@ -682,7 +671,7 @@ mod tests {
 
     /// Another player's territory has to reach you, or you cannot see whose
     /// ground you are standing next to — and, worse, your own does not reach
-    /// you either: `may_place` reads the owner off the cell, so a client that
+    /// you either: `own_ground` reads the owner off the cell, so a client that
     /// never receives the chunk refuses to build on ground that is its own.
     ///
     /// The case that nearly slipped through is a chunk holding *only*

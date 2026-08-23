@@ -107,15 +107,22 @@ pub mod hud {
     ];
 }
 
+/// How a drag says part of it is being paid for at the outside rate.
+///
+/// Empty when none of it is, so it appends to a label without a branch at
+/// every call site. Placing outside your own ground is a price rather than a
+/// refusal, and a price the player cannot see is one they only find out about
+/// by being poorer.
+pub fn outside(n: usize) -> String {
+    if n == 0 {
+        String::new()
+    } else {
+        format!(", {n} outside your ground at ten times")
+    }
+}
+
 /// What the world says back when it refuses something.
 pub mod refused {
-    pub fn not_your_territory(row: i32, col: i32) -> String {
-        format!("({row}, {col}) is not your territory")
-    }
-
-    pub fn cells_not_yours(n: usize) -> String {
-        format!("{n} of those cells are not your territory")
-    }
 
     pub fn cannot_afford(cells: usize, costs: i32, have: i32) -> String {
         format!("{cells} cells costs {costs}, you have {have}")

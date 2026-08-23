@@ -12,6 +12,7 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | place a mine | −10 each |
 | place a turret | −15 each, and four is the smallest one that works |
 | place ice | −5 each |
+| **anywhere but your own ground** | **×10**, whatever is being placed |
 | **a mine of yours is born** | **+1** |
 | **a dead mine of yours, each generation it lies there** | **−1**, sixteen times in sixty-four |
 | reclaim your own | +1 |
@@ -74,7 +75,7 @@ A dead turret runs the whole thing backwards. It takes the nearest square that *
 
 So a failed emplacement fires on the ground behind it, including the other three cells of its own block, and a block that loses a cell dismantles itself. A dead turret decays back to ordinary ground four times in sixty-four, so it does that for about sixteen generations before it stops.
 
-Granted ground is exempt, for the same reason it never decays: placing is confined to your own territory, and a machine of yours that failed must not be what locks you out of the game.
+Granted ground is exempt, for the same reason it never decays: it is the ground you can always build on at the ordinary price, and a machine of yours that failed must not be what takes that away.
 
 A turret is not inherited. A mine's children are mines, but a birth beside a turret is ordinary life owned by the turret's owner — the ground changes hands and the machine does not copy itself. Without that a gun would be a turret factory, and whoever built one first would own the map.
 
@@ -136,9 +137,13 @@ More than one cell is what makes a drag a drag. A press that travelled but staye
 
 Every dead cell carries an owner, and that is territory. The rule spreads it: a dead cell next to living ones takes one of their owners most generations, so ground is claimed by the life that grows over it. It stays dead — this sets the owner and nothing else. Ice is exempt while it stands, since a pane's cover is not claimed out from under it.
 
-**A player may only place inside their own territory.** Ground nobody has reached belongs to nobody and is closed to everyone, so reach grows where life goes and nowhere else. `net::may_place` is the whole rule, and the client refuses on the same terms the server does — instantly, and with the same answer.
+**Placing outside your own territory costs ten times as much.** Somebody else's ground and ground nobody has ever reached are the same price, because what is being paid for is the same thing: putting something where your own life has not got to. A cell of life out there costs what a mine costs at home.
 
-That makes a grant necessary. A player who owned nothing could place nothing and so could never come to own anything, so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it.
+It used to be refused outright, and that made territory a wall rather than a price. Two things were wrong with it. A player whose life went out was finished — they could not place, so they could not grow ground, so they could not place — and the home patch existed largely to stop that happening. And reaching a neighbour meant growing all the way to them, so the only thing you could ever do about somebody on the far side of the map was wait. A price says yes to both and charges for it.
+
+The multiplier is per **cell**, not per action, because a stroke that starts on your ground and runs off it is the ordinary case; charging the whole of it at either rate would be wrong in one direction or the other. `net::cell_cost` is the whole rule, and the client prices on the same terms the server does, so a drag's label says how many of its cells are being paid for at ten times before you let go.
+
+That is what a grant is for. A player who owned nothing could still act, at ten times the price, but a hundred of value buys ten cells of life and nothing else — so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it, which is somewhere to build at the ordinary rate.
 
 A grant claims **dead ground whoever held it**. It used to claim only cells nobody held, on the principle that territory is taken by life reaching it rather than handed out over what is already held — and that principle costs a player the game. Territory only ever spreads, so a world with an edge eventually belongs to whoever got there first, and a player joining after that was granted nothing: no ground, and therefore no block, since the block only stands on ground they own. They could place nothing, could never come to own anything, and were locked out of a world they were looking at. On a torus that is not an edge case; it is what happens to the second player to arrive at a world that has been running.
 
@@ -156,7 +161,7 @@ Life holds the ground around it, because a square touching something alive is cl
 
 Every chance in the rules is out of **sixty-four**, per cell, per generation — `SPREAD` 40, `CREEP` 8, `DECAY` 2, `MINE_UPKEEP` 16. One denominator, so a constant is a chance and nothing has to say which way round it reads.
 
-Your **granted patch is the exception** and never decays. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. It is a mark on the ground rather than on the cells, so it survives the ground changing hands, and an opponent who grows over your home keeps it as theirs.
+Your **granted patch is the exception** and never decays. It is no longer the difference between playing and not — placing outside your own ground is a price now rather than a refusal — but it is the ground the cheap rate applies on, and a player who has lost everything else still has somewhere to build at one a cell. It is a mark on the ground rather than on the cells, so it survives the ground changing hands, and an opponent who grows over your home keeps it as theirs.
 
 ## Ice
 

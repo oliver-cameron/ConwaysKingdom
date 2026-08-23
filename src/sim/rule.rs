@@ -83,6 +83,18 @@ pub const MINE_COST: i32 = 10;
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
 pub const RECLAIM: i32 = 1;
+/// What placing outside your own territory multiplies the cost by.
+///
+/// Ground somebody else holds and ground nobody has ever reached read the same
+/// here, because what is being paid for is the same thing: putting something
+/// where your own life has not got to. It used to be refused outright, which
+/// made territory a wall rather than a price and left a player whose life died
+/// out with nothing they could do about it.
+///
+/// Ten, so a cell of life outside costs what a mine costs inside — dear enough
+/// that reaching is a decision and cheap enough that a hundred is ten cells of
+/// somewhere new.
+pub const OUTSIDE_MULTIPLIER: i32 = 10;
 /// One turret.
 ///
 /// Dearer than a mine, and the number to read per **emplacement** rather than
