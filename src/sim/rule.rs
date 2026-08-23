@@ -61,6 +61,33 @@ pub const MINE_UPKEEP: Chance = 16;
 /// about. Keep this at or under a chunk.
 pub const TURRET_REACH: i32 = 6;
 
+/// How many squares a turret flips a generation.
+///
+/// The knob that decides whether a turret is a frontier tool or a weapon, and
+/// the arithmetic to set it by:
+///
+/// On **empty ground** each claim a generation holds about thirty squares
+/// against [`DECAY`], which eats N/32 of what is held — so a turret settles at
+/// roughly `30 × TURRET_POWER` squares, and the 2x2 block a turret is really
+/// bought as settles at four times that.
+///
+/// Against a **living** neighbour it is far weaker, and this is the number
+/// that matters. Their life takes a claimed square straight back through
+/// [`SPREAD`] at forty in sixty-four, so what a turret holds of contested
+/// ground is about `TURRET_POWER × 64 / SPREAD` — one and a half squares at
+/// one, six at four. Below about four a turret cannot press on a neighbour at
+/// all, which is why one reads as a way of reaching past your own frontier
+/// rather than a way of fighting over somebody's colony.
+///
+/// It is also the cost. A turret reads the `(2R+1)²` box around itself twice
+/// per square it flips — once to find the nearest and once to walk to the one
+/// the tie-break picked — so this multiplies [`TURRET_REACH`]'s bill directly:
+/// 338 reads a turret a generation at one, 1352 at four.
+///
+/// A dead turret gives back the same number it would have taken, so the mirror
+/// holds however this is set.
+pub const TURRET_POWER: usize = 1;
+
 /// A dead turret becomes ordinary ground.
 ///
 /// Slower than [`MINE_UPKEEP`], because the two are punishing different

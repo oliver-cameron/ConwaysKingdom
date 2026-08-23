@@ -526,23 +526,24 @@ impl World {
                 super::seed::mix(Self::TURRET_SEED, self.generation),
                 (at.0 as u32 as u64) << 32 | at.1 as u32 as u64,
             );
-            let Some(target) = self.turret_target(at, owner, live, seed) else {
-                continue;
-            };
-            let cell = self.cell_at(target.0, target.1).unwrap_or(Cell::DEAD);
-            shots.push((
-                target,
-                if live {
-                    cell.with_player(owner)
-                } else {
-                    // A live cell must have an owner -- `Cell::alive` asserts
-                    // it, because unowned life would have nobody to attribute
-                    // a birth to. So taking a square away from its owner kills
-                    // whatever was standing on it, and a dead turret killing
-                    // things is that invariant rather than a rule of its own.
-                    cell.with_alive(false).with_player(PlayerId::UNOWNED)
-                },
-            ));
+            let (targets, hit) = self.turret_targets(at, owner, live, seed);
+            for &target in &targets[..hit] {
+                let cell = self.cell_at(target.0, target.1).unwrap_or(Cell::DEAD);
+                shots.push((
+                    target,
+                    if live {
+                        cell.with_player(owner)
+                    } else {
+                        // A live cell must have an owner -- `Cell::alive`
+                        // asserts it, because unowned life would have nobody
+                        // to attribute a birth to. So taking a square away
+                        // from its owner kills whatever was standing on it,
+                        // and a dead turret killing things is that invariant
+                        // rather than a rule of its own.
+                        cell.with_alive(false).with_player(PlayerId::UNOWNED)
+                    },
+                ));
+            }
         }
 
         for ((row, col), cell) in shots {
@@ -550,8 +551,40 @@ impl World {
         }
     }
 
-    /// The square a turret acts on: the nearest one that answers its question,
-    /// and one of them at random where several tie.
+    /// The squares a turret acts on: the [`rule::TURRET_POWER`] nearest that
+    /// answer its question, nearest first, and however many fewer it found.
+    ///
+    /// One search per square rather than one search for all of them, each
+    /// excluding what the last took. Nearest-first falls out of that, and it
+    /// costs a second walk of a box already in cache — where collecting the
+    /// whole box and sorting it would allocate per turret per generation to
+    /// answer a question about its first few entries.
+    ///
+    /// Each shot mixes its own index into the seed, so a volley does not break
+    /// every tie the same way.
+    fn turret_targets(
+        &self,
+        at: (i32, i32),
+        owner: PlayerId,
+        live: bool,
+        seed: u64,
+    ) -> ([(i32, i32); rule::TURRET_POWER], usize) {
+        let mut chosen = [(0, 0); rule::TURRET_POWER];
+        let mut hit = 0;
+        while hit < rule::TURRET_POWER {
+            let shot = super::seed::mix(seed, hit as u64);
+            let Some(next) = self.turret_target(at, owner, live, shot, &chosen[..hit]) else {
+                break;
+            };
+            chosen[hit] = next;
+            hit += 1;
+        }
+        (chosen, hit)
+    }
+
+    /// The square a turret acts on: the nearest one that answers its question
+    /// and is not already `taken` by this volley, and one of them at random
+    /// where several tie.
     ///
     /// The tie-break is the whole reason there is a roll here. A ring holds
     /// many squares at the same distance, and letting the scan order choose
@@ -573,6 +606,7 @@ impl World {
         owner: PlayerId,
         live: bool,
         seed: u64,
+        taken: &[(i32, i32)],
     ) -> Option<(i32, i32)> {
         let reach = rule::TURRET_REACH;
         let mut best = i32::MAX;
@@ -581,6 +615,9 @@ impl World {
             for dc in -reach..=reach {
                 let d = dr * dr + dc * dc;
                 if d == 0 || d > reach * reach || d > best {
+                    continue;
+                }
+                if taken.contains(&(at.0 + dr, at.1 + dc)) {
                     continue;
                 }
                 if !self.turret_wants((at.0 + dr, at.1 + dc), owner, live) {
@@ -606,7 +643,7 @@ impl World {
                     continue;
                 }
                 let target = (at.0 + dr, at.1 + dc);
-                if !self.turret_wants(target, owner, live) {
+                if taken.contains(&target) || !self.turret_wants(target, owner, live) {
                     continue;
                 }
                 if nth == 0 {
@@ -920,12 +957,42 @@ mod tests {
         w.fire_turrets();
         let after = owned_by(&w, me);
 
-        assert_eq!(after.len(), before.len() + 1, "a turret takes one square a generation");
-        let claimed = *after.iter().find(|c| !before.contains(c)).unwrap();
+        let nearest = [(-1, 4), (9, 4), (4, -1), (4, 9)];
         assert!(
-            [(-1, 4), (9, 4), (4, -1), (4, 9)].contains(&claimed),
-            "{claimed:?} is not one of the four squares that tie for nearest"
+            rule::TURRET_POWER <= nearest.len(),
+            "this test's geometry assumes a volley fits in the four squares that tie"
         );
+        assert_eq!(
+            after.len(),
+            before.len() + rule::TURRET_POWER,
+            "a turret takes TURRET_POWER squares a generation"
+        );
+        for claimed in after.iter().filter(|c| !before.contains(c)) {
+            assert!(nearest.contains(claimed), "{claimed:?} is not one of the nearest four");
+        }
+    }
+
+    /// A volley aims each shot somewhere new. Without excluding what the last
+    /// shot took, every shot in a volley finds the same nearest square — the
+    /// world is not written until all the searching is done, so the square is
+    /// still there to be found.
+    #[test]
+    fn a_volley_does_not_aim_twice_at_one_square() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        let r = rule::TURRET_REACH;
+        own_ground(&mut w, (-r, r), (-r, r), me);
+        w.set_cell_at(0, 0, turret(me));
+        // Two gaps in the owner's ground at different distances, so there is
+        // a nearest and a next-nearest and no tie to break.
+        w.set_cell_at(0, 3, Cell::DEAD);
+        w.set_cell_at(0, 5, Cell::DEAD);
+
+        let first = w.turret_target((0, 0), me, true, 0, &[]).expect("a gap within reach");
+        assert_eq!(first, (0, 3), "the nearer gap");
+        let second =
+            w.turret_target((0, 0), me, true, 0, &[first]).expect("and the one past it");
+        assert_eq!(second, (0, 5), "once the nearer one is spoken for");
     }
 
     /// A turret inside its owner's ground finds everything within reach

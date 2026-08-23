@@ -90,15 +90,25 @@ What is left:
 
 The deadline is a **tick**, not a wall clock. The tick is the generation and it is already what a client adopts from `Welcome`, so a match that ends at tick N needs no clock synchronisation, cannot be lengthened by a client that pauses, and is the same instant for everybody by construction.
 
-### Where the first value comes from
+### The opening is the problem, not the income
 
-**A starting value of zero currently leaves nobody anything to do.** Life costs one and zero buys none of it. The grant is a 2×2 block, which is a still life: it never gives birth, so even a block of mines earns nothing — `game.md` calls that the honest edge case. A match that starts everyone at zero under the present rules is one where nobody can ever act. This is the decision to make first, and there are three candidates.
+**A 2×2 block and an income is a clicker.** A still life is the one shape in Conway that does nothing at all — it does not breed, it does not move, and it cannot die — so a player granted one and paid a trickle has exactly the clicker loop in front of them: wait, tap, wait. Whatever the income turns out to be, it does not fix that, because a stationary pattern's footprint is fixed and so its income is flat. Anything that pays by the generation pays a block the same amount forever.
 
-**Territory pays**, and this is the recommendation. Value per generation in proportion to ground held. It makes the win condition and the economy the same thing: you are paid for exactly what you are scored on, every player has income from their grant in the first generation, and the whole match is a fight over ground rather than over where to put mines. It also falls the right way at the end — a player losing ground earns less and falls further behind, which is what a match wants and a sandbox does not.
+Note what the block was solving, because it is easy to throw out with it. `game.md`: four cells that hold their shape forever, the same for everyone, so nobody begins ahead — and the block is also what *keeps* the ground, since territory spreads from living cells and a bare patch would never grow. So the grant has to be **immortal**, or an unlucky opening eliminates somebody before they have acted, and **identical**, or the draw decides the match. In Conway those two pull hard against "and it should do something": the patterns that do something either wander off or grow without bound.
 
-**A grant that earns.** Start people on an oscillator of mines rather than a block of life: a blinker gives births every other generation, so a blinker of mines is an income. A smaller change, and it makes the first decision "what do I build" rather than "how do I get money". It does not tie the economy to the score.
+**A build phase resolves it, and it is what ice already is.** Lobby, then a phase with the world frozen and a fixed budget of cells to lay, then the clock starts and the world runs. `game.md` on ice: *a schematic — freezing a region lets a large pattern be laid out over many generations without the rule eating the half-built work*. A match's opening is that idea promoted to a rule, with the whole world under the pane and everybody drawing at once.
 
-**A stipend**, a flat income per generation. Simplest and says nothing — a clock rather than a game.
+What it buys is that **the interesting decision moves to the front**. Conway is a game about the initial condition, and a match where everyone lays a hundred cells into a frozen world and then watches them compete for two thousand generations is a competition about the thing the game is actually about. It also makes the grant question moot: nobody is handed a machine, everybody builds one, and what you are handed is a budget and a patch to spend it on.
+
+It leaves one question rather than three: **what happens during the run.** Three readings, and they are different games.
+
+- **Nothing.** No placing at all once the clock starts. The purest, and the least to do for however long the match lasts.
+- **Territory pays, and you may intervene.** Value per generation in proportion to ground held, spent on repairs and raids. The win condition and the economy become the same thing, which falls the right way at the end — a player losing ground earns less and falls further behind. Placing outside your own ground already costs ten times, so reaching into somebody else's half is expensive and deliberate rather than a click.
+- **A second build phase**, partway through. Freeze, everybody draws, unfreeze. Keeps the front-loaded decision and gives the match a second act.
+
+The middle one is the recommendation, with the first worth trying as a variant because it costs nothing to offer.
+
+**And if the grant is to be a machine after all**, an oscillator is the only thing that is immortal, stationary and gives births: a blinker of mines is the smallest, three cells earning every other generation forever. It is a fallback rather than an answer — it pays a flat rate, which is the clicker again with a better animation.
 
 ### Scoring
 
@@ -120,7 +130,7 @@ A finished match should stop stepping, which is the same machinery as the sleepi
 
 Reconnecting matters more here than in a sandbox — a refresh in the middle of a match has to put you back in your seat, which the rejoin token now does across a server restart as well.
 
-And a player who cannot afford anything is a player watching. With a zero start that is the opening position for everybody, so whatever the income turns out to be, it wants to arrive before the first decision rather than after it.
+And a player who cannot afford anything is a player watching. A build phase puts the spending before the clock rather than after it, which is the point: what a zero start must not mean is a minute of nothing while the money arrives.
 
 ## Mobile
 
