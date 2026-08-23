@@ -4,7 +4,7 @@
 //! it needs arrives as arguments, so it has no opinion about where the numbers
 //! came from and cannot change them.
 
-use crate::sim::PlayerId;
+use crate::sim::{PlayerId, WorldKind};
 
 /// What the HUD shows. Assembled by the client each frame.
 pub struct Status<'a> {
@@ -15,6 +15,17 @@ pub struct Status<'a> {
     pub chunks_drawn: u32,
     pub zoom: f32,
     pub connected: bool,
+    /// Which world on the server this is, once it has said. `None` offline,
+    /// where there is only the one and it has no name.
+    ///
+    /// Shown because a room is a whole separate world: two players who cannot
+    /// find each other are far more likely to be in different rooms than at
+    /// different ends of one, and nothing else on screen would say so.
+    pub room: Option<&'a str>,
+    /// The shape of the world, which decides whether the far edge is the
+    /// opposite edge. Sent by the server rather than assumed -- nothing a
+    /// client can see says whether the ground ends.
+    pub world: WorldKind,
     /// Why the last action was refused, if it was.
     pub notice: Option<&'a str>,
     /// Whether the pointer is currently over the interface rather than the
@@ -68,11 +79,22 @@ pub fn show(
             ui.label(format!("Zoom  {:.1} px/cell", status.zoom));
 
             ui.separator();
-            if status.connected {
-                ui.colored_label(theme.palette.good, "connected");
-            } else {
-                ui.colored_label(theme.palette.warn, "offline");
-            }
+            ui.horizontal(|ui| {
+                if status.connected {
+                    ui.colored_label(theme.palette.good, "connected");
+                } else {
+                    ui.colored_label(theme.palette.warn, "offline");
+                }
+                if let Some(room) = status.room {
+                    ui.label(format!("· room {room}"));
+                }
+            });
+            ui.small(match status.world {
+                WorldKind::Infinite => "boundless world".to_string(),
+                WorldKind::Toroidal { rows, cols } => {
+                    format!("{rows}x{cols} chunks, wrapping")
+                }
+            });
             if let Some(notice) = status.notice {
                 ui.colored_label(theme.palette.bad, notice);
             }

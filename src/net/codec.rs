@@ -51,7 +51,12 @@ mod tests {
     #[test]
     fn client_messages_round_trip() {
         let cases = vec![
-            ClientMessage::Join { name: "alice".into(), token: Some("cafef00d".into()) },
+            ClientMessage::Join {
+                name: "alice".into(),
+                token: Some("cafef00d".into()),
+                room: Some("lobby".into()),
+            },
+            ClientMessage::Join { name: "web".into(), token: None, room: None },
             ClientMessage::Act(Stamped {
                 tick: 42,
                 player: PlayerId(3),
@@ -89,6 +94,19 @@ mod tests {
                 spawn: (-144, -96),
                 token: "0123456789abcdef".into(),
                 value: 73,
+                room: "main".into(),
+                world: crate::sim::WorldKind::Infinite,
+            },
+            // The shape of a wrapping world has to survive the round trip, or
+            // a client is told the world ends somewhere it does not.
+            ServerMessage::Welcome {
+                you: PlayerId(7),
+                tick: 900,
+                spawn: (0, 0),
+                token: "beef".into(),
+                value: 0,
+                room: "ring".into(),
+                world: crate::sim::WorldKind::Toroidal { rows: 18, cols: 24 },
             },
             ServerMessage::Rejected { reason: "full".into() },
             ServerMessage::Step { tick: 9, actions: vec![Stamped {

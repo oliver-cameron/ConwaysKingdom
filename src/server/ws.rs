@@ -4,10 +4,17 @@
 //! and the socket from one origin and one port: no second static-file server,
 //! and no cross-origin question to answer.
 //!
-//! One task owns the [`Server`] and the tick; connections talk to it through
-//! channels. That keeps the simulation single-threaded and its ordering fixed,
-//! which is what determinism requires — a mutex shared between connection tasks
-//! would make the order actions land in depend on scheduling.
+//! One task owns the [`Rooms`] and their ticks; connections talk to it through
+//! channels. That keeps every simulation single-threaded and its ordering
+//! fixed, which is what determinism requires — a mutex shared between
+//! connection tasks would make the order actions land in depend on scheduling.
+//!
+//! Rooms are separate worlds, so a `Step` from one of them means nothing in
+//! another. There is still **one** broadcast channel: every message carries
+//! the room it came from and each connection drops what is not its own. One
+//! channel per room would save that comparison and cost a shared map of
+//! senders that connections and the simulation task would both have to lock —
+//! a lock, to avoid a string compare, on the one path that must not have one.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -23,43 +30,48 @@ use tokio::sync::{broadcast, mpsc};
 use tower_http::services::ServeDir;
 
 use crate::net::codec::{decode_client, encode_server};
-use crate::net::{ClientMessage, ServerMessage};
-use crate::server::Server;
-use crate::sim::PlayerId;
+use crate::net::{ClientMessage, RoomName, ServerMessage};
+use crate::server::rooms::{Rooms, Seat};
 
 /// What a connection sends to the simulation task.
 enum ToSim {
     Message {
-        from: Option<PlayerId>,
+        /// Where the sender is sitting, once they have joined. A `Join`
+        /// carries its own room and so needs none.
+        from: Option<Seat>,
         msg: ClientMessage,
         reply: mpsc::UnboundedSender<ServerMessage>,
     },
-    Left(PlayerId),
+    Left(Seat),
 }
+
+/// A message meant for everyone in one room. The room travels with it because
+/// the rooms are separate worlds: a `Step` from one is not a fact about
+/// another, and applying it there would advance a world nobody stepped.
+type Broadcast = (RoomName, ServerMessage);
 
 #[derive(Clone)]
 struct AppState {
     to_sim: mpsc::UnboundedSender<ToSim>,
-    broadcast: broadcast::Sender<ServerMessage>,
+    broadcast: broadcast::Sender<Broadcast>,
 }
 
 pub struct Config {
     pub addr: SocketAddr,
     /// Directory served at `/`, so the browser client comes from here too.
     pub static_dir: Option<PathBuf>,
-    /// Where the world is saved, and how often.
-    pub save_path: Option<PathBuf>,
+    /// How often every room is written out. Where is the rooms directory,
+    /// which [`Rooms`] already knows.
     pub save_every: Duration,
     pub generation_span: Duration,
 }
 
 /// Run until the process is asked to stop, saving on the way out.
-pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
+pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     let (to_sim, mut from_conns) = mpsc::unbounded_channel::<ToSim>();
-    let (broadcast_tx, _) = broadcast::channel::<ServerMessage>(1024);
+    let (broadcast_tx, _) = broadcast::channel::<Broadcast>(1024);
 
     let sim_broadcast = broadcast_tx.clone();
-    let save_path = config.save_path.clone();
     let save_every = config.save_every;
     let span = config.generation_span;
 
@@ -72,26 +84,29 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
 
         loop {
             tokio::select! {
+                // Every room advances on the same clock. Separate worlds, but
+                // one generation span: a room with its own rate would be a
+                // second thing for a client to be told and a second way for
+                // the two to disagree about what a tick is.
                 _ = ticker.tick() => {
-                    for msg in server.step() {
-                        let _ = sim_broadcast.send(msg);
+                    for labelled in rooms.step() {
+                        let _ = sim_broadcast.send(labelled);
                     }
                 }
+                // A failure is already logged per room, with the name of the
+                // one that could not be written; this only says how it went
+                // overall, so a quiet log means every world is on disk.
                 _ = save_timer.tick() => {
-                    if let Some(path) = &save_path {
-                        if let Err(e) = server.save(path) {
-                            log::error!("saving world: {e}");
-                        } else {
-                            log::info!("saved at tick {}", server.tick());
-                        }
+                    if rooms.save().is_ok() {
+                        log::info!("saved {} room(s)", rooms.len());
                     }
                 }
                 incoming = from_conns.recv() => {
                     match incoming {
                         None => break,
-                        Some(ToSim::Left(id)) => server.leave(id),
+                        Some(ToSim::Left(seat)) => rooms.leave(&seat),
                         Some(ToSim::Message { from, msg, reply }) => {
-                            for out in server.handle(from, msg) {
+                            for out in rooms.handle(from.as_ref(), msg) {
                                 let _ = reply.send(out);
                             }
                         }
@@ -100,10 +115,8 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
             }
         }
 
-        if let Some(path) = &save_path {
-            if let Err(e) = server.save(path) {
-                log::error!("saving world on shutdown: {e}");
-            }
+        if rooms.save().is_ok() {
+            log::info!("saved {} room(s) on shutdown", rooms.len());
         }
     });
 
@@ -160,14 +173,31 @@ pub async fn serve(mut server: Server, config: Config) -> std::io::Result<()> {
             log::warn!("IPv4 only; a client arriving over IPv6 will be refused");
         }
     }
-    axum::serve(listener, app)
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
             log::info!("shutting down");
         })
-        .await?;
+        .await;
 
-    sim.abort();
+    // Waited for rather than aborted, and this is the difference between a
+    // clean shutdown saving and not.
+    //
+    // The simulation task saves *after* its loop, and the loop only ends when
+    // every sender is gone -- which happens here, because `serve` consumed the
+    // router that held the last one. `abort` cancelled the task at its next
+    // await point, which is inside the loop's `select!`, so it never reached
+    // the save at all and a clean exit quietly lost up to `save_every` of
+    // every room. The symptom was a world that only ever remembered what a
+    // periodic save had caught.
+    //
+    // Bounded, because a sender that somehow outlives the router would
+    // otherwise hang the process on the way out -- and a shutdown that does
+    // not shut down is worse than one that loses a save it warned about.
+    if tokio::time::timeout(Duration::from_secs(10), sim).await.is_err() {
+        log::error!("the simulation task did not finish in ten seconds; exiting without its save");
+    }
+    served?;
     Ok(())
 }
 
@@ -194,21 +224,33 @@ async fn connection(socket: WebSocket, state: AppState) {
     let (mut sink, mut stream) = socket.split();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut subscribed = state.broadcast.subscribe();
-    let mut me: Option<PlayerId> = None;
+    // Which world this connection is in, and who they are in it. Both come
+    // from the `Welcome`: player numbers are per room, so the number alone
+    // does not say where its owner is sitting.
+    let mut me: Option<Seat> = None;
 
     loop {
         tokio::select! {
             // Replies addressed to this connection.
             Some(msg) = reply_rx.recv() => {
-                if let ServerMessage::Welcome { you, .. } = &msg {
-                    me = Some(*you);
+                if let ServerMessage::Welcome { you, room, .. } = &msg {
+                    me = Some((room.clone(), *you));
                 }
                 if !send(&mut sink, &msg).await { break; }
             }
-            // Everything every client needs.
+            // Everything every client in this room needs. A connection that
+            // has not joined is in no room and so hears nothing -- otherwise
+            // it would be handed one world's generations before it had asked
+            // for any world at all.
             broadcast = subscribed.recv() => {
                 match broadcast {
-                    Ok(msg) => if !send(&mut sink, &msg).await { break },
+                    Ok((room, msg)) => {
+                        if me.as_ref().is_some_and(|(mine, _)| *mine == room)
+                            && !send(&mut sink, &msg).await
+                        {
+                            break;
+                        }
+                    }
                     // Dropped frames mean this client is behind; a resync is
                     // the honest answer, but it needs the tick, so just log
                     // until the client asks with a Checkpoint.
@@ -224,7 +266,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
                             let _ = state.to_sim.send(ToSim::Message {
-                                from: me,
+                                from: me.clone(),
                                 msg,
                                 reply: reply_tx.clone(),
                             });
@@ -242,8 +284,8 @@ async fn connection(socket: WebSocket, state: AppState) {
     }
 
     match me {
-        Some(id) => {
-            let _ = state.to_sim.send(ToSim::Left(id));
+        Some(seat) => {
+            let _ = state.to_sim.send(ToSim::Left(seat));
         }
         None => log::info!("connection closed before joining"),
     }

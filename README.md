@@ -11,4 +11,6 @@ cargo run --bin native -- --ws ws://127.0.0.1:8080/ws                         # 
 
 Then open <http://localhost:8080/>. The browser client connects back to whatever served it, so there is nothing to configure.
 
+One server holds several worlds, called rooms. `--room NAME` declares one, `--room NAME` on the client joins it, and `?room=NAME` does the same in a browser; without either you get the server's default.
+
 Documentation is in [docs/](docs/) — start with [docs/README.md](docs/README.md).

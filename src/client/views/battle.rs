@@ -13,7 +13,7 @@ use crate::render::chunks::{
 };
 use crate::render::context::{Draw, DrawCall, GpuState};
 use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
-use crate::sim::{World, WorldMode, CHUNK_N};
+use crate::sim::{World, WorldKind, CHUNK_N};
 
 use crate::net::link::Link;
 use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
@@ -84,36 +84,48 @@ const TORUS_REPEATS: i32 = 1;
 /// Set before the event loop starts, like the connection and for the same
 /// reason: `App::init` takes no arguments of its own.
 #[cfg(not(target_arch = "wasm32"))]
-static WORLD: std::sync::Mutex<WorldMode> = std::sync::Mutex::new(WorldMode::Infinite);
+static WORLD: std::sync::Mutex<WorldKind> = std::sync::Mutex::new(WorldKind::Infinite);
 
 /// Choose the world before launching. Native only — a browser has no command
 /// line, and its world comes from the server anyway.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn set_world(mode: WorldMode) {
+pub fn set_world(mode: WorldKind) {
     *WORLD.lock().unwrap() = mode;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn chosen_world() -> WorldMode {
+fn chosen_world() -> WorldKind {
     *WORLD.lock().unwrap()
 }
 
 /// A browser gets the infinite world, and then the server's if it connects.
 #[cfg(target_arch = "wasm32")]
-fn chosen_world() -> WorldMode {
-    WorldMode::Infinite
+fn chosen_world() -> WorldKind {
+    WorldKind::Infinite
 }
 
-/// Set before the event loop starts, because `App::init` takes no arguments
-/// of its own. A one-shot rather than a config store: it is read once.
+/// Where to connect, as whom, and to which room. Set before the event loop
+/// starts, because `App::init` takes no arguments of its own. A one-shot
+/// rather than a config store: it is read once.
 #[cfg(not(target_arch = "wasm32"))]
-static CONNECTION: std::sync::Mutex<Option<(Option<String>, String)>> =
-    std::sync::Mutex::new(None);
+static CONNECTION: std::sync::Mutex<Option<Connection>> = std::sync::Mutex::new(None);
 
-/// Point the client at a server before launching it. `None` runs offline.
+/// What a client needs to reach a server: an address, a name, and a room.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn set_connection(url: Option<String>, name: String) {
-    *CONNECTION.lock().unwrap() = Some((url, name));
+pub struct Connection {
+    /// `None` runs offline.
+    pub url: Option<String>,
+    pub name: String,
+    /// Which world on that server. `None` takes whatever the server calls its
+    /// default, so a player with nothing to say about rooms still lands
+    /// somewhere.
+    pub room: Option<String>,
+}
+
+/// Point the client at a server before launching it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_connection(connection: Connection) {
+    *CONNECTION.lock().unwrap() = Some(connection);
 }
 
 /// What the pointer is doing.
@@ -307,6 +319,13 @@ pub struct BattleApp {
     cursor: (f64, f64),
     /// Our own player number, once the server has issued one.
     me: Option<crate::sim::PlayerId>,
+    /// Which room the server put us in, once it has said.
+    ///
+    /// Taken from the `Welcome` rather than from what was asked for: a client
+    /// may have named no room at all, and the rejoin token is filed under this
+    /// name, so a guess here is a token that comes back to the wrong world.
+    /// `None` while offline, where there is no room to be in.
+    room: Option<crate::net::RoomName>,
     /// Chunks already asked for, so a moving viewport only asks for what is new.
     subscribed: std::collections::HashSet<crate::sim::Coord>,
     /// The server connection, if there is one. A client with no link still
@@ -514,23 +533,45 @@ impl BattleApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick, spawn, token, value } => {
+                ServerMessage::Welcome { you, tick, spawn, token, value, room, world } => {
                     // Kept first, before anything else can go wrong: the whole
                     // value of it is being able to come back, and a client that
                     // crashes on its first frame is exactly the case that needs
                     // to.
-                    crate::net::token::store(&token);
-                    log::info!("joined as {you:?} at tick {tick}; adopting the server's world");
+                    //
+                    // Filed under the room the server says we are in, not the
+                    // one that was asked for: a client may have named none, and
+                    // a token stored against the wrong room brings you back to
+                    // the wrong world.
+                    crate::net::token::store(&room, &token);
+                    log::info!(
+                        "joined room \"{room}\" as {you:?} at tick {tick}, in a {} world",
+                        match world {
+                            crate::sim::WorldKind::Infinite => "boundless".to_string(),
+                            crate::sim::WorldKind::Toroidal { rows, cols } =>
+                                format!("{rows}x{cols} wrapping"),
+                        }
+                    );
                     // Taken from the server, not assumed: a player coming
                     // back has a value already, and guessing the starting
                     // figure would have this client offering to spend money
                     // the server knows is gone.
                     self.value = value;
                     self.me = Some(you);
+                    self.room = Some(room);
                     // Now, and only now, drop the local world. Until Welcome
                     // arrives there is nothing authoritative to replace it
                     // with, and an empty screen is worse than a local game.
-                    self.world = World::infinite_empty();
+                    //
+                    // Built to the shape the server named. A client that
+                    // assumed an infinite plane against a wrapping server
+                    // folded no coordinates: chunks the server calls the same
+                    // one were several to the client, digests were taken
+                    // against coordinates it had never heard of, and the seam
+                    // showed the moment anything crossed it. Nothing a client
+                    // can see says whether the ground ends, so this is the only
+                    // way it can know.
+                    self.world = world.build();
                     // A birth's owner is seeded from the generation, so a
                     // client simulating at a different tick would make
                     // different choices from identical cells.
@@ -961,10 +1002,19 @@ impl BattleApp {
 
     fn subscribe_to_view(&mut self) {
         let (min, max) = self.camera.visible_cells(VIEW_MARGIN);
-        let wanted: Vec<_> = World::chunks_covering(min, max)
+        // Folded onto the chunks that actually exist before anything is asked
+        // for. On a wrapping world the viewport runs off the edge and comes
+        // back, so the same chunk is covered under several global coordinates
+        // -- and a `Resync` names the folded one. Asking under the unfolded
+        // name would subscribe several times to one chunk and then fail to
+        // match the name the server used when it said that chunk was wrong.
+        let mut wanted: Vec<_> = World::chunks_covering(min, max)
             .into_iter()
+            .map(|c| self.world.canonical(c))
             .filter(|c| !self.subscribed.contains(c))
             .collect();
+        wanted.sort_unstable();
+        wanted.dedup();
         if wanted.is_empty() {
             return;
         }
@@ -1081,6 +1131,7 @@ impl App for BattleApp {
             last_action: None,
             value: Player::STARTING_VALUE,
             me: None,
+            room: None,
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
             pending: None,
@@ -1153,6 +1204,8 @@ impl App for BattleApp {
             chunks_drawn: self.chunks.instance_count(),
             zoom: self.camera.zoom,
             connected: self.link.is_some(),
+            room: self.room.as_deref(),
+            world: self.world.kind(),
             notice: self.notice.as_deref(),
             pointer_on_ui: self.views.borrow().wants_pointer(),
             cursor_cell: self.cell_under_cursor(self.cursor),
@@ -1476,27 +1529,92 @@ impl App for BattleApp {
 /// On the web this needs no configuration: the page came from the server, so
 /// the server is wherever the page came from. `wss` when the page is `https`,
 /// or the browser blocks it as mixed content.
+///
+/// The room comes from the query string — `?room=lobby` — because that is the
+/// one part a page cannot derive from where it was served. With none, the
+/// server picks, which is what makes a bare URL still a game.
 #[cfg(target_arch = "wasm32")]
 fn open_link() -> Option<Link> {
     let url = Link::origin_url("/ws")?;
-    log::info!("connecting to {url}");
+    let room = query_room();
+    log::info!("connecting to {url}, asking for room {room:?}");
     let link = Link::connect(&url)?;
-    link.send(ClientMessage::Join { name: "web".into(), token: crate::net::token::load() });
+    link.send(ClientMessage::Join {
+        name: "web".into(),
+        token: crate::net::token::for_join(room.as_deref()),
+        room,
+    });
     Some(link)
+}
+
+/// The `room` parameter from the page's query string.
+#[cfg(target_arch = "wasm32")]
+fn query_room() -> Option<String> {
+    room_in_query(&web_sys::window()?.location().search().ok()?)
+}
+
+/// The `room` parameter out of a query string, given the string.
+///
+/// Split from the lookup above so it can be tested at all: everything that
+/// reaches a browser's `location` is unreachable off wasm32, and this is the
+/// half with the decisions in it.
+///
+/// Parsed by hand rather than through `UrlSearchParams`, which would be
+/// another web-sys feature for one lookup. No percent-decoding, deliberately:
+/// a room name is letters, digits, `-` and `_`, so a name that needed decoding
+/// was never a room name, and refusing it here would say only "no" where the
+/// server can say what the rooms actually are.
+fn room_in_query(search: &str) -> Option<String> {
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == "room")
+        .map(|(_, value)| value.to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// On native there is no page to have come from, so the URL is an argument.
 #[cfg(not(target_arch = "wasm32"))]
 fn open_link() -> Option<Link> {
-    let (url, name) = CONNECTION.lock().unwrap().take()?;
+    let Connection { url, name, room } = CONNECTION.lock().unwrap().take()?;
     let link = Link::connect(url?);
-    link.send(ClientMessage::Join { name, token: crate::net::token::load() });
+    link.send(ClientMessage::Join {
+        name,
+        token: crate::net::token::for_join(room.as_deref()),
+        room,
+    });
     Some(link)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How a browser client says which world it wants. There is no command
+    /// line on a page, and the socket comes from the origin, so the query
+    /// string is the only thing left to carry it.
+    #[test]
+    fn the_room_comes_out_of_the_query_string() {
+        assert_eq!(room_in_query("?room=lobby").as_deref(), Some("lobby"));
+        assert_eq!(room_in_query("room=lobby").as_deref(), Some("lobby"), "with or without the ?");
+        assert_eq!(
+            room_in_query("?name=alice&room=arena&zoom=4").as_deref(),
+            Some("arena"),
+            "and wherever it sits among the others"
+        );
+
+        // Nothing to say means the server decides, which is what keeps a bare
+        // URL a game.
+        for none in ["", "?", "?room=", "?rooms=lobby", "?roomy=lobby", "?name=alice"] {
+            assert_eq!(room_in_query(none), None, "{none:?}");
+        }
+
+        // Not validated here. A name that is not one goes to the server,
+        // which refuses it with the list of rooms that do exist -- and that
+        // list is the only way a player finds out what is there.
+        assert_eq!(room_in_query("?room=NOT A ROOM").as_deref(), Some("NOT A ROOM"));
+    }
 
     /// The HUD swatch and the cells on the board must agree about a player's
     /// colour, so this reproduces the shader's arithmetic and checks the result

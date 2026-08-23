@@ -7,6 +7,7 @@ src/
   sim/      the rules                 client AND server
   net/      wire types and transport  client AND server
   server/   the authoritative side    server only
+    rooms.rs  several worlds behind one address
   render/   GPU and windowing         client only
   client/   what a player sees        client only
     views/  screens, and the egui they are drawn with

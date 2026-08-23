@@ -112,6 +112,8 @@ What is being placed travels in the action as a named `Placement`, not as cell b
 
 ## The HUD
 
-Player and their colour, value, generation, chunks held and drawn, zoom, connection state, and why the last action was refused.
+Player and their colour, value, generation, chunks held and drawn, zoom, connection state, which room, whether the world wraps, and why the last action was refused.
+
+The room and the world's shape are there because both are invisible otherwise. A room is a whole separate world, so two players who cannot find each other are far more likely to be in different rooms than at different ends of one; and nothing on the board says whether walking east far enough brings you back.
 
 It also reports the cell under the cursor, whether the pointer is over the panel or the world, and what the last click did. That is deliberate: a click on empty ground that takes nothing looks exactly like a click that never arrived, so the client says which of the two happened.

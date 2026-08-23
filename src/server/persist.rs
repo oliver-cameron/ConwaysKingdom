@@ -125,7 +125,13 @@ pub fn load(path: &Path) -> io::Result<Snapshot> {
 
     let mut world = match r.u8()? {
         KIND_INFINITE => World::infinite_empty(),
-        KIND_TOROIDAL => World::toroidal(r.i32()?, r.i32()?),
+        // `_empty`, and the asymmetry with the line above is how this hid: the
+        // infinite arm was already empty and the toroidal one was not.
+        // `World::toroidal` seeds a glider, and only chunks holding something
+        // are written, so every chunk the file did not mention kept it --
+        // which meant loading a saved torus invented five cells nobody placed,
+        // in chunk zero, on every restart.
+        KIND_TOROIDAL => World::toroidal_empty(r.i32()?, r.i32()?),
         other => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -188,5 +194,56 @@ impl<'a> Reader<'a> {
     }
     fn u64(&mut self) -> io::Result<u64> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::{Cell, PlayerId};
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir()
+            .join(format!("ck-persist-{tag}-{}.ckw", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// A world comes back as what was written, and nothing else.
+    ///
+    /// Only chunks holding something are saved, so anything a fresh world
+    /// starts with survives in every chunk the file did not mention. Building
+    /// the torus with `World::toroidal`, which seeds a glider, therefore made
+    /// every load invent five cells nobody had placed.
+    #[test]
+    fn a_loaded_world_holds_only_what_was_saved() {
+        for (tag, world) in [
+            ("infinite", World::infinite_empty()),
+            ("torus", World::toroidal_empty(4, 4)),
+        ] {
+            let path = scratch(tag);
+            save(&path, &world, &[], 0).unwrap();
+            let back = load(&path).unwrap();
+            assert_eq!(back.world.live_cells(), Vec::<(i32, i32)>::new(), "{tag}");
+            assert_eq!(back.world.kind(), world.kind(), "{tag}");
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// And what *was* saved comes back, so the check above is not passing by
+    /// losing everything.
+    #[test]
+    fn what_was_saved_comes_back() {
+        let path = scratch("roundtrip");
+        let mut world = World::toroidal_empty(3, 3);
+        world.set_cell_at(20, 5, Cell::alive(PlayerId(2)));
+        save(&path, &world, &[Player::new(PlayerId(2), "alice")], 77).unwrap();
+
+        let back = load(&path).unwrap();
+        assert_eq!(back.tick, 77);
+        assert_eq!(back.world.live_cells(), vec![(20, 5)]);
+        assert_eq!(back.world.cell_at(20, 5).unwrap().player(), PlayerId(2));
+        assert_eq!(back.players.len(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 }

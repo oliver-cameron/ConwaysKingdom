@@ -1,24 +1,32 @@
 //! The authoritative side.
 //!
-//! Holds the whole world, owns the tick, and assigns player numbers. Links
-//! [`crate::sim`] and [`crate::net`] and nothing else — built with
+//! One [`Server`] is one **room**: one world, one player table, one tick. A
+//! process runs several of them side by side — see [`rooms`] — so "the server"
+//! in the sense of the address you connect to is a [`rooms::Rooms`], and this
+//! is one of the worlds behind it.
+//!
+//! Links [`crate::sim`] and [`crate::net`] and nothing else — built with
 //! `--no-default-features`, neither wgpu nor winit is compiled at all.
 //!
-//! No transport yet. [`Server::handle`] is where one would land: it takes a
-//! decoded [`ClientMessage`] and returns the replies, so whatever carries the
-//! bytes is somebody else's problem.
+//! [`Server::handle`] takes a decoded [`ClientMessage`] and returns the
+//! replies, so whatever carries the bytes is somebody else's problem;
+//! [`ws`] is what carries them today.
 
 pub mod persist;
+pub mod rooms;
 #[cfg(feature = "server")]
 pub mod ws;
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::net::{ChunkId, ClientMessage, ServerMessage, Stamped, Tick};
+use crate::net::{ChunkId, ClientMessage, RoomName, ServerMessage, Stamped, Tick, DEFAULT_ROOM};
 use crate::sim::{Player, PlayerId, World};
 
 pub struct Server {
+    /// Which room this is. Not stored in the save file: the file's name *is*
+    /// the room's name, and two places to keep one fact is one too many.
+    room: RoomName,
     world: World,
     players: HashMap<PlayerId, Player>,
     /// Chunks each player has asked to be kept informed about.
@@ -42,13 +50,24 @@ fn new_token() -> String {
 }
 
 impl Server {
+    /// A room called [`DEFAULT_ROOM`]. What a test or a single-world server
+    /// wants; [`Server::named`] is what [`rooms::Rooms`] uses.
     pub fn new(world: World) -> Self {
+        Self::named(DEFAULT_ROOM, world)
+    }
+
+    pub fn named(room: impl Into<RoomName>, world: World) -> Self {
         Self {
+            room: room.into(),
             world,
             players: HashMap::new(),
             subscriptions: HashMap::new(),
             pending: Vec::new(),
         }
+    }
+
+    pub fn room(&self) -> &str {
+        &self.room
     }
 
     /// The generation the world is on, which is the only tick there is.
@@ -166,9 +185,10 @@ impl Server {
         let mut player = Player::new(id, name);
         player.last_seen = self.tick();
         log::info!(
-            "join: {:?} \"{}\" at tick {} ({} online)",
+            "join: {:?} \"{}\" in room {} at tick {} ({} online)",
             id,
             player.name,
+            self.room,
             self.tick(),
             self.players.len() + 1
         );
@@ -192,19 +212,24 @@ impl Server {
     /// Anything else -- a corrupt file, a mismatched cell width -- is an error
     /// rather than a silent reset, because silently discarding a world is the
     /// worst possible response to a bad read.
-    pub fn load_or_new(path: &Path, fresh: impl FnOnce() -> World) -> std::io::Result<Self> {
+    pub fn load_or_new(
+        path: &Path,
+        room: impl Into<RoomName>,
+        fresh: impl FnOnce() -> World,
+    ) -> std::io::Result<Self> {
+        let room = room.into();
         match persist::load(path) {
             Ok(snap) => {
                 let mut world = snap.world;
                 // The tick *is* the generation, so restoring one restores both.
                 world.set_generation(snap.tick);
-                let mut s = Self::new(world);
+                let mut s = Self::named(room, world);
                 for p in snap.players {
                     s.players.insert(p.id, p);
                 }
                 Ok(s)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new(fresh())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::named(room, fresh())),
             Err(e) => Err(e),
         }
     }
@@ -224,8 +249,9 @@ impl Server {
             p.online = false;
             let (name, since) = (p.name.clone(), p.last_seen);
             log::info!(
-                "leave: {:?} \"{name}\" after {} ticks ({} still on)",
+                "leave: {:?} \"{name}\" from room {} after {} ticks ({} still on)",
                 id,
+                self.room,
                 self.tick().saturating_sub(since),
                 self.players.values().filter(|p| p.online).count()
             );
@@ -242,11 +268,26 @@ impl Server {
             }
         }
         match msg {
-            ClientMessage::Join { name, token } => match self.join_with(name, token.as_deref()) {
+            // The room was resolved before this message was routed here -- a
+            // Server *is* one room, so by the time it arrives the question of
+            // which world has been answered.
+            ClientMessage::Join { name, token, room: _ } => match self.join_with(name, token.as_deref()) {
                 Ok((you, token)) => {
                     let spawn = crate::net::spawn_for(you, &self.world);
                     let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
-                    vec![ServerMessage::Welcome { you, tick: self.tick(), spawn, token, value }]
+                    vec![ServerMessage::Welcome {
+                        you,
+                        tick: self.tick(),
+                        spawn,
+                        token,
+                        value,
+                        room: self.room.clone(),
+                        // Sent rather than left to be derived: nothing a client
+                        // can see says whether the ground ends, so a client
+                        // told nothing builds an infinite world and disagrees
+                        // with a wrapping server about where everything is.
+                        world: self.world.kind(),
+                    }]
                 }
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
@@ -478,7 +519,7 @@ mod tests {
         assert_eq!(s.tick(), s.world().generation, "they are one number");
         s.save(&path).unwrap();
 
-        let back = Server::load_or_new(&path, World::infinite_empty).unwrap();
+        let back = Server::load_or_new(&path, DEFAULT_ROOM, World::infinite_empty).unwrap();
         assert_eq!(back.tick(), 7);
         assert_eq!(
             back.world().generation,
@@ -510,7 +551,7 @@ mod tests {
         }
         s.save(&path).unwrap();
 
-        let back = Server::load_or_new(&path, World::infinite).unwrap();
+        let back = Server::load_or_new(&path, DEFAULT_ROOM, World::infinite).unwrap();
         assert_eq!(back.tick(), s.tick(), "tick is restored");
         assert_eq!(back.world().digest(), s.world().digest(), "world is restored");
         assert_eq!(back.world().live_cells(), s.world().live_cells());
@@ -534,12 +575,12 @@ mod tests {
 
         let missing = dir.join("does-not-exist.ckw");
         let _ = std::fs::remove_file(&missing);
-        assert!(Server::load_or_new(&missing, World::infinite).is_ok());
+        assert!(Server::load_or_new(&missing, DEFAULT_ROOM, World::infinite).is_ok());
 
         let corrupt = dir.join("corrupt.ckw");
         std::fs::write(&corrupt, b"not a world file at all").unwrap();
         assert!(
-            Server::load_or_new(&corrupt, World::infinite).is_err(),
+            Server::load_or_new(&corrupt, DEFAULT_ROOM, World::infinite).is_err(),
             "a bad file must not be silently replaced with an empty world"
         );
         let _ = std::fs::remove_file(&corrupt);
@@ -600,7 +641,7 @@ mod tests {
         // to spend money the server knows is gone.
         let welcome = s.handle(
             None,
-            ClientMessage::Join { name: "alice".into(), token: Some(token.clone()) },
+            ClientMessage::Join { name: "alice".into(), token: Some(token.clone()), room: None },
         );
         match welcome.as_slice() {
             [ServerMessage::Welcome { you, token: back, value, .. }] => {

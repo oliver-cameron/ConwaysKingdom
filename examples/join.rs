@@ -1,22 +1,33 @@
 //! Prove a late join actually got the server's world.
 //!
-//!     cargo run --example join -- ws://127.0.0.1:8080/ws
+//!     cargo run --example join -- ws://127.0.0.1:8080/ws [ROOM]
 //!
 //! Joins, takes whatever chunks the server sends, then checkpoints its own
 //! per-chunk digests back. A silent reply means every chunk it holds matches
 //! the server byte for byte; a Resync names the ones that do not.
+//!
+//! `ROOM` picks which world on that server. Without it the server decides,
+//! and either way the `Welcome` says which room it was and what shape that
+//! room's world is — which this then **builds**, rather than assuming a plane.
+//! Assuming one against a wrapping server is the failure this exists to catch:
+//! nothing about the chunks that arrive says the ground ends, so the seam
+//! shows only once something crosses it.
 
 use conwayskingdom::net::link::Link;
 use conwayskingdom::net::{ClientMessage, ServerMessage};
-use conwayskingdom::sim::{Chunk, World};
+use conwayskingdom::sim::{Chunk, World, WorldKind};
 use std::time::{Duration, Instant};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let url = std::env::args().nth(1).expect("usage: join <ws url>");
+    let url = std::env::args().nth(1).expect("usage: join <ws url> [room]");
+    let room = std::env::args().nth(2);
     let mut link = Link::connect(url);
-    link.send(ClientMessage::Join { name: "late".into(), token: None });
+    link.send(ClientMessage::Join { name: "late".into(), token: None, room });
 
+    // Replaced on Welcome by a world of the shape the server named. A client
+    // always opens with something to look at, because a socket may never
+    // connect at all and an empty screen is worse than a local game.
     let mut world = World::infinite_empty();
     let (mut tick, mut chunks, mut checkpointed, mut verdict) = (0, 0, false, None);
 
@@ -24,13 +35,24 @@ fn main() {
     while Instant::now() < deadline && verdict.is_none() {
         for msg in link.drain() {
             match msg {
-                ServerMessage::Welcome { you, tick: t, .. } => {
-                    println!("joined as {you:?} at tick {t}");
+                ServerMessage::Welcome { you, tick: t, room, world: shape, .. } => {
+                    println!(
+                        "joined room {room:?} as {you:?} at tick {t}, in {}",
+                        match shape {
+                            WorldKind::Infinite => "a boundless world".to_string(),
+                            WorldKind::Toroidal { rows, cols } =>
+                                format!("a {rows}x{cols} world that wraps"),
+                        }
+                    );
                     tick = t;
+                    world = shape.build();
                     world.set_generation(t);
                     link.send(ClientMessage::Subscribe {
                         chunks: World::chunks_covering((-64, -64), (64, 64)),
                     });
+                }
+                ServerMessage::Rejected { reason } => {
+                    verdict = Some(format!("REFUSED — {reason}"));
                 }
                 ServerMessage::ChunkData { tick: t, chunk, cells } => {
                     let c: &Chunk = bytemuck::from_bytes(&cells);

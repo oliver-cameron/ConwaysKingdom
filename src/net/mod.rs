@@ -1,7 +1,9 @@
 //! Wire types shared by client and server.
 //!
-//! Scaffolding: the shapes are here so the seams exist, but no transport,
-//! encoding or session handling is implemented yet.
+//! The transport is [`link`] on the client and [`crate::server::ws`] on the
+//! server; the encoding is [`codec`]. What lives here is the vocabulary the
+//! two speak, and the handful of rules -- pricing, territory, grants -- that
+//! both sides have to answer identically or they disagree about what happened.
 //!
 //! The model this is shaped for: both sides hold a copy of the world and run
 //! the same deterministic step from [`crate::sim`]. The client holds less of it
@@ -25,7 +27,7 @@ pub use link_web as link;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{Cell, Coord, PlayerId, World};
+use crate::sim::{Cell, Coord, PlayerId, World, WorldKind};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
@@ -36,6 +38,47 @@ pub type ChunkId = Coord;
 /// Generation number. The unit of lockstep: an action is applied *at* a tick,
 /// so both sides apply it at the same point in the sequence.
 pub type Tick = u64;
+
+/// What a room is called. A room is a whole separate world on one server, so
+/// this names the world a player is in, not a channel inside a shared one.
+pub type RoomName = String;
+
+/// The room a client that names none is put in.
+pub const DEFAULT_ROOM: &str = "main";
+
+/// The longest a room name may be. Short enough to read in a log line and in
+/// the HUD, and long enough to be a word rather than a code.
+pub const ROOM_NAME_MAX: usize = 24;
+
+/// Normalise a room name, or say why it is not one.
+///
+/// Lowercased, because the name is also the save file's name and a
+/// case-insensitive filesystem would make `Lobby` and `lobby` two rooms on one
+/// machine and one room on another — which is a world that appears and
+/// disappears depending on where the server is running.
+///
+/// The charset is narrow for the same reason: a room name reaches the
+/// filesystem, and `../` or a path separator in it would be a name that
+/// escapes the directory rooms live in. Validated here rather than at the file
+/// layer so a client can refuse the same name locally and for the same reason.
+pub fn room_name(raw: &str) -> Result<RoomName, String> {
+    let name = raw.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return Err("a room needs a name".into());
+    }
+    if name.len() > ROOM_NAME_MAX {
+        return Err(format!("a room name is at most {ROOM_NAME_MAX} characters"));
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-' || *c == '_'))
+    {
+        return Err(format!(
+            "a room name is letters, digits, - and _; {bad:?} is not one of them"
+        ));
+    }
+    Ok(name)
+}
 
 /// What a player is putting down.
 ///
@@ -161,6 +204,14 @@ pub enum ClientMessage {
     Join {
         name: String,
         token: Option<String>,
+        /// Which world to join. `None` takes the server's default room, so a
+        /// client with nothing to say about rooms still lands somewhere.
+        ///
+        /// A room is a separate world, not a channel inside a shared one, so
+        /// this decides which cells the player will ever see — and player
+        /// numbers, value, territory and the rejoin token are all per room. A
+        /// player in two rooms is two players.
+        room: Option<RoomName>,
     },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
@@ -198,6 +249,21 @@ pub enum ServerMessage {
         /// money the server knows is gone, and the server would refuse the
         /// difference without the client having anything to show for it.
         value: i32,
+        /// Which room this is. Named back rather than assumed, because the
+        /// client may have asked for none and because the token it is about to
+        /// keep is filed under this name — a token stored against the wrong
+        /// room returns you to the wrong world, which is worse than having no
+        /// token at all.
+        room: RoomName,
+        /// The shape of the world, so the client builds the same one.
+        ///
+        /// Without it a client joining a toroidal server built an infinite
+        /// world locally: coordinates never folded, so the far side of the
+        /// world was somewhere else entirely, chunk digests were taken against
+        /// coordinates the server had never heard of, and the seam showed as
+        /// soon as anything crossed it. The shape is not something a client can
+        /// derive — nothing it can see says whether the ground ends.
+        world: WorldKind,
     },
     Rejected { reason: String },
     /// One generation happened. `tick` is the generation the world is on

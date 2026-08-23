@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use super::cell::{Cell, Chunk, Halo, CHUNK_N};
 use super::dir::Dir;
 use super::player::PlayerId;
@@ -35,10 +37,34 @@ enum Storage {
     },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// What shape a world is, and how big it is if it wraps.
+///
+/// Both "which world to open" and "which world this is": one enum, because
+/// the two were the same two variants under different names and the shape now
+/// travels on the wire, where a second spelling would need a translation that
+/// could be got wrong.
+///
+/// A runtime value rather than a const. As a const, whichever arm was not
+/// selected was dead code the compiler had to be told to ignore -- a world you
+/// cannot pick is a world nobody plays and nobody notices breaking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum WorldKind {
+    /// Grows as life reaches new ground.
     Infinite,
+    /// Wraps, `rows` by `cols` chunks. Small enough and a player's granted
+    /// ground wraps onto somebody else's.
     Toroidal { rows: i32, cols: i32 },
+}
+
+impl WorldKind {
+    /// A world of this shape with nothing in it, which is what both a server
+    /// and a client that has just been told the shape start from.
+    pub fn build(self) -> World {
+        match self {
+            Self::Infinite => World::infinite_empty(),
+            Self::Toroidal { rows, cols } => World::toroidal_empty(rows, cols),
+        }
+    }
 }
 
 pub struct World {
@@ -51,34 +77,11 @@ pub struct World {
     pub dirty: bool,
 }
 
-/// Which world the app opens, and how big it is if it wraps.
-///
-/// A runtime choice rather than a const. As a const, whichever arm was not
-/// selected was dead code the compiler had to be told to ignore — a world you
-/// cannot pick is a world nobody plays and nobody notices breaking.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WorldMode {
-    /// Grows as life reaches new ground.
-    Infinite,
-    /// Wraps, `rows` by `cols` chunks. Small enough and a player's granted
-    /// ground wraps onto somebody else's.
-    Torus { rows: i32, cols: i32 },
-}
-
-impl WorldMode {
-    pub fn build(self) -> World {
-        match self {
-            Self::Infinite => World::infinite_empty(),
-            Self::Torus { rows, cols } => World::toroidal_empty(rows, cols),
-        }
-    }
-}
-
 /// Read a torus size written as `ROWSxCOLS`, in chunks.
 ///
 /// Shared by both binaries so `--torus 18x18` means the same thing to each,
 /// and so the error does too.
-pub fn parse_torus(text: &str) -> Result<WorldMode, String> {
+pub fn parse_torus(text: &str) -> Result<WorldKind, String> {
     let (rows, cols) = text
         .split_once(['x', 'X'])
         .ok_or_else(|| format!("expected ROWSxCOLS, got {text:?}"))?;
@@ -89,7 +92,7 @@ pub fn parse_torus(text: &str) -> Result<WorldMode, String> {
             .filter(|&n| n > 0)
             .ok_or_else(|| format!("{what} must be a positive number of chunks, got {v:?}"))
     };
-    Ok(WorldMode::Torus { rows: parse(rows, "rows")?, cols: parse(cols, "cols")? })
+    Ok(WorldKind::Toroidal { rows: parse(rows, "rows")?, cols: parse(cols, "cols")? })
 }
 
 impl World {
@@ -110,8 +113,11 @@ impl World {
         }
     }
 
-    /// The world the app and the server open with.
+    /// An unbounded plane with a glider already on it.
     ///
+    /// Not what a game opens with -- that is `infinite_empty`, since the first
+    /// life arrives with the first player. This is for tests and examples that
+    /// want something already moving.
     pub fn infinite() -> Self {
         let mut chunk = Chunk::dead();
         seed_glider(&mut chunk, CHUNK_N / 2 - 2, CHUNK_N / 2 - 2, PlayerId(1));
@@ -632,11 +638,6 @@ fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
     }
 }
 
-/// Gosper's glider gun: 36 cells, period 30, stationary, emitting a glider
-/// south-east every cycle. Rows and columns are chunk-local, and it is 36 wide
-/// so it straddles chunk boundaries at any sane chunk size.
-
-
 /// The standard glider, travelling south-east.
 ///
 /// ```text
@@ -1083,9 +1084,9 @@ mod tests {
     /// server, so the parsing is one function and its refusals are pinned.
     #[test]
     fn a_torus_size_is_read_the_same_way_everywhere() {
-        assert_eq!(parse_torus("18x18"), Ok(WorldMode::Torus { rows: 18, cols: 18 }));
-        assert_eq!(parse_torus("4X7"), Ok(WorldMode::Torus { rows: 4, cols: 7 }));
-        assert_eq!(parse_torus(" 4 x 7 "), Ok(WorldMode::Torus { rows: 4, cols: 7 }));
+        assert_eq!(parse_torus("18x18"), Ok(WorldKind::Toroidal { rows: 18, cols: 18 }));
+        assert_eq!(parse_torus("4X7"), Ok(WorldKind::Toroidal { rows: 4, cols: 7 }));
+        assert_eq!(parse_torus(" 4 x 7 "), Ok(WorldKind::Toroidal { rows: 4, cols: 7 }));
 
         // A world with no chunks in it is not a world.
         assert!(parse_torus("0x4").is_err());
@@ -1098,7 +1099,7 @@ mod tests {
     /// The shape is a choice made at startup, and both shapes have to work.
     #[test]
     fn either_shape_builds_and_steps() {
-        for mode in [WorldMode::Infinite, WorldMode::Torus { rows: 4, cols: 4 }] {
+        for mode in [WorldKind::Infinite, WorldKind::Toroidal { rows: 4, cols: 4 }] {
             let mut w = mode.build();
             w.set_cell_at(2, 2, Cell::alive(PlayerId(1)));
             w.set_cell_at(2, 3, Cell::alive(PlayerId(1)));

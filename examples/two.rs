@@ -1,6 +1,6 @@
 //! Two clients on one server: do they end up with the same world?
 //!
-//!     cargo run --example two -- ws://127.0.0.1:8080/ws
+//!     cargo run --example two -- ws://127.0.0.1:8080/ws [ROOM]
 //!
 //! The real link and the real protocol, because the question is about what
 //! crosses the socket. Each side keeps a world and folds messages into it the
@@ -36,15 +36,20 @@ struct Peer {
 }
 
 impl Peer {
-    fn join(url: &str, name: &'static str) -> Self {
+    fn join(url: &str, name: &'static str, room: Option<String>) -> Self {
         let mut link = Link::connect(url.to_string());
-        link.send(ClientMessage::Join { name: name.into(), token: None });
+        link.send(ClientMessage::Join { name: name.into(), token: None, room });
         for _ in 0..200 {
             for msg in link.drain() {
-                if let ServerMessage::Welcome { you, tick, spawn, .. } = msg {
-                    let mut world = World::infinite_empty();
+                if let ServerMessage::Welcome { you, tick, spawn, room, world: shape, .. } = msg {
+                    // Built to the shape the server named, as the client does.
+                    // Assuming a plane against a wrapping server folds no
+                    // coordinates, so the two peers would disagree about which
+                    // chunk is which and this would report a divergence that
+                    // was really a misunderstanding.
+                    let mut world = shape.build();
                     world.set_generation(tick);
-                    println!("{name}: {you:?} at tick {tick}, ground at {spawn:?}");
+                    println!("{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}");
                     return Self { name, link, world, me: you, spawn, heard: 0, resyncs: 0 };
                 }
             }
@@ -118,10 +123,13 @@ impl Peer {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let url = std::env::args().nth(1).expect("usage: two <ws url>");
+    let url = std::env::args().nth(1).expect("usage: two <ws url> [room]");
+    // Both peers into the same room, or they are two worlds and cannot
+    // disagree about anything.
+    let room = std::env::args().nth(2);
 
-    let mut a = Peer::join(&url, "alice");
-    let mut b = Peer::join(&url, "bob");
+    let mut a = Peer::join(&url, "alice", room.clone());
+    let mut b = Peer::join(&url, "bob", room);
     assert_ne!(a.me, b.me);
 
     // Both look at both grants, so neither is missing ground the other has.
