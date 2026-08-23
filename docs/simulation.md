@@ -172,7 +172,9 @@ So `World::fire_turrets` runs after the rules in absolute coordinates, beside `b
 
 There is no index. `World::turrets` scans what is held the way `ice_cells` does, and **sorts**, because `stored` walks a `HashMap` on an infinite world and a `HashMap` iterates differently in different processes — an unsorted list would let a client and a server disagree about who owns a contested square.
 
-`rule::TURRET_REACH` is the whole cost model. A turret reads the `(2R+1)²` box around itself twice a generation — once to find the nearest square it will act on and once to walk to the one the tie-break picked — so at six that is 338 reads a turret a generation and does not matter, and at twenty-four it is 4802 and a hundred turrets cost more than stepping the world does. It is a **disc**, not a square: the box is what is walked, `d > reach²` is what makes the reach the same in every direction.
+`rule::TURRET_REACH` is the whole cost model. A turret reads the `(2R+1)²` box around itself twice per square it flips — once to find the nearest and once to walk to the one the tie-break picked — so at six that is 338 reads a turret a generation and does not matter, and at twenty-four it is 4802 and a hundred turrets cost more than stepping the world does. It is a **disc**, not a square: the box is what is walked, `d > reach²` is what makes the reach the same in every direction.
+
+`rule::TURRET_POWER` is how many squares it flips, and it multiplies that bill directly. One search per square rather than one search for all of them, each excluding what the last took — nearest-first falls out of that, and it costs a second walk of a box already in cache, where collecting the whole box and sorting it would allocate per turret per generation to answer a question about its first few entries. Each shot mixes its own index into the seed so a volley does not break every tie the same way, and a dead turret gives back the same number it would have taken, so the mirror holds however it is set.
 
 It also bounds how far a turret can wake the world. A turret writes through `set_cell_at`, which makes the chunk if there is not one, and a claim is ownership, so the chunk is no longer empty and `compute_active` picks it up next generation without being told. That only holds while the reach is at most one chunk; further and a turret could write two chunks away, past anything `compute_active` has a way to know about.
 
@@ -192,13 +194,13 @@ Ice is exempt either way, and a turret under a pane does not fire at all. A pane
 
 ### What it settles at
 
-A turret takes one square a generation and `DECAY` at two in sixty-four eats N/32 of what is held, so each claim a generation holds about thirty squares. Against a neighbour's living colony it is far weaker: `SPREAD` gives their life the square straight back at forty in sixty-four, so what a turret holds of contested ground is a couple of squares. **A turret claims empty land and cannot take ground that anything is alive on.**
+`DECAY` at two in sixty-four eats N/32 of what is held, so each square flipped per generation holds about thirty — a turret settles at roughly `30 × TURRET_POWER`, and the block it is really bought as at four times that. Against a neighbour's living colony it is far weaker, and that is the number `TURRET_POWER` is really setting: `SPREAD` gives their life the square straight back at forty in sixty-four, so what a turret holds of contested ground is about `TURRET_POWER × 64 / SPREAD` — one and a half squares at one, six at four. **Below about four a turret claims empty land and cannot press on ground anything is alive on.**
 
 Which means a turret inside its owner's ground finds everything within reach already theirs and idles. It only ever works from a frontier, and nothing had to be written to make that true.
 
 ### Fours
 
-One turret is one live cell with no live neighbours, and it is gone in a generation. So a turret is only ever placed as part of something that survives, and the cheapest thing that survives is the 2×2 block: four turrets, still, never dying and never giving birth, claiming four squares a generation for as long as nothing disturbs them. That settles at about a hundred and thirty squares, eleven across.
+One turret is one live cell with no live neighbours, and it is gone in a generation. So a turret is only ever placed as part of something that survives, and the cheapest thing that survives is the 2×2 block: four turrets, still, never dying and never giving birth, claiming four squares a generation for as long as nothing disturbs them. At `TURRET_POWER` of one that settles at about a hundred and thirty squares, eleven across.
 
 Which is the exact shape that is worthless for a mine. A block of mines never gives birth so never earns — [the game](game.md#mining) calls it forty spent on nothing — and it is the best thing a turret can be, because a turret works by standing there. **The still life is a mine's worst shape and a turret's best.**
 

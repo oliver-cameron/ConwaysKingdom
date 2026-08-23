@@ -27,7 +27,7 @@ pub use link_web as link;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{Cell, Coord, Kind, PlayerId, World, WorldKind};
+use crate::sim::{Cell, Coord, Kind, PlayerId, World, WorldKind, CHUNK_N};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
@@ -454,10 +454,24 @@ pub fn cell_cost(world: &World, player: PlayerId, row: i32, col: i32, placement:
 /// Six covers all 31 players a five-bit field can hold.
 const SPAWN_ACROSS: i32 = 6;
 
-/// Centre to centre between neighbouring grants, in cells. Four times the
-/// patch, so there is three patches' worth of unclaimed ground between any two
-/// players — enough to build in before anyone's territory meets.
-const SPAWN_PITCH: i32 = SPAWN_N * 4;
+/// No-man's-land between one grant's edge and the next, in cells.
+///
+/// Measured in **chunks** because that is the unit the world is built and
+/// drawn in, and because "how far away is my neighbour" is a question about
+/// the map rather than about the size of a patch. Three of them is far enough
+/// that neither player can see the other's opening at a comfortable zoom, and
+/// near enough that a glider crosses it in a hundred generations.
+///
+/// It was three patches' worth, thirty-six cells, and that read as close: two
+/// grants nearly touching at chunk scale, with the halo each block holds
+/// already a third of the way across. What the gap is really buying is the
+/// time before anyone's territory meets, and it wants to be enough to build a
+/// machine in.
+const SPAWN_GAP: i32 = 3 * CHUNK_N as i32;
+
+/// Centre to centre between neighbouring grants, in cells: a patch, plus the
+/// ground between it and the next one.
+const SPAWN_PITCH: i32 = SPAWN_N + SPAWN_GAP;
 
 /// The ground a player is granted on joining: a square of claimed but empty
 /// cells, far enough from everyone else's to be their own.
@@ -489,6 +503,11 @@ pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
             ((row - middle) * SPAWN_PITCH, (col - middle) * SPAWN_PITCH)
         }
         Some((height, width)) => {
+            // A torus has finite ground and has to share it out, so the
+            // spacing comes from the world rather than from `SPAWN_PITCH` --
+            // which means widening the gap above does nothing here, and a
+            // small torus puts players close together however it is set.
+            //
             // Never closer together than the patch is wide, or grants would
             // overlap before they even wrapped. On a world too small for even
             // that they do overlap, and `grant` leaves claimed ground alone,
@@ -1272,6 +1291,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Neighbouring grants are a patch apart plus the gap, and the gap is in
+    /// chunks — which is the unit "how far away is my neighbour" is a question
+    /// about. Pinned because the spacing is the one number a player feels
+    /// before they have done anything.
+    #[test]
+    fn neighbouring_grants_are_a_gap_apart() {
+        let world = World::infinite_empty();
+        // Two players side by side in the grid, so the difference is one pitch.
+        let (row, col) = spawn_for(PlayerId(1), &world);
+        let (next_row, next_col) = spawn_for(PlayerId(2), &world);
+        assert_eq!(next_row, row, "consecutive numbers fill a row before a column");
+        assert_eq!(next_col - col, SPAWN_PITCH);
+
+        // What is between them is the gap: the pitch less the patch they each
+        // stand on.
+        assert_eq!(SPAWN_PITCH - SPAWN_N, SPAWN_GAP);
+        assert_eq!(SPAWN_GAP, 3 * CHUNK_N as i32, "three chunks of no-man's-land");
+
+        // And the row below is the same distance away, so the grid is square
+        // rather than a corridor.
+        let (down_row, _) = spawn_for(PlayerId(1 + SPAWN_ACROSS as u8), &world);
+        assert_eq!(down_row - row, SPAWN_PITCH);
     }
 
     /// Ground nobody holds prices as empty, which is what `apply` writes into
