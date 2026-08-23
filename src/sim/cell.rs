@@ -66,9 +66,25 @@ pub mod bits {
     pub const PLAYER_WIDTH: u8 = 5;
     pub const PLAYER_MASK: u8 = (1 << PLAYER_WIDTH) - 1;
 
-    /// Byte 0, bits 0..3: nothing yet. Room for three flags that are about
-    /// *whose* a cell is rather than what it looks like — anything that
-    /// changes the picture belongs in the kind byte, where the sheet can see it.
+    /// Byte 0, bit 0: **granted ground**, which never decays.
+    ///
+    /// Territory is lost as well as gained now, and a player who lost all of
+    /// theirs could place nothing and so could never come to own anything
+    /// again. This is the floor: the patch handed out on joining stays yours
+    /// while nobody takes it, so there is always somewhere to build from.
+    ///
+    /// It marks a *square*, not a lineage, which is why a birth keeps the
+    /// dead cell's copy of it rather than the parent's — everything else about
+    /// a newborn comes from the parent.
+    pub const HOME: u8 = 1;
+
+    /// Byte 0, bits 0..3: flags that are about *whose* a cell is rather than
+    /// what it looks like — anything that changes the picture belongs in the
+    /// kind byte, where the sheet can see it. [`HOME`] is the first of them,
+    /// and two are still free.
+    ///
+    /// Preserved across a change of owner, which is what keeps `HOME` on a
+    /// square when the ground changes hands.
     pub const SPARE_MASK: u8 = (1 << PLAYER_SHIFT) - 1;
 }
 
@@ -168,6 +184,23 @@ impl Cell {
         self.with_tile(state | ((kind.0 & bits::KIND_MASK) << bits::KIND_SHIFT))
     }
 
+    /// Granted ground: this square is somebody's home patch and its owner does
+    /// not decay. Says nothing about who owns it now — ground changes hands by
+    /// life growing over it, and takes this with it.
+    #[inline]
+    pub const fn is_home(self) -> bool {
+        self.owner_byte() & bits::HOME != 0
+    }
+
+    #[inline]
+    pub const fn with_home(self, home: bool) -> Self {
+        if home {
+            Self([self.0[0] | bits::HOME, self.0[1]])
+        } else {
+            Self([self.0[0] & !bits::HOME, self.0[1]])
+        }
+    }
+
     #[inline]
     pub const fn with_ice(self, ice: bool) -> Self {
         if ice {
@@ -219,12 +252,36 @@ impl Kind {
     pub const COUNT: usize = Self::ALL.len();
 }
 
-/// How many cells of [`Kind::MINE`] were born for each player in one
-/// generation, indexed by the number the cell carries.
+/// What each player's mines did in one generation, indexed by the number the
+/// cell carries.
 ///
-/// A count rather than a sum of money: what a birth is *worth* is the
+/// Counts rather than a sum of money: what a birth or a death is *worth* is the
 /// economy's business and the economy lives in `net`. The rule counts.
-pub type Mined = [u32; PlayerId::COUNT];
+///
+/// Two counts rather than one net figure, so the two can be priced apart. They
+/// are not priced apart today — a birth pays what a death costs — but "income
+/// is net growth" is a choice, and one a net figure would have made
+/// permanently.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mined {
+    pub born: [u32; PlayerId::COUNT],
+    pub died: [u32; PlayerId::COUNT],
+}
+
+impl Mined {
+    /// Fold another generation's tally into this one.
+    ///
+    /// Saturating, so a world that somehow ran for four billion births does
+    /// not wrap a player's earnings round to nothing.
+    pub fn add(&mut self, other: &Mined) {
+        for (t, n) in self.born.iter_mut().zip(&other.born) {
+            *t = t.saturating_add(*n);
+        }
+        for (t, n) in self.died.iter_mut().zip(&other.died) {
+            *t = t.saturating_add(*n);
+        }
+    }
+}
 
 /// A chunk's cells, row-major. The first index is the texture's Y, the second
 /// its X — the only way in is `chunk[(row, col)]`, so that cannot drift.
@@ -353,8 +410,17 @@ impl Halo {
                 let cell_seed = mix(seed, (row as u64) << 32 | col as u64);
                 let before = self.get(hr, hc);
                 let after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
-                if !before.is_alive() && after.is_alive() && after.kind() == Kind::MINE {
-                    mined[after.player().0 as usize] += 1;
+                match (before.is_alive(), after.is_alive()) {
+                    (false, true) if after.kind() == Kind::MINE => {
+                        mined.born[after.player().0 as usize] += 1;
+                    }
+                    // A dying cell keeps its owner and its kind, so who is
+                    // charged is read from before rather than after -- the same
+                    // answer either way, and the one that says what is meant.
+                    (true, false) if before.kind() == Kind::MINE => {
+                        mined.died[before.player().0 as usize] += 1;
+                    }
+                    _ => {}
                 }
                 next[(row, col)] = after;
             }

@@ -88,6 +88,12 @@ A client applies its own action straight away, connected or not, so what you dra
 
 Usually. The server applies it whenever the message lands — this generation if it arrives before the next step, the one after if it arrives later — so a click is a coin flip, and on the losing side that client has evolved those cells a generation earlier than everyone else. Waiting for the server instead would remove it, at the cost of a quarter of a second before you see your own cells, which is a poor trade for something rare.
 
+**A client does not apply its own actions when they come back.** It predicted them; applying them again is not a no-op, because a `Paint` is idempotent on the generation it was meant for and not one generation later. By then the cells it named have moved, and laying them again stamps the original pattern back on top of where it went.
+
+The symptom is unmistakable once you have seen it: draw a glider, watch it thicken into a blob and settle into a honey farm, and watch it snap back to a glider a few seconds later when the resync lands. It needs latency to happen at all — the action has to miss one server step, which on a loopback socket it never does — so it is a browser and a real network problem and invisible locally.
+
+Skipping them leaves the phase error prediction has always had, the same cells a generation out, which the checkpoint puts right. `a_paint_applied_late_is_not_the_paint_you_asked_for` pins the difference: five cells either way when the client skips, and more than five when it does not.
+
 So it is found rather than prevented. Every few seconds a client sends a **`Checkpoint`**: one FNV-1a digest per chunk it holds, stamped with the generation they were taken at. A chunk is 512 bytes and its digest is eight, so a whole world's worth of state fits in a message that costs nothing — which is what lets agreement be checked constantly, with only the chunks that actually disagree ever sent back.
 
 The server compares against its own chunks and answers `Resync` with the ones that differ; the client asks for those again at once rather than waiting for the viewport to notice, because a wrong chunk off screen is still wrong. A checkpoint from any tick but the server's current one is ignored rather than answered wrongly — comparing against the wrong generation would disagree for a reason that is not a bug — and the next checkpoint is only seconds away.

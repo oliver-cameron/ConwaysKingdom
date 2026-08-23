@@ -12,6 +12,7 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | place a mine | −10 each |
 | place ice | −5 each |
 | **a mine of yours is born** | **+1** |
+| **a mine of yours dies** | **−1** |
 | reclaim your own | +1 |
 | take another player's | −1, because taking ground should not be free |
 | take what is not there | nothing |
@@ -30,11 +31,13 @@ Cost is read **before** the action is applied, since it depends on what is there
 
 A **mine** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a mine's children are mines — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
 
-That makes **turnover** the thing being rewarded, not holdings. A block of mines is a still life, never gives birth, and earns nothing at all. An oscillator earns every period. A gun earns forever. The economy is "build a machine that works", which is what Conway is interesting for — and it closes the loop rather than adding one, since value used to have exactly one source: reclaiming your own cells, one apiece, which made the only way to earn a click and it was the click you least wanted to make.
+A mine that **dies** costs its owner exactly what a birth pays. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid. Now a settled pattern gives birth and dies in equal measure and pays nothing at all.
 
-The cost and the yield are **one decision, not two**: together they are a mine's payback period, and everything about whether mining is worth doing is in that number. Ten against one means a mine pays for itself after ten births of its line. They are provisional, and only these two constants have to move — `net::MINE_COST` and `net::MINE_YIELD`.
+So income is the **net change in your mine population**, and over the life of a pattern it telescopes — what a mine earns in total is what it grows into. A still life earns nothing. An oscillator earns nothing. A gun earns forever, because its population really does keep growing. A colony dying back costs you. The economy is "build a machine that grows", which is what Conway is interesting for — and it closes the loop rather than adding one, since value used to have exactly one source: reclaiming your own cells, one apiece, which made the only way to earn a click and it was the click you least wanted to make.
 
-They probably want to move. Measured: three mines laid beside a starting block converted the whole colony by inheritance and earned about eight a generation within thirty generations, which recovers the starting purse of a hundred in seconds. One mine can convert a lineage, so the payback is potentially explosive, and that is the thing to tune against.
+Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_DRAIN` decides whether churn counts. Ten, one and one means a mine has to grow into ten more before it has paid for itself. Setting the drain below the yield would make churn pay again, which is why it is a constant of its own rather than an assumption baked into the counting.
+
+Value is floored at zero. A cost that comes from an action is refused when it cannot be paid; a drain arrives whether or not there is anything to take it from, and a player in debt would be one who cannot act and has no way to stop owing.
 
 A mine's corpse keeps its kind, as any cell does — so ground a mine died on shows the mine sprite, and life born there from an ordinary parent is ordinary. Placing plain Life over it explicitly sets the kind back to normal, or drawing over a mine's corpse would hand you a free mine.
 
@@ -102,7 +105,11 @@ The world decides the spacing. An infinite one has room, so the grid sits at a f
 
 Which means the client cannot work out where its own ground is: that depends on the shape of the world, and it does not know the shape until it is told. `Welcome` carries the spawn: four cells that hold their shape forever, the same for everyone, so nobody begins ahead. The block is also what keeps the ground, since territory spreads from living cells and a bare patch would never grow. An offline client grants itself the same thing, or a game of one would have no opening move.
 
-Territory has no die-off yet, so it only ever spreads. A glider therefore leaves a permanent trail of claimed ground, and the world grows with it — deliberately, since territory that vanished the moment life moved on would be no territory at all.
+**Ground is lost as well as won.** A dead cell with nothing alive among its eight neighbours loses its owner, one generation in sixteen — about four seconds. Territory used to only ever spread, so a glider left a permanent trail and the world grew for as long as anything moved; a map that only fills up is not one anybody competes over.
+
+Life holds the ground around it, because a square touching something alive is re-claimed as fast as it could ever decay. So your territory is where your life is and where it has just been, and holding ground means keeping something alive on it.
+
+Your **granted patch is the exception** and never decays. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. It is a mark on the ground rather than on the cells, so it survives the ground changing hands, and an opponent who grows over your home keeps it as theirs.
 
 ## Ice
 

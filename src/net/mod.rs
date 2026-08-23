@@ -467,7 +467,12 @@ pub fn grant(world: &mut World, player: PlayerId) {
         for c in col..col + SPAWN_N {
             let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
             if !cell.is_alive() && !cell.is_ice() {
-                world.set_cell_at(r, c, cell.with_player(player));
+                // Marked as home, which is what keeps it: territory decays
+                // where nothing alive is touching it, and a granted patch is
+                // mostly empty by definition. Without the mark a player's
+                // opening ground would fade under them in a few seconds and
+                // take their ability to place anything with it.
+                world.set_cell_at(r, c, cell.with_player(player).with_home(true));
             }
         }
     }
@@ -532,12 +537,31 @@ pub const MINE_COST: i32 = 10;
 /// What one birth of [`Kind::MINE`] pays its owner.
 pub const MINE_YIELD: i32 = 1;
 
-/// Turn a generation's tally of mine births into what each player earned.
+/// What one death of [`Kind::MINE`] costs its owner.
+///
+/// Equal to the yield, deliberately, which makes a generation's income the
+/// **net change in your mine population** and nothing else. Over the life of a
+/// pattern that telescopes: what a mine earned in total is what it grew into.
+///
+/// That is what stops mining being the answer to everything. Making every cell
+/// you own a mine used to be free money, because a settled pattern gives birth
+/// constantly and each birth paid; now a settled pattern gives birth and dies
+/// in equal measure and pays nothing at all. A still life earns nothing, an
+/// oscillator earns nothing, and only something that *grows* earns — a gun, or
+/// a colony still spreading. A colony dying back costs.
+///
+/// Priced apart from the yield so that "income is net growth" stays a choice
+/// rather than an assumption baked into the counting. Lower it and churn pays
+/// again.
+pub const MINE_DRAIN: i32 = 1;
+
+/// What a generation's tally is worth to one player.
 ///
 /// Here rather than in `sim` because it is a price, and the rule should not
-/// know prices — it counts births and this says what one is worth.
+/// know prices — it counts births and deaths and this says what they are worth.
 pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
-    mined[player.0 as usize] as i32 * MINE_YIELD
+    let at = player.0 as usize;
+    mined.born[at] as i32 * MINE_YIELD - mined.died[at] as i32 * MINE_DRAIN
 }
 
 /// What an action is worth to the player who did it.
@@ -614,6 +638,61 @@ mod tests {
 
     fn paint(cells: Vec<(i32, i32)>, placement: Placement) -> Stamped {
         Stamped { tick: 0, player: PlayerId(1), action: Action::Paint { cells, placement } }
+    }
+
+    /// Why a client must not apply its own action a second time when the
+    /// server broadcasts it back.
+    ///
+    /// A `Paint` is idempotent on the generation it was meant for and not one
+    /// generation later: by then the cells it named have moved, and laying
+    /// them again puts the original pattern back on top of where it went. The
+    /// symptom is a glider that turns into a blob and settles into a still
+    /// life, and then snaps back to a glider when the resync lands.
+    #[test]
+    fn a_paint_applied_late_is_not_the_paint_you_asked_for() {
+        let glider = vec![(1, 2), (2, 3), (3, 1), (3, 2), (3, 3)];
+        let paint = Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            action: Action::Paint { cells: glider, placement: Placement::Life },
+        };
+
+        // The server. The action lands after it has already stepped, which is
+        // the ordinary case as soon as there is any latency at all, so it lays
+        // the cells on untouched ground and steps.
+        let mut server = World::infinite_empty();
+        server.step();
+        apply(&mut server, &paint);
+        server.step();
+
+        // A client that predicted the paint a generation earlier, stepped when
+        // it was told a generation had happened, and then applied the same
+        // action again when the server broadcast it back.
+        let mut twice = World::infinite_empty();
+        apply(&mut twice, &paint);
+        twice.step();
+        apply(&mut twice, &paint);
+        twice.step();
+
+        // The same client, skipping what it had already predicted.
+        let mut once = World::infinite_empty();
+        apply(&mut once, &paint);
+        once.step();
+        once.step();
+
+        assert_eq!(server.live_cells().len(), 5, "the server has a glider");
+        assert_eq!(
+            once.live_cells().len(),
+            5,
+            "and so does a client that predicted it: the same five cells, one \
+             step out of phase, which is the error prediction is allowed"
+        );
+        assert!(
+            twice.live_cells().len() > 5,
+            "where applying it twice leaves {} cells -- the original pattern \
+             stamped back over where it went",
+            twice.live_cells().len()
+        );
     }
 
     /// The reason the pricing reads the world at all. A drag is extended by

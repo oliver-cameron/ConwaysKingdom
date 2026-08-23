@@ -421,7 +421,11 @@ impl Server {
         // What the mines paid out. The world counted the births; the price is
         // here, and this is the only place a purse is authoritative.
         for player in self.players.values_mut() {
-            player.value += crate::net::earnings(&mined, player.id);
+            // Floored at zero. A cost that comes from an action is refused
+            // when it cannot be paid; a drain arrives whether or not there is
+            // anything to take it from, and a player in debt would be a player
+            // who cannot act and has no way to stop owing.
+            player.value = (player.value + crate::net::earnings(&mined, player.id)).max(0);
         }
 
         // Every generation, even an empty one: the tick is what keeps clients
@@ -898,41 +902,36 @@ mod tests {
         assert_eq!(resyncs, vec![vec![held[0].0]], "only the disagreeing chunk");
     }
 
-    /// A mine pays its owner when one of its kind is born, and a birth copies
-    /// its parent -- so a colony of mines is income and a block of them, being
-    /// a still life that never gives birth, is not.
+    /// Income is **net growth**, which is the whole of what stops mining being
+    /// the answer to everything.
+    ///
+    /// A birth pays what a death costs, so a pattern that merely churns earns
+    /// nothing at all. A blinker gives birth twice a generation and kills two
+    /// cells doing it, and used to be free money for as long as it ran.
     #[test]
-    fn a_mine_pays_its_owner_when_its_line_is_born() {
+    fn a_blinker_of_mines_only_churns_and_so_earns_nothing() {
         let mut s = Server::new(World::infinite_empty());
         let me = s.join("me").unwrap();
 
-        // A blinker of mines: three in a row, which flips end over end
-        // forever, giving birth twice a generation. Clear of the grant's own
-        // block, which sits in the middle of the patch.
+        // Three in a row, which flips end over end forever. Clear of the
+        // grant's own block, which sits in the middle of the patch.
         place_mines(&mut s, me, &[(1, 1), (2, 1), (3, 1)]);
-        // After the cost is charged, which `handle` does on receipt, so what
-        // is measured from here is earnings alone.
-        let purse = s.value_of(me).unwrap();
-        assert_eq!(purse, 100 - 3 * crate::net::MINE_COST, "three mines were paid for");
-
         s.step();
-        let after = s.value_of(me).unwrap();
-        assert_eq!(
-            after - purse,
-            2 * crate::net::MINE_YIELD,
-            "a blinker gives birth twice a generation, and both are mines"
-        );
+        // Measured from after the cost, which `handle` charges on receipt.
+        let purse = s.value_of(me).unwrap();
 
-        // And it keeps earning, generation after generation.
-        let before = after;
-        for _ in 0..4 {
+        for _ in 0..20 {
             s.step();
         }
-        assert!(s.value_of(me).unwrap() > before, "and goes on earning");
+        assert_eq!(
+            s.value_of(me).unwrap(),
+            purse,
+            "two born and two dead every generation nets nothing"
+        );
     }
 
-    /// The still life that earns nothing, which is what makes turnover the
-    /// thing being rewarded rather than holdings.
+    /// A still life earns nothing either, for the simpler reason that nothing
+    /// happens on it at all.
     #[test]
     fn a_block_of_mines_earns_nothing() {
         let mut s = Server::new(World::infinite_empty());
@@ -946,6 +945,42 @@ mod tests {
             s.step();
         }
         assert_eq!(s.value_of(me).unwrap(), purse, "a still life gives no births");
+    }
+
+    /// What does earn: a population that grows. What a mine is worth in the
+    /// end is what it grew into, because the births and deaths telescope.
+    #[test]
+    fn growth_earns_and_dying_back_costs() {
+        let count_mines = |s: &Server| {
+            s.world()
+                .live_cells()
+                .iter()
+                .filter(|&&(r, c)| {
+                    s.world().cell_at(r, c).unwrap().kind() == crate::sim::Kind::MINE
+                })
+                .count() as i32
+        };
+
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        // An R-pentomino of mines, which grows for hundreds of generations
+        // before it settles.
+        place_mines(&mut s, me, &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)]);
+        s.step();
+
+        let purse = s.value_of(me).unwrap();
+        let population = count_mines(&s);
+        for _ in 0..60 {
+            s.step();
+        }
+
+        let earned = s.value_of(me).unwrap() - purse;
+        let grew = count_mines(&s) - population;
+        assert!(grew > 0, "the pentomino should have grown, got {grew}");
+        assert_eq!(
+            earned, grew,
+            "what was earned is exactly what the population grew by"
+        );
     }
 
     /// Lay mines at offsets inside this player's granted ground, and apply

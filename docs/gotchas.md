@@ -114,15 +114,25 @@ The same bug, one layer down, and worth knowing before spending an afternoon on 
 
 `xdotool windowfocus --sync $(xdotool search --name Conway | tail -1)` sets it directly, and everything works. Clicks need no such thing, which is what makes it confusing: the pointer works, so the window looks alive.
 
-## Frame times come in bursts, and it is the event loop, not the GPU
+## Ask for the next frame in `about_to_wait`, not at the end of the last one
 
-The loop runs on `ControlFlow::Wait` and re-arms itself with a `request_redraw()` at the end of each frame, so it sleeps in between. Meanwhile `Frame::begin` calls `surface.get_current_texture()`, and with `PresentMode::Fifo` that **blocks the same thread that dispatches input** until the compositor releases a buffer.
+A `request_redraw()` made **while handling `RedrawRequested`** may be folded into the redraw already being processed. winit says so and several backends do it, so the request is dropped, nothing is left to wake the loop, and under `ControlFlow::Wait` it sleeps until some input arrives — and then the redraw fires immediately behind that input.
 
-So: the thread stalls inside present, input events pile up in the OS queue, the draw finishes and re-arms, and the loop comes back to find several cheap input events *and* a redraw request. The input drains in microseconds and the redraw fires immediately behind it. A wait, then two frames almost together.
+*Symptom:* a stall, then two frames almost together, and **worst when the pointer is still**, because nothing else is waking the loop. It looks like the GPU stuttering when nothing about the GPU has changed.
 
-*Symptom:* frame times that look like the GPU is stuttering when nothing about the GPU has changed, and which get worse the more you move the mouse.
+`about_to_wait` runs after the queue has drained and before the loop sleeps, so a request made there is always outstanding when it sleeps and there is always exactly one frame pending. Pacing then comes from the present queue, which is `Fifo` and is the thing that should be setting it.
+
+The second contributor is real too and is not fixed: `Frame::begin` calls `surface.get_current_texture()`, and with `Fifo` that blocks the same thread that dispatches input until the compositor releases a buffer. Input arriving during that block is drained in one go afterwards. Getting rid of that means not presenting on the event thread, which is a bigger change than it is worth so far.
 
 `dt` inherits all of it, and it used to be handed to `World::update` unclamped — so a long stall (a window drag, devtools opening, a backgrounded tab) became `MAX_CATCHUP_STEPS` generations in one frame and the *world* lurched too, not just the picture. It is clamped to one generation's worth now. Connected, the server is the clock and this only paces the interface; offline it is the difference between a hitch and a jump.
+
+## A `Paint` is idempotent for one generation only
+
+Applying the same paint twice at the same tick changes nothing. Applying it one generation late is a different action: the cells it named have moved, and laying them again puts the original pattern back on top of where it went.
+
+That is what a client does if it applies its own actions when the server broadcasts them back, and it needs latency to happen — the action has to miss one server step, which on a loopback socket it never does. So it is invisible locally and ordinary over a real network.
+
+*Symptom:* draw a glider, watch it thicken into a blob and settle into a still life, then snap back to a glider a few seconds later when the resync lands.
 
 ## Serving over plain HTTP costs you WebGPU
 

@@ -184,6 +184,8 @@ struct Running<A> {
     gpu: GpuState,
     app: A,
     last_frame: f64,
+    /// Frame intervals since the last report, for `frame_report`.
+    frames: Vec<f32>,
     /// Control held. A trackpad pinch arrives as ctrl+wheel nearly everywhere,
     /// so the wheel needs to know.
     ctrl: bool,
@@ -222,6 +224,7 @@ impl<A: App> Harness<A> {
             gpu,
             app,
             last_frame,
+            frames: Vec::new(),
             ctrl: false,
             cursor: winit::window::CursorIcon::Default,
         });
@@ -287,6 +290,28 @@ impl<A: App> ApplicationHandler for Harness<A> {
         });
 
         self.take_pending();
+    }
+
+    /// Ask for the next frame here rather than at the end of the last one.
+    ///
+    /// This is what keeps the loop running, and where it is asked from decides
+    /// whether it runs *evenly*. A `request_redraw` made while handling
+    /// `RedrawRequested` may be folded into the redraw already being processed
+    /// — winit says so, and several backends do it — so the request is dropped,
+    /// nothing is left to wake the loop, and under `ControlFlow::Wait` it
+    /// sleeps until some input arrives. Then the redraw fires immediately
+    /// behind that input: a stall, then two frames almost together, and worst
+    /// when the pointer is still because nothing else is waking it.
+    ///
+    /// `about_to_wait` runs after the queue has drained and before the loop
+    /// sleeps, so a request made here is always outstanding when it sleeps and
+    /// there is always exactly one frame pending. Pacing then comes from the
+    /// present queue, which is `Fifo` and is the thing that should be setting
+    /// it.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(r) = &self.running {
+            r.window.request_redraw();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -371,6 +396,9 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 let dt = ((now - r.last_frame).max(0.0) as f32).min(LONGEST_FRAME);
                 r.last_frame = now;
 
+                r.frames.push(dt);
+                frame_report(&mut r.frames);
+
                 r.app.update(&r.gpu, dt);
 
                 let cursor = r.app.cursor_icon();
@@ -399,13 +427,37 @@ impl<A: App> ApplicationHandler for Harness<A> {
                     }
                 }
 
-                // Ask for the next frame now that this one is done. One
-                // scheduler, paced by the display.
-                r.window.request_redraw();
             }
             _ => {}
         }
     }
+}
+
+/// Say how evenly frames are arriving, every few seconds and only at debug.
+///
+/// Worth having permanently, because "the frame rate feels lumpy" is a
+/// complaint no screenshot can settle and the shape of the distribution says
+/// which of two very different things is happening: a low median is not
+/// keeping up, and a low median with a long tail is keeping up and stalling.
+fn frame_report(frames: &mut Vec<f32>) {
+    const EVERY: usize = 240;
+    if frames.len() < EVERY {
+        return;
+    }
+    let mut sorted = frames.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let at = |q: f32| sorted[((sorted.len() - 1) as f32 * q) as usize] * 1000.0;
+    let mean = frames.iter().sum::<f32>() / frames.len() as f32;
+    log::debug!(
+        "frames: {:.0}/s mean, ms p50 {:.1} p90 {:.1} p99 {:.1} max {:.1}, shortest {:.1}",
+        1.0 / mean,
+        at(0.50),
+        at(0.90),
+        at(0.99),
+        at(1.0),
+        at(0.0),
+    );
+    frames.clear();
 }
 
 /// The most device pixels per point the canvas will ask for. See

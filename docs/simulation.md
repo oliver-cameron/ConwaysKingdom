@@ -29,7 +29,8 @@ Two bytes, uploaded as `Rg8Uint`. The second of them is a sprite.
 | alive | G bit 0 | living or not |
 | ice | G bit 1 | a pane covers it; independent of alive |
 | kind | G bits 2..8 | what it is |
-| spare | R bits 0..3 | nothing yet |
+| home | R bit 0 | granted ground, which never decays |
+| spare | R bits 1..3 | nothing yet |
 | player | R bits 3..8 | owner, 0 = unowned, so 31 players |
 
 **Byte 1 is the tile this cell draws**, whole and unshifted: low nibble across the sheet, high nibble down it. Alive and ice sit in its bottom bits and the kind in the rest, so a kind's four states are four consecutive tiles and finding a cell's picture is arithmetic rather than a lookup. There is no layer to choose and no UV to carry — what a cell looks like is one number.
@@ -66,11 +67,11 @@ Ice is cleared on a birth because a parent may be *under a pane* and still count
 
 ### Mines, and what the rule counts
 
-`Kind::MINE` pays its owner when one of its kind is **born**. The rule does not know what a birth is worth — it counts them, per player, and hands the tally back from `World::step` as a `Mined`. What a birth is worth is a price, and prices live in `net`.
+`Kind::MINE` pays its owner when one of its kind is **born** and costs its owner when one **dies**. The rule does not know what either is worth — it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. What they are worth is a price, and prices live in `net`.
 
 Counted inside `Halo::step_into`, which is the one place that holds a cell before and after in the same breath, so it costs a comparison and no second pass over the world. The tally is returned rather than applied, because a world holds cells and not purses: the server folds it into the authoritative values and a client folds it into its predicted one.
 
-What that makes valuable is **turnover** rather than holdings. A block of mines is a still life, never gives birth and earns nothing; an oscillator earns every period, and a gun earns forever.
+A death costs exactly what a birth pays, so a generation's income is the **net change in your mine population** and nothing else. Over the life of a pattern that telescopes: what a mine earned in total is what it grew into. A still life earns nothing, an oscillator earns nothing, only something still *growing* earns, and a colony dying back costs.
 
 ## Chunks
 
@@ -104,6 +105,12 @@ Every non-empty chunk, plus any neighbour it carries life towards. A chunk with 
 ## Territory
 
 A dead cell next to living ones takes the owner of one of them, chosen by the seed, most generations. It stays dead: the rule sets the owner and nothing else. Ice is checked first, so a pane's cover is not claimed while it stands.
+
+**And it decays.** A dead cell with *nothing alive* among its eight neighbours loses its owner, one generation in `rule::DECAY_ODDS` — sixteen, about four seconds at the default rate. Territory used to only ever spread, which meant a glider left a permanent trail and an infinite world grew for as long as anything moved: ground was won and never lost, and a map that only fills up is not one anybody competes over. A glider crossing four hundred generations used to hold twenty-five chunks and climbing, for five live cells; it now holds a handful.
+
+Life holds the ground around it, because a square touching something alive is re-claimed as fast as it could ever decay. So territory is "where your life is, and where it has just been" rather than "everywhere it has ever been".
+
+The exception is **granted ground**, marked by `bits::HOME` and exempt. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. The mark is on the *square*, not the lineage, which is why a birth keeps the dead cell's copy of it while taking everything else from its parent. It travels with the ground when the ground changes hands.
 
 This makes ownership meaningful on dead ground, which changes what an empty chunk is. `Chunk::is_empty` now asks about ownership as well as life and ice — without that, `prune` would drop a chunk on the very step its ground was claimed, and territory outside a chunk that also held life could never last a generation. The cost is that an infinite world grows with territory as well as with life, and there is no die-off yet, so it only grows.
 

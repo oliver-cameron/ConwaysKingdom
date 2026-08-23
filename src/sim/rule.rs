@@ -29,6 +29,7 @@
 //! number without exchanging one.
 
 use super::cell::Cell;
+use super::player::PlayerId;
 
 /// Neighbours in [`super::Dir::ALL`] order: N, NE, E, SE, S, SW, W, NW.
 pub type Neighbours = [Cell; 8];
@@ -36,6 +37,19 @@ pub type Neighbours = [Cell; 8];
 /// A rule. Swap in a different one by changing what the world calls; the
 /// signature is a plain function pointer, so there is no dispatch cost.
 pub type RuleFn = fn(Cell, &Neighbours, u64) -> Cell;
+
+/// One chance in this many, per generation, that a dead cell with nothing
+/// alive beside it loses its owner.
+///
+/// Sixteen is about four seconds at the default rate: long enough that a
+/// pattern flickering off and on keeps its ground, short enough that a glider's
+/// trail fades behind it rather than staking a claim across the world. The one
+/// number to move if territory feels too sticky or too slippery.
+///
+/// Granted ground is exempt — see [`super::bits::HOME`]. Without that floor a
+/// player whose life died out would lose every square they had, and placing is
+/// confined to your own territory, so they could never place again.
+pub const DECAY_ODDS: u64 = 16;
 
 /// Mix a value into a seed. SplitMix64's finaliser: cheap, and it decorrelates
 /// the near-identical inputs (adjacent cells, consecutive ticks) that a plain
@@ -62,22 +76,44 @@ impl Cell {
         if self.is_ice() {
             return self;
         }
-        // Territory. A dead cell takes the owner of a living neighbour, most
-        // of the time, so ground is claimed by the life that grows over it.
-        // It stays dead: this sets the owner and nothing else.
-        //
-        // Ice is handled above, so a pane's cover is not claimed while it
-        // stands. Territory only ever spreads for now -- there is no die-off,
-        // so ground once claimed stays claimed until someone else's life
-        // reaches it.
+        // Territory: claimed by life growing over it, and lost when life goes
+        // away. Either way the cell stays dead -- this sets the owner and
+        // nothing else. Ice is handled above, so a pane's cover is neither
+        // claimed nor lost while it stands.
         if !self.is_alive() {
-            let live: Vec<&Cell> = neighbours.iter().filter(|n| n.is_alive()).collect();
-            if !live.is_empty() && ((seed >> 3) & 15) <= 9 {
+            // A fixed array and a count rather than a `Vec`, because this runs
+            // for every dead cell of every active chunk of every generation
+            // and it was the one allocation in the hot loop.
+            let mut claimants = [PlayerId::UNOWNED; 8];
+            let mut found = 0usize;
+            for n in neighbours {
+                if n.is_alive() {
+                    claimants[found] = n.player();
+                    found += 1;
+                }
+            }
+
+            if found > 0 {
                 // A random living neighbour, so a cell between two players
                 // goes to one of them rather than always to the first in
                 // `Dir::ALL` order.
-                let claimant = live[(seed % live.len() as u64) as usize];
-                self = self.with_player(claimant.player());
+                if (seed >> 3) & 15 <= 9 {
+                    self = self.with_player(claimants[(seed % found as u64) as usize]);
+                }
+            } else if self.player().is_owned() && !self.is_home() {
+                // **Decay.** Nothing alive is touching this square, so whoever
+                // holds it is holding it on memory alone. Territory used to
+                // only ever spread, which meant a glider left a permanent
+                // trail and an infinite world grew for as long as anything
+                // moved: ground was won and never lost, and a map that only
+                // fills up is not one anybody competes over.
+                //
+                // Slow, and seeded like everything else, so a patch fades over
+                // a few seconds rather than blinking out. Its own slice of the
+                // seed, so it is independent of the claim above.
+                if (seed >> 9).is_multiple_of(DECAY_ODDS) {
+                    self = self.with_player(PlayerId::UNOWNED);
+                }
             }
         }
 
@@ -111,7 +147,12 @@ impl Cell {
             // cleared because a parent may be under a pane and count as a live
             // neighbour while frozen, and a birth outside the pane must not
             // inherit the pane.
-            (false, 3) => parent(neighbours, seed).with_ice(false),
+            (false, 3) => parent(neighbours, seed)
+                .with_ice(false)
+                // `HOME` marks the square, so it stays with the square. Every
+                // other thing about a newborn comes from its parent, and this
+                // is the one that must not.
+                .with_home(self.is_home()),
             // Dies, or stays dead. Owner and metadata are left as they were.
             _ => self.with_alive(false),
         }

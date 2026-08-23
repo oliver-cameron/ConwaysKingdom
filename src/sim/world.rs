@@ -331,7 +331,7 @@ impl World {
         let mut steps = 0;
         while self.elapsed >= span && steps < MAX_CATCHUP_STEPS {
             self.elapsed -= span;
-            add_mined(&mut mined, &self.step());
+            mined.add(&self.step());
             steps += 1;
         }
         if steps == MAX_CATCHUP_STEPS {
@@ -612,16 +612,6 @@ impl World {
 
 }
 
-/// Fold one generation's tally into a running one.
-///
-/// Saturating, so a world that somehow ran for four billion births does not
-/// wrap a player's earnings round to nothing.
-pub fn add_mined(total: &mut Mined, one: &Mined) {
-    for (t, n) in total.iter_mut().zip(one) {
-        *t = t.saturating_add(*n);
-    }
-}
-
 /// Does this chunk carry life on the edge facing `dir`? A live cell there can
 /// contribute to a birth in the chunk beyond.
 fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
@@ -690,17 +680,21 @@ mod tests {
             assert!(!chunk.is_empty(), "chunk {coord:?} is empty but stored");
         }
 
-        // But the wake is no longer empty. A glider claims the ground it
-        // crosses, and territory has no die-off, so every chunk it has ever
-        // passed through is kept for the owner marks left on its dead cells.
-        // The world therefore grows with the glider -- deliberately, since
-        // territory that vanished the moment life moved on would be no
-        // territory at all, but it is unbounded until a die-off bounds it.
+        // And the wake is bounded, which is what territory decay bought.
+        //
+        // A glider claims the ground it crosses. With no die-off it kept every
+        // square it had ever touched, so a chunk was held for each and the
+        // world grew for as long as anything moved -- twenty-five chunks and
+        // climbing after four hundred generations, for five live cells.
+        // Ground with nothing alive beside it now loses its owner, so the
+        // trail fades behind the glider and only what it is currently over is
+        // held.
         assert!(
-            w.stored_count() > 4,
-            "a glider crossing 400 generations should have claimed a trail, got {}",
+            w.stored_count() <= 8,
+            "a glider should hold a handful of chunks, not a trail; got {}",
             w.stored_count()
         );
+
         let claimed = w
             .stored()
             .iter()
@@ -709,6 +703,60 @@ mod tests {
             })
             .count();
         assert_eq!(claimed, w.stored_count(), "every chunk kept is kept for a reason");
+    }
+
+    /// Ground is lost as well as won, and granted ground is not.
+    #[test]
+    fn territory_decays_where_nothing_is_alive_but_home_does_not() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+
+        // A patch of plain claimed ground, and a patch of granted ground, both
+        // with nothing alive anywhere near them.
+        for c in 0..8 {
+            w.set_cell_at(0, c, Cell::DEAD.with_player(me));
+            w.set_cell_at(4, c, Cell::DEAD.with_player(me).with_home(true));
+        }
+
+        let owned = |w: &World, row: i32| {
+            (0..8).filter(|&c| w.cell_at(row, c).unwrap().player() == me).count()
+        };
+        assert_eq!(owned(&w, 0), 8);
+
+        // Long enough that a one-in-sixteen chance has almost certainly come
+        // up for every square.
+        for _ in 0..200 {
+            w.step();
+        }
+
+        assert_eq!(owned(&w, 0), 0, "ground with nothing alive beside it fades");
+        assert_eq!(owned(&w, 4), 8, "granted ground is the floor and stays");
+    }
+
+    /// Decay only reaches ground that life has left. A pattern holds the
+    /// squares around it for as long as it is alive, or a blinker would flicker
+    /// its own ground away.
+    #[test]
+    fn territory_beside_life_is_held() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        // A block: four cells that live forever without moving.
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            w.set_cell_at(r, c, Cell::alive(me));
+        }
+        for _ in 0..200 {
+            w.step();
+        }
+        // The eight squares around it are touching life every generation, so
+        // they are re-claimed as fast as they could ever decay.
+        let ring = [(-1, -1), (-1, 0), (-1, 1), (-1, 2), (0, -1), (0, 2), (2, 0), (2, 1)];
+        for (r, c) in ring {
+            assert_eq!(
+                w.cell_at(r, c).unwrap().player(),
+                me,
+                "({r}, {c}) beside a block should stay claimed"
+            );
+        }
     }
 
     /// Every one of a 1x1 torus's eight neighbours is the chunk itself. A

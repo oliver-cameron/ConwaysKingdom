@@ -551,20 +551,29 @@ impl BattleApp {
         let here = self.world.generation;
         if tick == here + 1 {
             let mined = self.world.step();
-            self.value += crate::net::earnings(&mined, self.player());
+            self.bank(&mined);
             return;
         }
         if tick > here && tick - here <= CATCH_UP {
             log::debug!("{} generations behind; catching up", tick - here);
             for _ in here..tick {
                 let mined = self.world.step();
-                self.value += crate::net::earnings(&mined, self.player());
+                self.bank(&mined);
             }
             return;
         }
         log::warn!("out of step: the server is at {tick} and this client at {here}");
         self.world.set_generation(tick);
         self.world.dirty = true;
+    }
+
+    /// Fold a generation's mining into the predicted purse, floored at zero
+    /// the way the server floors the real one.
+    ///
+    /// A prediction, and a low one: only the mines in chunks this client holds
+    /// are counted. `Purse` is what makes it right again.
+    fn bank(&mut self, mined: &crate::sim::Mined) {
+        self.value = (self.value + crate::net::earnings(mined, self.player())).max(0);
     }
 
     /// Drain the socket and fold what arrived into the local world.
@@ -702,7 +711,21 @@ impl BattleApp {
                     // timing both matter: the step is a pure function of state
                     // and tick, so doing this a generation early or late is
                     // the same as doing something else.
-                    for stamped in &actions {
+                    //
+                    // **Except our own, which were applied when they were
+                    // made.** A `Paint` is idempotent on the generation it was
+                    // meant for and not one generation later: by then the cells
+                    // it named have moved, and laying them again stamps the
+                    // original pattern back on top of where it went. Draw a
+                    // glider, watch it thicken into a blob and settle into a
+                    // honey farm, and watch it snap back to a glider when the
+                    // resync lands a few seconds later.
+                    //
+                    // Skipping them leaves the phase error prediction has
+                    // always had -- the same cells, a generation out, which the
+                    // checkpoint puts right -- instead of a different pattern
+                    // that the rules then build on.
+                    for stamped in actions.iter().filter(|s| Some(s.player) != self.me) {
                         crate::net::apply(&mut self.world, stamped);
                     }
                     self.advance_to(tick);
@@ -1382,7 +1405,7 @@ impl App for BattleApp {
         // `advance_to`.
         if self.link.is_none() {
             let mined = self.world.update(dt, GENERATION_SPAN);
-            self.value += crate::net::earnings(&mined, self.player());
+            self.bank(&mined);
         }
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);
