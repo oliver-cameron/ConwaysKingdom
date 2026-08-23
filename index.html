@@ -31,6 +31,12 @@
       height: 100vh;
       outline: none;
 
+      /* winit no longer calls preventDefault on everything -- see
+         `render::app` -- so a drag across the canvas would start selecting
+         the page instead of drawing. */
+      user-select: none;
+      -webkit-user-select: none;
+
       /* The browser decides what a gesture means from this, and it decides
          before it delivers an event anyone can cancel. Left at `auto` it takes
          a two-finger pinch as page zoom and a drag as a scroll, and winit's

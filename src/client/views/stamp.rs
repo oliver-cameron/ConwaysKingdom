@@ -158,26 +158,7 @@ impl Stamp {
             // a solid blob -- the difference between a shape and a smear.
             let box_ = at.shrink(step * 0.12);
 
-            match sheet {
-                // The tile a stamp's cell would draw as once it is placed:
-                // alive, and of this placement's kind. The sheet is already in
-                // this player's colour, and the tile byte carries the state,
-                // so there is nothing here to look up.
-                Some(sheet) => {
-                    let tile = what.apply_to(Cell::DEAD, player).tile();
-                    painter.image(sheet, box_, Icons::uv(tile), egui::Color32::WHITE);
-                }
-                None => {
-                    let lightness = match what {
-                        Placement::Turret => 0.90,
-                        Placement::Mine => 0.78,
-                        _ => 0.62,
-                    };
-                    let (red, green, blue) =
-                        crate::client::views::hud::shade(lightness, 1.0, player);
-                    painter.rect_filled(box_, 0.0, egui::Color32::from_rgb(red, green, blue));
-                }
-            }
+            cell(painter, box_, what, player, sheet);
         }
     }
 
@@ -185,6 +166,263 @@ impl Stamp {
     /// is where you are looking when you place it.
     pub fn centred_on(&self, at: (i32, i32)) -> (i32, i32) {
         (at.0 - self.size.0 / 2, at.1 - self.size.1 / 2)
+    }
+}
+
+/// The pad you draw a stamp on, and the two buttons that do something with it.
+///
+/// Below the list rather than behind a mode, because drawing one and looking
+/// at the ones you have are the same errand — you draw a thing you have not
+/// got, and what you have got is right there to tell you whether you have it.
+///
+/// Returns what the player asked for, if anything.
+fn pad(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    sketch: &mut Sketch,
+    player: PlayerId,
+    sheet: Option<egui::TextureId>,
+) -> Option<Picked> {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let mut asked = None;
+
+    // What the pad lays. Its own row rather than the world's hotbar, because
+    // what you are drawing here and what you are holding out there are not the
+    // same choice -- and a pad that changed what your next click on the board
+    // would do would be a trap.
+    ui.horizontal(|ui| {
+        for what in [Placement::Life, Placement::Mine, Placement::Turret] {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(m.slot * 0.6, m.slot * 0.6), egui::Sense::click());
+            let held = sketch.holding() == what;
+            ui.painter().rect_stroke(
+                rect,
+                m.rounding,
+                egui::Stroke::new(if held { 1.5 } else { 1.0 }, if held { p.accent } else { p.line }),
+                egui::StrokeKind::Inside,
+            );
+            cell(ui.painter(), rect.shrink(4.0), what, player, sheet);
+            if response.clicked() {
+                sketch.hold(what);
+            }
+        }
+    });
+
+    let side = ui.available_width().min(224.0);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click_and_drag());
+    let step = side / SKETCH_N as f32;
+    ui.painter().rect_filled(rect, m.rounding, p.surface);
+
+    for row in 0..SKETCH_N {
+        for col in 0..SKETCH_N {
+            let Some(what) = sketch.at(row, col) else { continue };
+            let box_ = egui::Rect::from_min_size(
+                rect.min + egui::vec2(col as f32 * step, row as f32 * step),
+                egui::vec2(step, step),
+            );
+            cell(ui.painter(), box_.shrink(step * 0.08), what, player, sheet);
+        }
+    }
+    // Drawn over the cells, so the grid reads as ruling on paper rather than
+    // as gaps between them.
+    let faint = egui::Stroke::new(1.0, p.line.gamma_multiply(0.35));
+    for i in 0..=SKETCH_N {
+        let at = i as f32 * step;
+        ui.painter().line_segment(
+            [rect.min + egui::vec2(at, 0.0), rect.min + egui::vec2(at, side)],
+            faint,
+        );
+        ui.painter().line_segment(
+            [rect.min + egui::vec2(0.0, at), rect.min + egui::vec2(side, at)],
+            faint,
+        );
+    }
+    ui.painter().rect_stroke(
+        rect,
+        m.rounding,
+        egui::Stroke::new(1.0, p.line),
+        egui::StrokeKind::Inside,
+    );
+
+    // A drag lays and a click lays or lifts, which is what the same gestures
+    // do on the board. Only the cell under the pointer this frame: a pad is
+    // small and a hand crossing it is slow, so the interpolation the world's
+    // pencil needs would be machinery for nothing.
+    if let Some(at) = response.interact_pointer_pos() {
+        let local = at - rect.min;
+        let (row, col) = ((local.y / step) as i32, (local.x / step) as i32);
+        if response.clicked() {
+            sketch.click(row, col);
+        } else if response.dragged() {
+            sketch.lay(row, col);
+        }
+    }
+
+    ui.horizontal(|ui| {
+        // Nothing drawn is nothing to keep, and a button that does nothing
+        // says less than one that is plainly not available.
+        ui.add_enabled_ui(!sketch.is_empty(), |ui| {
+            if ui.small_button(words::KEEP).clicked() {
+                if let Some(stamp) = sketch.to_stamp() {
+                    sketch.clear();
+                    asked = Some(Picked::Keep(stamp));
+                }
+            }
+            if ui.small_button(words::CLEAR).clicked() {
+                sketch.clear();
+            }
+        });
+        ui.small(words::DRAW_HOW);
+    });
+
+    asked
+}
+
+/// Draw one cell of a pattern, as the world would draw it.
+///
+/// One function because the preview on a button and the pad you draw on must
+/// agree: a cell that looks like a mine in one and like life in the other is
+/// worse than either.
+///
+/// The sheet can fail to build, and then the kinds fall back to lightness —
+/// paler for a mine, paler still for a turret — so the distinction survives
+/// losing the art rather than going with it.
+fn cell(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    what: Placement,
+    player: PlayerId,
+    sheet: Option<egui::TextureId>,
+) {
+    match sheet {
+        // The tile this cell would draw as once it is placed: alive, and of
+        // this placement's kind. The sheet is already in the player's colour
+        // and the tile byte carries the state, so there is nothing to look up.
+        Some(sheet) => {
+            let tile = what.apply_to(Cell::DEAD, player).tile();
+            painter.image(sheet, rect, Icons::uv(tile), egui::Color32::WHITE);
+        }
+        None => {
+            let lightness = match what {
+                Placement::Turret => 0.90,
+                Placement::Mine => 0.78,
+                _ => 0.62,
+            };
+            let (red, green, blue) = crate::client::views::hud::shade(lightness, 1.0, player);
+            painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(red, green, blue));
+        }
+    }
+}
+
+/// How wide the pad you draw a stamp on is, in cells.
+///
+/// Sixteen because that is a chunk, and because a pattern worth drawing by
+/// hand is a small one — anything larger is a thing you build on the board and
+/// capture with Grab. What is kept is trimmed to what was drawn, so using a
+/// corner of the pad costs nothing.
+pub const SKETCH_N: i32 = 16;
+
+/// A stamp being drawn by hand rather than taken off the board.
+///
+/// Capturing needs something already alive and standing where you can reach
+/// it, which makes the first stamp of a session the hardest one to get and
+/// makes trying a pattern out mean building it first. Drawing needs nothing:
+/// a pad, a kind, and somewhere to put the cells.
+///
+/// It holds placements rather than cells, exactly as a [`Stamp`] does, so what
+/// is drawn is what is kept and there is no conversion to get wrong.
+#[derive(Clone, Debug)]
+pub struct Sketch {
+    cells: Vec<Option<Placement>>,
+    /// What the next cell laid will be. The pad's own hotbar, and separate
+    /// from the world's, because what you are drawing here is not what you are
+    /// holding out there.
+    holding: Placement,
+}
+
+impl Default for Sketch {
+    fn default() -> Self {
+        Self {
+            cells: vec![None; (SKETCH_N * SKETCH_N) as usize],
+            holding: Placement::Life,
+        }
+    }
+}
+
+impl Sketch {
+    /// What the pad lays next.
+    pub fn holding(&self) -> Placement {
+        self.holding
+    }
+
+    pub fn hold(&mut self, what: Placement) {
+        self.holding = what;
+    }
+
+    fn index(row: i32, col: i32) -> Option<usize> {
+        (0..SKETCH_N).contains(&row).then_some(())?;
+        (0..SKETCH_N).contains(&col).then_some(())?;
+        Some((row * SKETCH_N + col) as usize)
+    }
+
+    pub fn at(&self, row: i32, col: i32) -> Option<Placement> {
+        self.cells[Self::index(row, col)?]
+    }
+
+    /// Lay what is held here. A drag always lays and never lifts, which is the
+    /// rule a drag follows on the board: a sweep across cells already drawn is
+    /// far more likely to be drawing over them than asking for them back.
+    pub fn lay(&mut self, row: i32, col: i32) {
+        if let Some(i) = Self::index(row, col) {
+            self.cells[i] = Some(self.holding);
+        }
+    }
+
+    /// A click lays, or lifts what it finds if that is already what is held —
+    /// the same question `net::Placement::is_on` asks of a square on the
+    /// board, so the pad behaves like the thing it is drawing for.
+    pub fn click(&mut self, row: i32, col: i32) {
+        let Some(i) = Self::index(row, col) else { return };
+        self.cells[i] = if self.cells[i] == Some(self.holding) { None } else { Some(self.holding) };
+    }
+
+    pub fn clear(&mut self) {
+        self.cells.iter_mut().for_each(|c| *c = None);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.iter().all(Option::is_none)
+    }
+
+    /// What is drawn, as a stamp, trimmed to the cells that are there.
+    ///
+    /// `None` when nothing is drawn: an empty stamp is a button that does
+    /// nothing, which is worse than a refusal that says why. Trimmed for the
+    /// same reason a capture is — where on the pad you happened to draw is not
+    /// part of the pattern.
+    pub fn to_stamp(&self) -> Option<Stamp> {
+        let found: Vec<((i32, i32), Placement)> = (0..SKETCH_N)
+            .flat_map(|r| (0..SKETCH_N).map(move |c| (r, c)))
+            .filter_map(|(r, c)| self.at(r, c).map(|what| ((r, c), what)))
+            .collect();
+        if found.is_empty() {
+            return None;
+        }
+
+        let top = found.iter().map(|&((r, _), _)| r).min()?;
+        let left = found.iter().map(|&((_, c), _)| c).min()?;
+        let bottom = found.iter().map(|&((r, _), _)| r).max()?;
+        let right = found.iter().map(|&((_, c), _)| c).max()?;
+        Some(Stamp {
+            name: format!("{}x{}", bottom - top + 1, right - left + 1),
+            cells: found
+                .into_iter()
+                .map(|((r, c), what)| ((r - top, c - left), what))
+                .collect(),
+            size: (bottom - top + 1, right - left + 1),
+        })
     }
 }
 
@@ -236,6 +474,8 @@ pub enum Picked {
     Nothing,
     Hold(usize),
     Forget(usize),
+    /// A pattern drawn on the pad rather than taken off the board.
+    Keep(Stamp),
     Close,
 }
 
@@ -247,6 +487,7 @@ pub fn show(
     ctx: &egui::Context,
     theme: &Theme,
     library: &Library,
+    sketch: &mut Sketch,
     player: PlayerId,
     sheet: Option<egui::TextureId>,
 ) -> (Picked, Option<egui::Rect>) {
@@ -308,6 +549,12 @@ pub fn show(
                     });
 
                     ui.separator();
+                    ui.label(words::DRAW);
+                    if let Some(drawn) = pad(ui, theme, sketch, player, sheet) {
+                        picked = drawn;
+                    }
+
+                    ui.separator();
                     ui.small(words::HOW);
                     if ui
                         .add_sized([ui.available_width(), 26.0], egui::Button::new(words::CLOSE))
@@ -331,6 +578,124 @@ mod tests {
             world.set_cell_at(r, c, Cell::alive(who).with_kind(kind));
         }
         world
+    }
+
+    /// Drawn rather than captured: the first stamp of a session no longer
+    /// needs something already alive and standing where you can reach it.
+    #[test]
+    fn a_drawn_stamp_is_the_pattern_not_where_it_was_drawn() {
+        let mut pad = Sketch::default();
+        // A glider, drawn away from the pad's corner.
+        for (r, c) in [(5, 6), (6, 7), (7, 5), (7, 6), (7, 7)] {
+            pad.lay(r, c);
+        }
+        let stamp = pad.to_stamp().expect("five cells is a pattern");
+        assert_eq!(stamp.size, (3, 3), "trimmed to what was drawn");
+        assert_eq!(stamp.name, "3x3");
+        let mut cells: Vec<(i32, i32)> = stamp.cells.iter().map(|&(at, _)| at).collect();
+        cells.sort_unstable();
+        assert_eq!(cells, vec![(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)]);
+    }
+
+    /// The pad asks the same question the board does: what you are holding is
+    /// already there, so a click takes it back, and anything else it lays.
+    #[test]
+    fn a_click_lays_or_lifts_and_a_drag_only_lays() {
+        let mut pad = Sketch::default();
+        assert_eq!(pad.holding(), Placement::Life);
+
+        pad.click(0, 0);
+        assert_eq!(pad.at(0, 0), Some(Placement::Life));
+        pad.click(0, 0);
+        assert_eq!(pad.at(0, 0), None, "clicking what is held lifts it");
+
+        // Holding something else replaces rather than lifts, as on the board.
+        pad.click(1, 1);
+        pad.hold(Placement::Turret);
+        pad.click(1, 1);
+        assert_eq!(pad.at(1, 1), Some(Placement::Turret));
+
+        // A drag lays and never lifts: a sweep over cells already drawn is far
+        // more likely to be drawing over them than asking for them back.
+        pad.lay(1, 1);
+        assert_eq!(pad.at(1, 1), Some(Placement::Turret));
+    }
+
+    /// Every cell keeps the kind it was drawn with, which is the whole of what
+    /// a stamp carries beyond its shape.
+    #[test]
+    fn a_drawn_stamp_keeps_the_kind_of_every_cell() {
+        let mut pad = Sketch::default();
+        pad.lay(0, 0);
+        pad.hold(Placement::Mine);
+        pad.lay(0, 1);
+        pad.hold(Placement::Turret);
+        pad.lay(0, 2);
+
+        let stamp = pad.to_stamp().unwrap();
+        let mut cells = stamp.cells.clone();
+        cells.sort_by_key(|&(at, _)| at);
+        assert_eq!(
+            cells,
+            vec![
+                ((0, 0), Placement::Life),
+                ((0, 1), Placement::Mine),
+                ((0, 2), Placement::Turret),
+            ]
+        );
+        assert_eq!(stamp.placements().len(), 3, "and each is laid as its own action");
+    }
+
+    /// An empty stamp is a button that does nothing, which is worse than a
+    /// refusal that says why.
+    #[test]
+    fn an_empty_pad_is_not_a_stamp() {
+        let mut pad = Sketch::default();
+        assert!(pad.is_empty());
+        assert!(pad.to_stamp().is_none());
+
+        pad.lay(3, 3);
+        assert!(!pad.is_empty());
+        pad.clear();
+        assert!(pad.to_stamp().is_none(), "clearing leaves nothing to keep");
+    }
+
+    /// Off the pad is nothing at all rather than a panic or a wrapped cell —
+    /// a pointer leaving the grid mid-drag is the ordinary case.
+    #[test]
+    fn drawing_off_the_pad_does_nothing() {
+        let mut pad = Sketch::default();
+        for (r, c) in [(-1, 0), (0, -1), (SKETCH_N, 0), (0, SKETCH_N), (99, 99)] {
+            pad.lay(r, c);
+            pad.click(r, c);
+            assert_eq!(pad.at(r, c), None);
+        }
+        assert!(pad.is_empty());
+    }
+
+    /// A stamp is a stamp however it was made: what is drawn goes on the wire
+    /// as the same `Paint` a captured one does.
+    #[test]
+    fn a_drawn_stamp_places_like_a_captured_one() {
+        let mut pad = Sketch::default();
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            pad.lay(r, c);
+        }
+        let drawn = pad.to_stamp().unwrap();
+        let captured = Stamp::capture(
+            &world_with(&[
+                ((0, 0), Kind::NORMAL, PlayerId(1)),
+                ((0, 1), Kind::NORMAL, PlayerId(1)),
+                ((1, 0), Kind::NORMAL, PlayerId(1)),
+                ((1, 1), Kind::NORMAL, PlayerId(1)),
+            ]),
+            PlayerId(1),
+            (0, 0),
+            (1, 1),
+        )
+        .unwrap();
+        assert_eq!(drawn.size, captured.size);
+        assert_eq!(drawn.at((5, 5)), captured.at((5, 5)));
     }
 
     /// A stamp is the pattern, not the rectangle somebody swept round it.

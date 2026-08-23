@@ -399,6 +399,12 @@ pub struct BattleApp {
     icons: icons::Icons,
     /// Whether the stamps that did not fit on the bar are on screen.
     picking_stamp: bool,
+    /// The pattern being drawn by hand in the library, if any.
+    ///
+    /// Lives here rather than in the library window because the window is
+    /// built afresh every frame, and half a drawing that vanished when you
+    /// looked away would not be worth having.
+    sketch: stamp::Sketch,
 }
 
 impl BattleApp {
@@ -1451,6 +1457,7 @@ impl App for BattleApp {
             stamps: stamp::Library::default(),
             icons: icons::Icons::default(),
             picking_stamp: false,
+            sketch: stamp::Sketch::default(),
             link,
         };
         app.world.dirty = false;
@@ -1564,6 +1571,10 @@ impl App for BattleApp {
         // `self` is already borrowed by `views`. Put back below, whatever the
         // menu did with it.
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        // Taken out for the frame for the same reason the screen is: the
+        // closure needs `&mut` on it while `self` is already borrowed by
+        // `views`. Put back below, whatever was drawn on it.
+        let mut sketch = std::mem::take(&mut self.sketch);
         let on_web = cfg!(target_arch = "wasm32");
         let me = self.player();
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
@@ -1588,7 +1599,8 @@ impl App for BattleApp {
                 let bar = hotbar::show(ctx, &look, held, &self.stamps);
                 picked = bar.picked;
                 if picking {
-                    let (chose, rect) = stamp::show(ctx, &theme, &self.stamps, me, sheet);
+                    let (chose, rect) =
+                        stamp::show(ctx, &theme, &self.stamps, &mut sketch, me, sheet);
                     from_library = chose;
                     return [hud_rect, bar.rect, rect].into_iter().flatten().collect();
                 }
@@ -1616,8 +1628,17 @@ impl App for BattleApp {
                 self.stamps.forget(i);
                 self.held = Held::default();
             }
+            // Kept where a captured one is kept, and held straight away: you
+            // drew it because you meant to place it.
+            stamp::Picked::Keep(stamp) => {
+                let (name, cells) = (stamp.name.clone(), stamp.cells.len());
+                self.stamps.keep(stamp);
+                self.held = Held::Stamp(0);
+                self.notice = Some(words::stamps::captured(&name, cells));
+            }
             stamp::Picked::Close => self.picking_stamp = false,
         }
+        self.sketch = sketch;
         *self.ui_output.borrow_mut() = Some(output);
 
         if self.camera.dirty {

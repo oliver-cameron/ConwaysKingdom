@@ -192,6 +192,8 @@ Any live cell in the eight neighbours shatters the whole connected run, **even i
 | escape | abandon the drag in progress |
 | 1–9 | choose a hotbar slot |
 
+On the web the page prevents only the defaults that would fight the game: the arrows and space, which scroll a document; the context menu, because right-drag pans; and middle-click autoscroll, for the same reason. Everything else reaches the browser — winit prevents everything it handles by default, and that took `F12` and `ctrl+shift+I` with it, so the page ate the key that opens the inspector and a build misbehaving in a browser could not be looked at. Touch is settled in the page's CSS instead, with `touch-action: none`, because a browser decides what a gesture means before it delivers an event anybody can cancel.
+
 A wheel and a trackpad arrive as the same winit event, and the only thing separating them is the unit: a wheel reports discrete lines, a trackpad continuous pixels. Splitting on that is what makes the gestures consistent — treating every scroll as zoom made a two-finger swipe lurch the zoom where every other application pans.
 
 Drawing and moving the view are never the same gesture, so neither has to guess which was meant. Three ways to pan rather than one because the middle button does not exist on a laptop trackpad and the right button is not always reachable either; space and drag is what a drawing tool does, and works everywhere.
@@ -226,7 +228,11 @@ A pattern captured once and placed again. Nothing on the wire is a stamp: placin
 
 **Grab** is a square of its own, at the front of the stamps segment. Hold it, drag a box round your own life, and what was inside becomes a stamp. It needs its own square because otherwise there is nowhere to start — capturing was "drag with a stamp held", which is fine once you have one and impossible before. Holding an existing stamp and dragging captures too, since by then you are already thinking about stamps.
 
-A stamp is **the live cells and their kind**, not the rectangle you swept, and the thumbnail draws each of them as the cell it will become. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of mines is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
+A stamp is **the live cells and their kind**, not the rectangle you swept, and the thumbnail draws each of them as the cell it will become.
+
+**Or draw one.** The library has a pad on it: pick a kind, click cells or drag a run of them, and keep what you drew. Capturing needs something already alive and standing where you can reach it, which makes the first stamp of a session the hardest one to get and makes trying a pattern out mean building it first — a pad needs nothing. What is kept is trimmed to what was drawn, so which corner of the pad you used is not part of the pattern, and a drawn stamp is a stamp like any other: the same `Paint` on the wire, priced and judged the same way.
+
+The pad asks the same questions the board does. A click lays a cell, or lifts it if what is there is already what you are holding; a drag only ever lays, because a sweep across cells already drawn is far more likely to be drawing over them than asking for them back. What the pad holds is its own choice and not the hotbar's — a pad that changed what your next click on the world would do would be a trap. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of mines is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
 
 Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern. Past ten, the rest are behind the library key — which is **always** there, not only when something has overflowed, because the library is where a stamp is looked at and thrown away as well as where the extras live. It shows each pattern at a size you can recognise, beside its size and cell count.
 

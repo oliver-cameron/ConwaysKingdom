@@ -149,6 +149,65 @@ mod zoom_gesture {
     }
 }
 
+/// Prevent the few browser defaults that would fight the game, and let every
+/// other one through.
+///
+/// winit's blanket `prevent_default` is off, because it took the browser's own
+/// shortcuts with it and a page you cannot open the inspector on is a page you
+/// cannot debug. What it was doing that is worth keeping is narrow, and this
+/// is the whole of it:
+///
+/// - **the arrows and space scroll a document**, and the game pans with both,
+///   so a pan would scroll the page out from under the canvas;
+/// - **right-click opens the context menu**, and right-drag pans;
+/// - **middle-click starts autoscroll** on Firefox, and middle-drag pans.
+///
+/// Never when ctrl, meta or alt is held, so ctrl+shift+I, F12, ctrl+R and the
+/// rest reach the browser whatever the game has bound. Touch needs nothing
+/// here: `touch-action: none` in the page's CSS settles it before an event is
+/// delivered at all, which is the only thing that works, since the browser
+/// decides what a gesture means before anyone can cancel it.
+#[cfg(target_arch = "wasm32")]
+mod defaults {
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    /// Attach a listener and let it live as long as the page does. Dropping a
+    /// `Closure` detaches it, so each one is leaked deliberately.
+    fn on<E: wasm_bindgen::convert::FromWasmAbi + 'static>(
+        canvas: &web_sys::HtmlCanvasElement,
+        event: &str,
+        f: impl FnMut(E) + 'static,
+    ) {
+        let handler = Closure::<dyn FnMut(E)>::new(f);
+        let _ = canvas.add_event_listener_with_callback(event, handler.as_ref().unchecked_ref());
+        handler.forget();
+    }
+
+    pub fn guard(canvas: &web_sys::HtmlCanvasElement) {
+        on(canvas, "keydown", |e: web_sys::KeyboardEvent| {
+            if e.ctrl_key() || e.meta_key() || e.alt_key() {
+                return;
+            }
+            if matches!(
+                e.key().as_str(),
+                "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | " "
+            ) {
+                e.prevent_default();
+            }
+        });
+        // Right-drag pans, so the menu would open on top of every pan.
+        on(canvas, "contextmenu", |e: web_sys::MouseEvent| e.prevent_default());
+        // Button 1 is the middle one, which pans and which Firefox otherwise
+        // takes as the start of an autoscroll.
+        on(canvas, "mousedown", |e: web_sys::MouseEvent| {
+            if e.button() == 1 {
+                e.prevent_default();
+            }
+        });
+    }
+}
+
 /// Off the web there is no such thing: a pinch either arrives as a
 /// `PinchGesture` or as a genuinely held ctrl, and both are already handled.
 #[cfg(not(target_arch = "wasm32"))]
@@ -242,6 +301,20 @@ impl<A: App> ApplicationHandler for Harness<A> {
         self.started = true;
 
         let attributes = Window::default_attributes().with_title("Conway's Kingdom");
+
+        // winit's web backend calls `preventDefault` on everything it handles,
+        // and that takes the browser's own shortcuts with it -- F12 and
+        // ctrl+shift+I among them, so the page swallowed the key that opens
+        // the inspector and there was no way to read the console of a build
+        // that was misbehaving. A page has no business doing that.
+        //
+        // Off, and the handful of defaults actually worth preventing are
+        // prevented by hand in `defaults` below.
+        #[cfg(target_arch = "wasm32")]
+        let attributes = {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            attributes.with_prevent_default(false)
+        };
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -256,6 +329,7 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 .and_then(|doc| {
                     let canvas = window.canvas()?;
                     canvas.set_id("render-canvas");
+                    defaults::guard(&canvas);
                     doc.body()?.append_child(&canvas).ok()?;
                     // Focused, or the keyboard goes nowhere. winit gives the
                     // canvas a `tabindex` so it *can* take focus, and then

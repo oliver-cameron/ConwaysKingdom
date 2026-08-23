@@ -68,8 +68,13 @@ pub mod stamps {
     pub const TITLE: &str = "Stamps";
     pub const CLOSE: &str = "Close";
     pub const FORGET: &str = "forget";
-    pub const NONE_YET: &str = "Nothing captured yet.";
-    pub const HOW: &str = "Grab, then drag a box round your own life, to take another.";
+    pub const NONE_YET: &str = "Nothing kept yet.";
+    pub const HOW: &str =
+        "Grab and drag a box round your own life to take one, or draw one below.";
+    pub const DRAW: &str = "Draw one";
+    pub const KEEP: &str = "keep";
+    pub const CLEAR: &str = "clear";
+    pub const DRAW_HOW: &str = "Click to lay a cell or lift it, drag to lay a run.";
 
     pub fn captured(name: &str, cells: usize) -> String {
         format!("captured {name} ({cells} cells)")
