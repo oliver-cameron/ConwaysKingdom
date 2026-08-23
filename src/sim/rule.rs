@@ -101,7 +101,7 @@ impl Cell {
             // Survives. Only the alive bit is in play, and it is already set.
             (true, 2 | 3) => self,
             // Born. Keeps whatever metadata was left behind, gains an owner.
-            (false, 3) => self.with_alive(true).with_player(parent(neighbours, seed)),
+            (false, 3) => parent(neighbours, seed).with_ice(false),
             // Dies, or stays dead. Owner and metadata are left as they were.
             _ => self.with_alive(false),
         }
@@ -119,19 +119,22 @@ pub fn next_cell(cell: Cell, neighbours: &Neighbours, seed: u64) -> Cell {
 /// Scanning in a fixed order and indexing by `seed % 3` means the choice
 /// depends only on the seed, never on iteration order — so it is the same on
 /// every peer, and reproducible when replaying a tick.
-fn parent(neighbours: &Neighbours, seed: u64) -> PlayerId {
-    let mut parents = [PlayerId::UNOWNED; 3];
+fn parent(neighbours: &Neighbours, seed: u64) -> Cell {
+    let mut parents = [&Cell([0, 0]); 3];
     let mut found = 0usize;
     for n in neighbours {
         if n.is_alive() && found < parents.len() {
-            parents[found] = n.player();
+            parents[found] = n;
             found += 1;
         }
     }
     debug_assert_eq!(found, 3, "a birth has exactly three parents");
     let chosen = parents[(seed % found.max(1) as u64) as usize];
-    debug_assert!(chosen.is_owned(), "every parent is a live cell, so owned");
-    chosen
+    debug_assert!(
+        chosen.player().is_owned(),
+        "every parent is a live cell, so owned"
+    );
+    *chosen
 }
 
 #[cfg(test)]
@@ -257,7 +260,11 @@ mod tests {
             for ice in [false, true] {
                 let c = Cell::DEAD
                     .with_alive(alive)
-                    .with_player(if alive { PlayerId(1) } else { PlayerId::UNOWNED })
+                    .with_player(if alive {
+                        PlayerId(1)
+                    } else {
+                        PlayerId::UNOWNED
+                    })
                     .with_ice(ice);
                 assert_eq!(c.is_alive(), alive);
                 assert_eq!(c.is_ice(), ice);
