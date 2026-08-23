@@ -9,7 +9,9 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | | |
 |---|---|
 | place life | −1 each |
+| place a mine | −10 each |
 | place ice | −5 each |
+| **a mine of yours is born** | **+1** |
 | reclaim your own | +1 |
 | take another player's | −1, because taking ground should not be free |
 | take what is not there | nothing |
@@ -23,6 +25,18 @@ The taking rule reads the same for life and for ice, because the question it ask
 An action that cannot be afforded is refused. The client prices and refuses locally on the same terms the server would, so a refusal is instant rather than a round trip away, and the two cannot disagree because `net::value_delta` is one function used by both.
 
 Cost is read **before** the action is applied, since it depends on what is there now.
+
+## Mining
+
+A **mine** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a mine's children are mines — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
+
+That makes **turnover** the thing being rewarded, not holdings. A block of mines is a still life, never gives birth, and earns nothing at all. An oscillator earns every period. A gun earns forever. The economy is "build a machine that works", which is what Conway is interesting for — and it closes the loop rather than adding one, since value used to have exactly one source: reclaiming your own cells, one apiece, which made the only way to earn a click and it was the click you least wanted to make.
+
+The cost and the yield are **one decision, not two**: together they are a mine's payback period, and everything about whether mining is worth doing is in that number. Ten against one means a mine pays for itself after ten births of its line. They are provisional, and only these two constants have to move — `net::MINE_COST` and `net::MINE_YIELD`.
+
+They probably want to move. Measured: three mines laid beside a starting block converted the whole colony by inheritance and earned about eight a generation within thirty generations, which recovers the starting purse of a hundred in seconds. One mine can convert a lineage, so the payback is potentially explosive, and that is the thing to tune against.
+
+A mine's corpse keeps its kind, as any cell does — so ground a mine died on shows the mine sprite, and life born there from an ordinary parent is ordinary. Placing plain Life over it explicitly sets the kind back to normal, or drawing over a mine's corpse would hand you a free mine.
 
 ## Placing and taking
 
@@ -131,7 +145,9 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 
 ## The hotbar
 
-Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The two are `Life` and `Ice`: the placement is named for what is put down, since a cell is the square and life is one of the two things that can be on it.
+Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The placement is named for what is put down, since a cell is the square and life is one of the things that can be on it.
+
+The three slots are `Life`, `Mine` and `Ice`. Mine is a pencil rather than a rectangle, because a mine is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 

@@ -6,25 +6,29 @@
 //! varies by cell type: everything a rule needs is in its arguments, and it
 //! knows nothing about chunks, worlds or topology.
 //!
-//! The default is plain Conway, and it touches **only the alive bit**. A cell
-//! that dies keeps its owner and metadata, so "recently died, and whose it was"
-//! survives without a field to store it. That is inert as far as the rules go:
-//! nothing counts a dead cell, and births take their owner from live
-//! neighbours only.
+//! Survival and death touch **only the alive bit**. A cell that dies keeps its
+//! owner and its kind, so "recently died, and whose it was" survives without a
+//! field to store it. That is inert as far as the rules go: nothing counts a
+//! dead cell, and a birth takes everything it is from a living parent rather
+//! than from the corpse it lands on.
 //!
 //! One invariant holds throughout: **a live cell always has a non-zero player**.
 //! Player zero means unowned, and unowned life would have nobody to attribute a
 //! birth to.
 //!
-//! A birth picks its owner at random from the three parents — but *seeded*
-//! random, not `rand`. Client-side prediction needs the step to be a pure
+//! A birth is a **copy of one of its three parents**, kind included, so what
+//! a cell is passes down a line rather than sitting on the ground. That is
+//! what makes [`super::Kind::MINE`] work: a mine's children are mines, and
+//! because the parent is chosen at random the kind spreads through a mixed
+//! population rather than being handed down whole.
+//!
+//! A birth picks that parent at random — but *seeded* random, not `rand`. Client-side prediction needs the step to be a pure
 //! function of state and tick, and a client that rolled its own dice would
 //! diverge from the server on the first contested birth. The seed is derived
 //! from the tick and the cell's absolute position, so every peer rolls the same
 //! number without exchanging one.
 
 use super::cell::Cell;
-use super::player::PlayerId;
 
 /// Neighbours in [`super::Dir::ALL`] order: N, NE, E, SE, S, SW, W, NW.
 pub type Neighbours = [Cell; 8];
@@ -100,7 +104,13 @@ impl Cell {
         match (self.is_alive(), live) {
             // Survives. Only the alive bit is in play, and it is already set.
             (true, 2 | 3) => self,
-            // Born. Keeps whatever metadata was left behind, gains an owner.
+            // Born, as a copy of one of its parents: owner, kind and all.
+            //
+            // The dead cell's own metadata is discarded, which is the whole of
+            // how a kind spreads -- a mine's children are mines. Ice is
+            // cleared because a parent may be under a pane and count as a live
+            // neighbour while frozen, and a birth outside the pane must not
+            // inherit the pane.
             (false, 3) => parent(neighbours, seed).with_ice(false),
             // Dies, or stays dead. Owner and metadata are left as they were.
             _ => self.with_alive(false),
@@ -140,7 +150,7 @@ fn parent(neighbours: &Neighbours, seed: u64) -> Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sim::Kind;
+    use crate::sim::{Kind, PlayerId};
 
     fn neighbours(live: &[usize], player: u8) -> Neighbours {
         let mut n = [Cell::DEAD; 8];
@@ -277,16 +287,40 @@ mod tests {
         assert!(!next_cell(Cell::DEAD.with_ice(true), &n, 0).is_alive());
     }
 
+    /// A birth takes everything it is from a parent, and nothing from the
+    /// ground it lands on. That is how a kind travels down a line, which is
+    /// what makes a mine an investment rather than a square.
     #[test]
-    fn a_birth_keeps_whatever_metadata_the_dead_cell_carried() {
+    fn a_birth_is_a_copy_of_a_parent_not_of_the_corpse() {
         let corpse = Cell::DEAD.with_kind(Kind(37)).with_player(PlayerId(6));
         let mut n = [Cell::DEAD; 8];
         for i in 0..3 {
-            n[i] = Cell::alive(PlayerId(2));
+            n[i] = Cell::alive(PlayerId(2)).with_kind(Kind::MINE);
         }
         let born = next_cell(corpse, &n, 1);
         assert!(born.is_alive());
-        assert_eq!(born.kind(), corpse.kind(), "kind survives");
-        assert_eq!(born.player(), PlayerId(2), "but a parent takes ownership");
+        assert_eq!(born.player(), PlayerId(2), "a parent's number");
+        assert_eq!(born.kind(), Kind::MINE, "and a parent's kind");
+        assert!(!born.is_ice(), "never a parent's pane");
+    }
+
+    /// The kind is inherited from *the parent that was chosen*, so in a mixed
+    /// neighbourhood it spreads rather than being handed down whole. One mine
+    /// dropped into a growing pattern takes a share of the births, not all of
+    /// them and not none.
+    #[test]
+    fn a_kind_spreads_through_a_mixed_neighbourhood() {
+        let mut n = [Cell::DEAD; 8];
+        n[0] = Cell::alive(PlayerId(1)).with_kind(Kind::MINE);
+        n[3] = Cell::alive(PlayerId(1));
+        n[6] = Cell::alive(PlayerId(1));
+
+        let mines = (0..300)
+            .filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::MINE)
+            .count();
+        assert!(
+            (60..140).contains(&mines),
+            "one parent in three should carry it, got {mines} in 300"
+        );
     }
 }

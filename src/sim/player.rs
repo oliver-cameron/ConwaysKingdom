@@ -22,6 +22,9 @@ impl PlayerId {
     pub const UNOWNED: Self = Self(0);
     /// Five bits in the cell, so 1..=31 are real players.
     pub const MAX: u8 = (1 << bits::PLAYER_WIDTH) - 1;
+    /// Every number a cell can carry, zero included. The width of anything
+    /// kept per player and indexed by the number the cell holds.
+    pub const COUNT: usize = Self::MAX as usize + 1;
 
     pub const fn is_owned(self) -> bool {
         self.0 != 0

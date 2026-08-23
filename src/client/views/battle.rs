@@ -550,13 +550,15 @@ impl BattleApp {
     fn advance_to(&mut self, tick: crate::net::Tick) {
         let here = self.world.generation;
         if tick == here + 1 {
-            self.world.step();
+            let mined = self.world.step();
+            self.value += crate::net::earnings(&mined, self.player());
             return;
         }
         if tick > here && tick - here <= CATCH_UP {
             log::debug!("{} generations behind; catching up", tick - here);
             for _ in here..tick {
-                self.world.step();
+                let mined = self.world.step();
+                self.value += crate::net::earnings(&mined, self.player());
             }
             return;
         }
@@ -641,6 +643,18 @@ impl BattleApp {
                     self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
                     self.asked_at = Some(self.elapsed);
                     return;
+                }
+                ServerMessage::Purse { value } => {
+                    // Taken, not reconciled. A client only sees the mines in
+                    // its own viewport, so its guess is always low and always
+                    // getting lower; the server's number is the number. The
+                    // cost is that an action sent for this tick and not yet
+                    // applied shows for a moment as money still in hand, which
+                    // a checkpoint interval later is right again.
+                    if value != self.value {
+                        log::debug!("purse: {} -> {value}", self.value);
+                        self.value = value;
+                    }
                 }
                 ServerMessage::Rooms { rooms } => {
                     log::info!("the server has {} room(s)", rooms.len());
@@ -1367,7 +1381,8 @@ impl App for BattleApp {
         // generation happened, and never on this client's own clock -- see
         // `advance_to`.
         if self.link.is_none() {
-            self.world.update(dt, GENERATION_SPAN);
+            let mined = self.world.update(dt, GENERATION_SPAN);
+            self.value += crate::net::earnings(&mined, self.player());
         }
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);

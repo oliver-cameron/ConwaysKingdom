@@ -199,11 +199,32 @@ pub struct Kind(pub u8);
 impl Kind {
     /// An ordinary living cell.
     pub const NORMAL: Self = Self(0);
+    /// A cell that pays its owner when it is **born**.
+    ///
+    /// Not a marker on the ground and not a rule about death: income is a
+    /// property of a lineage. A birth copies its parent, kind and all, so a
+    /// mine's children are mines — and since a birth picks one of its three
+    /// parents at random, the kind spreads through a mixed population rather
+    /// than being handed down whole. One mine dropped into a growing pattern
+    /// takes about a third of the next births and drifts from there.
+    ///
+    /// What that makes valuable is **turnover**, not holdings. A block of
+    /// mines is a still life and never gives birth, so it earns nothing. An
+    /// oscillator earns every period, and a gun earns forever — which is the
+    /// right shape for a game about patterns that work.
+    pub const MINE: Self = Self(1);
     /// Every kind. Each must have art at its own index in `render::atlas`;
     /// extend this and the sprite list beside it, or it will not compile.
-    pub const ALL: [Self; 1] = [Self::NORMAL];
+    pub const ALL: [Self; 2] = [Self::NORMAL, Self::MINE];
     pub const COUNT: usize = Self::ALL.len();
 }
+
+/// How many cells of [`Kind::MINE`] were born for each player in one
+/// generation, indexed by the number the cell carries.
+///
+/// A count rather than a sum of money: what a birth is *worth* is the
+/// economy's business and the economy lives in `net`. The rule counts.
+pub type Mined = [u32; PlayerId::COUNT];
 
 /// A chunk's cells, row-major. The first index is the texture's Y, the second
 /// its X — the only way in is `chunk[(row, col)]`, so that cannot drift.
@@ -276,7 +297,7 @@ impl Chunk {
     pub fn step(&self, next: &mut Chunk) {
         let mut halo = Halo::dead();
         halo.set_centre(self);
-        halo.step_into(next, 0);
+        halo.step_into(next, 0, &mut Mined::default());
     }
 }
 
@@ -320,13 +341,22 @@ impl Halo {
     /// Step every cell. `seed` identifies this chunk at this tick; each cell
     /// mixes its own position in, so the pseudo-randomness a birth uses is the
     /// same on every peer without any of them exchanging a number.
-    pub fn step_into(&self, next: &mut Chunk, seed: u64) {
+    ///
+    /// `mined` is added to, never cleared: a caller sums a whole world into one
+    /// tally. Counted here because this is the one place that holds a cell
+    /// before and after in the same breath, so a birth costs a comparison and
+    /// no second pass over the world.
+    pub fn step_into(&self, next: &mut Chunk, seed: u64, mined: &mut Mined) {
         for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 let (hr, hc) = (row + 1, col + 1);
                 let cell_seed = mix(seed, (row as u64) << 32 | col as u64);
-                next[(row, col)] =
-                    next_cell(self.get(hr, hc), &self.neighbours(hr, hc), cell_seed);
+                let before = self.get(hr, hc);
+                let after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
+                if !before.is_alive() && after.is_alive() && after.kind() == Kind::MINE {
+                    mined[after.player().0 as usize] += 1;
+                }
+                next[(row, col)] = after;
             }
         }
     }

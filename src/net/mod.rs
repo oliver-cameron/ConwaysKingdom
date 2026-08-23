@@ -27,7 +27,7 @@ pub use link_web as link;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{Cell, Coord, PlayerId, World, WorldKind};
+use crate::sim::{Cell, Coord, Kind, PlayerId, World, WorldKind};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
@@ -95,6 +95,14 @@ pub enum Placement {
     /// A pane. Freezes what it covers, and is independent of whether the cell
     /// beneath is alive.
     Ice,
+    /// A living cell that pays its owner every time one of its kind is born.
+    ///
+    /// Bought once and inherited afterwards: a birth copies its parent, so a
+    /// mine's children are mines, and since a birth picks one of three parents
+    /// at random the kind spreads through a mixed population rather than being
+    /// handed down whole. What you are paying for is a **lineage**, not a
+    /// cell — which is why it costs what a stroke of life costs ten times over.
+    Mine,
 }
 
 impl Placement {
@@ -107,7 +115,17 @@ impl Placement {
     /// other.
     pub fn apply_to(self, existing: Cell, player: PlayerId) -> Cell {
         match self {
-            Self::Life => existing.with_alive(true).with_player(player),
+            Self::Life => existing
+                .with_alive(true)
+                .with_player(player)
+                // Placed life is ordinary life. Without this, drawing over a
+                // mine's corpse would hand you a free mine -- the kind is on
+                // the cell and outlives the life that carried it.
+                .with_kind(Kind::NORMAL),
+            Self::Mine => existing
+                .with_alive(true)
+                .with_player(player)
+                .with_kind(Kind::MINE),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
             // cell with it -- deliberate, and the reason a pane costs what it
@@ -132,6 +150,7 @@ impl Placement {
         match self {
             Self::Life => 1,
             Self::Ice => 5,
+            Self::Mine => MINE_COST,
         }
     }
 
@@ -144,6 +163,11 @@ impl Placement {
     pub const fn can_be_taken(self) -> bool {
         match self {
             Self::Life => true,
+            // A mine is a live cell like any other, so taking it back is
+            // taking back the life -- and at the reclaim rate, so a misplaced
+            // one costs what it cost minus one. That is the commitment a mine
+            // should carry without being a trap.
+            Self::Mine => true,
             Self::Ice => false,
         }
     }
@@ -161,7 +185,9 @@ impl Placement {
     /// so a cleared cell still lets its chunk be dropped.
     pub fn remove_from(self, existing: Cell) -> Cell {
         match self {
-            Self::Life => existing.with_alive(false),
+            // The kind stays on the corpse, as it does when a cell dies of the
+            // rule: what is being taken back is the life.
+            Self::Life | Self::Mine => existing.with_alive(false),
             Self::Ice => existing.with_ice(false),
         }
     }
@@ -310,6 +336,14 @@ pub enum ServerMessage {
     ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
     /// The client's copy of these chunks is wrong; here they are again.
     Resync { tick: Tick, chunks: Vec<ChunkId> },
+    /// What this player actually has to spend.
+    ///
+    /// Sent in reply to a `Checkpoint`, which is the only regular thing a
+    /// client says. Value used to be predictable from a client's own actions
+    /// alone; mining made it depend on births anywhere in the world, and a
+    /// client holds a viewport — so its number drifts below the server's for
+    /// as long as it plays, and nothing else would ever correct it.
+    Purse { value: i32 },
     /// The rooms this server has, in the order it lists them.
     ///
     /// Ordered by the server rather than sorted by the client, so two players
@@ -481,6 +515,30 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 
 /// What reclaiming your own costs, or rather pays.
 pub const RECLAIM: i32 = 1;
+
+/// What one mine cell costs to place.
+///
+/// This and [`MINE_YIELD`] are one decision rather than two: together they are
+/// a mine's payback period, and everything about whether mining is worth doing
+/// is in that number. Ten against one means a mine pays for itself after ten
+/// births of its line — a still life never does, an oscillator does in a few
+/// seconds, and a gun does forever.
+///
+/// A starting purse of a hundred is ten mines, which is the seed investment
+/// the opening is meant to be. Provisional: the pair wants play rather than
+/// argument, and only these two constants have to move.
+pub const MINE_COST: i32 = 10;
+
+/// What one birth of [`Kind::MINE`] pays its owner.
+pub const MINE_YIELD: i32 = 1;
+
+/// Turn a generation's tally of mine births into what each player earned.
+///
+/// Here rather than in `sim` because it is a price, and the rule should not
+/// know prices — it counts births and this says what one is worth.
+pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
+    mined[player.0 as usize] as i32 * MINE_YIELD
+}
 
 /// What an action is worth to the player who did it.
 ///

@@ -36,8 +36,11 @@ enum ServerMessage {
     ChunkData { tick, chunk, cells },
     Resync { tick, chunks },
     Rooms { rooms: Vec<RoomInfo> },            // name, players online, shape
+    Purse { value },                           // what you actually have
 }
 ```
+
+`Purse` rides on every `Checkpoint` reply. Value used to be predictable from a client's own actions alone, so the number on screen was the number the server would agree with. Mining broke that: earnings depend on births *anywhere* in the world and a client holds a viewport, so its guess is always low and always getting lower, and nothing else would ever correct it. The machinery for "your copy is wrong, here is mine" already exists and runs every few seconds, so value uses it rather than growing a second one. The cost is that an action sent for the current tick and not yet applied shows for a moment as money still in hand.
 
 `Rooms` and `Join` are the only two messages a connection with **no seat** may send, and for the same reason: neither names a world. A room is a world, so a player has to see the rooms before picking one, and asking from inside one is asking too late. Everything else from an unjoined connection is dropped rather than answered out of the default room.
 

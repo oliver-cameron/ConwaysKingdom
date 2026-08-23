@@ -24,49 +24,17 @@ Rooms are listed too: `ClientMessage::Rooms` is answerable without a seat, and t
 
 ## Auto-mining
 
-A way to gather value without clicking for it — and it should be **a new kind of cell**, not a rule applied to life in general.
+**Built** — see [game.md](game.md#mining). A mine is a living cell that pays its owner every time one of its kind is born, and the mechanism is **inheritance**: a birth copies its parent, kind and all, so a mine's children are mines and the kind spreads through a mixed population because the parent is picked at random.
 
-Value has exactly one source today: reclaiming your own living cells, one apiece. That makes the only way to earn a click, and it is the click you least want to be making. The obvious fix — living cells you own earn a trickle simply by being alive — is worse than it looks, because it prices territory by area. Whoever holds the most cells earns the most, sprawl is the strategy, and every cell becomes an accountant.
+That is a better idea than what was written here before, which was a mine as a marker on the ground paying out on deaths. Inheritance makes a mine an investment in a *lineage* rather than a square, needs no per-square bookkeeping, and the payout is counted where the rule already holds a cell before and after — so it costs a comparison and no second pass.
 
-A kind localises it. Only mines earn; a mine is placed deliberately, at a price; and what a mine does to the ground around it is what that price buys. `Cell::update` already matches on `Cell::kind` and falls through to Conway for every value but one, so this is an arm rather than a rewrite, and the kind field is six bits with one of sixty-four used.
+Two of the three open questions answered themselves. The rule counts births and `net` prices them, so the tally never taught the simulation about money. And the prediction problem went the way this section said it should: `Purse` rides on every `Checkpoint` reply, reusing the machinery that already exists for "your copy is wrong, here is mine".
 
-### A mine is a property of the square, not of the cell
+What is left is the number. `MINE_COST` and `MINE_YIELD` are one decision — a mine's payback period — and ten against one is a guess. Measured once: three mines laid beside a starting block converted the whole colony by inheritance and were earning about eight a generation within thirty generations, which recovers the starting purse in seconds. One mine can convert a lineage, so the payback is potentially explosive. That is the thing to tune against, and it wants play rather than argument.
 
-Like ice, and for the same reason: a mine wants patterns to run over it. If a mine had to be alive it would need Conway's support to survive — a lone one dies of loneliness — and it would count as a neighbour, so placing one would change the pattern it was meant to measure.
+The art is a stand-in like the rest of the sheet: the ordinary cell with a diamond and a pip stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 4–7. It reads clearly against all four states and in any player's hue, and it is not what anybody would draw on purpose.
 
-As a kind on dead ground it disturbs nothing. Life is born on it and dies on it and the kind survives both, because a birth already keeps whatever metadata the dead cell carried and only takes the owner. Which also gives the mine its capture rule for free: **a birth on your mine hands it to whoever's parent won the roll**, and territory spread claims a dead one the same way it claims any other dead cell. A mine you cannot defend becomes somebody else's income, by the rule that already exists, with nothing added.
-
-That is the strongest argument for doing it this way, and it is worth stating as a test the design has to pass: *whatever a mine does, an opponent must be able to take it with life.*
-
-### The two rules it could follow
-
-**It pays on death.** A cell that was alive at generation G and dead at G+1, on a mine, pays the mine's owner. Income is then proportional to **turnover** rather than to holdings: a still life beside a mine earns nothing, a gun firing into a crash site earns steadily, an oscillator that kills and rebirths earns forever. The economy becomes "build a machine that churns, and route it over your mines", which is what Conway is actually interesting for.
-
-It also closes the loop rather than adding one. Mortality is the only sink today — a cell that dies of its neighbours cannot be reclaimed — so making it the source as well means the same event is a loss or a gain depending on where you paid to make it one. And it is nearly free to compute: `Halo::step_into` has the before and the after cell in hand at the moment it writes one, so the tally costs a comparison per cell and no second pass.
-
-**It prevents births nearby.** No birth happens in a mine's eight neighbours, and the mine earns a fixed amount per generation instead. The suppression is the price: ground under mines grows nothing, so mining and building compete for the same territory rather than stacking.
-
-The trouble is that it fails the test above. A glider needs births to move, so a glider entering the suppressed halo stops and dies — which makes a mine field an uncapturable glider trap that pays its owner forever, and a cheaper, better wall than ice. Suppressing births removes the only means of taking a mine back, and it is the same mechanic ice already provides, minus the counterplay.
-
-**The two do not compose.** Suppressing births suppresses the deaths that pay, so a mine that did both would sterilise its own income. They are opposites rather than flavours, which is worth knowing before anyone tries to have both.
-
-So: pay on death. The suppressing mine is written down here because it was the other candidate and because the reason it loses — that a rule must leave the opponent a move — is the reason worth keeping.
-
-### What has to be settled
-
-**The rate against the cost.** These are one decision, not two: together they are a mine's payback period, and everything about whether mining is worth doing is in that number. A mine dear enough to matter and a rate slow enough to require a working machine is the shape to aim at; the precise pair wants play rather than argument. Reclaiming pays one, so a mine at *N* placed in the wrong spot costs *N−1* to undo, which is the commitment a mine should carry and the reason it should be reclaimable at all rather than permanent like ice.
-
-**Whose deaths pay.** The mine's owner, or the dying cell's owner. The mine's owner is the more interesting answer by some way: it makes a mine something you place *at a border*, to harvest the churn of whoever is fighting you, and it gives a reason to care where somebody else's machine is running. The dying cell's owner makes mines private infrastructure and nothing more.
-
-**Whether a client can predict its own income.** This is the real engineering problem and it is not small. A client holds its viewport and a margin, so income from mines off screen is income it cannot compute — its predicted value would drift below the server's every generation and never correct, because everything a client predicts today is its own action, which is by definition on screen. Three answers:
-
-1. *Send it.* `Step` goes out every generation already, but it is one broadcast encoded once for everybody, and a per-player number cannot ride on it without making it per-connection.
-2. *Correct it.* `Checkpoint` and `Resync` exist because the world is predicted and predictions are sometimes wrong; value is the same problem, and an authoritative figure in the reply would bound the drift to one checkpoint interval. This is the answer — the machinery is there, it works, and a second mechanism for one class of problem is the thing to avoid.
-3. *Confine it.* Define income over the region a peer holds. Ruled out, and written down so nobody re-derives it: the step would stop being a pure function of state and tick, which is the contract everything else rests on.
-
-**Where the tally lives.** `sim` has no wallet — `Player` is defined there but no world holds a table of them — so `World::step` has to *produce* earnings rather than apply them, and the server and client each fold the result into the number they keep. It must be ordered by player rather than by iteration, for the same reason the active-chunk list is sorted.
-
-**The art.** A kind has four consecutive tiles — dead, alive, iced, alive and iced — and `render::atlas` asserts every one of them is drawn. So a mine costs four sprites before it compiles, and one of the four is "a mine under ice", which is a state with a meaning worth deciding: ice freezes what it covers, so **a pane over a mine turns it off without capturing it**. Whether that is a feature — a cheap way to deny income without taking ground — or a hole is a question for whoever sets the rate.
+Also unsettled: **a mine under ice**. A pane freezes what it covers, so a frozen mine gives no births and earns nothing — a cheap way to switch off somebody's income without taking their ground. Whether that is a feature or a hole is a question for whoever sets the rate.
 
 ## Stamps
 

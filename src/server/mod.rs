@@ -380,12 +380,23 @@ impl Server {
                     .filter(|&(coord, digest)| self.world.chunk_digest(coord) != Some(digest))
                     .map(|(coord, _)| coord)
                     .collect();
-                if wrong.is_empty() {
-                    Vec::new()
-                } else {
-                    log::warn!("desync: {:?} disagrees on {} chunks at tick {tick}", from, wrong.len());
-                    vec![ServerMessage::Resync { tick, chunks: wrong }]
+
+                // The purse rides along, because mining made value something a
+                // client cannot predict on its own: earnings depend on births
+                // anywhere in the world, and a client holds a viewport. It
+                // would drift down for as long as it played, and never
+                // correct. The machinery for "your copy is wrong, here is
+                // mine" already exists and runs every few seconds, so value
+                // uses it rather than growing a second one.
+                let mut out = Vec::new();
+                if let Some(value) = from.and_then(|id| self.value_of(id)) {
+                    out.push(ServerMessage::Purse { value });
                 }
+                if !wrong.is_empty() {
+                    log::warn!("desync: {:?} disagrees on {} chunks at tick {tick}", from, wrong.len());
+                    out.push(ServerMessage::Resync { tick, chunks: wrong });
+                }
+                out
             }
         }
     }
@@ -405,7 +416,13 @@ impl Server {
         for stamped in &applied {
             self.apply(stamped);
         }
-        self.world.step();
+        let mined = self.world.step();
+
+        // What the mines paid out. The world counted the births; the price is
+        // here, and this is the only place a purse is authoritative.
+        for player in self.players.values_mut() {
+            player.value += crate::net::earnings(&mined, player.id);
+        }
 
         // Every generation, even an empty one: the tick is what keeps clients
         // in step, and a quiet generation still moves the world on.
@@ -852,19 +869,99 @@ mod tests {
             .iter()
             .map(|&(coord, _)| (coord, s.world().chunk_digest(coord).unwrap()))
             .collect();
-        assert!(s
-            .handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: held.clone() })
-            .is_empty());
+
+        // Agreement is silence about chunks -- but never silence, because the
+        // purse rides on every checkpoint now that value is not a thing a
+        // client can work out for itself.
+        let replies =
+            s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: held.clone() });
+        assert!(
+            !replies.iter().any(|m| matches!(m, ServerMessage::Resync { .. })),
+            "matching digests asked for a resync: {replies:?}"
+        );
+        assert!(
+            replies.iter().any(|m| matches!(m, ServerMessage::Purse { .. })),
+            "and the purse should come back with it: {replies:?}"
+        );
 
         // One chunk wrong: only that one comes back.
         let mut bad = held.clone();
         bad[0].1 = !bad[0].1;
         let replies = s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: bad });
-        match replies.as_slice() {
-            [ServerMessage::Resync { chunks, .. }] => {
-                assert_eq!(chunks, &[held[0].0], "only the disagreeing chunk");
-            }
-            other => panic!("expected one Resync, got {other:?}"),
+        let resyncs: Vec<_> = replies
+            .iter()
+            .filter_map(|m| match m {
+                ServerMessage::Resync { chunks, .. } => Some(chunks.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resyncs, vec![vec![held[0].0]], "only the disagreeing chunk");
+    }
+
+    /// A mine pays its owner when one of its kind is born, and a birth copies
+    /// its parent -- so a colony of mines is income and a block of them, being
+    /// a still life that never gives birth, is not.
+    #[test]
+    fn a_mine_pays_its_owner_when_its_line_is_born() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+
+        // A blinker of mines: three in a row, which flips end over end
+        // forever, giving birth twice a generation. Clear of the grant's own
+        // block, which sits in the middle of the patch.
+        place_mines(&mut s, me, &[(1, 1), (2, 1), (3, 1)]);
+        // After the cost is charged, which `handle` does on receipt, so what
+        // is measured from here is earnings alone.
+        let purse = s.value_of(me).unwrap();
+        assert_eq!(purse, 100 - 3 * crate::net::MINE_COST, "three mines were paid for");
+
+        s.step();
+        let after = s.value_of(me).unwrap();
+        assert_eq!(
+            after - purse,
+            2 * crate::net::MINE_YIELD,
+            "a blinker gives birth twice a generation, and both are mines"
+        );
+
+        // And it keeps earning, generation after generation.
+        let before = after;
+        for _ in 0..4 {
+            s.step();
         }
+        assert!(s.value_of(me).unwrap() > before, "and goes on earning");
+    }
+
+    /// The still life that earns nothing, which is what makes turnover the
+    /// thing being rewarded rather than holdings.
+    #[test]
+    fn a_block_of_mines_earns_nothing() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        // The grant already stands a block of ordinary life in the middle;
+        // put these far enough away to be their own still life.
+        place_mines(&mut s, me, &[(1, 1), (1, 2), (2, 1), (2, 2)]);
+        s.step();
+        let purse = s.value_of(me).unwrap();
+        for _ in 0..10 {
+            s.step();
+        }
+        assert_eq!(s.value_of(me).unwrap(), purse, "a still life gives no births");
+    }
+
+    /// Lay mines at offsets inside this player's granted ground, and apply
+    /// them, without advancing the world.
+    fn place_mines(s: &mut Server, id: PlayerId, offsets: &[(i32, i32)]) {
+        let tick = s.tick();
+        s.handle(
+            Some(id),
+            ClientMessage::Act(Stamped {
+                tick,
+                player: id,
+                action: Action::Paint { cells: mine(id, offsets), placement: Placement::Mine },
+            }),
+        );
+        // `handle` queues; `step` is what applies. Stepping once here would
+        // also advance the world, so the pending action is drained by the
+        // caller's own first step.
     }
 }

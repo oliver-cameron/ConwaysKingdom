@@ -30,8 +30,12 @@ pub struct Slot {
     pub stroke: Stroke,
 }
 
-pub const SLOTS: [Slot; 2] = [
+pub const SLOTS: [Slot; 3] = [
     Slot { name: "Life", placement: Placement::Life, stroke: Stroke::Pencil },
+    // A pencil, not a rectangle, because a mine is placed a few at a time and
+    // into a pattern rather than laid out as a field -- what it is worth
+    // depends on what it is next to.
+    Slot { name: "Mine", placement: Placement::Mine, stroke: Stroke::Pencil },
     // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
     Slot { name: "Ice", placement: Placement::Ice, stroke: Stroke::Rectangle },

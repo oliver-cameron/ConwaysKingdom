@@ -54,11 +54,23 @@ cell.update(&neighbours, seed) -> Cell
 
 - An iced cell is returned unchanged. Checked before the kind, so a pane freezes anything without every kind having to remember to honour it.
 - Otherwise Conway. Survival and death change **only the alive bit**, so a dead cell keeps its owner and metadata — "recently died, and whose it was" exists without a field for it. Those corpses are inert: nothing counts a dead cell.
-- A birth sets the owner, because it has none to keep.
+- A birth is a **copy of one of its three parents** — owner, kind and all — with ice cleared.
 
 ### Whose birth is it
 
 At random, from the three parents — but seeded, from the generation and the chunk coordinate with each cell mixing in its own position, through SplitMix64's finaliser. Every peer rolls the same number without exchanging one. All three parents are reachable and the same seed always gives the same answer; both are tested.
+
+The newborn takes **everything** from that parent and nothing from the corpse it lands on. That is not a detail: it is how a kind travels. A mine's children are mines, and because the parent is chosen at random rather than by vote, a kind spreads through a mixed population instead of being handed down whole — one mine beside two ordinary cells wins about a third of the births there, and drifts from that. Three mines placed beside a starting block converted a whole growing colony inside thirty generations.
+
+Ice is cleared on a birth because a parent may be *under a pane* and still count as a live neighbour while frozen. Without that, a cell born outside the pane would inherit it.
+
+### Mines, and what the rule counts
+
+`Kind::MINE` pays its owner when one of its kind is **born**. The rule does not know what a birth is worth — it counts them, per player, and hands the tally back from `World::step` as a `Mined`. What a birth is worth is a price, and prices live in `net`.
+
+Counted inside `Halo::step_into`, which is the one place that holds a cell before and after in the same breath, so it costs a comparison and no second pass over the world. The tally is returned rather than applied, because a world holds cells and not purses: the server folds it into the authoritative values and a client folds it into its predicted one.
+
+What that makes valuable is **turnover** rather than holdings. A block of mines is a still life, never gives birth and earns nothing; an oscillator earns every period, and a gun earns forever.
 
 ## Chunks
 

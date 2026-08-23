@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::cell::{Cell, Chunk, Halo, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, Mined, CHUNK_N};
 use super::dir::Dir;
 use super::player::PlayerId;
 
@@ -320,23 +320,33 @@ impl World {
         self.active.len()
     }
 
-    pub fn update(&mut self, dt: f32, span: f32) {
+    /// Advance on a clock, and total what was mined over however many
+    /// generations that turned out to be.
+    pub fn update(&mut self, dt: f32, span: f32) -> Mined {
+        let mut mined = Mined::default();
         if span <= 0.0 {
-            return;
+            return mined;
         }
         self.elapsed += dt;
         let mut steps = 0;
         while self.elapsed >= span && steps < MAX_CATCHUP_STEPS {
             self.elapsed -= span;
-            self.step();
+            add_mined(&mut mined, &self.step());
             steps += 1;
         }
         if steps == MAX_CATCHUP_STEPS {
             self.elapsed = 0.0;
         }
+        mined
     }
 
-    pub fn step(&mut self) {
+    /// Advance one generation, and say what each player mined doing it.
+    ///
+    /// The tally is returned rather than applied: a world holds cells, not
+    /// purses, and the server and the client each fold it into the number they
+    /// keep. Summed in the order chunks are stepped, which is sorted, though
+    /// integer addition would not care.
+    pub fn step(&mut self) -> Mined {
         // Taken before the rule runs, so a cell touching a pane breaks it even
         // if this is the generation it dies in. It is alive now and it is
         // against the ice now, and that is the whole of what breaking means --
@@ -366,6 +376,7 @@ impl World {
             self.scratch.push(halo);
         }
 
+        let mut mined = Mined::default();
         for (i, &coord) in active.iter().enumerate() {
             let halo = self.scratch[i];
             // Seeded by generation and chunk, so a birth's owner is chosen the
@@ -375,7 +386,7 @@ impl World {
                 (coord.0 as u32 as u64) << 32 | coord.1 as u32 as u64,
             );
             if let Some(chunk) = self.chunk_at_mut(coord) {
-                halo.step_into(chunk, seed);
+                halo.step_into(chunk, seed, &mut mined);
             }
         }
 
@@ -384,6 +395,7 @@ impl World {
         self.break_ice_from(seeds);
         self.dirty = true;
         self.prune();
+        mined
     }
 
     /// Copy a chunk and the facing strip of each neighbour into a flat padded
@@ -598,6 +610,16 @@ impl World {
         out
     }
 
+}
+
+/// Fold one generation's tally into a running one.
+///
+/// Saturating, so a world that somehow ran for four billion births does not
+/// wrap a player's earnings round to nothing.
+pub fn add_mined(total: &mut Mined, one: &Mined) {
+    for (t, n) in total.iter_mut().zip(one) {
+        *t = t.saturating_add(*n);
+    }
 }
 
 /// Does this chunk carry life on the edge facing `dir`? A live cell there can

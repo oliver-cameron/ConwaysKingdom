@@ -79,6 +79,11 @@ mod tests {
             ClientMessage::Unsubscribe { chunks: vec![(9, 9)] },
             ClientMessage::Checkpoint { tick: 100, chunks: vec![((0, 0), 0xDEAD_BEEF), ((-1, 4), 7)] },
             ClientMessage::Rooms,
+            ClientMessage::Act(Stamped {
+                tick: 11,
+                player: PlayerId(4),
+                action: Action::Paint { cells: vec![(2, 2)], placement: Placement::Mine },
+            }),
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -117,6 +122,7 @@ mod tests {
             }] },
             ServerMessage::ChunkData { tick: 3, chunk: (-2, 7), cells: vec![1, 2, 3, 4] },
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },
+            ServerMessage::Purse { value: -3 },
             ServerMessage::Rooms { rooms: vec![] },
             ServerMessage::Rooms {
                 rooms: vec![
