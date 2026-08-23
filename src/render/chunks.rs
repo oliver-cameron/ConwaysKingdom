@@ -125,7 +125,21 @@ pub struct CameraUniform {
     pub viewport: [f32; 2],
     pub zoom: f32,
     pub chunk_n: f32,
-    pub _pad: [f32; 2],
+    /// Non-zero when the fragment shader must encode sRGB itself.
+    ///
+    /// The shader works in linear light and returns linear light, because that
+    /// is what an sRGB surface format converts on the way out. Where no sRGB
+    /// format is offered — the WebGL2 path, whose default framebuffer has no
+    /// encode-on-write to give — `GpuState::new` falls back to a plain
+    /// `Unorm` surface, and those linear numbers reach the display as though
+    /// they were already encoded. Mid grey lands at 43% of the light it should
+    /// emit, so the whole image reads dark and muddy.
+    ///
+    /// A flag rather than a second pipeline: it is one `select` in the
+    /// fragment shader, fixed for the life of the surface, and the alternative
+    /// is compiling the shader twice to change its last line.
+    pub encode_srgb: f32,
+    pub _pad: f32,
 }
 
 const _: () = {

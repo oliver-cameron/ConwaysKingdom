@@ -405,9 +405,15 @@ impl BattleApp {
     /// A fixed camera. Autoscrolling is gone: the view no longer chases the
     /// live pattern, so what is on screen is whatever `VIEW_CENTRE` and
     /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
+    /// The shader encodes sRGB itself exactly when the surface will not.
+    ///
+    /// Read from the negotiated format every frame rather than cached: it is
+    /// one field access, and a cached copy is one more thing to forget when
+    /// the surface is reconfigured.
     fn write_camera(&self, gpu: &GpuState) {
+        let uniform = self.camera.uniform(!gpu.config.format.is_srgb());
         gpu.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&self.camera.uniform()));
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     fn cell_under_cursor(&self, at: (f64, f64)) -> (i32, i32) {

@@ -25,7 +25,8 @@ struct Camera {
     viewport: vec2<f32>,   // framebuffer size in physical pixels
     zoom:     f32,         // screen pixels per cell
     chunk_n:  f32,         // cells per chunk edge
-    _pad:     vec2<f32>,
+    encode:   f32,         // non-zero when this shader must encode sRGB itself
+    _pad:     f32,
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
@@ -41,8 +42,12 @@ struct Camera {
 //
 // OKLab rather than HSV, because HSV's hues are not evenly spaced perceptually:
 // its yellows and cyans read far brighter than its blues at equal "value", so
-// players would not look equally prominent. Output is linear, which is what the
-// sRGB surface format expects to convert itself.
+// players would not look equally prominent.
+//
+// Everything here works in linear light, and an sRGB surface format encodes it
+// on the way out. Where no sRGB format was offered -- WebGL2, whose default
+// framebuffer has no encode-on-write to give -- `cam.encode` is set and
+// `fs_main` does it instead. See `linear_to_srgb` at the bottom.
 
 const TAU: f32 = 6.283185307;
 // Golden ratio: consecutive player numbers land far apart on the hue circle,
@@ -222,7 +227,31 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         sprite.a,
     );
 
+    // Encoded here only when the surface will not do it. On an sRGB surface
+    // this is skipped and the hardware converts; on a plain Unorm one the
+    // linear numbers would otherwise reach the display as though they were
+    // already encoded, which costs a mid grey more than half the light it
+    // should emit and reads as a dark, muddy picture.
+    if cam.encode != 0.0 {
+        colour = linear_to_srgb(colour);
+    }
+
     // Composited against the background rather than alpha-blended, so the
     // pipeline needs no blend state and draw order stays irrelevant.
     return vec4<f32>(colour, 1.0);
+}
+
+/// Linear light to sRGB: the transfer function a surface would apply itself.
+///
+/// The piecewise sRGB curve rather than a plain 1/2.2 gamma, because the two
+/// disagree most in the darks -- which is exactly the range a mistake here is
+/// most visible in -- and because it must be the inverse of what the display
+/// does, not an approximation of it.
+///
+/// `max` guards the `pow`: a negative base is undefined in WGSL, and while
+/// `shade` clips its output to the gamut, nothing in the type system says so.
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
 }

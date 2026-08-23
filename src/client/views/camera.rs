@@ -216,14 +216,21 @@ impl Camera {
     }
 
     /// What the shader needs to draw this view.
-    pub fn uniform(&self) -> CameraUniform {
+    ///
+    /// `encode_srgb` is the surface's business rather than the camera's — the
+    /// camera is arithmetic and has never known there is a GPU — so it is a
+    /// parameter rather than a field. It rides here because the camera
+    /// uniform is the only thing bound to the fragment stage that has room
+    /// for it.
+    pub fn uniform(&self, encode_srgb: bool) -> CameraUniform {
         let (ox, oy) = self.origin();
         CameraUniform {
             origin: [ox, oy],
             viewport: [self.viewport.0, self.viewport.1],
             zoom: self.zoom,
             chunk_n: CHUNK_N as f32,
-            _pad: [0.0; 2],
+            encode_srgb: if encode_srgb { 1.0 } else { 0.0 },
+            _pad: 0.0,
         }
     }
 }
