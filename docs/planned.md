@@ -90,17 +90,25 @@ What is left:
 
 **A starting value of zero is not in.** It was in the original description and it is held back on purpose: life costs one, zero buys none of it, and the granted block never gives birth, so a match starting everybody at zero under today's rules is one where nobody can ever act. The income question below has to be settled first.
 
-### The opening is the problem, not the income
+### The opening
+
+**Settled: nothing happens before the whistle.** Gathering neither steps nor takes actions — players join, get their patch, and wait. The build phase below was tried and is wrong, and the reason is worth keeping: freezing the world makes an opening fair in *generations* and leaves it unfair in **time**, because holding the tick still does not hold a clock still and whoever joined ten minutes early has had ten minutes to think. What is left is a race, which is a better opening than a draw — everybody looks at the same thing when the clock starts, and hesitating costs generations rather than nothing.
+
+That also answers the clicker worry differently from the way this section did. The first thing anybody does in a match is spend, under time pressure, at the same moment as everybody else. The question is only what they are spending, which is below.
+
+### What was rejected, and why it is written down
 
 **A 2×2 block and an income is a clicker.** A still life is the one shape in Conway that does nothing at all — it does not breed, it does not move, and it cannot die — so a player granted one and paid a trickle has exactly the clicker loop in front of them: wait, tap, wait. Whatever the income turns out to be, it does not fix that, because a stationary pattern's footprint is fixed and so its income is flat. Anything that pays by the generation pays a block the same amount forever.
 
 Note what the block was solving, because it is easy to throw out with it. `game.md`: four cells that hold their shape forever, the same for everyone, so nobody begins ahead — and the block is also what *keeps* the ground, since territory spreads from living cells and a bare patch would never grow. So the grant has to be **immortal**, or an unlucky opening eliminates somebody before they have acted, and **identical**, or the draw decides the match. In Conway those two pull hard against "and it should do something": the patterns that do something either wander off or grow without bound.
 
-**A build phase resolves it, and it is what ice already is.** Lobby, then a phase with the world frozen and a fixed budget of cells to lay, then the clock starts and the world runs. `game.md` on ice: *a schematic — freezing a region lets a large pattern be laid out over many generations without the rule eating the half-built work*. A match's opening is that idea promoted to a rule, with the whole world under the pane and everybody drawing at once.
+**A build phase** — the world frozen, a fixed budget of cells, then the clock — was the recommendation here and is rejected. It is what ice already is, promoted to a rule, and Conway is a game about the initial condition, so a competition about the initial condition is a competition about the right thing. What it cannot fix is that drawing takes wall-clock time, which a frozen tick does nothing about: the first player into the lobby draws at leisure and the last draws in a hurry. A phase that is fair only if everybody arrives at once is not a phase, it is a request.
 
-What it buys is that **the interesting decision moves to the front**. Conway is a game about the initial condition, and a match where everyone lays a hundred cells into a frozen world and then watches them compete for two thousand generations is a competition about the thing the game is actually about. It also makes the grant question moot: nobody is handed a machine, everybody builds one, and what you are handed is a budget and a patch to spend it on.
+It could be rescued by a countdown — freeze, then everyone gets the same sixty seconds — and that is a real design worth trying later. It is a bigger thing than it looks: a countdown is a wall clock, and a wall clock is the one thing the tick was chosen to avoid needing.
 
-It leaves one question rather than three: **what happens during the run.** Three readings, and they are different games.
+### What happens during the run
+
+Three readings, and they are different games.
 
 - **Nothing.** No placing at all once the clock starts. The purest, and the least to do for however long the match lasts.
 - **Territory pays, and you may intervene.** Value per generation in proportion to ground held, spent on repairs and raids. The win condition and the economy become the same thing, which falls the right way at the end — a player losing ground earns less and falls further behind. Placing outside your own ground already costs ten times, so reaching into somebody else's half is expensive and deliberate rather than a click.

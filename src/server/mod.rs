@@ -403,6 +403,21 @@ impl Server {
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
+                // Nothing happens before the whistle, and nothing after it.
+                // Dropped rather than answered, which is what an action the
+                // server will not take already does -- the client predicted it
+                // locally and the next `Checkpoint` puts the world and the
+                // purse back. It will do that until a match's phase reaches
+                // the client and it can refuse for itself; see planned.md.
+                if !self.phase.accepts_actions() {
+                    log::debug!(
+                        "dropped an action from {:?}: \"{}\" is {}",
+                        stamped.player,
+                        self.room,
+                        self.phase.name()
+                    );
+                    return Vec::new();
+                }
                 // Judged here as well as refused in the client, because a
                 // client that sends whatever it likes is the case this exists
                 // for. Ice is not liftable, so an erase naming it is not an
@@ -511,24 +526,18 @@ impl Server {
     /// Apply everything queued for this tick, advance one generation, and hand
     /// back what every client needs to stay in step.
     pub fn step(&mut self) -> Vec<ServerMessage> {
-        // A match that has not started yet, or is over, holds still. Actions
-        // are still applied — gathering is when the opening is drawn, and a
-        // pattern laid into a frozen world is exactly what ice already does
-        // for one region, promoted here to the whole of it.
-        //
-        // The tick does not move either, which is what makes gathering fair:
-        // somebody who joined a minute earlier has not had a minute of
-        // generations the others did not.
+        // A match that has not started yet, or is over, holds still — and
+        // nothing is pending either, since `handle` takes no actions in those
+        // phases. Emptied rather than left, so an action that arrived in the
+        // same breath as the whistle cannot be applied a phase later than it
+        // was priced.
+        if !self.phase.stepping() {
+            self.pending.clear();
+            return Vec::new();
+        }
         let applied = std::mem::take(&mut self.pending);
         for stamped in &applied {
             self.apply(stamped);
-        }
-        if !self.phase.stepping() {
-            return if applied.is_empty() {
-                Vec::new()
-            } else {
-                vec![ServerMessage::Step { tick: self.tick(), actions: applied }]
-            };
         }
         let mined = self.world.step();
 
@@ -832,6 +841,71 @@ mod tests {
         let stopped = s.tick();
         s.step();
         assert_eq!(s.tick(), stopped, "an over match holds still");
+    }
+
+    /// **Nothing happens before the whistle.** A match that let people place
+    /// while gathering would be fair in generations and unfair in *time*:
+    /// somebody who joined ten minutes early has had ten minutes to think and
+    /// draw, and holding the tick still does not hold a clock still.
+    #[test]
+    fn a_gathering_match_takes_no_actions() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 100 });
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        let cells = mine(alice, &[(3, 3), (3, 4)]);
+
+        let before = s.world().live_cells().len();
+        s.handle(
+            Some(alice),
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: alice,
+                action: Action::Paint { cells: cells.clone(), placement: Placement::Life },
+            }),
+        );
+        s.step();
+        assert_eq!(s.world().live_cells().len(), before, "nothing laid before the whistle");
+        assert_eq!(s.value_of(alice), Some(Player::STARTING_VALUE), "and nothing spent");
+
+        // The whistle, and the same action lands.
+        s.start_match().unwrap();
+        s.handle(
+            Some(alice),
+            ClientMessage::Act(Stamped {
+                tick: s.tick(),
+                player: alice,
+                action: Action::Paint { cells, placement: Placement::Life },
+            }),
+        );
+        s.step();
+        assert!(s.world().live_cells().len() > before, "and lands once it is running");
+        assert!(s.value_of(alice).unwrap() < Player::STARTING_VALUE, "and is paid for");
+    }
+
+    /// And nothing after it either: a decided match cannot be played on.
+    #[test]
+    fn an_over_match_takes_no_actions() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 1 });
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        s.start_match().unwrap();
+        s.step();
+        assert!(matches!(s.phase(), Phase::Over { .. }), "one generation, then over");
+
+        let before = s.world().live_cells().len();
+        s.handle(
+            Some(alice),
+            ClientMessage::Act(Stamped {
+                tick: s.tick(),
+                player: alice,
+                action: Action::Paint {
+                    cells: mine(alice, &[(3, 3)]),
+                    placement: Placement::Life,
+                },
+            }),
+        );
+        s.step();
+        assert_eq!(s.world().live_cells().len(), before);
     }
 
     /// The other condition: first to a count rather than most at a whistle.

@@ -46,6 +46,23 @@ impl Phase {
         matches!(self, Self::Open | Self::Gathering)
     }
 
+    /// Whether a player may change the world.
+    ///
+    /// **Nothing happens before the whistle.** The same set as
+    /// [`Self::stepping`] today, and a different question: a match that let
+    /// people place while gathering would be fair in *generations* and unfair
+    /// in **time**, since somebody who joined ten minutes early has had ten
+    /// minutes to think and draw and the last to arrive has had none. Holding
+    /// the tick still does not hold a clock still.
+    ///
+    /// So a match opens with everybody looking at the same thing, and the
+    /// first thing anybody does is done against a running clock — which is a
+    /// better opening than a leisurely draw, since hesitating costs
+    /// generations rather than nothing.
+    pub fn accepts_actions(&self) -> bool {
+        matches!(self, Self::Open | Self::Running { .. })
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::Open => "open",
@@ -119,18 +136,21 @@ mod tests {
 
     #[test]
     fn a_gathering_world_does_not_step_and_a_running_one_does_not_admit() {
-        assert!(!Phase::Gathering.stepping(), "the opening is drawn, not raced");
+        assert!(!Phase::Gathering.stepping(), "nothing moves before the whistle");
+        assert!(!Phase::Gathering.accepts_actions(), "and nobody does anything either");
         assert!(Phase::Gathering.open_to_newcomers());
 
         let running = Phase::Running { from: 0 };
-        assert!(running.stepping());
+        assert!(running.stepping() && running.accepts_actions());
         assert!(!running.open_to_newcomers(), "no late joining");
 
         let over = Phase::Over { winner: None, held: 0, at: 10 };
         assert!(!over.stepping(), "a decided match stops");
+        assert!(!over.accepts_actions(), "and cannot be played on afterwards");
         assert!(!over.open_to_newcomers());
 
-        assert!(Phase::Open.stepping() && Phase::Open.open_to_newcomers());
+        assert!(Phase::Open.stepping() && Phase::Open.accepts_actions());
+        assert!(Phase::Open.open_to_newcomers());
     }
 
     #[test]

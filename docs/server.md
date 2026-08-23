@@ -40,14 +40,16 @@ A room with a beginning, an end and a winner. An ordinary room runs forever and 
 
 Three phases, on `server::matches::Phase`:
 
-| | steps | admits newcomers |
-|---|---|---|
-| `Open` | yes | yes |
-| `Gathering` | **no** | yes |
-| `Running` | yes | **no** |
-| `Over` | no | no |
+| | steps | takes actions | admits newcomers |
+|---|---|---|---|
+| `Open` | yes | yes | yes |
+| `Gathering` | **no** | **no** | yes |
+| `Running` | yes | yes | **no** |
+| `Over` | no | no | no |
 
-**Gathering does not step**, and that is what makes the opening fair rather than a race: actions still apply, so the opening is *drawn* into a frozen world, and somebody who joined a minute earlier has not had a minute of generations the others did not. It is what ice already does for one region — a schematic laid out without the rule eating the half-built work — promoted to the whole world.
+**Nothing happens before the whistle.** Gathering neither steps nor takes actions: players join, get their patch and their block, and wait. Letting people place while gathering was tried and is wrong — it is fair in *generations* and unfair in **time**, because somebody who joined ten minutes early has had ten minutes to think and draw and the last to arrive has had none. Holding the tick still does not hold a clock still.
+
+What that makes the opening is a race rather than a draw: everybody is looking at the same thing when the clock starts, and the first thing anybody lays is laid against a running world, where hesitating costs generations. An action arriving before the whistle is **dropped**, which is what an action the server will not take already does — the client predicted it locally and the next `Checkpoint` puts the world and the purse back. It will keep doing that until a match's phase reaches the client and it can refuse for itself.
 
 **No late joining.** A player arriving at generation four hundred is not in the same race: everyone else has four hundred generations of ground and they have a block. A `Join` into a running match is refused with a reason rather than allowed and hopeless, which would read as the game being broken. A player *already* in the match is a different question and still gets back in with their token — that is the door, not the room.
 
