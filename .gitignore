@@ -1,4 +1,5 @@
 target/
 pkg/
+rooms/
 world.ckw
 .DS_Store

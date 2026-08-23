@@ -37,7 +37,9 @@ Keyed on what is held rather than on whether the cell is occupied at all, becaus
 
 **A drag lays the shape the held slot lays**, and the two slots lay different shapes. Life is a **pencil**: every cell the pointer crosses, so you draw a pattern and watch the line appear under your hand. Ice is a **rectangle**: two corners, because a pane is a shape you place and dragging one out says how big before it exists. Which one a drag is drawing is fixed when the button goes down, so changing slot midway does not change a line already half drawn.
 
-**A stroke is laid as it is drawn**, not when the button comes up. Holding it back meant every line appeared a moment after the hand that drew it, which reads as lag however fast everything else is — and it is a pencil, so it should behave like one. Each frame's new cells are priced and sent as a batch, so a stroke that runs out of value stops where the money did rather than being refused whole. The cells are their own preview; only a rectangle, which does not exist until it is released, still shows one.
+**Nothing is laid until the button comes up** — a stroke as much as a pane. What a drag would place is drawn as a preview under the hand, with its size and its price beside it, and the world does not change until you let go.
+
+It was the other way round for a while: a stroke laid itself cell by cell as it was drawn, on the reasoning that a pencil should behave like one and that holding it back reads as lag. What that cost was everything a preview buys. Escape could not abandon a stroke, because most of it was already down. A refusal arrived partway through, so a sweep that left your territory laid the cells before the boundary and stopped. And the pricing had to be per batch, so a stroke that ran out of value stopped where the money did — somewhere the hand had not — instead of being refused whole. Committing on release makes the pencil obey the same rule as everything else: **a drag is all or nothing**, and you can see what it will do before it does it.
 
 The pencil marks every cell between one pointer position and the next, not just the ones it was reported at. Events arrive far apart when the hand moves quickly — a fast stroke crosses twenty cells between two of them — so marking only the reported positions would draw a dotted line.
 
@@ -52,7 +54,7 @@ A stroke that crosses itself lists each cell once: the pricing compares every ce
 
 A drag always places, never takes: a sweep across occupied ground is far more likely to be building over it than a request to clear it cell by cell, and an accidental sweep that wiped a structure would be unforgiving. Taking stays a deliberate single click.
 
-What will be laid is drawn while you draw it, with its size and its price beside it, and a drag that cannot be paid for is drawn as refused before the button comes up. **A drag is all or nothing.** One laid as far as the value stretched would stop somewhere the hand did not, and the player would be left working out where it ran out and why.
+A drag that cannot be paid for is drawn as refused *while the button is still down*, so the answer arrives before the commitment rather than after it — and since a drag is all or nothing, a refusal means no cells at all rather than as many as could be paid for.
 
 Only the cells a placement actually changes are charged for. Extending a rectangle means sweeping the whole of it again, and paying twice for the part that was already there made the natural gesture the expensive one. This is why `value_delta` reads the world for a paint as well as for an erase.
 

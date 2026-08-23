@@ -58,6 +58,10 @@ fn main() -> std::io::Result<()> {
                 span = Duration::from_millis(ms);
             }
             "--fresh" => fresh = true,
+            // Skipped rather than refused. The `cargo serve` alias already
+            // ends in `--`, so typing a second one -- which is the habit --
+            // would otherwise hand the binary a bare `--` and panic on it.
+            "--" => continue,
             "--torus" => {
                 let text = args.next().expect("--torus needs ROWSxCOLS");
                 shape = conwayskingdom::sim::parse_torus(&text)

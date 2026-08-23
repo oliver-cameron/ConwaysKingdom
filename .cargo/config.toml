@@ -1,0 +1,26 @@
+# Shorthands, because cargo cannot turn a feature on for one target.
+#
+# `required-features` is a gate rather than a switch: it tells cargo to skip a
+# target whose features are off, so `cargo build` does not fail on a binary it
+# cannot compile. Features are resolved for the whole package before any target
+# is chosen, so there is nowhere for "building this bin implies this feature"
+# to live -- rust-lang/cargo#1982, open since 2015.
+#
+# Making `server` a default feature would do it, and cannot: axum and
+# tower-http sit in plain `[dependencies]`, so a default-on `server` would have
+# `wasm-pack build` try to compile them for wasm32, where tokio's net and
+# signal stack does not build. It would also link axum into the native client
+# for nothing.
+#
+# So: aliases. They change nothing about what any build compiles, and they are
+# checked in, so a fresh clone gets them.
+[alias]
+# The server, and the page it serves, from one origin.
+serve = "run --no-default-features --features server --bin server -- --serve ."
+# The server with no static files, for when the client is run separately.
+server = "run --no-default-features --features server --bin server"
+# The native client.
+client = "run --bin native"
+# Everything, both ways round: with the renderer and without it. The second is
+# what proves the module boundary, since it compiles zero GPU crates.
+check-all = "test --no-default-features"
