@@ -22,6 +22,14 @@
 //! Slices work, and they work only for as long as nobody picks two that
 //! overlap — a silent correlation that no test would think to look for.
 
+/// What every chance in [`crate::sim::rule`] is out of.
+///
+/// One number, so a constant is a chance and nothing has to say which way
+/// round it reads. Sixty-four because it is a power of two — the modulo is a
+/// mask — and fine enough to say a sixty-fourth without saying more than
+/// anybody could tune.
+pub const OUT_OF: u64 = 64;
+
 /// Mix a value into a seed. SplitMix64's finaliser: cheap, and it decorrelates
 /// the near-identical inputs — adjacent cells, consecutive ticks — that a plain
 /// hash would leave visibly patterned.
@@ -54,16 +62,10 @@ impl Roll {
         mix(self.0, stream)
     }
 
-    /// One chance in `odds`. `odds` of 1 is always, and 0 is never.
+    /// Whether a chance of `n` out of [`OUT_OF`] came up.
     #[inline]
-    pub const fn one_in(self, stream: u64, odds: u64) -> bool {
-        odds != 0 && self.stream(stream).is_multiple_of(odds)
-    }
-
-    /// `n` chances in `outof`.
-    #[inline]
-    pub const fn chance(self, stream: u64, (n, outof): (u64, u64)) -> bool {
-        outof != 0 && self.stream(stream) % outof < n
+    pub const fn chance(self, stream: u64, n: u64) -> bool {
+        self.stream(stream) % OUT_OF < n
     }
 
     /// One of `count`, evenly. Zero for an empty choice, so a caller that has
@@ -87,12 +89,12 @@ mod tests {
     fn a_roll_is_a_pure_function_of_its_seed_and_stream() {
         for seed in 0..64 {
             let roll = Roll::new(seed);
-            let (a, b, c) = (roll.one_in(0, 4), roll.chance(1, (10, 16)), roll.pick(2, 5));
+            let (a, b, c) = (roll.chance(0, 16), roll.chance(1, 40), roll.pick(2, 5));
             for _ in 0..8 {
                 // Taken in a different order, which must not matter.
                 assert_eq!(Roll::new(seed).pick(2, 5), c);
-                assert_eq!(Roll::new(seed).chance(1, (10, 16)), b);
-                assert_eq!(Roll::new(seed).one_in(0, 4), a);
+                assert_eq!(Roll::new(seed).chance(1, 40), b);
+                assert_eq!(Roll::new(seed).chance(0, 16), a);
             }
         }
     }
@@ -103,7 +105,7 @@ mod tests {
     #[test]
     fn streams_do_not_agree_with_each_other() {
         let both = (0..2000u64)
-            .filter(|&s| Roll::new(s).one_in(0, 4) == Roll::new(s).one_in(1, 4))
+            .filter(|&s| Roll::new(s).chance(0, 16) == Roll::new(s).chance(1, 16))
             .count();
         // Independent streams agree by luck about 5/8 of the time: both true
         // 1/16, both false 9/16. Anything near 2000 is one stream twice.
@@ -119,17 +121,14 @@ mod tests {
     fn the_odds_are_what_they_say() {
         let hits = |f: &dyn Fn(u64) -> bool| (0..20_000u64).filter(|&s| f(s)).count();
 
-        let quarter = hits(&|s| Roll::new(s).one_in(0, 4));
-        assert!((4600..5400).contains(&quarter), "one in four gave {quarter} in 20000");
+        let quarter = hits(&|s| Roll::new(s).chance(0, 16));
+        assert!((4600..5400).contains(&quarter), "16 in 64 gave {quarter} in 20000");
 
-        let ten_sixteenths = hits(&|s| Roll::new(s).chance(0, (10, 16)));
-        assert!(
-            (12000..13000).contains(&ten_sixteenths),
-            "ten in sixteen gave {ten_sixteenths} in 20000"
-        );
+        let most = hits(&|s| Roll::new(s).chance(0, 40));
+        assert!((12000..13000).contains(&most), "40 in 64 gave {most} in 20000");
 
-        assert!((0..20_000).all(|s| !Roll::new(s).one_in(0, 0)), "one in nothing is never");
-        assert!((0..20_000).all(|s| Roll::new(s).one_in(0, 1)), "one in one is always");
+        assert!((0..20_000).all(|s| !Roll::new(s).chance(0, 0)), "0 in 64 is never");
+        assert!((0..20_000).all(|s| Roll::new(s).chance(0, OUT_OF)), "64 in 64 is always");
     }
 
     /// Every choice must be reachable, or "at random" is a lie and one parent

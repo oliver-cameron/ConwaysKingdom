@@ -12,7 +12,7 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | place a mine | −10 each |
 | place ice | −5 each |
 | **a mine of yours is born** | **+1** |
-| **a dead mine of yours, each generation it lies there** | **−1**, one generation in four |
+| **a dead mine of yours, each generation it lies there** | **−1**, sixteen times in sixty-four |
 | reclaim your own | +1 |
 | take another player's | −1, because taking ground should not be free |
 | take what is not there | nothing |
@@ -31,7 +31,7 @@ Cost is read **before** the action is applied, since it depends on what is there
 
 A **mine** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a mine's children are mines — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
 
-**A mine's corpse costs while it lies there**, one generation in four, for as long as the ground is still yours. Not once when it falls — a standing charge. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
+**A mine's corpse costs while it lies there**, sixteen generations in sixty-four, for as long as the ground is still yours. Not once when it falls — a standing charge. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
 
 So income is births minus the upkeep of everything you have let die, and the thing being rewarded is a **compact machine**. `cargo run --no-default-features --example balance` prints the table, in value per generation at steady state:
 
@@ -49,7 +49,7 @@ A block of mines is the honest edge case: nothing is ever born and nothing ever 
 
 The drain is bounded by territory decay rather than by a timer. A corpse with nothing alive beside it loses its owner within about sixteen generations and stops costing anybody, so abandoned ground bleeds you briefly and then goes quiet — while corpses inside a living colony are re-claimed every generation and go on costing. There is no other way to clear them: a dead cell cannot be reclaimed, so a mine field you regret is a liability until the life on it goes out.
 
-Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_UPKEEP_ODDS` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
+Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_UPKEEP` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
 
 Value is floored at zero. A cost that comes from an action is refused when it cannot be paid; a drain arrives whether or not there is anything to take it from, and a player in debt would be one who cannot act and has no way to stop owing.
 
@@ -119,9 +119,13 @@ The world decides the spacing. An infinite one has room, so the grid sits at a f
 
 Which means the client cannot work out where its own ground is: that depends on the shape of the world, and it does not know the shape until it is told. `Welcome` carries the spawn: four cells that hold their shape forever, the same for everyone, so nobody begins ahead. The block is also what keeps the ground, since territory spreads from living cells and a bare patch would never grow. An offline client grants itself the same thing, or a game of one would have no opening move.
 
-**Ground is lost as well as won.** A dead cell with nothing alive among its eight neighbours loses its owner, one generation in sixteen — about four seconds. Territory used to only ever spread, so a glider left a permanent trail and the world grew for as long as anything moved; a map that only fills up is not one anybody competes over.
+**Ground is traded and lost as well as won.** Where nothing alive is touching a dead cell, it takes the owner of a neighbouring cell — whoever that is, **including nobody**. So the same rule spreads your ground and eats it: inside your territory every neighbour agrees and nothing moves, at the edge it is a coin weighted by how much of the ground around it is yours, and a thin trail is nearly all empty neighbours and goes quickly. A slow decay on top means ground nothing lives on eventually goes rather than settling into a shape and staying.
 
-Life holds the ground around it, because a square touching something alive is re-claimed as fast as it could ever decay. So your territory is where your life is and where it has just been, and holding ground means keeping something alive on it.
+Territory used to only ever spread, so a glider left a permanent trail and the world grew for as long as anything moved; a map that only fills up is not one anybody competes over.
+
+Life holds the ground around it, because a square touching something alive is claimed before creep or decay ever see it. So your territory is a **halo around your life** whose edge moves both ways, and holding ground means keeping something alive on it. `cargo run --no-default-features --example territory` draws it.
+
+Every chance in the rules is out of **sixty-four**, per cell, per generation — `SPREAD` 40, `CREEP` 8, `DECAY` 2, `MINE_UPKEEP` 16. One denominator, so a constant is a chance and nothing has to say which way round it reads.
 
 Your **granted patch is the exception** and never decays. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. It is a mark on the ground rather than on the cells, so it survives the ground changing hands, and an opponent who grows over your home keeps it as theirs.
 

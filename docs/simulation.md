@@ -81,7 +81,7 @@ Ice is cleared on a birth because a parent may be *under a pane* and still count
 
 ### Mines, and what the rule counts
 
-`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner for every generation one of its corpses **lies there** — one in `rule::MINE_UPKEEP_ODDS`, which is four. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
+`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner for every generation one of its corpses **lies there** — `rule::MINE_UPKEEP`, sixteen times in sixty-four. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
 
 Note what `upkeep` counts. Not deaths — charges falling due. A square is counted many times over its life as a corpse, and a square that dies and is never counted is possible too.
 
@@ -89,7 +89,7 @@ Counted inside `Halo::step_into`, which is the one place that holds a cell befor
 
 What that rewards is a **machine that stays where you put it**. A blinker is three cells and two corpses and pays; a glider drags twenty corpses behind it and bleeds; an r-pentomino of sprawl bleeds badly. A block of mines neither earns nor costs, because nothing is ever born on it and nothing ever dies.
 
-The drain is bounded by territory decay rather than by a timer: a corpse with nothing alive beside it loses its owner within about `DECAY_ODDS` generations and stops costing anybody, while corpses inside a living colony are re-claimed every generation and go on costing.
+The drain is bounded by territory decay rather than by a timer: a corpse with nothing alive beside it loses its owner soon enough and stops costing anybody, while corpses inside a living colony are re-claimed every generation and go on costing.
 
 ## Chunks
 
@@ -124,9 +124,19 @@ Every non-empty chunk, plus any neighbour it carries life towards. A chunk with 
 
 A dead cell next to living ones takes the owner of one of them, chosen by the seed, most generations. It stays dead: the rule sets the owner and nothing else. Ice is checked first, so a pane's cover is not claimed while it stands.
 
-**And it decays.** A dead cell with *nothing alive* among its eight neighbours loses its owner, one generation in `rule::DECAY_ODDS` — sixteen, about four seconds at the default rate. Territory used to only ever spread, which meant a glider left a permanent trail and an infinite world grew for as long as anything moved: ground was won and never lost, and a map that only fills up is not one anybody competes over. A glider crossing four hundred generations used to hold twenty-five chunks and climbing, for five live cells; it now holds a handful.
+**And it creeps, and it fades.** Where nothing alive is touching a dead cell, it takes the owner of a neighbouring cell — **whoever that is, including nobody**. That one rule does both jobs, which is why there is no threshold anywhere trying to work out what a shape is:
 
-Life holds the ground around it, because a square touching something alive is re-claimed as fast as it could ever decay. So territory is "where your life is, and where it has just been" rather than "everywhere it has ever been".
+- Deep inside a region every neighbour agrees, so nothing moves.
+- At an edge, a cell with five owned neighbours and three empty ones has five-in-eight odds of staying and three-in-eight of going, and the square just outside it has the same odds the other way. The border is an unbiased walk: it neither runs away nor rots.
+- A thin trail is nearly all empty neighbours, so it goes quickly.
+
+Every threshold tried failed, and for a reason worth writing down: **a corner of a solid region and a cell just outside a straight edge both have exactly three owned neighbours.** No count of neighbours can tell them apart, so any rule built on one either erodes every blob from its corners or grows every edge outward forever. Measured: at four of eight a glider's trail reached 454 squares and climbing; at three of eight an abandoned patch grew from 169 to 807.
+
+On top of that, a slow **decay** — `rule::DECAY`, two in sixty-four — so ground nothing lives on eventually goes rather than settling into a shape and staying. Without it, a patch nobody has touched for four hundred generations is still two hundred squares; with it, none.
+
+Territory used to only ever spread, which meant a glider left a permanent trail and an infinite world grew for as long as anything moved. A glider crossing four hundred generations used to hold twenty-five chunks and climbing, for five live cells.
+
+Life holds the ground around it, because a square touching something alive is claimed by the rule above before creep or decay ever see it. So territory is a halo around your life that fluctuates at its edge — `cargo run --no-default-features --example territory` draws it.
 
 The exception is **granted ground**, marked by `bits::HOME` and exempt. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. The mark is on the *square*, not the lineage, which is why a birth keeps the dead cell's copy of it while taking everything else from its parent. It travels with the ground when the ground changes hands.
 

@@ -178,3 +178,53 @@ fn a_kind_spreads_through_a_mixed_neighbourhood() {
         "one parent in three should carry it, got {mines} in 300"
     );
 }
+
+/// Creep cuts both ways, which is the whole of why a border settles rather than
+/// running away or rotting: a dead cell takes a neighbour's owner, and one of
+/// those neighbours may be nobody.
+#[test]
+fn creep_takes_whoever_is_beside_it_including_nobody() {
+    let mine = Cell::DEAD.with_player(PlayerId(1));
+    let nobody = Cell::DEAD;
+    let outcomes = |cell: Cell, around: &Neighbours| {
+        (0..2000u64).filter(|&s| next_cell(cell, around, s).player() == PlayerId(1)).count()
+    };
+
+    // Deep inside my ground there is nothing else to take, so unclaimed ground
+    // there only ever becomes mine -- at the creep rate, not at once.
+    let inside = [mine; 8];
+    let claimed = outcomes(nobody, &inside);
+    assert!((180..340).contains(&claimed), "claimed {claimed} of 2000, want about 250");
+    for seed in 0..2000 {
+        let next = next_cell(nobody, &inside, seed).player();
+        assert!(next == PlayerId(1) || next == PlayerId::UNOWNED, "seed {seed}: {next:?}");
+    }
+
+    // Out where nothing is claimed, my ground only ever becomes nobody's --
+    // and that is the erosion, with no rule of its own.
+    let outside = [nobody; 8];
+    let kept = outcomes(mine, &outside);
+    assert!(kept < 2000, "ground surrounded by nothing should sometimes go, kept {kept}");
+    assert!(kept > 1500, "and should not go all at once, kept {kept}");
+
+    // On a border it goes both ways, which is what makes the edge a walk.
+    let mut edge = [nobody; 8];
+    for n in edge.iter_mut().take(5) {
+        *n = mine;
+    }
+    let held = outcomes(mine, &edge);
+    assert!((1500..2000).contains(&held), "a border should move both ways, held {held} of 2000");
+}
+
+/// Granted ground answers to life alone: it neither creeps nor fades, or a
+/// player whose life went out would lose the only ground they may build on.
+#[test]
+fn granted_ground_is_not_taken_by_the_ground_around_it() {
+    let home = Cell::DEAD.with_player(PlayerId(1)).with_home(true);
+    let nothing = [Cell::DEAD; 8];
+    for seed in 0..2000 {
+        let next = next_cell(home, &nothing, seed);
+        assert_eq!(next.player(), PlayerId(1), "seed {seed}");
+        assert!(next.is_home());
+    }
+}
