@@ -58,8 +58,8 @@ pub mod hotbar {
     pub const ICE: &str = "Ice";
     /// The square that takes a stamp. Short, because it sits in a 44px box.
     pub const CAPTURE: &str = "Grab";
-    /// Shown beside it before anything has been captured.
-    pub const NO_STAMPS: &str = "drag a box\nround your\nown life";
+    /// The square that opens the library.
+    pub const LIBRARY: &str = "Stamps";
 }
 
 /// The library of captured patterns.
@@ -68,7 +68,7 @@ pub mod stamps {
     pub const CLOSE: &str = "Close";
     pub const FORGET: &str = "forget";
     pub const NONE_YET: &str = "Nothing captured yet.";
-    pub const HOW: &str = "Hold a stamp and drag a box round your own life to take another.";
+    pub const HOW: &str = "Grab, then drag a box round your own life, to take another.";
 
     pub fn captured(name: &str, cells: usize) -> String {
         format!("captured {name} ({cells} cells)")

@@ -176,6 +176,8 @@ Two segments, and one thing selected across both:
     [ Life  Mine │ Ice ]   [ Grab  stamps … +7 ]
 ```
 
+**Every square shows a picture rather than a word.** Life, Mine and Ice are drawn from the same sprite sheet the world is drawn from, tinted with the same hue, so what you are choosing is what will be on the board — which is where you are looking. Grab is a camera, painted rather than sampled, because capturing is not a cell and the sheet has no picture of one. A stamp shows **the pattern it holds**: `2x2` said nothing about what was about to be placed, and at button size a glider is a glider and a block is a block. The names are still there, on hover.
+
 The tools are the game's own vocabulary and never change; the stamps are whatever you happened to capture, and there may be none or thirty. Run together, the Ice key would move every time you saved a pattern. Ice sits with the tools but behind a rule, because it is the one that walls people off and should not be a neighbour of the one you draw with.
 
 **The digits are the stamps** — `1` to `9` then `0`, which is ten and is why the bar holds ten — and **shift and a digit is a tool**. The stamps get the bare keys because they are what you hold ten of and swap between without looking; the three tools never change and never grow, so they can afford a modifier.
@@ -192,7 +194,7 @@ A pattern captured once and placed again. Nothing on the wire is a stamp: placin
 
 A stamp is **the live cells and their kind**, not the rectangle you swept. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of mines is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
 
-Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern. Past ten, the rest are behind a `+N` key that opens the library.
+Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern. Past ten, the rest are behind the library key — which is **always** there, not only when something has overflowed, because the library is where a stamp is looked at and thrown away as well as where the extras live. It shows each pattern at a size you can recognise, beside its size and cell count.
 
 **Not yet: the double cost.** `planned.md` decided a stamp should cost twice what drawing it would, and it does not — it costs the same. Doubling needs the action to say on the wire that it is a stamp, or the client charges double and the server charges single and the two disagree about money.
 

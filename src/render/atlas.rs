@@ -111,6 +111,16 @@ impl Atlas {
     }
 }
 
+/// The sheet's texels, or `None` if the art is unusable.
+///
+/// The interface draws the same sprites the world does — a hotbar button
+/// showing the cell says more than one spelling its name — and it draws them
+/// through egui rather than through this pipeline, so it needs the pixels
+/// rather than the GPU texture.
+pub fn decoded() -> Option<Vec<u8>> {
+    decode(SHEET).ok()
+}
+
 /// A 16x16 RGBA PNG, as raw texels.
 fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes));

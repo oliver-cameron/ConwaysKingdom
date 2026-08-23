@@ -7,7 +7,7 @@ use std::cell::RefCell;
 
 use crate::render::app::App;
 use super::words;
-use super::{camera, hotbar, hud, menu, overlay, stamp, Views};
+use super::{camera, hotbar, hud, icons, menu, overlay, stamp, Views};
 use hotbar::{Held, Key};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
@@ -394,6 +394,9 @@ pub struct BattleApp {
     held: Held,
     /// Every pattern captured so far.
     stamps: stamp::Library,
+    /// The sprite sheet as egui can draw it, so the hotbar shows the cell each
+    /// tool puts down rather than spelling its name.
+    icons: icons::Icons,
     /// Whether the stamps that did not fit on the bar are on screen.
     picking_stamp: bool,
 }
@@ -1451,6 +1454,7 @@ impl App for BattleApp {
             pending: None,
             held: Held::default(),
             stamps: stamp::Library::default(),
+            icons: icons::Icons::default(),
             picking_stamp: false,
             link,
         };
@@ -1540,6 +1544,12 @@ impl App for BattleApp {
                 (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect();
             (self.held, views.theme, learned)
         };
+        // Registered before the frame rather than inside it: loading a texture
+        // needs the context, and the context is borrowed for the whole build.
+        let sheet = {
+            let ctx = self.views.borrow().ctx().clone();
+            self.icons.sheet(&ctx, self.player())
+        };
         // What shift and a digit types on this keyboard, as far as anyone has
         // found out by pressing it.
         let typed = move |digit: u32| {
@@ -1560,6 +1570,7 @@ impl App for BattleApp {
         // menu did with it.
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
         let on_web = cfg!(target_arch = "wasm32");
+        let me = self.player();
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
             // The world is still drawn behind it, and still running if this
             // client is offline. A menu over a dead grey rectangle says the
@@ -1573,10 +1584,16 @@ impl App for BattleApp {
             Screen::Playing => {
                 overlay::show(ctx, &theme, &marks);
                 let hud_rect = hud::show(ctx, &theme, &status);
-                let bar = hotbar::show(ctx, &theme, held, &self.stamps, &typed);
+                let look = hotbar::Look {
+                    theme: &theme,
+                    sheet,
+                    player: me,
+                    typed: &typed,
+                };
+                let bar = hotbar::show(ctx, &look, held, &self.stamps);
                 picked = bar.picked;
                 if picking {
-                    let (chose, rect) = stamp::show(ctx, &theme, &self.stamps);
+                    let (chose, rect) = stamp::show(ctx, &theme, &self.stamps, me);
                     from_library = chose;
                     return [hud_rect, bar.rect, rect].into_iter().flatten().collect();
                 }

@@ -118,6 +118,37 @@ impl Stamp {
         out
     }
 
+    /// Draw it as the cells it is, fitted to a box.
+    ///
+    /// `2x2` says nothing about what is about to be placed; its shape does. At
+    /// button size a glider is a glider and a block is a block, which is the
+    /// whole question a row of ten of them has to answer.
+    pub fn draw(&self, painter: &egui::Painter, rect: egui::Rect, player: PlayerId) {
+        let (rows, cols) = (self.size.0.max(1) as f32, self.size.1.max(1) as f32);
+        // Square cells, sized so the longer axis just fits.
+        let step = (rect.width() / cols).min(rect.height() / rows);
+        let origin = rect.center() - egui::vec2(cols * step, rows * step) * 0.5;
+
+        for &((r, c), what) in &self.cells {
+            let (red, green, blue) = crate::client::views::hud::shade(
+                if what == Placement::Mine { 0.78 } else { 0.62 },
+                1.0,
+                player,
+            );
+            let at = egui::Rect::from_min_size(
+                origin + egui::vec2(c as f32 * step, r as f32 * step),
+                egui::vec2(step, step),
+            );
+            // Shrunk a hair, so neighbouring cells read as cells rather than as
+            // a solid blob -- the difference between a shape and a smear.
+            painter.rect_filled(
+                at.shrink(step * 0.12),
+                0.0,
+                egui::Color32::from_rgb(red, green, blue),
+            );
+        }
+    }
+
     /// Put its middle under the pointer rather than its corner, because that
     /// is where you are looking when you place it.
     pub fn centred_on(&self, at: (i32, i32)) -> (i32, i32) {
@@ -166,6 +197,95 @@ impl Library {
             self.stamps.remove(index);
         }
     }
+}
+
+/// What the player did with the picker this frame.
+pub enum Picked {
+    Nothing,
+    Hold(usize),
+    Forget(usize),
+    Close,
+}
+
+/// The whole library, for when there are more stamps than the bar can hold.
+///
+/// A list rather than a grid of squares: past ten of them you are reading names
+/// and sizes, not recognising shapes, and a list is what reading wants.
+pub fn show(
+    ctx: &egui::Context,
+    theme: &Theme,
+    library: &Library,
+    player: PlayerId,
+) -> (Picked, Option<egui::Rect>) {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let mut picked = Picked::Nothing;
+
+    let area = egui::Area::new("stamps".into())
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(p.surface)
+                .stroke(egui::Stroke::new(1.0, p.line))
+                .corner_radius(m.rounding)
+                .inner_margin(m.panel_padding * 1.4)
+                .show(ui, |ui| {
+                    ui.set_width(280.0);
+                    ui.spacing_mut().item_spacing.y = m.item_spacing;
+                    ui.heading(words::TITLE);
+                    ui.separator();
+
+                    if library.is_empty() {
+                        ui.colored_label(p.text_dim, words::NONE_YET);
+                    }
+                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                        for (i, stamp) in library.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                // The shape first, and big enough to recognise:
+                                // a name is what you call it once you know
+                                // which one it is.
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(m.slot, m.slot),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    m.rounding,
+                                    egui::Stroke::new(1.0, p.line),
+                                    egui::StrokeKind::Inside,
+                                );
+                                stamp.draw(ui.painter(), rect.shrink(4.0), player);
+                                if response.clicked() {
+                                    picked = Picked::Hold(i);
+                                }
+                                ui.colored_label(
+                                    p.text_dim,
+                                    format!("{}  ·  {} cells", stamp.name, stamp.cells.len()),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button(words::FORGET).clicked() {
+                                            picked = Picked::Forget(i);
+                                        }
+                                    },
+                                );
+                            });
+                        }
+                    });
+
+                    ui.separator();
+                    ui.small(words::HOW);
+                    if ui
+                        .add_sized([ui.available_width(), 26.0], egui::Button::new(words::CLOSE))
+                        .clicked()
+                    {
+                        picked = Picked::Close;
+                    }
+                });
+        });
+
+    (picked, Some(area.response.rect))
 }
 
 #[cfg(test)]
@@ -251,74 +371,4 @@ mod tests {
         library.forget(0);
         assert_eq!(library.len(), ON_THE_BAR + 2);
     }
-}
-
-/// What the player did with the picker this frame.
-pub enum Picked {
-    Nothing,
-    Hold(usize),
-    Forget(usize),
-    Close,
-}
-
-/// The whole library, for when there are more stamps than the bar can hold.
-///
-/// A list rather than a grid of squares: past ten of them you are reading names
-/// and sizes, not recognising shapes, and a list is what reading wants.
-pub fn show(ctx: &egui::Context, theme: &Theme, library: &Library) -> (Picked, Option<egui::Rect>) {
-    let p = theme.palette;
-    let m = theme.metrics;
-    let mut picked = Picked::Nothing;
-
-    let area = egui::Area::new("stamps".into())
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(p.surface)
-                .stroke(egui::Stroke::new(1.0, p.line))
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding * 1.4)
-                .show(ui, |ui| {
-                    ui.set_width(280.0);
-                    ui.spacing_mut().item_spacing.y = m.item_spacing;
-                    ui.heading(words::TITLE);
-                    ui.separator();
-
-                    if library.is_empty() {
-                        ui.colored_label(p.text_dim, words::NONE_YET);
-                    }
-                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                        for (i, stamp) in library.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                if ui.button(&stamp.name).clicked() {
-                                    picked = Picked::Hold(i);
-                                }
-                                ui.colored_label(
-                                    p.text_dim,
-                                    format!("{} cells", stamp.cells.len()),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.small_button(words::FORGET).clicked() {
-                                            picked = Picked::Forget(i);
-                                        }
-                                    },
-                                );
-                            });
-                        }
-                    });
-
-                    ui.separator();
-                    ui.small(words::HOW);
-                    if ui
-                        .add_sized([ui.available_width(), 26.0], egui::Button::new(words::CLOSE))
-                        .clicked()
-                    {
-                        picked = Picked::Close;
-                    }
-                });
-        });
-
-    (picked, Some(area.response.rect))
 }

@@ -52,7 +52,7 @@ What is left:
 
 **Rotation and mirroring**, and what to do when a stamp will not fit inside your territory: refuse it whole, as it does now, or place the part that fits.
 
-**Naming.** A stamp is called `3x4` because nothing has asked what it is. The library menu is where a name would be typed.
+**Naming.** A stamp is called `3x4` because nothing has asked what it is. The library is where a name would be typed, and the shape beside it already does most of the work a name would.
 
 ## Mobile
 

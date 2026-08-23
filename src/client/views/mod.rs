@@ -21,6 +21,7 @@ pub mod battle;
 pub mod hotbar;
 pub mod camera;
 pub mod hud;
+pub mod icons;
 pub mod menu;
 pub mod overlay;
 pub mod stamp;
@@ -214,6 +215,12 @@ impl Views {
                 },
             ),
         }
+    }
+
+    /// The egui context, for anything that has to be registered with it —
+    /// a texture, say — before a frame is built.
+    pub fn ctx(&self) -> &egui::Context {
+        &self.ctx
     }
 
     /// Whether the interface, rather than the world, should get the pointer.

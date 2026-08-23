@@ -125,61 +125,50 @@ pub fn show(
 /// swatch matches the cells on the board. OKLab with the chroma bisected down
 /// until it fits sRGB, which keeps hue and lightness exactly rather than
 /// bending them the way clamping would.
-pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
+/// What the shader draws a sheet texel as, for this player.
+///
+/// The sheet carries no hue: a texel is saturation and lightness, and the hue
+/// comes from the player's number. Mirrors `shade` and `player_hue` in
+/// `grid.wgsl`, which is the one that has to be right — this only has to agree
+/// with it.
+pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) {
     const HUE_STEP: f32 = 0.618_034;
     const TAU: f32 = std::f32::consts::TAU;
+    const MAX_CHROMA: f32 = 0.13;
 
     let hue = (player.0 as f32 * HUE_STEP).fract() * TAU;
-    // Player zero is nobody, and nobody's ground is grey. Mirrors the shader,
-    // which is the one that has to be right -- this only has to agree with it.
-    let saturation = if player.0 == 0 {
+    // Player zero is nobody, and nobody's ground is grey.
+    let tier = if player.0 == 0 {
         0.0
     } else if player.0 % 2 == 1 {
         1.0
     } else {
         0.55
     };
-    let lightness = 0.62f32;
+    // Chroma tapers off at the ends, where there is no room for it.
+    let taper = 1.0 - (2.0 * lightness - 1.0).abs().powi(2);
+    let chroma = MAX_CHROMA * saturation * tier * taper;
+    let (a, b) = (chroma * hue.cos(), chroma * hue.sin());
 
-    let oklab_to_linear = |l: f32, a: f32, b: f32| {
-        let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
-        let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
-        let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
-        let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-        [
-            4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
-            -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
-            -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
-        ]
-    };
-    let inside = |c: [f32; 3]| c.iter().all(|v| (-0.0005..=1.0005).contains(v));
-
-    let chroma = 0.30 * saturation * (1.0 - (2.0 * lightness - 1.0).abs());
-    let (dx, dy) = (hue.cos(), hue.sin());
-    let mut scale = 1.0;
-    if !inside(oklab_to_linear(lightness, chroma * dx, chroma * dy)) {
-        let (mut lo, mut hi) = (0.0f32, 1.0f32);
-        for _ in 0..8 {
-            let mid = (lo + hi) * 0.5;
-            let c = chroma * mid;
-            if inside(oklab_to_linear(lightness, c * dx, c * dy)) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        scale = lo;
-    }
-    let c = chroma * scale;
-    let linear = oklab_to_linear(lightness, c * dx, c * dy);
-
-    // egui takes sRGB bytes, so encode; the shader hands linear to a surface
-    // that does this in hardware.
-    let encode = |v: f32| {
+    let l_ = lightness + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = lightness - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = lightness - 0.089_484_18 * a - 1.291_485_5 * b;
+    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+    let linear = [
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    ];
+    let byte = |v: f32| {
         let v = v.clamp(0.0, 1.0);
-        let s = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+        let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
         (s * 255.0).round() as u8
     };
-    (encode(linear[0]), encode(linear[1]), encode(linear[2]))
+    (byte(linear[0]), byte(linear[1]), byte(linear[2]))
+}
+
+/// The colour of a player's cells, for a swatch beside their name.
+pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
+    shade(0.62, 1.0, player)
 }
 

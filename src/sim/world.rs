@@ -292,8 +292,8 @@ impl World {
     }
 
     /// Chunks that must be stepped: every non-empty chunk, plus any neighbour
-    /// it carries life towards. A chunk with no life on the edge facing its
-    /// neighbour cannot cause a birth there, so the neighbour can be skipped.
+    /// something on its edge can reach — life, which can cause a birth there,
+    /// or ownership, which can creep there.
     fn compute_active(&mut self) {
         let mut set: HashSet<Coord> = HashSet::new();
         for (coord, chunk) in self.stored() {
@@ -302,7 +302,7 @@ impl World {
             }
             set.insert(coord);
             for dir in Dir::ALL {
-                if edge_has_life(chunk, dir) {
+                if edge_can_reach(chunk, dir) {
                     set.insert(self.canonical(offset(coord, dir)));
                 }
             }
@@ -612,19 +612,30 @@ impl World {
 
 }
 
-/// Does this chunk carry life on the edge facing `dir`? A live cell there can
-/// contribute to a birth in the chunk beyond.
-fn edge_has_life(chunk: &Chunk, dir: Dir) -> bool {
+/// Can anything on the edge facing `dir` change the chunk beyond it?
+///
+/// Life can, by causing a birth. **So can ownership**, now that territory
+/// creeps: ground next to your ground becomes your ground, and the ground next
+/// to it may be in the next chunk along.
+///
+/// Life alone was the test, and it made territory unable to cross a chunk
+/// boundary at all. Nothing woke the neighbour, so nothing was stepped there,
+/// so nothing was ever claimed there. It showed up as a granted patch that
+/// crept right and down and not up or left — because a grant lands flush
+/// against a chunk's top-left corner, so those two edges *are* the boundary
+/// and the other two are interior.
+fn edge_can_reach(chunk: &Chunk, dir: Dir) -> bool {
+    let spreads = |cell: Cell| cell.is_alive() || cell.player().is_owned();
     let last = CHUNK_N - 1;
     match dir {
-        Dir::N => (0..CHUNK_N).any(|c| chunk[(0, c)].is_alive()),
-        Dir::S => (0..CHUNK_N).any(|c| chunk[(last, c)].is_alive()),
-        Dir::W => (0..CHUNK_N).any(|r| chunk[(r, 0)].is_alive()),
-        Dir::E => (0..CHUNK_N).any(|r| chunk[(r, last)].is_alive()),
-        Dir::Nw => chunk[(0, 0)].is_alive(),
-        Dir::Ne => chunk[(0, last)].is_alive(),
-        Dir::Sw => chunk[(last, 0)].is_alive(),
-        Dir::Se => chunk[(last, last)].is_alive(),
+        Dir::N => (0..CHUNK_N).any(|c| spreads(chunk[(0, c)])),
+        Dir::S => (0..CHUNK_N).any(|c| spreads(chunk[(last, c)])),
+        Dir::W => (0..CHUNK_N).any(|r| spreads(chunk[(r, 0)])),
+        Dir::E => (0..CHUNK_N).any(|r| spreads(chunk[(r, last)])),
+        Dir::Nw => spreads(chunk[(0, 0)]),
+        Dir::Ne => spreads(chunk[(0, last)]),
+        Dir::Sw => spreads(chunk[(last, 0)]),
+        Dir::Se => spreads(chunk[(last, last)]),
     }
 }
 
@@ -703,6 +714,41 @@ mod tests {
             })
             .count();
         assert_eq!(claimed, w.stored_count(), "every chunk kept is kept for a reason");
+    }
+
+    /// Territory has to be able to leave the chunk it started in.
+    ///
+    /// A granted patch lands flush against a chunk's top-left corner, so two of
+    /// its edges *are* the boundary. While only life woke a neighbouring chunk,
+    /// ground crept right and down — which is interior — and never up or left,
+    /// which is exactly what it looked like on screen.
+    #[test]
+    fn territory_creeps_across_a_chunk_boundary() {
+        let me = PlayerId(1);
+        let mut w = World::infinite_empty();
+        // Claimed ground in the corner of chunk (0, 0), with a block standing
+        // on it so the ground is held rather than fading.
+        for r in 0..6 {
+            for c in 0..6 {
+                w.set_cell_at(r, c, Cell::DEAD.with_player(me));
+            }
+        }
+        for (r, c) in [(1, 1), (1, 2), (2, 1), (2, 2)] {
+            w.set_cell_at(r, c, Cell::alive(me));
+        }
+
+        let (mut north, mut west) = (false, false);
+        for _ in 0..400 {
+            w.step();
+            north |= (-4..0).any(|r| {
+                (0..6).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me))
+            });
+            west |= (0..6).any(|r| {
+                (-4..0).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me))
+            });
+        }
+        assert!(north, "nothing ever crept north out of the chunk");
+        assert!(west, "nothing ever crept west out of the chunk");
     }
 
     /// Ground is lost as well as won, and granted ground is not.

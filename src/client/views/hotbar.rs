@@ -21,10 +21,12 @@
 //! because shift and `1` is `!` on one keyboard and something else on
 //! Programmer Dvorak, and nothing but the keyboard can say which.
 
-use crate::client::views::stamp::Library;
+use crate::client::views::icons::{self, Icons};
+use crate::client::views::stamp::{Library, Stamp};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::hotbar as words;
 use crate::net::Placement;
+use crate::sim::{Cell, Kind, PlayerId};
 
 /// What a drag lays.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -40,6 +42,8 @@ pub enum Stroke {
 /// One of the fixed tools.
 pub struct Tool {
     pub name: &'static str,
+    /// The cell this puts down, so a button can show it rather than spell it.
+    pub shows: Cell,
     /// What the server is asked for. A name rather than cell bits, so the
     /// server can judge the request.
     pub placement: Placement,
@@ -47,19 +51,25 @@ pub struct Tool {
     pub stroke: Stroke,
 }
 
+/// What each tool leaves on a square, which is what its button shows. Built
+/// here rather than named, so a button cannot show one thing and lay another.
+const LIVE: Cell = Cell::DEAD.with_alive(true);
+const MINED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::MINE);
+const ICED: Cell = Cell::DEAD.with_ice(true);
+
 /// The left segment: what you draw with.
 pub const DRAWN: [Tool; 2] = [
-    Tool { name: words::LIFE, placement: Placement::Life, stroke: Stroke::Pencil },
+    Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life, stroke: Stroke::Pencil },
     // A pencil, not a rectangle: a mine is placed a few at a time and into a
     // pattern, because what it is worth depends on what it is next to.
-    Tool { name: words::MINE, placement: Placement::Mine, stroke: Stroke::Pencil },
+    Tool { name: words::MINE, shows: MINED, placement: Placement::Mine, stroke: Stroke::Pencil },
 ];
 
 /// The right segment, on its own.
 pub const WALLED: Tool =
     // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
-    Tool { name: words::ICE, placement: Placement::Ice, stroke: Stroke::Rectangle };
+    Tool { name: words::ICE, shows: ICED, placement: Placement::Ice, stroke: Stroke::Rectangle };
 
 /// What the hand is holding.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -140,14 +150,14 @@ pub fn stamp_for_digit(digit: u32) -> Option<usize> {
 
 /// The keys that are not stamps, in the order they sit on the bar. Shift and a
 /// digit picks one of these.
-pub fn shifted(library: &Library) -> Vec<Key> {
-    let mut out: Vec<Key> = (0..DRAWN.len()).map(|i| Key::Held(Held::Draw(i))).collect();
-    out.push(Key::Held(Held::Ice));
-    out.push(Key::Held(Held::Capture));
-    if library.len() > library.on_the_bar() {
-        out.push(Key::More);
-    }
-    out
+pub fn shifted(_library: &Library) -> Vec<Key> {
+    vec![
+        Key::Held(Held::Draw(0)),
+        Key::Held(Held::Draw(1)),
+        Key::Held(Held::Ice),
+        Key::Held(Held::Capture),
+        Key::More,
+    ]
 }
 
 /// Which of those shift and this digit picks.
@@ -190,13 +200,19 @@ pub struct Shown {
     pub picked: Option<Key>,
 }
 
-pub fn show(
-    ctx: &egui::Context,
-    theme: &Theme,
-    held: Held,
-    library: &Library,
-    typed: &Typed<'_>,
-) -> Shown {
+/// Everything a square might need to draw itself.
+pub struct Look<'a> {
+    pub theme: &'a Theme,
+    /// The sprite sheet in this player's colour, if it could be built.
+    pub sheet: Option<egui::TextureId>,
+    pub player: PlayerId,
+    /// What shift and a digit types here.
+    pub typed: &'a Typed<'a>,
+}
+
+pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library) -> Shown {
+    let theme = look.theme;
+    let typed = look.typed;
     let m = theme.metrics;
     let mut picked = None;
     // Shift keys run over the bar's non-stamp squares in the order they sit.
@@ -211,7 +227,14 @@ pub fn show(
                 segment(ui, theme, |ui| {
                     for (i, tool) in DRAWN.iter().enumerate() {
                         let key = Held::Draw(i);
-                        if square(ui, theme, tool.name, tool_hint(shift, typed), held == key) {
+                        if square(
+                            ui,
+                            look,
+                            Face::Sprite(tool.shows),
+                            tool.name,
+                            tool_hint(shift, typed),
+                            held == key,
+                        ) {
                             picked = Some(Key::Held(key));
                         }
                         shift += 1;
@@ -219,7 +242,14 @@ pub fn show(
                     // Ice is a tool, and it is the one that walls people off,
                     // so it lives here but behind a rule.
                     rule(ui, theme);
-                    if square(ui, theme, WALLED.name, tool_hint(shift, typed), held == Held::Ice) {
+                    if square(
+                        ui,
+                        look,
+                        Face::Sprite(WALLED.shows),
+                        WALLED.name,
+                        tool_hint(shift, typed),
+                        held == Held::Ice,
+                    ) {
                         picked = Some(Key::Held(Held::Ice));
                     }
                     shift += 1;
@@ -232,7 +262,8 @@ pub fn show(
                     // library comes from, so it cannot be behind having one.
                     if square(
                         ui,
-                        theme,
+                        look,
+                        Face::Camera,
                         words::CAPTURE,
                         tool_hint(shift, typed),
                         held == Held::Capture,
@@ -240,25 +271,38 @@ pub fn show(
                         picked = Some(Key::Held(Held::Capture));
                     }
                     shift += 1;
-                    if library.is_empty() {
-                        empty_square(ui, theme, words::NO_STAMPS);
-                        return;
-                    }
                     for i in 0..library.on_the_bar() {
                         let key = Held::Stamp(i);
-                        let name = library.get(i).map(|s| s.name.as_str()).unwrap_or("?");
-                        if square(ui, theme, name, stamp_hint(i), held == key) {
+                        let Some(stamp) = library.get(i) else { continue };
+                        if square(
+                            ui,
+                            look,
+                            Face::Pattern(stamp),
+                            &stamp.name,
+                            stamp_hint(i),
+                            held == key,
+                        ) {
                             picked = Some(Key::Held(key));
                         }
                     }
-                    if library.len() > library.on_the_bar() {
-                        let more = library.len() - library.on_the_bar();
-                        let label = format!("+{more}");
-                        if square(ui, theme, &label, tool_hint(shift, typed), false) {
-                            picked = Some(Key::More);
-                        }
-                        shift += 1;
+                    // The library is always one key away, whether or not
+                    // anything overflowed: it is where a stamp is named, looked
+                    // at, and thrown away.
+                    rule(ui, theme);
+                    let overflow = library.len() - library.on_the_bar();
+                    let label =
+                        if overflow > 0 { format!("+{overflow}") } else { "…".to_string() };
+                    if square(
+                        ui,
+                        look,
+                        Face::Text(&label),
+                        words::LIBRARY,
+                        tool_hint(shift, typed),
+                        false,
+                    ) {
+                        picked = Some(Key::More);
                     }
+                    shift += 1;
                 });
             });
         });
@@ -290,15 +334,34 @@ fn segment(ui: &mut egui::Ui, theme: &Theme, contents: impl FnOnce(&mut egui::Ui
 
 /// One square. Returns whether it was clicked. `digit` is the key that picks
 /// it, and is only shown while there is a key left to show it with.
+/// What fills the middle of a square.
+enum Face<'a> {
+    /// A cell, drawn from the sheet as the world would draw it.
+    Sprite(Cell),
+    /// A pattern, drawn as the cells it is.
+    Pattern(&'a Stamp),
+    /// A camera, for the square that takes one.
+    Camera,
+    /// Words, for the square that has no picture.
+    Text(&'a str),
+}
+
+/// One square: a picture of what it does, the key that picks it, and its name
+/// on hover.
+///
+/// A picture rather than the word, because what you are choosing is what will
+/// be on the board and the board is where you are looking. The word is still
+/// there, as a tooltip, for the first time somebody wonders.
 fn square(
     ui: &mut egui::Ui,
-    theme: &Theme,
+    look: &Look<'_>,
+    face: Face<'_>,
     name: &str,
     key: Option<String>,
     selected: bool,
 ) -> bool {
-    let p = theme.palette;
-    let m = theme.metrics;
+    let p = look.theme.palette;
+    let m = look.theme.metrics;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(m.slot, m.slot), egui::Sense::click());
 
@@ -319,6 +382,21 @@ fn square(
         egui::StrokeKind::Inside,
     );
 
+    // The picture sits inside the key's corner, so the two never overlap.
+    let inner = rect.shrink(m.slot * 0.18);
+    let ink = if selected { p.text } else { p.text_dim };
+    match face {
+        Face::Sprite(cell) => match look.sheet {
+            Some(sheet) => {
+                painter.image(sheet, inner, Icons::uv(cell.tile()), egui::Color32::WHITE);
+            }
+            None => draw_text(painter, inner, name, ink),
+        },
+        Face::Pattern(stamp) => stamp.draw(painter, inner, look.player),
+        Face::Camera => icons::camera(painter, inner, ink),
+        Face::Text(text) => draw_text(painter, inner, text, ink),
+    }
+
     if let Some(key) = key {
         painter.text(
             rect.left_top() + egui::vec2(4.0, 2.0),
@@ -328,36 +406,17 @@ fn square(
             if selected { p.accent } else { p.text_dim },
         );
     }
-    painter.text(
-        rect.center() + egui::vec2(0.0, 4.0),
-        egui::Align2::CENTER_CENTER,
-        name,
-        egui::FontId::proportional(11.0),
-        if selected { p.text } else { p.text_dim },
-    );
 
-    response.clicked()
+    response.on_hover_text(name).clicked()
 }
 
-/// A square-shaped hint where the stamps will go. Not a button: there is
-/// nothing to pick yet, and a dead button is a thing people click at.
-fn empty_square(ui: &mut egui::Ui, theme: &Theme, hint: &str) {
-    let p = theme.palette;
-    let m = theme.metrics;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(m.slot * 2.2, m.slot), egui::Sense::hover());
-    ui.painter().rect_stroke(
-        rect,
-        m.rounding,
-        egui::Stroke::new(1.0, p.line),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
+fn draw_text(painter: &egui::Painter, rect: egui::Rect, text: &str, colour: egui::Color32) {
+    painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        hint,
-        egui::FontId::proportional(9.0),
-        p.text_dim,
+        text,
+        egui::FontId::proportional(11.0),
+        colour,
     );
 }
 
@@ -401,8 +460,9 @@ mod tests {
     fn the_bar_stops_growing_and_the_rest_go_behind_a_menu() {
         assert_eq!(library(ON_THE_BAR).on_the_bar(), ON_THE_BAR);
         assert_eq!(library(ON_THE_BAR + 50).on_the_bar(), ON_THE_BAR);
-        assert!(!shifted(&library(ON_THE_BAR)).contains(&Key::More), "exactly full needs no menu");
-        assert!(shifted(&library(ON_THE_BAR + 1)).contains(&Key::More));
+        // The library is always one key away: it is where a stamp is named,
+        // looked at and thrown away, not only where the overflow lives.
+        assert!(shifted(&library(0)).contains(&Key::More));
     }
 
     /// The digits are the stamps: 1 to 9 and then 0, which is ten of them and
@@ -426,13 +486,12 @@ mod tests {
         assert_eq!(shifted_for_digit(2, &few), Some(Key::Held(Held::Draw(1))));
         assert_eq!(shifted_for_digit(3, &few), Some(Key::Held(Held::Ice)));
         assert_eq!(shifted_for_digit(4, &few), Some(Key::Held(Held::Capture)));
-        assert_eq!(shifted_for_digit(5, &few), None);
+        assert_eq!(shifted_for_digit(5, &few), Some(Key::More));
+        assert_eq!(shifted_for_digit(6, &few), None);
 
-        // The menu key only exists once there is something behind it, and the
-        // tools before it never move when a pattern is captured.
+        // And not one of them moves when a pattern is captured.
         let many = library(ON_THE_BAR + 1);
-        assert_eq!(shifted_for_digit(3, &many), Some(Key::Held(Held::Ice)));
-        assert_eq!(shifted_for_digit(5, &many), Some(Key::More));
+        assert_eq!(shifted(&many), shifted(&few));
     }
 
     /// Capturing is a rectangle, and it has a square of its own — there has to

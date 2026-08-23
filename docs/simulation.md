@@ -118,7 +118,9 @@ A travelling glider holds one to four chunks indefinitely.
 
 ### What is stepped
 
-Every non-empty chunk, plus any neighbour it carries life towards. A chunk with no life on the edge facing its neighbour cannot cause a birth there.
+Every non-empty chunk, plus any neighbour something on its edge **can reach** — life, which can cause a birth there, or **ownership**, which can creep there.
+
+Life alone was the test, and it made territory unable to cross a chunk boundary at all: nothing woke the neighbour, so nothing was stepped there, so nothing was ever claimed there. It showed on screen as a granted patch that crept right and down and never up or left — because a grant lands flush against a chunk's top-left corner, so those two edges *are* the boundary and the other two are interior. `territory_creeps_across_a_chunk_boundary` pins it.
 
 ## Territory
 
