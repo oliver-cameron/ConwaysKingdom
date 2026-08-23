@@ -33,7 +33,7 @@ default = ["render"]
 # neither wgpu nor winit compiled at all.
 render = ["dep:wgpu", "dep:winit", "dep:egui", "dep:egui-wgpu"]
 # The websocket server. Native only.
-server = ["dep:axum", "dep:tower-http"]
+server = ["dep:axum", "dep:tower-http", "server"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
