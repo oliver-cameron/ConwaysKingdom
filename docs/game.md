@@ -10,6 +10,7 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 |---|---|
 | place life | −1 each |
 | place a mine | −10 each |
+| place a turret | −15 each, and four is the smallest one that works |
 | place ice | −5 each |
 | **a mine of yours is born** | **+1** |
 | **a dead mine of yours, each generation it lies there** | **−1**, sixteen times in sixty-four |
@@ -55,6 +56,28 @@ Value is floored at zero. A cost that comes from an action is refused when it ca
 
 A mine's corpse keeps its kind, as any cell does — so ground a mine died on shows the mine sprite, and life born there from an ordinary parent is ordinary. Placing plain Life over it explicitly sets the kind back to normal, or drawing over a mine's corpse would hand you a free mine.
 
+## Turrets
+
+A **turret** claims ground at range. Every generation it takes the nearest square that is not yours and makes it yours — wherever that is, out to six cells. It is the opposite of a mine in every way that matters: a mine earns on turnover and a turret works by standing still, a mine is bought once per lineage and a turret once per cell, and a mine wants a machine that keeps giving birth where a turret wants one that never has to.
+
+**A turret is placed in fours.** One turret is one live cell with no live neighbours and is gone in a generation, so the smallest turret that works is the 2×2 block — the cheapest thing in Conway that never dies and never gives birth. Sixty against a starting hundred, which is an opening you can afford exactly one of.
+
+That the block gives no births is the point rather than a cost. A block of mines is the honest edge case above, forty spent on nothing; a block of turrets is the best thing a turret can be. **The still life is a mine's worst shape and a turret's best.**
+
+A turret takes **ground**, not the life standing on it. It will not claim a square something is alive on, whoever owns it, and it will not touch what is under a pane. What it does take is dead ground, including ground nobody has ever held — which is what makes it a way to reach past your own frontier rather than a way to fight over somebody's colony. Against a living neighbour it barely works at all: their life takes the square straight back through the ordinary spread of territory, and a turret only claims one square a generation.
+
+**A turret inside your own ground does nothing.** Everything within reach is already yours, so it idles. Put them on your frontier, which is where you would have put them anyway — the rule enforces its own placement without a rule about placement.
+
+### When one dies
+
+A dead turret runs the whole thing backwards. It takes the nearest square that **is** yours and gives it up, and since a live cell must have an owner, doing that to a square you have something living on kills it. That is not a separate rule about killing — it is the same rule read in the other direction, and taking a square away from its owner is the only thing it does.
+
+So a failed emplacement fires on the ground behind it, including the other three cells of its own block, and a block that loses a cell dismantles itself. A dead turret decays back to ordinary ground four times in sixty-four, so it does that for about sixteen generations before it stops.
+
+Granted ground is exempt, for the same reason it never decays: placing is confined to your own territory, and a machine of yours that failed must not be what locks you out of the game.
+
+A turret is not inherited. A mine's children are mines, but a birth beside a turret is ordinary life owned by the turret's owner — the ground changes hands and the machine does not copy itself. Without that a gun would be a turret factory, and whoever built one first would own the map.
+
 ## Placing and taking
 
 One button, and the cell under it decides which — for whatever the hotbar is holding:
@@ -63,6 +86,12 @@ One button, and the cell under it decides which — for whatever the hotbar is h
 - it is not → put it down
 
 Keyed on what is held rather than on whether the cell is occupied at all, because **life and ice are independent**. Holding Life and clicking a living cell under a pane kills the life and leaves the pane standing; clearing the square outright would destroy a pane the player never aimed at, at five a cell. Holding Ice and clicking that same pane lifts it and leaves the life, which is the only way a misplaced pane comes back.
+
+**Life and a mine are different things to hold, and clicking one over the other replaces it.** Holding Mine and clicking your own living cell makes that cell a mine, at what a mine costs; holding Life and clicking a mine makes it ordinary life again, at what a cell costs. It used to kill the cell instead, because the question being asked was whether taking the held thing away would change anything — and life and a mine are both taken away by clearing the same bit, so a mine held over life read as already being there. What a player holding Mine over their own life means is *make this a mine*, and the only click that should take a mine back is one holding a mine. `net::Placement::is_on` is the question now, and it asks whether the square holds *this*.
+
+That is a different relationship from the one life has with ice. Life and ice are **independent** — a square may carry both, so holding one and clicking the other leaves the other standing. Life and a mine are **exclusive**: they are the same cell in two states, so holding one and clicking the other converts it. A corpse is neither, whatever kind it kept, so a click over a dead mine places rather than takes — which is what stops drawing over one handing out a free mine.
+
+The owner is no part of it. Somebody else's life is still life, so a click holding Life takes it, at the reclaim price, which is what lets you clear a glider that has flown onto your ground.
 
 `Action::Erase` carries what to remove for the same reason `Paint` carries what to lay: the server judges an intent, and "kill the life on this square" is a different intent from "clear this square".
 
@@ -173,14 +202,14 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 Two segments, and one thing selected across both:
 
 ```
-    [ Life  Mine │ Ice ]   [ Grab  stamps … +7 ]
+    [ Life  Mine  Turret │ Ice ]   [ Grab  stamps … +7 ]
 ```
 
-**Every square shows a picture rather than a word.** Life, Mine and Ice are drawn from the same sprite sheet the world is drawn from, tinted with the same hue, so what you are choosing is what will be on the board — which is where you are looking. Grab is a camera, painted rather than sampled, because capturing is not a cell and the sheet has no picture of one. A stamp shows **the pattern it holds**: `2x2` said nothing about what was about to be placed, and at button size a glider is a glider and a block is a block. The names are still there, on hover.
+**Every square shows a picture rather than a word.** Life, Mine, Turret and Ice are drawn from the same sprite sheet the world is drawn from, tinted with the same hue, so what you are choosing is what will be on the board — which is where you are looking. Grab is a camera, painted rather than sampled, because capturing is not a cell and the sheet has no picture of one. A stamp shows **the pattern it holds**: `2x2` said nothing about what was about to be placed, and at button size a glider is a glider and a block is a block. The names are still there, on hover.
 
 The tools are the game's own vocabulary and never change; the stamps are whatever you happened to capture, and there may be none or thirty. Run together, the Ice key would move every time you saved a pattern. Ice sits with the tools but behind a rule, because it is the one that walls people off and should not be a neighbour of the one you draw with.
 
-**The digits are the stamps** — `1` to `9` then `0`, which is ten and is why the bar holds ten — and **shift and a digit is a tool**. The stamps get the bare keys because they are what you hold ten of and swap between without looking; the three tools never change and never grow, so they can afford a modifier.
+**The digits are the stamps** — `1` to `9` then `0`, which is ten and is why the bar holds ten — and **shift and a digit is a tool**. The stamps get the bare keys because they are what you hold ten of and swap between without looking; the tools are the game's own vocabulary and grow only when the game does, so they can afford a modifier. Adding the turret moved Ice from shift-3 to shift-4, which is the cost of that arrangement and is paid once per new tool rather than every time a pattern is captured.
 
 Binding is by *physical* key, so it is the same key on every layout and only the **label** is ever in question. The label starts as what the common layout types — `!` `@` `#` `$` — and is corrected the moment a key says otherwise, so the great majority see the right thing on the first frame and somebody on Programmer Dvorak, where the digits are shifted to begin with, is only shown the wrong one until they use it.
 
@@ -200,7 +229,7 @@ Placing one puts its middle under the pointer, and goes as one action per placem
 
 Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The placement is named for what is put down, since a cell is the square and life is one of the things that can be on it.
 
-Mine is a pencil rather than a rectangle, because a mine is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out.
+Mine is a pencil rather than a rectangle, because a mine is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out. Turret is a pencil for the same reason and a shorter stroke: four cells in a block is a gesture, and a gesture is what a pencil is for.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 

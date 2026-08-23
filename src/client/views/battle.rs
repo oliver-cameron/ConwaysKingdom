@@ -470,12 +470,17 @@ impl BattleApp {
         self.gesture = Gesture::Drawing(Drag::begin(at, self.camera.cell_at(at), stroke));
     }
 
-    /// Whether what the hotbar holds is already on this cell. Taking it away
-    /// would change something, which is exactly what "already there" means.
+    /// Whether what the hotbar holds is already on this cell.
+    ///
+    /// `Placement::is_on` asks whether the square holds *this* thing, not
+    /// whether taking it away would change anything — which is what this used
+    /// to ask, and it could not tell life from a mine, since both are taken
+    /// away by clearing the same bit. Holding one over the other now replaces
+    /// the kind instead of killing the cell.
     fn already_there(&self, row: i32, col: i32) -> bool {
         let Some(placement) = self.held.placement() else { return false };
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
-        placement.remove_from(existing) != existing
+        placement.is_on(existing)
     }
 
     fn begin_pan(&mut self, button: Option<winit::event::MouseButton>) {

@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::cell::{Cell, Chunk, Halo, Mined, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, Kind, Mined, CHUNK_N};
+use super::rule;
+use super::seed::Roll;
 use super::dir::Dir;
 use super::player::PlayerId;
 
@@ -393,6 +395,7 @@ impl World {
         self.active = active;
         self.generation += 1;
         self.break_ice_from(seeds);
+        self.fire_turrets();
         self.dirty = true;
         self.prune();
         mined
@@ -487,6 +490,202 @@ impl World {
                 self.set_cell_at(row, col, cell.with_ice(false));
             }
         }
+    }
+
+    /// Distinct from the constant the step is seeded with, so a turret's
+    /// tie-break cannot correlate with a birth's choice of parent at the same
+    /// position and generation. Any two different numbers would do; these are
+    /// two.
+    const TURRET_SEED: u64 = 0x7E44_E757;
+
+    /// Every turret takes the nearest square it acts on, all at once.
+    ///
+    /// A pass rather than a rule, and for the same reason shattering ice is
+    /// one: every rule in [`super::rule`] is a pure function of a cell and its
+    /// eight neighbours, which is what lets a generation run out of a `Halo`
+    /// with no bounds checks and no knowledge of topology. "The nearest square
+    /// that is not mine" is a search no halo can answer.
+    ///
+    /// **Searched first, applied second**, which is the same discipline as
+    /// gathering every halo before writing any of the next generation. Every
+    /// turret reads the world as this generation left it, so no turret's
+    /// answer depends on which turret went first — two aiming at one square
+    /// simply agree or overwrite, and the list is sorted, so which of them
+    /// wins is the same on every peer.
+    fn fire_turrets(&mut self) {
+        let turrets = self.turrets();
+        if turrets.is_empty() {
+            return;
+        }
+
+        let mut shots = Vec::new();
+        for (at, owner, live) in turrets {
+            // Seeded from the generation and the turret's own position, so
+            // every peer breaks the same tie without exchanging a number.
+            let seed = super::seed::mix(
+                super::seed::mix(Self::TURRET_SEED, self.generation),
+                (at.0 as u32 as u64) << 32 | at.1 as u32 as u64,
+            );
+            let Some(target) = self.turret_target(at, owner, live, seed) else {
+                continue;
+            };
+            let cell = self.cell_at(target.0, target.1).unwrap_or(Cell::DEAD);
+            shots.push((
+                target,
+                if live {
+                    cell.with_player(owner)
+                } else {
+                    // A live cell must have an owner -- `Cell::alive` asserts
+                    // it, because unowned life would have nobody to attribute
+                    // a birth to. So taking a square away from its owner kills
+                    // whatever was standing on it, and a dead turret killing
+                    // things is that invariant rather than a rule of its own.
+                    cell.with_alive(false).with_player(PlayerId::UNOWNED)
+                },
+            ));
+        }
+
+        for ((row, col), cell) in shots {
+            self.set_cell_at(row, col, cell);
+        }
+    }
+
+    /// The square a turret acts on: the nearest one that answers its question,
+    /// and one of them at random where several tie.
+    ///
+    /// The tie-break is the whole reason there is a roll here. A ring holds
+    /// many squares at the same distance, and letting the scan order choose
+    /// between them would have every turret in the world prefer the same
+    /// direction — territory would grow in a lopsided plume that reads as a
+    /// bug rather than as a rule.
+    ///
+    /// Two passes over the box rather than a list of candidates: the first
+    /// finds the nearest distance and counts how many share it, the second
+    /// walks to the one the roll picked. That costs a second read of a box
+    /// that is already in cache and saves allocating per turret per
+    /// generation.
+    ///
+    /// A disc, not a square. The box is what is walked, `d > reach²` is what
+    /// makes the reach the same in every direction.
+    fn turret_target(
+        &self,
+        at: (i32, i32),
+        owner: PlayerId,
+        live: bool,
+        seed: u64,
+    ) -> Option<(i32, i32)> {
+        let reach = rule::TURRET_REACH;
+        let mut best = i32::MAX;
+        let mut ties = 0usize;
+        for dr in -reach..=reach {
+            for dc in -reach..=reach {
+                let d = dr * dr + dc * dc;
+                if d == 0 || d > reach * reach || d > best {
+                    continue;
+                }
+                if !self.turret_wants((at.0 + dr, at.1 + dc), owner, live) {
+                    continue;
+                }
+                if d < best {
+                    best = d;
+                    ties = 1;
+                } else {
+                    ties += 1;
+                }
+            }
+        }
+        if ties == 0 {
+            return None;
+        }
+
+        let mut nth = Roll::new(seed).pick(rule::TURRET_STREAM, ties);
+        for dr in -reach..=reach {
+            for dc in -reach..=reach {
+                let d = dr * dr + dc * dc;
+                if d != best {
+                    continue;
+                }
+                let target = (at.0 + dr, at.1 + dc);
+                if !self.turret_wants(target, owner, live) {
+                    continue;
+                }
+                if nth == 0 {
+                    return Some(target);
+                }
+                nth -= 1;
+            }
+        }
+        unreachable!("the second pass walks the same squares the first counted")
+    }
+
+    /// Whether a turret will act on this square.
+    ///
+    /// A live turret takes **ground**, so it wants a dead square that is not
+    /// its owner's — dead because claiming a living cell would hand its owner
+    /// the cell itself rather than the square under it, there being one owner
+    /// field, and territory has never worked that way. Unheld ground counts:
+    /// an absent chunk is dead and unowned, which is exactly what a turret is
+    /// for reaching.
+    ///
+    /// A dead turret is the mirror and takes its owner's own squares, alive or
+    /// not. `HOME` is exempt for the same reason it never decays: placing is
+    /// confined to your own territory, so a player who lost the last of it
+    /// could never place again, and a machine of theirs that failed should not
+    /// be what locks them out.
+    ///
+    /// Ice is exempt either way. A pane stops time over what it covers, and a
+    /// pane's cover is not claimed out from under it.
+    fn turret_wants(&self, at: (i32, i32), owner: PlayerId, live: bool) -> bool {
+        let cell = self.cell_at(at.0, at.1).unwrap_or(Cell::DEAD);
+        if cell.is_ice() {
+            return false;
+        }
+        if live {
+            !cell.is_alive() && cell.player() != owner
+        } else {
+            cell.player() == owner && !cell.is_home()
+        }
+    }
+
+    /// Every turret, in absolute coordinates, with its owner and whether it is
+    /// alive.
+    ///
+    /// **Sorted**, because `stored` walks a `HashMap` on an infinite world and
+    /// a `HashMap` iterates differently in different processes. Two turrets
+    /// aiming at one square is decided by which fires last, so an unsorted
+    /// list would let a client and a server disagree about who owns it.
+    ///
+    /// A scan rather than an index, the way `ice_cells` is. The world has no
+    /// list of anything, and a turret is found by looking, which costs one
+    /// pass over what is held per generation.
+    fn turrets(&self) -> Vec<((i32, i32), PlayerId, bool)> {
+        let mut out = Vec::new();
+        for ((crow, ccol), chunk) in self.stored() {
+            for row in 0..CHUNK_N {
+                for col in 0..CHUNK_N {
+                    let cell = chunk[(row, col)];
+                    // A frozen turret does not fire: a pane stops time over
+                    // whatever it covers, and that is every rule, not just the
+                    // ones inside `rule`.
+                    if cell.kind() != Kind::TURRET || cell.is_ice() {
+                        continue;
+                    }
+                    if !cell.player().is_owned() {
+                        continue;
+                    }
+                    out.push((
+                        (
+                            crow * CHUNK_N as i32 + row as i32,
+                            ccol * CHUNK_N as i32 + col as i32,
+                        ),
+                        cell.player(),
+                        cell.is_alive(),
+                    ));
+                }
+            }
+        }
+        out.sort_unstable();
+        out
     }
 
     /// Every iced cell, in absolute coordinates.
@@ -668,6 +867,209 @@ mod tests {
             .collect();
         v.sort_unstable();
         v
+    }
+
+    /// Dead ground held by `player`, so a turret can stand somewhere already
+    /// its owner's and the nearest square it wants is out of reach of the
+    /// territory rule — which claims everything beside a living cell and would
+    /// otherwise be indistinguishable from the turret doing it.
+    fn own_ground(w: &mut World, rows: (i32, i32), cols: (i32, i32), player: PlayerId) {
+        for row in rows.0..=rows.1 {
+            for col in cols.0..=cols.1 {
+                let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+                w.set_cell_at(row, col, cell.with_player(player));
+            }
+        }
+    }
+
+    fn owned_by(w: &World, player: PlayerId) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        for ((crow, ccol), chunk) in w.stored() {
+            for row in 0..CHUNK_N {
+                for col in 0..CHUNK_N {
+                    if chunk[(row, col)].player() == player {
+                        out.push((
+                            crow * CHUNK_N as i32 + row as i32,
+                            ccol * CHUNK_N as i32 + col as i32,
+                        ));
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    fn turret(player: PlayerId) -> Cell {
+        Cell::alive(player).with_kind(Kind::TURRET)
+    }
+
+    /// One square a generation, and the nearest one that is not its owner's.
+    ///
+    /// The patch is nine across with the turret in the middle, so the four
+    /// squares just outside it tie at five cells and everything else is
+    /// further — and all four are far enough from the only living cell that
+    /// the territory rule cannot have been what claimed them.
+    #[test]
+    fn a_turret_claims_the_nearest_square_that_is_not_its_owners() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        own_ground(&mut w, (0, 8), (0, 8), me);
+        w.set_cell_at(4, 4, turret(me));
+
+        let before = owned_by(&w, me);
+        w.fire_turrets();
+        let after = owned_by(&w, me);
+
+        assert_eq!(after.len(), before.len() + 1, "a turret takes one square a generation");
+        let claimed = *after.iter().find(|c| !before.contains(c)).unwrap();
+        assert!(
+            [(-1, 4), (9, 4), (4, -1), (4, 9)].contains(&claimed),
+            "{claimed:?} is not one of the four squares that tie for nearest"
+        );
+    }
+
+    /// A turret inside its owner's ground finds everything within reach
+    /// already theirs and does nothing, so it only ever works from a frontier.
+    /// That is also what pins the reach: own the whole disc and it idles.
+    #[test]
+    fn a_turret_inside_its_owners_ground_idles() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        let r = rule::TURRET_REACH;
+        own_ground(&mut w, (-r, r), (-r, r), me);
+        w.set_cell_at(0, 0, turret(me));
+
+        let before = owned_by(&w, me);
+        w.fire_turrets();
+        assert_eq!(owned_by(&w, me), before, "nothing within reach was anyone else's");
+    }
+
+    /// A turret takes **ground**, so it wants a dead square that is not its
+    /// owner's. Not the life standing on one — there is a single owner field,
+    /// so claiming a living cell would hand over the cell rather than the
+    /// square, and territory has never worked that way.
+    #[test]
+    fn a_turret_claims_ground_and_not_the_life_standing_on_it() {
+        let mut w = World::infinite_empty();
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        w.set_cell_at(0, 1, Cell::DEAD.with_player(them));
+        w.set_cell_at(0, 2, Cell::alive(them));
+        w.set_cell_at(0, 3, Cell::DEAD.with_player(me));
+        w.set_cell_at(0, 4, Cell::DEAD.with_player(them).with_ice(true));
+
+        assert!(w.turret_wants((0, 1), me, true), "their ground is what a turret takes");
+        assert!(!w.turret_wants((0, 2), me, true), "their life is not");
+        assert!(!w.turret_wants((0, 3), me, true), "nor is what is already theirs");
+        assert!(!w.turret_wants((0, 4), me, true), "a pane's cover is not claimed from under it");
+        assert!(w.turret_wants((5, 5), me, true), "and ground nobody holds counts");
+    }
+
+    /// A live cell must have an owner, so taking a square away from its owner
+    /// kills whatever was standing on it. The killing is that invariant rather
+    /// than a rule of its own.
+    #[test]
+    fn a_dead_turret_takes_its_owners_ground_back_and_kills_what_stands_on_it() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        w.set_cell_at(0, 0, turret(me).with_alive(false));
+        w.set_cell_at(0, 1, Cell::alive(me));
+
+        w.fire_turrets();
+
+        let hit = w.cell_at(0, 1).unwrap();
+        assert!(!hit.is_alive(), "unowning a living square kills it");
+        assert_eq!(hit.player(), PlayerId::UNOWNED);
+    }
+
+    /// Granted ground is exempt, for the reason it never decays: placing is
+    /// confined to your own territory, so a machine of yours that failed must
+    /// not be what locks you out of the game.
+    #[test]
+    fn a_dead_turret_does_not_eat_home_ground() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        w.set_cell_at(0, 0, turret(me).with_alive(false));
+        w.set_cell_at(0, 1, Cell::DEAD.with_player(me).with_home(true));
+        w.set_cell_at(0, 5, Cell::DEAD.with_player(me));
+
+        w.fire_turrets();
+
+        let home = w.cell_at(0, 1).unwrap();
+        assert_eq!(home.player(), me, "home ground is not what a dead turret takes");
+        assert!(home.is_home());
+        assert_eq!(
+            w.cell_at(0, 5).unwrap().player(),
+            PlayerId::UNOWNED,
+            "so it reached past it for the next square that was the owner's"
+        );
+    }
+
+    /// A pane stops time over whatever it covers, and that is every rule
+    /// rather than only the ones inside `rule`.
+    #[test]
+    fn a_turret_under_ice_does_not_fire() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        w.set_cell_at(0, 0, turret(me).with_ice(true));
+
+        let before = owned_by(&w, me);
+        w.fire_turrets();
+        assert_eq!(owned_by(&w, me), before, "a frozen turret claimed ground");
+    }
+
+    /// Four turrets in a block: the cheapest thing in Conway that never dies
+    /// and never gives birth, which is why a turret is placed in fours. One on
+    /// its own has no live neighbours and is gone in a generation.
+    #[test]
+    fn a_block_of_four_turrets_never_dies_and_never_breeds() {
+        let mut w = World::infinite_empty();
+        let me = PlayerId(1);
+        let block = [(0, 0), (0, 1), (1, 0), (1, 1)];
+        for (row, col) in block {
+            w.set_cell_at(row, col, turret(me));
+        }
+        for _ in 0..50 {
+            w.step();
+        }
+        for (row, col) in block {
+            let cell = w.cell_at(row, col).unwrap();
+            assert!(cell.is_alive(), "({row}, {col}) died");
+            assert_eq!(cell.kind(), Kind::TURRET, "({row}, {col}) stopped being a turret");
+        }
+        assert_eq!(w.live_cells().len(), 4, "a still life gives no births, so it stays four");
+    }
+
+    #[test]
+    fn a_lone_turret_dies_of_loneliness() {
+        let mut w = World::infinite_empty();
+        w.set_cell_at(0, 0, turret(PlayerId(1)));
+        w.step();
+        assert!(!w.cell_at(0, 0).unwrap().is_alive());
+    }
+
+    /// The pass is part of the step, so it is under the same contract: two
+    /// worlds given the same start stay byte-identical. The tie-break is a
+    /// seeded roll and the turret list is sorted, which is what makes that
+    /// true across processes where `stored` walks a `HashMap`.
+    #[test]
+    fn firing_turrets_is_deterministic() {
+        let build = || {
+            let mut w = World::infinite_empty();
+            for (player, at) in [(1u8, (0, 0)), (2, (7, 9)), (1, (20, 3))] {
+                let me = PlayerId(player);
+                own_ground(&mut w, (at.0, at.0 + 3), (at.1, at.1 + 3), me);
+                w.set_cell_at(at.0 + 1, at.1 + 1, turret(me));
+                w.set_cell_at(at.0 + 2, at.1 + 2, turret(me).with_alive(false));
+            }
+            w
+        };
+        let (mut a, mut b) = (build(), build());
+        for _ in 0..40 {
+            a.step();
+            b.step();
+        }
+        assert_eq!(a.digest(), b.digest());
     }
 
     #[test]

@@ -52,6 +52,57 @@ fn a_birth_takes_one_of_its_three_parents() {
     }
 }
 
+/// A kind that does not inherit passes over ownership alone. Without it a gun
+/// would be a turret factory: a birth copies its parent whole, so a turret's
+/// children would be turrets and whoever built one first would claim the map.
+#[test]
+fn a_turret_is_not_inherited() {
+    let mut n = [Cell::DEAD; 8];
+    for i in [0, 3, 6] {
+        n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::TURRET);
+    }
+    for seed in 0..64 {
+        let born = next_cell(Cell::DEAD, &n, seed);
+        assert!(born.is_alive(), "seed {seed}");
+        assert_eq!(born.player(), PlayerId(4), "the ground still changes hands");
+        assert_eq!(born.kind(), Kind::NORMAL, "seed {seed} bred a turret");
+    }
+}
+
+/// And a mine still is, because that is the whole of what a mine is: what was
+/// bought is a lineage, and it travels by being copied.
+#[test]
+fn a_mine_is_still_inherited() {
+    let mut n = [Cell::DEAD; 8];
+    for i in [0, 3, 6] {
+        n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::MINE);
+    }
+    for seed in 0..64 {
+        assert_eq!(next_cell(Cell::DEAD, &n, seed).kind(), Kind::MINE, "seed {seed}");
+    }
+}
+
+/// Which parent is chosen must not depend on what kind it turned out to be:
+/// the carve-out is after the roll, so every peer reaches the same parent and
+/// only then asks whether its kind travels.
+#[test]
+fn not_inheriting_does_not_move_the_roll() {
+    let owners = [PlayerId(4), PlayerId(7), PlayerId(9)];
+    for seed in 0..64 {
+        let mut plain = [Cell::DEAD; 8];
+        let mut turrets = [Cell::DEAD; 8];
+        for (i, &p) in [0usize, 3, 6].iter().zip(&owners) {
+            plain[*i] = Cell::alive(p);
+            turrets[*i] = Cell::alive(p).with_kind(Kind::TURRET);
+        }
+        assert_eq!(
+            next_cell(Cell::DEAD, &plain, seed).player(),
+            next_cell(Cell::DEAD, &turrets, seed).player(),
+            "seed {seed} picked a different parent once the kind changed"
+        );
+    }
+}
+
 /// All three parents must be reachable, or "random" is a lie.
 #[test]
 fn every_parent_can_win() {

@@ -61,6 +61,7 @@ impl Stamp {
                 }
                 let placement = match cell.kind() {
                     Kind::MINE => Placement::Mine,
+                    Kind::TURRET => Placement::Turret,
                     _ => Placement::Life,
                 };
                 found.push(((r, c), placement));
@@ -130,11 +131,15 @@ impl Stamp {
         let origin = rect.center() - egui::vec2(cols * step, rows * step) * 0.5;
 
         for &((r, c), what) in &self.cells {
-            let (red, green, blue) = crate::client::views::hud::shade(
-                if what == Placement::Mine { 0.78 } else { 0.62 },
-                1.0,
-                player,
-            );
+            // Told apart by lightness alone, since the hue is the player's
+            // and a thumbnail is too small for a shape to read.
+            let lightness = match what {
+                Placement::Turret => 0.90,
+                Placement::Mine => 0.78,
+                _ => 0.62,
+            };
+            let (red, green, blue) =
+                crate::client::views::hud::shade(lightness, 1.0, player);
             let at = egui::Rect::from_min_size(
                 origin + egui::vec2(c as f32 * step, r as f32 * step),
                 egui::vec2(step, step),

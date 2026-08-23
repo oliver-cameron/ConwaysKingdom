@@ -103,6 +103,16 @@ pub enum Placement {
     /// handed down whole. What you are paying for is a **lineage**, not a
     /// cell — which is why it costs what a stroke of life costs ten times over.
     Mine,
+    /// A living cell that claims ground at range: every generation it takes
+    /// the nearest square that is not its owner's and makes it theirs, and a
+    /// dead one runs that backwards over the ground behind it.
+    ///
+    /// The opposite of a mine, and priced by the **emplacement** rather than
+    /// by the cell. A mine is bought once per lineage, because a birth copies
+    /// it; a turret is not inherited, so it is bought once per cell forever —
+    /// and one turret is one live cell and dies of loneliness in a generation,
+    /// so the smallest turret that works is four of them in a block.
+    Turret,
 }
 
 impl Placement {
@@ -126,11 +136,48 @@ impl Placement {
                 .with_alive(true)
                 .with_player(player)
                 .with_kind(Kind::MINE),
+            Self::Turret => existing
+                .with_alive(true)
+                .with_player(player)
+                .with_kind(Kind::TURRET),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
             // cell with it -- deliberate, and the reason a pane costs what it
             // does.
             Self::Ice => existing.with_ice(true).with_player(player),
+        }
+    }
+
+    /// Whether this is what the square already holds — the question a click
+    /// asks to decide whether it places or takes back.
+    ///
+    /// Not "would taking it away change anything", which is what this used to
+    /// be. Life and a mine are both taken away by clearing the same bit, so a
+    /// mine held over ordinary life read as already there and the click killed
+    /// the cell rather than converting it. What a player holding Mine over
+    /// their own life means is *make this a mine*, and the only click that
+    /// should take a mine back is one holding a mine.
+    ///
+    /// So life and a mine are **different things to hold**, where life and ice
+    /// are independent things to hold: clicking one over the other replaces
+    /// the kind, and clicking Life on a living cell under a pane still kills
+    /// the life and leaves the pane standing.
+    ///
+    /// The owner is no part of it. Somebody else's life is still life, so a
+    /// click holding Life takes it — which is what lets you clear a glider
+    /// that has flown onto your ground, priced at [`RECLAIM`] because taking
+    /// another player's should not be free.
+    ///
+    /// A corpse is not what it was. A mine's kind outlives the life that
+    /// carried it, so a dead mine holds no life for either placement to take
+    /// and a click over it places, which is what stops drawing over a corpse
+    /// handing out a free mine.
+    pub fn is_on(self, existing: Cell) -> bool {
+        match self {
+            Self::Life => existing.is_alive() && existing.kind() == Kind::NORMAL,
+            Self::Mine => existing.is_alive() && existing.kind() == Kind::MINE,
+            Self::Turret => existing.is_alive() && existing.kind() == Kind::TURRET,
+            Self::Ice => existing.is_ice(),
         }
     }
 
@@ -151,6 +198,7 @@ impl Placement {
             Self::Life => LIFE_COST,
             Self::Ice => ICE_COST,
             Self::Mine => MINE_COST,
+            Self::Turret => TURRET_COST,
         }
     }
 
@@ -168,6 +216,11 @@ impl Placement {
             // one costs what it cost minus one. That is the commitment a mine
             // should carry without being a trap.
             Self::Mine => true,
+            // As with a mine: it is a live cell, so taking it back is taking
+            // back the life. A misplaced turret is dear, and a turret you
+            // cannot pick up would make the fourth click of an emplacement a
+            // trap rather than a decision.
+            Self::Turret => true,
             Self::Ice => false,
         }
     }
@@ -187,7 +240,7 @@ impl Placement {
         match self {
             // The kind stays on the corpse, as it does when a cell dies of the
             // rule: what is being taken back is the life.
-            Self::Life | Self::Mine => existing.with_alive(false),
+            Self::Life | Self::Mine | Self::Turret => existing.with_alive(false),
             Self::Ice => existing.with_ice(false),
         }
     }
@@ -522,7 +575,9 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// "life costs one" is the same kind of statement as "a cell survives on two
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
-pub use crate::sim::{ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM};
+pub use crate::sim::{
+    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM, TURRET_COST,
+};
 
 /// What a generation's tally is worth to one player.
 ///
@@ -684,6 +739,97 @@ mod tests {
             -Placement::Ice.cost(),
             "only the cell that changed should be charged for"
         );
+    }
+
+    /// Life and a mine are different things to hold, so a click holding one
+    /// over the other replaces the kind rather than killing the cell — which
+    /// is what `is_on` answers and what `remove_from` could not, since both
+    /// are taken away by clearing the same bit.
+    #[test]
+    fn a_mine_held_over_life_is_not_already_there() {
+        let me = PlayerId(1);
+        let life = Placement::Life.apply_to(Cell::DEAD, me);
+        let mine = Placement::Mine.apply_to(Cell::DEAD, me);
+
+        assert!(Placement::Life.is_on(life), "life is what is on a living cell");
+        assert!(!Placement::Mine.is_on(life), "so a mine held over it places");
+        assert!(Placement::Mine.is_on(mine));
+        assert!(!Placement::Life.is_on(mine), "and life held over a mine places");
+
+        // And placing is what converts, at the price of what is being laid.
+        let mut world = World::infinite_empty();
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
+        assert_eq!(
+            value_delta(&world, &paint(vec![(0, 0)], Placement::Mine)),
+            -Placement::Mine.cost(),
+            "converting life to a mine costs what a mine costs"
+        );
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Mine));
+        assert_eq!(world.cell_at(0, 0).unwrap().kind(), Kind::MINE);
+        assert!(world.cell_at(0, 0).unwrap().is_alive(), "and leaves the cell living");
+    }
+
+    /// A turret is bought once per cell forever, where a mine is bought once
+    /// per lineage — so it is dearer than a mine, and the price to read is the
+    /// **emplacement**: one turret dies of loneliness, and the smallest one
+    /// that works is a block of four.
+    #[test]
+    fn a_turret_is_priced_per_cell_and_placed_in_fours() {
+        assert!(TURRET_COST > MINE_COST, "a turret does not inherit, so it costs more");
+
+        let mut world = World::infinite_empty();
+        let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
+        assert_eq!(
+            value_delta(&world, &paint(block.clone(), Placement::Turret)),
+            -4 * TURRET_COST,
+            "an emplacement is four of them"
+        );
+
+        apply(&mut world, &paint(block.clone(), Placement::Turret));
+        for (row, col) in block {
+            let cell = world.cell_at(row, col).unwrap();
+            assert!(cell.is_alive());
+            assert_eq!(cell.kind(), Kind::TURRET);
+        }
+
+        // And it is a third thing to hold, so life over a turret replaces it
+        // exactly as life over a mine does.
+        let placed = world.cell_at(0, 0).unwrap();
+        assert!(Placement::Turret.is_on(placed));
+        assert!(!Placement::Life.is_on(placed));
+        assert!(!Placement::Mine.is_on(placed));
+    }
+
+    /// A corpse holds no life for either placement to take, whatever kind it
+    /// kept — which is what stops a click over a dead mine handing out a free
+    /// one instead of charging for it.
+    #[test]
+    fn a_dead_mine_holds_neither_life_nor_a_mine() {
+        let corpse = Placement::Mine.apply_to(Cell::DEAD, PlayerId(1)).with_alive(false);
+        assert_eq!(corpse.kind(), Kind::MINE);
+        assert!(!Placement::Mine.is_on(corpse));
+        assert!(!Placement::Life.is_on(corpse));
+    }
+
+    /// The owner is no part of the question. Somebody else's life is still
+    /// life, so a click holding Life takes it — priced at RECLAIM rather than
+    /// converting it for what a cell costs.
+    #[test]
+    fn somebody_elses_life_is_still_life() {
+        let theirs = Placement::Life.apply_to(Cell::DEAD, PlayerId(2));
+        assert!(Placement::Life.is_on(theirs));
+    }
+
+    /// Ice is independent of life, so a pane is on a square whether or not
+    /// anything lives there — and life held over an iced living cell still
+    /// takes the life and leaves the pane.
+    #[test]
+    fn a_pane_is_on_a_square_whatever_lives_under_it() {
+        let me = PlayerId(1);
+        let iced_life = Placement::Ice.apply_to(Placement::Life.apply_to(Cell::DEAD, me), me);
+        assert!(Placement::Ice.is_on(iced_life));
+        assert!(Placement::Life.is_on(iced_life));
+        assert!(Placement::Life.remove_from(iced_life).is_ice(), "the pane stands");
     }
 
     /// Ice and life are independent, so laying one over the other is a

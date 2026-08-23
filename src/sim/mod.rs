@@ -32,7 +32,7 @@ pub use player::{Player, PlayerId};
 pub use rule::{
     next_cell, Chance, Neighbours, RuleFn, Then, BORN_ON, CREEP, DECAY, ICE_COST, LIFE_COST,
     MINE_COST, MINE_DRAIN, MINE_UPKEEP, MINE_YIELD, RECLAIM, RULES, SPREAD, STARTING_VALUE,
-    SURVIVES_ON,
+    SURVIVES_ON, TURRET_COST, TURRET_DECAY, TURRET_REACH,
 };
 pub use seed::{mix, Roll, OUT_OF};
 pub use world::{parse_torus, Coord, World, WorldKind};

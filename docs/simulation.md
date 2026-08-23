@@ -28,7 +28,7 @@ Two bytes, uploaded as `Rg8Uint`. The second of them is a sprite.
 |---|---|---|
 | alive | G bit 0 | living or not |
 | ice | G bit 1 | a pane covers it; independent of alive |
-| kind | G bits 2..8 | what it is |
+| kind | G bits 2..8 | what it is — see `kinds!` |
 | home | R bit 0 | granted ground, which never decays |
 | spare | R bits 1..3 | nothing yet |
 | player | R bits 3..8 | owner, 0 = unowned, so 31 players |
@@ -76,6 +76,12 @@ cell.update(&neighbours, seed) -> Cell
 At random, from the three parents — but seeded, from the generation and the chunk coordinate with each cell mixing in its own position, through SplitMix64's finaliser. Every peer rolls the same number without exchanging one. All three parents are reachable and the same seed always gives the same answer; both are tested.
 
 The newborn takes **everything** from that parent and nothing from the corpse it lands on. That is not a detail: it is how a kind travels. A mine's children are mines, and because the parent is chosen at random rather than by vote, a kind spreads through a mixed population instead of being handed down whole — one mine beside two ordinary cells wins about a third of the births there, and drifts from that. Three mines placed beside a starting block converted a whole growing colony inside thirty generations.
+
+**Except for the kinds that are not inherited, which pass over ownership alone.** Pick a turret as the parent and the newborn is ordinary life belonging to the turret's owner: the ground still changes hands and the machine does not copy itself. Kinds are declared in one list, `kinds!` in `sim::cell`, which writes `Kind::ALL`, the count and `Kind::inherits` from the same rows for the same reason `rules!` writes the rule chain and its names — so what a kind is, what it looks like and whether it travels cannot drift apart.
+
+The split is what the two kinds are *for*. **An inheriting kind is an investment in a lineage; a non-inheriting one is a machine somebody placed.** A mine is bought once and spreads, so what was paid for is the lineage. A turret works by standing where it is put rather than by breeding, and a turret whose children were turrets would make any gun a factory that claims the map — so it is bought once per cell, forever, and costs more for it.
+
+The carve-out is applied **after** the roll rather than before it, so which parent is chosen does not depend on what kind it turned out to be. Every peer must reach the same parent from the same seed whatever is standing there; `not_inheriting_does_not_move_the_roll` pins it.
 
 Ice is cleared on a birth because a parent may be *under a pane* and still count as a live neighbour while frozen. Without that, a cell born outside the pane would inherit it.
 
@@ -143,6 +149,64 @@ Life holds the ground around it, because a square touching something alive is cl
 The exception is **granted ground**, marked by `bits::HOME` and exempt. Without a floor, a player whose life died out would lose every square they had — and placing is confined to your own territory, so they could never place again. The mark is on the *square*, not the lineage, which is why a birth keeps the dead cell's copy of it while taking everything else from its parent. It travels with the ground when the ground changes hands.
 
 This makes ownership meaningful on dead ground, which changes what an empty chunk is. `Chunk::is_empty` now asks about ownership as well as life and ice — without that, `prune` would drop a chunk on the very step its ground was claimed, and territory outside a chunk that also held life could never last a generation. The cost is that an infinite world grows with territory as well as with life, and there is no die-off yet, so it only grows.
+
+## Turrets
+
+A turret claims ground at range. Every generation it takes the nearest square that is not its owner's and makes it theirs; a dead turret runs that backwards, taking the nearest square that *is* its owner's and giving it up.
+
+**A live cell must have an owner** — `Cell::alive` asserts it, because unowned life would have nobody to attribute a birth to — so taking a square away from its owner kills whatever was standing on it. That is the whole of why a dead turret kills. It is the invariant, not a rule of its own, and it is the only thing in the game that kills a live cell outside Conway.
+
+### Why it is a pass and not a rule
+
+Every rule in `sim::rule` is a pure function of a cell and its eight neighbours. That is what lets a generation run out of a `Halo` — one flat 18×18 grid per chunk, no bounds checks and no knowledge of topology — and "the nearest square that is not mine" is a search no halo can answer.
+
+So `World::fire_turrets` runs after the rules in absolute coordinates, beside `break_ice_from` and for the same reason: a pane spans chunks, so shattering cannot happen inside `next_cell` either. Turrets fire after the ice and before the prune.
+
+**Searched first, applied second**, which is the same discipline as gathering every halo before writing any of the next generation. Every turret reads the world as the generation left it, so no turret's answer depends on which turret went first. Two aiming at one square either agree or overwrite, and the list is sorted, so which of them wins is the same on every peer.
+
+### Finding them, and the reach
+
+There is no index. `World::turrets` scans what is held the way `ice_cells` does, and **sorts**, because `stored` walks a `HashMap` on an infinite world and a `HashMap` iterates differently in different processes — an unsorted list would let a client and a server disagree about who owns a contested square.
+
+`rule::TURRET_REACH` is the whole cost model. A turret reads the `(2R+1)²` box around itself twice a generation — once to find the nearest square it will act on and once to walk to the one the tie-break picked — so at six that is 338 reads a turret a generation and does not matter, and at twenty-four it is 4802 and a hundred turrets cost more than stepping the world does. It is a **disc**, not a square: the box is what is walked, `d > reach²` is what makes the reach the same in every direction.
+
+It also bounds how far a turret can wake the world. A turret writes through `set_cell_at`, which makes the chunk if there is not one, and a claim is ownership, so the chunk is no longer empty and `compute_active` picks it up next generation without being told. That only holds while the reach is at most one chunk; further and a turret could write two chunks away, past anything `compute_active` has a way to know about.
+
+### The tie-break
+
+A ring holds many squares at the same distance, and letting the scan order choose between them would have every turret in the world prefer the same direction — territory would grow in a lopsided plume that reads as a bug rather than as a rule. So the choice is a seeded roll on a stream of its own, the way `territory` picks among living owners for `SPREAD`, seeded from the generation and the turret's own position so every peer breaks the same tie without exchanging a number.
+
+Two passes over the box rather than a list of candidates: the first finds the nearest distance and counts how many share it, the second walks to the one the roll picked. That costs a second read of a box already in cache and saves allocating per turret per generation.
+
+### What it will and will not touch
+
+A live turret takes **ground**, so it wants a dead square that is not its owner's. Not the life standing on one: there is a single owner field, so claiming a living cell would hand over the cell rather than the square under it, and territory has never worked that way. Ground nobody holds counts, and so does ground in a chunk that was never allocated — an absent chunk reads as dead and unowned, which is exactly what a turret is for reaching.
+
+A dead turret is the mirror and takes its owner's own squares, alive or not. **`HOME` is exempt**, for the reason it never decays: placing is confined to your own territory, so a player who lost the last of it could never place again, and a machine of theirs that failed must not be what locks them out.
+
+Ice is exempt either way, and a turret under a pane does not fire at all. A pane stops time over whatever it covers, and that is every rule rather than only the ones inside `rule`.
+
+### What it settles at
+
+A turret takes one square a generation and `DECAY` at two in sixty-four eats N/32 of what is held, so each claim a generation holds about thirty squares. Against a neighbour's living colony it is far weaker: `SPREAD` gives their life the square straight back at forty in sixty-four, so what a turret holds of contested ground is a couple of squares. **A turret claims empty land and cannot take ground that anything is alive on.**
+
+Which means a turret inside its owner's ground finds everything within reach already theirs and idles. It only ever works from a frontier, and nothing had to be written to make that true.
+
+### Fours
+
+One turret is one live cell with no live neighbours, and it is gone in a generation. So a turret is only ever placed as part of something that survives, and the cheapest thing that survives is the 2×2 block: four turrets, still, never dying and never giving birth, claiming four squares a generation for as long as nothing disturbs them. That settles at about a hundred and thirty squares, eleven across.
+
+Which is the exact shape that is worthless for a mine. A block of mines never gives birth so never earns — [the game](game.md#mining) calls it forty spent on nothing — and it is the best thing a turret can be, because a turret works by standing there. **The still life is a mine's worst shape and a turret's best.**
+
+It also means the inheritance split rarely fires for a turret in its natural form: a block gives no births, so there is no parent to pick. Non-inheritance is for the turret somebody drops into a live pattern, which is the case it exists to stop.
+
+### The corpse
+
+`rule::TURRET_DECAY` returns a dead turret to ordinary ground, four times in sixty-four, the way `MINE_UPKEEP` does for a dead mine — slower, because the two punish different things. A dead mine is a bill that wants a bottom to it; a dead turret is a machine firing backwards over the ground behind it, and four in sixty-four leaves it doing that for about sixteen generations.
+
+Nothing is tallied for it. What a dead turret costs its owner is the ground it hands back and the life it takes with it, and that is applied rather than priced — which is why `Mined` says nothing about turrets and `Halo::step_into` only decays them.
+
+Note what that means read literally: the mirror of "the nearest square that is not the owner's" is "the nearest that is", so a dead turret eats its owner's ground and shoots its owner's life, including the other three cells of its own block. A failing emplacement dismantles itself.
 
 ## Ice
 

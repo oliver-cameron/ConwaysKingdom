@@ -38,6 +38,26 @@ The art is a stand-in like the rest of the sheet: the ordinary cell with a diamo
 
 Also unsettled: **a mine under ice**. A pane freezes what it covers, so a frozen mine gives no births and earns nothing — a cheap way to switch off somebody's income without taking their ground. Whether that is a feature or a hole is a question for whoever sets the rate.
 
+## Turrets
+
+**Built** — see [game.md](game.md#turrets) and [simulation.md](simulation.md#turrets). A turret claims ground at range: every generation it takes the nearest square that is not its owner's, out to `rule::TURRET_REACH`, and a dead one runs that backwards over the ground behind it. It is a pass after the rules in absolute coordinates, beside `break_ice_from`, because every rule in `sim::rule` sees one cell and its eight neighbours and no halo can answer "the nearest square that is not mine".
+
+Two things fell out rather than being designed, and both are better than what was planned here. **A live cell must have an owner**, so taking a square away from its owner kills whatever stands on it — the dead turret's killing is that invariant rather than a rule about killing. And a turret inside its owner's ground finds everything within reach already theirs and idles, so **it only works from a frontier** and needed no rule about where it may be placed.
+
+The inheritance problem was answered by splitting kinds into those a birth inherits and those it does not, which is now `kinds!` in `sim::cell` — one list writing `Kind::ALL`, the count and `Kind::inherits`, the way `rules!` writes the rule chain and its names. A kind that does not inherit passes over ownership alone, so a birth beside a turret is ordinary life owned by the turret's owner and a gun is not a turret factory. That made the rest of what was planned here unnecessary: a turret never spreads, so it needs no bill to stop it sprawling, and its balance is its purchase price and its claim rate and nothing emergent.
+
+What is left is numbers rather than mechanism.
+
+**The balance is argued, not measured.** `TURRET_COST` at fifteen, `TURRET_REACH` at six and `TURRET_DECAY` at four in sixty-four were reasoned off the decay arithmetic — a claim a generation against `DECAY` settles at about thirty squares, so a block of four holds about a hundred and thirty — and nothing has run to check it. `examples/balance.rs` is the harness that answered this for mines and prints nothing about turrets. It should, and the shapes to put in it are the block against a lone turret against a turret dropped into a glider, since those are the three things a player will try.
+
+**A turret cannot press on a living neighbour**, and it is not settled whether that is right. One claim a generation against `SPREAD` at forty in sixty-four means a turret holds two or three squares of contested ground and no more, so it is a way to reach past your own frontier and not a way to fight over somebody's colony. If it should be a weapon, the claim has to be a ring or a volley rather than one square — and that is a different mechanic, not a bigger number.
+
+**A turret under ice** is the same open question as a mine under ice, and sharper. A frozen turret does not fire, so a pane is a cheap way to switch off somebody's territory engine without taking any ground from them. Whether that is a feature or a hole is for whoever sets the rate.
+
+**The remedy for a corpse is in tension with what the corpse does.** A dead turret is cleared by building on it — placing life sets the kind back to ordinary, as it does over a dead mine — but placing is confined to your own territory, and what the corpse is doing is taking that territory away from you a square at a time. So the fix is cheap if you get to it quickly and gone if you do not, which may be exactly the right shape or may be a trap. It has not been played enough to say.
+
+**The art is a stand-in** like the rest of the sheet: the ordinary cell with a solid plus stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 8–11 with the mine's own mark colours so the two read as siblings. It is legible against all four states and in any player's hue, and it is not what anybody would draw on purpose.
+
 ## Stamps
 
 **Started** — see [game.md](game.md#stamps). Capture with Grab, place with a click, ten on the bar and the rest behind a key. Captured as live cells and their kind rather than as a rectangle of ground, trimmed to what was caught, and only ever your own life.

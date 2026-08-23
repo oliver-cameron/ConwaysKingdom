@@ -55,14 +55,25 @@ pub struct Tool {
 /// here rather than named, so a button cannot show one thing and lay another.
 const LIVE: Cell = Cell::DEAD.with_alive(true);
 const MINED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::MINE);
+const TURRETED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::TURRET);
 const ICED: Cell = Cell::DEAD.with_ice(true);
 
 /// The left segment: what you draw with.
-pub const DRAWN: [Tool; 2] = [
+pub const DRAWN: [Tool; 3] = [
     Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life, stroke: Stroke::Pencil },
     // A pencil, not a rectangle: a mine is placed a few at a time and into a
     // pattern, because what it is worth depends on what it is next to.
     Tool { name: words::MINE, shows: MINED, placement: Placement::Mine, stroke: Stroke::Pencil },
+    // A pencil for the same reason, and a shorter stroke: a turret is placed
+    // in fours, because one live cell on its own dies of loneliness and the
+    // 2x2 block is the cheapest thing that does not. Four cells is a gesture,
+    // which is what a pencil is for.
+    Tool {
+        name: words::TURRET,
+        shows: TURRETED,
+        placement: Placement::Turret,
+        stroke: Stroke::Pencil,
+    },
 ];
 
 /// The right segment, on its own.

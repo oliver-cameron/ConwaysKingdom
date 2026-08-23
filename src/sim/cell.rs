@@ -2,7 +2,9 @@ use bytemuck::{Pod, Zeroable};
 
 use super::dir::Dir;
 use super::player::PlayerId;
-use super::rule::{next_cell, Neighbours, MINE_UPKEEP, UPKEEP_STREAM};
+use super::rule::{
+    next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM, UPKEEP_STREAM,
+};
 use super::seed::{mix, Roll};
 use std::ops::{Index, IndexMut};
 
@@ -230,9 +232,59 @@ impl core::fmt::Debug for Cell {
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable)]
 pub struct Kind(pub u8);
 
-impl Kind {
+/// Every kind of cell, in one list: what it is, the number that is also its
+/// sprite, and whether a birth inherits it.
+///
+/// A macro for the same reason [`super::rule::order::rules!`] is one — the
+/// list is written once, so [`Kind::ALL`], [`Kind::COUNT`] and
+/// [`Kind::inherits`] cannot drift from each other, and adding a kind is a
+/// row rather than four edits in three places.
+macro_rules! kinds {
+    ($( $(#[$doc:meta])* $name:ident = $n:literal, inherited: $inherited:literal ),* $(,)?) => {
+        impl Kind {
+            $( $(#[$doc])* pub const $name: Self = Self($n); )*
+
+            /// Every kind. Each must have art at its own index in
+            /// `render::atlas`, which asserts it, so a kind cannot exist
+            /// without a picture.
+            pub const ALL: [Self; [$($n),*].len()] = [$(Self::$name),*];
+            pub const COUNT: usize = Self::ALL.len();
+
+            /// Whether a birth copies this kind from the parent it chose.
+            ///
+            /// A birth otherwise takes **everything** from its parent, which
+            /// is how a kind travels: a mine's children are mines, and since
+            /// the parent is picked at random the kind spreads through a
+            /// mixed population rather than being handed down whole.
+            ///
+            /// That is right for a kind you buy a *lineage* of and wrong for
+            /// one you buy a *machine* of. A turret claims ground by standing
+            /// there rather than by breeding, so a turret whose children were
+            /// turrets would make any gun a factory that claims the map. A
+            /// kind that does not inherit **passes over ownership alone** —
+            /// pick it as a parent and the newborn is ordinary life belonging
+            /// to whoever owned the parent.
+            ///
+            /// So an inheriting kind is an investment in a lineage and a
+            /// non-inheriting one is a machine somebody placed, and the
+            /// difference is one row in the list above.
+            pub const fn inherits(self) -> bool {
+                match self.0 {
+                    $( $n => $inherited, )*
+                    // A kind with no row here is one nothing can produce:
+                    // the placements are a closed vocabulary and a birth
+                    // copies an existing cell. Inheriting would propagate a
+                    // number that has no art and no rules.
+                    _ => false,
+                }
+            }
+        }
+    };
+}
+
+kinds! {
     /// An ordinary living cell.
-    pub const NORMAL: Self = Self(0);
+    NORMAL = 0, inherited: true,
     /// A cell that pays its owner when it is **born**.
     ///
     /// Not a marker on the ground and not a rule about death: income is a
@@ -246,11 +298,22 @@ impl Kind {
     /// mines is a still life and never gives birth, so it earns nothing. An
     /// oscillator earns every period, and a gun earns forever — which is the
     /// right shape for a game about patterns that work.
-    pub const MINE: Self = Self(1);
-    /// Every kind. Each must have art at its own index in `render::atlas`;
-    /// extend this and the sprite list beside it, or it will not compile.
-    pub const ALL: [Self; 2] = [Self::NORMAL, Self::MINE];
-    pub const COUNT: usize = Self::ALL.len();
+    MINE = 1, inherited: true,
+    /// A cell that claims ground at range: every generation it takes the
+    /// nearest square that is not its owner's and makes it theirs.
+    ///
+    /// A dead turret runs the same rule backwards — it takes the nearest
+    /// square that *is* its owner's and gives it up — and since a live cell
+    /// must have an owner, doing that to a living square kills it. It decays
+    /// back to ordinary ground after a while, the way a dead mine does.
+    ///
+    /// The opposite of a mine in every way that matters. A mine earns on
+    /// **turnover** and a turret works by **standing still**, so the block
+    /// that is a mine's worst shape is a turret's best: four turrets is the
+    /// cheapest thing in Conway that never dies and never gives birth, which
+    /// is why a turret is placed in fours. It does not inherit, so a turret
+    /// is always exactly the cells somebody paid for.
+    TURRET = 2, inherited: false,
 }
 
 /// What each player's mines did in one generation, indexed by the number the
@@ -429,6 +492,17 @@ impl Halo {
                         mined.upkeep[after.player().0 as usize] += 1;
                         after = after.with_kind(Kind::NORMAL);
                     }
+                }
+                // A dead turret fires backwards over the ground behind it for
+                // as long as it lies there, and then stops being one. Nothing
+                // is tallied: what it costs its owner is the ground it hands
+                // back and the life it takes with it, which `World::step`
+                // applies, not money.
+                if after.kind() == Kind::TURRET
+                    && !after.is_alive()
+                    && Roll::new(cell_seed).chance(TURRET_ROT_STREAM, TURRET_DECAY)
+                {
+                    after = after.with_kind(Kind::NORMAL);
                 }
                 next[(row, col)] = after;
             }

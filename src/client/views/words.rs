@@ -55,6 +55,7 @@ pub mod menu {
 pub mod hotbar {
     pub const LIFE: &str = "Life";
     pub const MINE: &str = "Mine";
+    pub const TURRET: &str = "Turret";
     pub const ICE: &str = "Ice";
     /// The square that takes a stamp. Short, because it sits in a 44px box.
     pub const CAPTURE: &str = "Grab";
