@@ -2,10 +2,13 @@
 //!
 //!     cargo run --bin native -- [--ws ws://host:8080/ws] [--name NAME]
 //!                                [--room NAME] [--torus ROWSxCOLS]
-//!                                [--token DIR]
+//!                                [--keep DIR]
 //!
-//! Without `--ws` it runs entirely locally: the simulation is deterministic, so
-//! an unconnected client is a complete game, just a solitary one.
+//! Without `--ws` it opens the menu, which asks for a server or offers to play
+//! alone. Alone the simulation is deterministic, so an unconnected client is a
+//! complete game, just a solitary one. With `--ws` it goes straight there: an
+//! address on a command line is a choice already made, and asking again would
+//! be the menu getting in the way.
 //!
 //! `--room` picks which world on that server to join. Without it the server
 //! decides, which is what makes a bare `--ws` still a game. A room is a
@@ -17,10 +20,11 @@
 //! offline: connected, the world is whatever the server's room is running, and
 //! the `Welcome` says which.
 //!
-//! `--token` says where to keep the secrets this client comes back with: a
-//! directory, one file per room. Two clients on one machine otherwise share
-//! one store and so try to be the same player; give them a directory each to
-//! run them as two people.
+//! `--keep` says where this client keeps what it remembers between visits:
+//! the rejoin secret for each room, which room and which server were last
+//! used, and the name that was typed. Two clients on one machine otherwise
+//! share one store and so try to be the same player; give them a directory
+//! each to run them as two people.
 
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
@@ -46,8 +50,8 @@ fn main() {
                             .unwrap_or_else(|e| panic!("--room: {e}")),
                     );
                 }
-                "--token" => conwayskingdom::net::token::keep_in(
-                    args.next().expect("--token needs a directory").into(),
+                "--keep" => conwayskingdom::net::keep::keep_in(
+                    args.next().expect("--keep needs a directory").into(),
                 ),
                 "--torus" => {
                     let text = args.next().expect("--torus needs ROWSxCOLS");
@@ -62,7 +66,10 @@ fn main() {
             log::warn!("--torus is ignored when connected; the server's world is the world");
         }
         if ws.is_none() && room.is_some() {
-            log::warn!("--room is ignored offline; there is only the one world here");
+            log::warn!(
+                "--room needs --ws; without a server there is no room to be in. \
+                 The menu will ask."
+            );
         }
         conwayskingdom::client::set_world(world);
         conwayskingdom::client::set_connection(conwayskingdom::client::Connection {

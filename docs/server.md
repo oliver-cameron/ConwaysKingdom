@@ -20,7 +20,9 @@ A room is a separate world rather than a view of a shared one, which is the simp
 REFUSED — no room "loby" here; this server has arena, lobby
 ```
 
-The alternative — creating a room for whoever asks — turns a typo into a world: `loby` gets you an empty plane where you own nothing, know nobody, and cannot tell that you are the only one who will ever be there. Until there is a menu that lists what a server has, that rejection *is* the list, which is why it carries the names.
+The alternative — creating a room for whoever asks — turns a typo into a world: `loby` gets you an empty plane where you own nothing, know nobody, and cannot tell that you are the only one who will ever be there.
+
+The menu asks `ClientMessage::Rooms` and shows what comes back, so a name is normally clicked rather than typed. The rejection still carries the names, because a name can still arrive typed — `--room` on a command line, `?room=` in a link — and a client refused that way falls back to the menu with **both** the reason and the live list on screen. The two are halves of one answer, and showing only the list reads as the click having done nothing.
 
 `Join` carries `room: Option<RoomName>`; `None` takes the server's default, so a client with nothing to say about rooms still lands somewhere. `Welcome` names the room back, because the client may have asked for none and because the token it is about to keep is filed under that name.
 

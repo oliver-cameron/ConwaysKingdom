@@ -37,7 +37,23 @@ A room opens empty. There is no seeded pattern: the first life arrives with the 
 
 `--world PATH` is gone. A world is now one room among several, saved under its room's name, so the flag says a thing that no longer has a meaning; passing it is an error that says what to do instead. The file format is unchanged, so an old `world.ckw` becomes a room by moving it to `rooms/main.ckw`.
 
-The native client takes `--ws URL`, `--name NAME`, `--room NAME`, `--token DIR`, and `--torus RxC` for an offline world that wraps. Without `--ws` it runs offline; connected, the server's room is the world, and `--torus` and `--room` are both ignored with a note saying so. The browser client needs no address — it derives its socket from the page's own origin — and takes its room from the query string, `?room=lobby`.
+### The client
+
+Both clients open on a **menu**: a name, a server, and — once that server has been asked — its rooms, with a "play alone" underneath. That is the only way to reach a server or choose a room without a command line, which is what a phone and a browser have.
+
+| flag | meaning |
+|---|---|
+| `--ws URL` | go straight to this server, skipping the menu |
+| `--room NAME` | which room on it; needs `--ws` |
+| `--name NAME` | who to play as |
+| `--torus RxC` | the shape of the offline world, for "play alone" |
+| `--keep DIR` | where this client remembers things |
+
+`--ws` skips the menu because an address on a command line is a choice already made. Connected, the server's room is the world and `--torus` is ignored with a note saying so; a `--room` the server does not have is refused, and the client falls back to the menu with the reason and that server's real room list on screen.
+
+`--keep` is the store: a rejoin secret per room, plus the room, server and name last used, so the menu opens on what you used last. Two clients on one machine otherwise share it and try to be one player — give them a directory each.
+
+The browser client needs no address; it derives its socket from the page's own origin. `?room=lobby` in the URL skips the menu and goes straight to that room, which is how a link takes somebody to a world.
 
 Rebuild the browser client with `wasm-pack build --target web`.
 

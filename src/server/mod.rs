@@ -361,6 +361,10 @@ impl Server {
                 }
                 Vec::new()
             }
+            // A room cannot list the rooms: it is one of them, and it knows
+            // of no others. `Rooms::handle` answers this before it routes
+            // anything here.
+            ClientMessage::Rooms => Vec::new(),
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.

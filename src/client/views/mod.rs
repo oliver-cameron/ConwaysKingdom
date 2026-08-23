@@ -21,6 +21,7 @@ pub mod battle;
 pub mod hotbar;
 pub mod camera;
 pub mod hud;
+pub mod menu;
 pub mod overlay;
 pub mod theme;
 
@@ -51,6 +52,45 @@ pub struct Views {
     start: f64,
     pub theme: theme::Theme,
     renderer: egui_wgpu::Renderer,
+}
+
+/// Borrowed out so the match arm above reads as one thing. `KeyEvent::state`
+/// is a field, and taking a reference to it inside the pattern would move the
+/// event out of the borrow.
+fn state_of(event: &winit::event::KeyEvent) -> &winit::event::ElementState {
+    &event.state
+}
+
+/// The egui key a winit key means, where egui has one.
+///
+/// Only what a text field and a menu need: editing, moving the caret,
+/// confirming, and leaving. Not the letters and digits — those reach a field
+/// as `Text`, and egui only wants them as `Key` for shortcuts, which this
+/// integration has no clipboard to serve.
+fn egui_key(key: &winit::keyboard::Key) -> Option<egui::Key> {
+    use winit::keyboard::{Key, NamedKey};
+    let named = match key {
+        Key::Named(named) => named,
+        _ => return None,
+    };
+    Some(match named {
+        NamedKey::Enter => egui::Key::Enter,
+        NamedKey::Tab => egui::Key::Tab,
+        NamedKey::Space => egui::Key::Space,
+        NamedKey::Backspace => egui::Key::Backspace,
+        NamedKey::Delete => egui::Key::Delete,
+        NamedKey::Escape => egui::Key::Escape,
+        NamedKey::ArrowLeft => egui::Key::ArrowLeft,
+        NamedKey::ArrowRight => egui::Key::ArrowRight,
+        NamedKey::ArrowUp => egui::Key::ArrowUp,
+        NamedKey::ArrowDown => egui::Key::ArrowDown,
+        NamedKey::Home => egui::Key::Home,
+        NamedKey::End => egui::Key::End,
+        NamedKey::PageUp => egui::Key::PageUp,
+        NamedKey::PageDown => egui::Key::PageDown,
+        NamedKey::Insert => egui::Key::Insert,
+        _ => return None,
+    })
 }
 
 /// Hand every texture change to the renderer, then empty the delta.
@@ -139,6 +179,19 @@ impl Views {
         self.dragging_widget || claims(&self.claimed, self.pointer)
     }
 
+    /// Whether the interface, rather than the world, should get the keyboard.
+    ///
+    /// Asked of egui directly, unlike [`Self::wants_pointer`], and the reason
+    /// the two differ is worth stating. A pointer is claimed by *where it is*,
+    /// which this integration can answer from the rectangles each panel
+    /// reported, and answering it that way avoids depending on interaction
+    /// state fed by hand. The keyboard is claimed by *what has focus*, which
+    /// is egui's own bookkeeping and not something a rectangle can express:
+    /// there is nowhere else to ask.
+    pub fn wants_keyboard(&self) -> bool {
+        self.ctx.egui_wants_keyboard_input()
+    }
+
     /// Translate a window event. Returns whether the world should ignore it.
     pub fn on_window_event(&mut self, event: &winit::event::WindowEvent, scale: f32) -> bool {
         use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -202,6 +255,45 @@ impl Views {
                     command: s.control_key(),
                 };
                 false
+            }
+            // Typing. Nothing needed it until there was a field to type into,
+            // and a menu is two text fields, so this is where the keyboard
+            // stops being the game's alone.
+            //
+            // Two events, not one. `Text` is what a character key contributes
+            // to a field; `Key` is what backspace, the arrows, enter and escape
+            // do to one. A key that produces text produces both, because egui
+            // routes shortcuts off `Key` and content off `Text`, and a field
+            // that got only text could never be corrected.
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+                let pressed = *state_of(event) == ElementState::Pressed;
+                if let Some(key) = egui_key(&event.logical_key) {
+                    self.events.push(egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed,
+                        repeat: event.repeat,
+                        modifiers: self.modifiers,
+                    });
+                }
+                // Only on the way down, and never while a command modifier is
+                // held: ctrl+V is a paste, and inserting a literal "v" beside
+                // it is the sort of thing that only shows up in somebody's
+                // password field.
+                if pressed
+                    && !self.modifiers.command
+                    && !self.modifiers.alt
+                    && let Some(text) = event.text.as_ref()
+                {
+                    // Control characters arrive here as text -- enter is
+                    // "\r", escape is "\u{1b}" -- and inserting them into a
+                    // field puts an invisible character in a room name.
+                    let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !printable.is_empty() {
+                        self.events.push(egui::Event::Text(printable));
+                    }
+                }
+                self.wants_keyboard()
             }
             _ => false,
         }

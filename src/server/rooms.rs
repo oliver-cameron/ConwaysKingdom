@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::net::{ClientMessage, RoomName, ServerMessage, DEFAULT_ROOM};
+use crate::net::{ClientMessage, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
 use crate::server::Server;
 use crate::sim::{PlayerId, WorldKind};
 
@@ -180,6 +180,13 @@ impl Rooms {
     /// is from the `Welcome` it never got, would go on believing it was still
     /// there.
     pub fn handle(&mut self, seat: Option<&Seat>, msg: ClientMessage) -> Vec<ServerMessage> {
+        // Answered without a seat, like `Join` and for the same reason: it
+        // names no world. A player has to see the rooms before picking one,
+        // and a room *is* a world, so asking from inside one is asking too
+        // late.
+        if let ClientMessage::Rooms = msg {
+            return vec![ServerMessage::Rooms { rooms: self.listing() }];
+        }
         if let ClientMessage::Join { room, .. } = &msg {
             let asked = room.clone();
             return match self.resolve(asked.as_deref()) {
@@ -254,6 +261,22 @@ impl Rooms {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    /// Every room, as a menu needs to see it.
+    ///
+    /// In name order, because `rooms` is a `BTreeMap` and a listing that
+    /// reordered itself between two requests would be a menu whose buttons
+    /// move under the pointer.
+    pub fn listing(&self) -> Vec<RoomInfo> {
+        self.rooms
+            .iter()
+            .map(|(name, server)| RoomInfo {
+                name: name.clone(),
+                players: server.players().filter(|p| p.online).count() as u32,
+                world: server.world().kind(),
+            })
+            .collect()
     }
 
     /// How many players are connected right now, across every room.
@@ -455,6 +478,42 @@ mod tests {
                 .is_empty(),
             "an unjoined connection may not read a world"
         );
+    }
+
+    /// The menu's whole reason for being able to show anything. Asked before
+    /// joining, because a room is a world and picking one after you are in it
+    /// is picking too late.
+    #[test]
+    fn the_rooms_can_be_listed_without_joining_one() {
+        let mut rooms = Rooms::open(
+            temp_dir("listing"),
+            &["lobby".into(), "arena".into()],
+            WorldKind::Toroidal { rows: 4, cols: 4 },
+            true,
+        )
+        .unwrap();
+        rooms.get_mut("arena").unwrap().join("alice").unwrap();
+
+        let replies = rooms.handle(None, ClientMessage::Rooms);
+        let [ServerMessage::Rooms { rooms: listed }] = &replies[..] else {
+            panic!("expected a listing, got {replies:?}");
+        };
+        assert_eq!(
+            listed.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["arena", "lobby"],
+            "in one order, so the buttons do not move under the pointer"
+        );
+        assert_eq!(listed[0].players, 1, "connected now");
+        assert_eq!(listed[1].players, 0);
+        assert_eq!(listed[0].world, WorldKind::Toroidal { rows: 4, cols: 4 });
+
+        // A player who left is not a player who is there.
+        rooms.get_mut("arena").unwrap().leave(PlayerId(1));
+        let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(None, ClientMessage::Rooms)[..]
+        else {
+            panic!("expected a listing");
+        };
+        assert_eq!(listed[0].players, 0);
     }
 
     /// Joining twice on one connection is a room change, not a second player

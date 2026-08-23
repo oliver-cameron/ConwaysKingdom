@@ -78,6 +78,7 @@ mod tests {
             ClientMessage::Subscribe { chunks: vec![(0, 0), (-1, 5)] },
             ClientMessage::Unsubscribe { chunks: vec![(9, 9)] },
             ClientMessage::Checkpoint { tick: 100, chunks: vec![((0, 0), 0xDEAD_BEEF), ((-1, 4), 7)] },
+            ClientMessage::Rooms,
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -116,6 +117,21 @@ mod tests {
             }] },
             ServerMessage::ChunkData { tick: 3, chunk: (-2, 7), cells: vec![1, 2, 3, 4] },
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },
+            ServerMessage::Rooms { rooms: vec![] },
+            ServerMessage::Rooms {
+                rooms: vec![
+                    crate::net::RoomInfo {
+                        name: "arena".into(),
+                        players: 3,
+                        world: crate::sim::WorldKind::Toroidal { rows: 6, cols: 6 },
+                    },
+                    crate::net::RoomInfo {
+                        name: "lobby".into(),
+                        players: 0,
+                        world: crate::sim::WorldKind::Infinite,
+                    },
+                ],
+            },
         ];
         for msg in cases {
             let bytes = encode_server(&msg).unwrap();

@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use crate::render::app::App;
-use super::{camera, hotbar, hud, overlay, Views};
+use super::{camera, hotbar, hud, menu, overlay, Views};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -127,6 +127,26 @@ pub struct Connection {
 pub fn set_connection(connection: Connection) {
     *CONNECTION.lock().unwrap() = Some(connection);
 }
+
+/// Which screen the client is on.
+///
+/// Not two `App`s. The event loop calls one, and the world, the pipeline and
+/// the atlas belong to the game whether or not it is being looked at — so the
+/// menu is a state the app is in rather than a second app with its own copy
+/// of the GPU.
+enum Screen {
+    /// Choosing a server and a room, or choosing to play alone.
+    Menu(menu::Menu),
+    /// In a world. The only screen that takes input from the world.
+    Playing,
+}
+
+/// How long to wait for a server to say what rooms it has before giving up.
+///
+/// Generous, because it covers a connection being made as well as answered,
+/// and short enough that a wrong address is a mistake you correct rather than
+/// a page you reload.
+const ROOM_LIST_TIMEOUT: f64 = 8.0;
 
 /// What the pointer is doing.
 ///
@@ -319,6 +339,13 @@ pub struct BattleApp {
     cursor: (f64, f64),
     /// Our own player number, once the server has issued one.
     me: Option<crate::sim::PlayerId>,
+    /// Menu or game. Everything the world does with input asks this first: a
+    /// click that lands beside the menu panel must not draw on the world
+    /// behind it.
+    screen: Screen,
+    /// When the room list was asked for, so a server that never answers
+    /// becomes a message rather than a menu that says "asking" forever.
+    asked_at: Option<f64>,
     /// Which room the server put us in, once it has said.
     ///
     /// Taken from the `Welcome` rather than from what was asked for: a client
@@ -543,7 +570,7 @@ impl BattleApp {
                     // one that was asked for: a client may have named none, and
                     // a token stored against the wrong room brings you back to
                     // the wrong world.
-                    crate::net::token::store(&room, &token);
+                    crate::net::keep::store_token(&room, &token);
                     log::info!(
                         "joined room \"{room}\" as {you:?} at tick {tick}, in a {} world",
                         match world {
@@ -559,6 +586,12 @@ impl BattleApp {
                     self.value = value;
                     self.me = Some(you);
                     self.room = Some(room);
+                    // Into the game. Not before: until a Welcome arrives there
+                    // is no world to be in, and a menu that closed on the
+                    // click would leave the player staring at ground they
+                    // could not build on while the socket was still opening.
+                    self.screen = Screen::Playing;
+                    self.asked_at = None;
                     // Now, and only now, drop the local world. Until Welcome
                     // arrives there is nothing authoritative to replace it
                     // with, and an empty screen is worse than a local game.
@@ -586,8 +619,32 @@ impl BattleApp {
                 }
                 ServerMessage::Rejected { reason } => {
                     log::error!("server refused the connection: {reason}");
-                    self.link = None;
+                    // Shown rather than logged and dropped. The refusal names
+                    // the rooms that do exist, which with no other listing is
+                    // the most useful thing on the screen -- and the link is
+                    // kept, so the next choice is a click rather than a
+                    // reconnect.
+                    self.show_menu(menu::Stage::Failed(reason));
+                    self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
+                    self.asked_at = Some(self.elapsed);
                     return;
+                }
+                ServerMessage::Rooms { rooms } => {
+                    log::info!("the server has {} room(s)", rooms.len());
+                    self.asked_at = None;
+                    if let Screen::Menu(m) = &mut self.screen {
+                        // A refusal already on screen is carried over rather
+                        // than replaced: the reason and the list of rooms that
+                        // do exist are two halves of one answer, and a list
+                        // arriving on its own reads as the click having done
+                        // nothing.
+                        let note = match std::mem::replace(&mut m.stage, menu::Stage::Idle) {
+                            menu::Stage::Failed(why) => Some(why),
+                            menu::Stage::Choosing { note, .. } => note,
+                            _ => None,
+                        };
+                        m.stage = menu::Stage::Choosing { rooms, note };
+                    }
                 }
                 ServerMessage::ChunkData { tick, chunk, cells } => {
                     match bytemuck::try_from_bytes::<crate::sim::Chunk>(&cells) {
@@ -646,12 +703,27 @@ impl BattleApp {
         }
 
         if closed {
-            log::warn!("link closed; continuing offline");
             self.link = None;
+            self.asked_at = None;
+            match &self.screen {
+                // Nothing was ever reached. The address is the likely reason
+                // and the only thing the player can act on, so it is what the
+                // message names.
+                Screen::Menu(m) => {
+                    let address = m.address.clone();
+                    self.show_menu(menu::Stage::Failed(format!("no server answered at {address}")));
+                }
+                // Mid-game. The simulation is deterministic, so the world
+                // carries on locally rather than stopping -- offline is a
+                // solitary game, not a broken one.
+                Screen::Playing => log::warn!("link closed; continuing offline"),
+            }
             return;
         }
 
-        self.subscribe_to_view();
+        if matches!(self.screen, Screen::Playing) {
+            self.subscribe_to_view();
+        }
     }
 
     /// Ask for any visible chunk not already requested. The camera is fixed for
@@ -1000,6 +1072,104 @@ impl BattleApp {
         log::debug!("clicked ({row}, {col}); value {}", self.value);
     }
 
+    /// Whether input from the world should be acted on at all.
+    fn playing(&self) -> bool {
+        matches!(self.screen, Screen::Playing)
+    }
+
+    /// Back to the menu, in this state, keeping whatever was typed into it.
+    ///
+    /// Rebuilt from what is remembered when there was no menu to return to,
+    /// which is the case of a game started from a command line being refused.
+    fn show_menu(&mut self, stage: menu::Stage) {
+        match &mut self.screen {
+            Screen::Menu(m) => m.stage = stage,
+            Screen::Playing => {
+                let address = self.address_hint();
+                let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
+                m.stage = stage;
+                self.screen = Screen::Menu(m);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn address_hint(&self) -> String {
+        Link::origin_url("/ws").unwrap_or_else(|| "ws://localhost:8080/ws".into())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn address_hint(&self) -> String {
+        crate::net::keep::server().unwrap_or_else(|| DEFAULT_ADDRESS.into())
+    }
+
+    /// Act on what the menu was clicked for.
+    fn chose(&mut self, chose: menu::Chose) {
+        match chose {
+            menu::Chose::Nothing => {}
+            // The local world is already built and already granted -- `init`
+            // does that whether or not anyone connects -- so this is a change
+            // of screen and nothing else.
+            menu::Chose::Offline => {
+                log::info!("playing alone");
+                self.screen = Screen::Playing;
+            }
+            menu::Chose::Connect(address) => {
+                if let Screen::Menu(m) = &mut self.screen {
+                    crate::net::keep::remember_name(&m.name);
+                }
+                crate::net::keep::remember_server(&address);
+                log::info!("asking {address} what rooms it has");
+                // Any previous socket goes first. Two links would both be
+                // draining into one client, and the second Welcome would
+                // arrive into a world built for the first.
+                self.link = dial(&address);
+                match &self.link {
+                    Some(link) => {
+                        link.send(ClientMessage::Rooms);
+                        self.asked_at = Some(self.elapsed);
+                        self.show_menu(menu::Stage::Asking);
+                    }
+                    None => self
+                        .show_menu(menu::Stage::Failed(format!("{address} is not an address"))),
+                }
+            }
+            menu::Chose::Join(room) => {
+                let Some(link) = &self.link else {
+                    self.show_menu(menu::Stage::Failed("the connection went away".into()));
+                    return;
+                };
+                let name = match &self.screen {
+                    Screen::Menu(m) => m.name.clone(),
+                    Screen::Playing => "player".into(),
+                };
+                crate::net::keep::remember_name(&name);
+                log::info!("joining room \"{room}\" as \"{name}\"");
+                link.send(ClientMessage::Join {
+                    token: crate::net::keep::token_for_join(Some(&room)),
+                    name,
+                    room: Some(room),
+                });
+            }
+        }
+    }
+
+    /// Give up on a server that has not answered.
+    ///
+    /// A menu that says "asking" forever is indistinguishable from one that is
+    /// broken, and the two most likely causes -- a wrong address, and a server
+    /// that is not running -- both look exactly like this.
+    fn time_out_room_list(&mut self) {
+        let Some(asked) = self.asked_at else { return };
+        if self.elapsed - asked < ROOM_LIST_TIMEOUT {
+            return;
+        }
+        self.asked_at = None;
+        self.link = None;
+        let address = self.address_hint();
+        self.show_menu(menu::Stage::Failed(format!("{address} did not answer")));
+    }
+
     fn subscribe_to_view(&mut self) {
         let (min, max) = self.camera.visible_cells(VIEW_MARGIN);
         // Folded onto the chunks that actually exist before anything is asked
@@ -1027,7 +1197,25 @@ impl BattleApp {
 
 impl App for BattleApp {
     fn init(gpu: &GpuState) -> Self {
-        let link = open_link();
+        // Where to go, or whether to ask. A destination stated on a command
+        // line or in a link is a choice already made; anything else opens the
+        // menu, which is the only way a room can be chosen without a terminal.
+        let (screen, link) = match startup() {
+            Start::Join { url, name, room } => {
+                log::info!("connecting to {url}, asking for room {room:?}");
+                let link = dial(&url).inspect(|link| {
+                    link.send(ClientMessage::Join {
+                        name,
+                        token: crate::net::keep::token_for_join(room.as_deref()),
+                        room,
+                    })
+                });
+                (Screen::Playing, link)
+            }
+            Start::Menu { address } => {
+                (Screen::Menu(menu::Menu::new(address, cfg!(target_arch = "wasm32"))), None)
+            }
+        };
         // Always start with something on screen. Holding an empty world until
         // the server answers means a client that never connects -- wrong port,
         // server down, a page served from somewhere else -- shows nothing at
@@ -1130,6 +1318,8 @@ impl App for BattleApp {
             notice: None,
             last_action: None,
             value: Player::STARTING_VALUE,
+            screen,
+            asked_at: None,
             me: None,
             room: None,
             subscribed: std::collections::HashSet::new(),
@@ -1156,12 +1346,15 @@ impl App for BattleApp {
             self.subscribed.clear(); // a different area is visible now
         }
 
-        self.apply_pan(dt);
-        self.flush_stroke();
+        if self.playing() {
+            self.apply_pan(dt);
+            self.flush_stroke();
+        }
 
         if self.link.is_some() {
             self.pump_link();
         }
+        self.time_out_room_list();
 
         if let Some(Pending { drag, to_px }) = self.pending.take() {
             let to = self.cell_under_cursor(to_px);
@@ -1223,15 +1416,35 @@ impl App for BattleApp {
             selection: self.selection_mark(),
         };
         let mut picked = None;
-        let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {
-            overlay::show(ctx, &theme, &marks);
-            let hud_rect = hud::show(ctx, &theme, &status);
-            let bar = hotbar::show(ctx, &theme, slot);
-            picked = bar.picked;
-            // Each panel on its own. Folding them together first would claim
-            // everything between them, and they sit in opposite corners.
-            [hud_rect, bar.rect].into_iter().flatten().collect()
+        let mut chose = menu::Chose::Nothing;
+        // Taken out for the frame, because the closure needs `&mut` on it and
+        // `self` is already borrowed by `views`. Put back below, whatever the
+        // menu did with it.
+        let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        let on_web = cfg!(target_arch = "wasm32");
+        let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
+            // The world is still drawn behind it, and still running if this
+            // client is offline. A menu over a dead grey rectangle says the
+            // game has not started; a menu over a world says it is waiting for
+            // you.
+            Screen::Menu(m) => {
+                let (picked_menu, rect) = menu::show(ctx, &theme, m, on_web);
+                chose = picked_menu;
+                rect.into_iter().collect()
+            }
+            Screen::Playing => {
+                overlay::show(ctx, &theme, &marks);
+                let hud_rect = hud::show(ctx, &theme, &status);
+                let bar = hotbar::show(ctx, &theme, slot);
+                picked = bar.picked;
+                // Each panel on its own. Folding them together first would
+                // claim everything between them, and they sit in opposite
+                // corners.
+                [hud_rect, bar.rect].into_iter().flatten().collect()
+            }
         });
+        self.screen = screen;
+        self.chose(chose);
         if let Some(index) = picked {
             self.slot = index;
         }
@@ -1276,6 +1489,11 @@ impl App for BattleApp {
     }
 
     fn on_key(&mut self, code: winit::keyboard::KeyCode, pressed: bool) {
+        // The menu is over the world, and the world is still there. A click
+        // that lands beside the panel must not draw on it.
+        if !self.playing() {
+            return;
+        }
         use winit::keyboard::KeyCode as K;
         if let Some(index) = digit(code).and_then(hotbar::slot_for_digit) {
             if pressed {
@@ -1314,6 +1532,11 @@ impl App for BattleApp {
     /// A trackpad pinch, on the platforms that report one as a gesture.
     /// `delta` is a relative change, so it multiplies rather than adds.
     fn on_pinch(&mut self, delta: f64) {
+        // The menu is over the world, and the world is still there. A click
+        // that lands beside the panel must not draw on it.
+        if !self.playing() {
+            return;
+        }
         if !delta.is_finite() {
             return;
         }
@@ -1332,6 +1555,11 @@ impl App for BattleApp {
     /// draw with, and the hotbar has already promised the player is holding
     /// something.
     fn on_touch(&mut self, id: u64, phase: winit::event::TouchPhase, x: f64, y: f64) {
+        // The menu is over the world, and the world is still there. A click
+        // that lands beside the panel must not draw on it.
+        if !self.playing() {
+            return;
+        }
         use winit::event::TouchPhase as P;
         // A finger is not a hovering pointer. There is nothing under it once
         // it lifts, so the hover box would be left behind where it ended.
@@ -1397,6 +1625,11 @@ impl App for BattleApp {
     /// every scroll as zoom made a two-finger swipe on a trackpad lurch the
     /// zoom when every other application pans with it.
     fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta, ctrl: bool) {
+        // The menu is over the world, and the world is still there. A click
+        // that lands beside the panel must not draw on it.
+        if !self.playing() {
+            return;
+        }
         use winit::event::MouseScrollDelta as D;
         // A trackpad sends its own momentum after the fingers lift, so ours
         // would be a second one running alongside it.
@@ -1445,6 +1678,11 @@ impl App for BattleApp {
     /// view are never the same gesture and neither has to guess which was
     /// meant — and every mouse and trackpad has at least one of the three.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
+        // The menu is over the world, and the world is still there. A click
+        // that lands beside the panel must not draw on it.
+        if !self.playing() {
+            return;
+        }
         use winit::event::MouseButton as B;
         if pressed {
             // A press is aiming at something, so a glide left over from the
@@ -1524,36 +1762,80 @@ impl App for BattleApp {
     }
 }
 
-/// Open a connection, if there is one to open.
+/// What the client does before the first frame: go somewhere, or ask.
+enum Start {
+    /// Straight into a game, because something said where to go — `--ws` on a
+    /// command line, or `?room=` on a page. A stated destination is a choice
+    /// already made, and asking again would be the menu getting in the way.
+    Join { url: String, name: String, room: Option<String> },
+    /// Show the menu, with this address filled in.
+    Menu { address: String },
+}
+
+/// Connect, and ask nothing yet.
 ///
-/// On the web this needs no configuration: the page came from the server, so
-/// the server is wherever the page came from. `wss` when the page is `https`,
-/// or the browser blocks it as mixed content.
+/// Two shapes because the two links differ: a browser's socket may fail to be
+/// constructed at all, and a native one is a thread that starts and may then
+/// find nothing there.
+#[cfg(target_arch = "wasm32")]
+fn dial(url: &str) -> Option<Link> {
+    Link::connect(url)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn dial(url: &str) -> Option<Link> {
+    Some(Link::connect(url.to_string()))
+}
+
+/// On the web nothing needs configuring: the page came from the server, so the
+/// server is wherever the page came from. `wss` when the page is `https`, or
+/// the browser blocks it as mixed content.
 ///
 /// The room comes from the query string — `?room=lobby` — because that is the
-/// one part a page cannot derive from where it was served. With none, the
-/// server picks, which is what makes a bare URL still a game.
+/// one part a page cannot derive from where it was served, and naming it is
+/// how a link takes somebody straight to a world. With none, the menu asks.
 #[cfg(target_arch = "wasm32")]
-fn open_link() -> Option<Link> {
-    let url = Link::origin_url("/ws")?;
-    let room = query_room();
-    log::info!("connecting to {url}, asking for room {room:?}");
-    let link = Link::connect(&url)?;
-    link.send(ClientMessage::Join {
-        name: "web".into(),
-        token: crate::net::token::for_join(room.as_deref()),
-        room,
-    });
-    Some(link)
+fn startup() -> Start {
+    let url = Link::origin_url("/ws").unwrap_or_else(|| "ws://localhost:8080/ws".into());
+    let name = crate::net::keep::name().unwrap_or_else(|| "web".into());
+    match room_in_query(&query_string()) {
+        Some(room) => Start::Join { url, name, room: Some(room) },
+        None => Start::Menu { address: url },
+    }
 }
 
-/// The `room` parameter from the page's query string.
 #[cfg(target_arch = "wasm32")]
-fn query_room() -> Option<String> {
-    room_in_query(&web_sys::window()?.location().search().ok()?)
+fn query_string() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default()
 }
+
+/// On native there is no page to have come from, so the URL is an argument —
+/// and without one, the menu asks for it.
+#[cfg(not(target_arch = "wasm32"))]
+fn startup() -> Start {
+    let taken = CONNECTION.lock().unwrap().take();
+    let Some(Connection { url, name, room }) = taken else {
+        return Start::Menu { address: DEFAULT_ADDRESS.into() };
+    };
+    crate::net::keep::remember_name(&name);
+    match url {
+        Some(url) => Start::Join { url, name, room },
+        None => Start::Menu { address: DEFAULT_ADDRESS.into() },
+    }
+}
+
+/// What the native menu offers when nothing has been typed before. The server
+/// this repository tells you to run, on the port it tells you to run it on.
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_ADDRESS: &str = "ws://127.0.0.1:8080/ws";
 
 /// The `room` parameter out of a query string, given the string.
+///
+/// Reached only from the browser's startup, so off wasm32 nothing but the test
+/// below calls it — which is the point of the split, and why the allow is
+/// narrower than silencing the warning at the module.
 ///
 /// Split from the lookup above so it can be tested at all: everything that
 /// reaches a browser's `location` is unreachable off wasm32, and this is the
@@ -1564,6 +1846,7 @@ fn query_room() -> Option<String> {
 /// a room name is letters, digits, `-` and `_`, so a name that needed decoding
 /// was never a room name, and refusing it here would say only "no" where the
 /// server can say what the rooms actually are.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn room_in_query(search: &str) -> Option<String> {
     search
         .trim_start_matches('?')
@@ -1574,18 +1857,6 @@ fn room_in_query(search: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// On native there is no page to have come from, so the URL is an argument.
-#[cfg(not(target_arch = "wasm32"))]
-fn open_link() -> Option<Link> {
-    let Connection { url, name, room } = CONNECTION.lock().unwrap().take()?;
-    let link = Link::connect(url?);
-    link.send(ClientMessage::Join {
-        name,
-        token: crate::net::token::for_join(room.as_deref()),
-        room,
-    });
-    Some(link)
-}
 
 #[cfg(test)]
 mod tests {

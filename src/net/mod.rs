@@ -17,7 +17,7 @@
 //! Nothing here may depend on [`crate::render`].
 
 pub mod codec;
-pub mod token;
+pub mod keep;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
 #[cfg(target_arch = "wasm32")]
@@ -196,6 +196,21 @@ pub struct Stamped {
     pub action: Action,
 }
 
+/// One room, as a menu needs to show it.
+///
+/// Enough to choose by and no more: which world, whether anybody is in it, and
+/// whether it ends. Not the tick, not the chunk count — a room is picked on
+/// what it is like to be in, and neither of those says anything about that.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomInfo {
+    pub name: RoomName,
+    /// Players connected right now, not players the room has ever seen. The
+    /// second number is the one the world remembers and the wrong one to
+    /// choose a room by.
+    pub players: u32,
+    pub world: WorldKind,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Asking to play. `token` is the secret a previous `Welcome` handed out,
@@ -223,6 +238,14 @@ pub enum ClientMessage {
     /// desync. Per chunk rather than whole-world: a client holds only what its
     /// viewport covers, so a world digest would always disagree.
     Checkpoint { tick: Tick, chunks: Vec<(ChunkId, u64)> },
+    /// What rooms are here?
+    ///
+    /// Answerable **before joining**, and that is the point of it: a player
+    /// has to see the worlds before picking one, and a room is a world, so
+    /// there is no way to look first and choose after without asking from
+    /// outside every room. It names no world itself, which is why it is one of
+    /// the two messages a connection with no seat may send.
+    Rooms,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +310,13 @@ pub enum ServerMessage {
     ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
     /// The client's copy of these chunks is wrong; here they are again.
     Resync { tick: Tick, chunks: Vec<ChunkId> },
+    /// The rooms this server has, in the order it lists them.
+    ///
+    /// Ordered by the server rather than sorted by the client, so two players
+    /// looking at the same menu see the same list in the same order — and so
+    /// the order is one thing a server can decide rather than a thing that
+    /// happens.
+    Rooms { rooms: Vec<RoomInfo> },
 }
 
 /// How wide a patch of ground a player is granted when they join, in cells.

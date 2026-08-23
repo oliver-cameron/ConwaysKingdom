@@ -110,6 +110,16 @@ Picks what a click acts on — both what it places and, on ground that already h
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 
+## The menu
+
+The screen before the game. A name, a server, and the rooms that server has, or "play alone".
+
+The room list is **asked for, not guessed**. A room is a whole separate world, so a name that does not exist is not a mistyped filter, it is nowhere — and a client cannot know what a server has without asking. So the menu shows nothing under Rooms until `ServerMessage::Rooms` comes back, rather than offering a name that might be there. A server that never answers becomes a message naming the address after eight seconds, because a menu that says "asking" forever is indistinguishable from one that is broken, and the two likeliest causes — a wrong address, and a server that is not running — both look exactly like it.
+
+The world is still drawn behind the panel, and still running when the client is offline. A menu over a dead grey rectangle says the game has not started; a menu over a world says it is waiting for you.
+
+On the web the server is shown but not editable: the socket is derived from the page's origin, so a typed address would be a promise the client cannot keep. Natively it is a field, because there is no page to have come from.
+
 ## The HUD
 
 Player and their colour, value, generation, chunks held and drawn, zoom, connection state, which room, whether the world wraps, and why the last action was refused.

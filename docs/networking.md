@@ -26,6 +26,7 @@ enum ClientMessage {
     Act(Stamped),                              // an action, with player and tick
     Subscribe { chunks }, Unsubscribe { chunks },
     Checkpoint { tick, chunks: Vec<(ChunkId, u64)> },
+    Rooms,                                     // what worlds are here?
 }
 
 enum ServerMessage {
@@ -34,8 +35,13 @@ enum ServerMessage {
     Step { tick, actions },
     ChunkData { tick, chunk, cells },
     Resync { tick, chunks },
+    Rooms { rooms: Vec<RoomInfo> },            // name, players online, shape
 }
 ```
+
+`Rooms` and `Join` are the only two messages a connection with **no seat** may send, and for the same reason: neither names a world. A room is a world, so a player has to see the rooms before picking one, and asking from inside one is asking too late. Everything else from an unjoined connection is dropped rather than answered out of the default room.
+
+A `RoomInfo` is enough to choose by and no more — the name, how many players are connected *now*, and whether the world ends. Not the tick and not the chunk count: neither says anything about what it is like to be in there. The order is the server's, so two players looking at the same menu see the same list in the same order.
 
 A chunk is identified by **where it is** — `type ChunkId = Coord`. There is no id to allocate, keep unique, or reconcile after a reconnect; two peers naming the same coordinate mean the same chunk. On a torus, fold with `World::canonical` before comparing.
 
