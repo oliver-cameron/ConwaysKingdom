@@ -132,6 +132,10 @@ Life alone was the test, and it made territory unable to cross a chunk boundary 
 
 A dead cell next to living ones takes the owner of one of them, chosen by the seed, most generations. It stays dead: the rule sets the owner and nothing else. Ice is checked first, so a pane's cover is not claimed while it stands.
 
+**`SPREAD` does not spread territory — `CREEP` does**, and the names are the wrong way round for what people expect of them. Spread only ever acts on a square something is **alive** beside, and the two branches are disjoint: a square with a living neighbour takes that rule and returns, so creep and decay never see it. Turn creep off and territory stops expanding altogether, however high spread goes, because nothing can then put your number on a square nothing of yours is alive next to. What you are left with is the **footprint of life**: the union of every square something of yours has ever been alive beside, growing exactly as fast as your patterns reach new ground and not at all if they sit still. Measured with creep and decay at zero, a block holds 169 squares at generation 0 and 169 at generation 400, while a glider goes from 169 to 902 — a diagonal stripe, one cell of halo either side of where it flew.
+
+Spread is also a **transfer** rather than only a gain: the owners it picks between are those of every living neighbour whoever they belong to, so a dead square of yours touching somebody else's life becomes theirs at the same rate. With creep and decay at zero that is the only way the rule moves ground at all.
+
 **And it creeps, and it fades.** Where nothing alive is touching a dead cell, it takes the owner of a neighbouring cell — **whoever that is, including nobody**. That one rule does both jobs, which is why there is no threshold anywhere trying to work out what a shape is:
 
 - Deep inside a region every neighbour agrees, so nothing moves.

@@ -268,6 +268,44 @@ fn a_kind_spreads_through_a_mixed_neighbourhood() {
     );
 }
 
+/// **Liveness is what chooses the branch**, and that is the whole answer to
+/// "does spread on its own make territory grow?"
+///
+/// The same neighbour, owned by the same player, moves a square at the spread
+/// rate when it is alive and at the creep rate when it is not. So with creep
+/// at zero a square nothing is alive beside never changes hands at all, and
+/// territory is the **footprint of life** rather than something that diffuses:
+/// it grows exactly as fast as life reaches squares it has not reached before,
+/// and a still life grows it not at all.
+#[test]
+fn spread_needs_a_living_neighbour_where_creep_does_not() {
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    let mine = Cell::DEAD.with_player(me);
+    let took = |around: &Neighbours| {
+        (0..2000u64).filter(|&s| next_cell(mine, around, s).player() == them).count()
+    };
+
+    let mut living = [Cell::DEAD; 8];
+    living[0] = Cell::alive(them);
+    let mut ground = [Cell::DEAD; 8];
+    ground[0] = Cell::DEAD.with_player(them);
+
+    // Alive: the spread branch, at its own rate and straight to that owner.
+    let by_spread = took(&living);
+    let expected = 2000 * SPREAD as usize / crate::sim::seed::OUT_OF as usize;
+    assert!(by_spread.abs_diff(expected) < 200, "spread took {by_spread}, want ~{expected}");
+
+    // Dead: the spread branch is not even reached, so it is creep — which
+    // fires more rarely and then picks one of eight neighbours, only one of
+    // which is theirs.
+    let by_creep = took(&ground);
+    assert!(
+        by_creep * 4 < by_spread,
+        "dead ground moved {by_creep} of 2000 against {by_spread} for living, \
+         which is not the difference between two rules"
+    );
+}
+
 /// Creep cuts both ways, which is the whole of why a border settles rather than
 /// running away or rotting: a dead cell takes a neighbour's owner, and one of
 /// those neighbours may be nobody.
