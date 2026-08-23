@@ -28,5 +28,5 @@ mod world;
 pub use cell::{bits, Cell, Chunk, Halo, Kind, Mined, CHUNK_CELLS, CHUNK_N, HALO_N};
 pub use dir::Dir;
 pub use player::{Player, PlayerId};
-pub use rule::{next_cell, Neighbours, RuleFn};
+pub use rule::{next_cell, Neighbours, RuleFn, DECAY_ODDS, MINE_UPKEEP_ODDS};
 pub use world::{parse_torus, Coord, World, WorldKind};

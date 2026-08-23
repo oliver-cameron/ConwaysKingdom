@@ -67,4 +67,5 @@ cargo test --no-default-features                       # without the renderer
 cargo build --target wasm32-unknown-unknown --lib      # the browser client
 wasm-pack test --headless --firefox                    # GPU setup, in a browser
 cargo run --example headless -- 400 infinite           # the simulation, no GPU
+cargo run --no-default-features --example balance      # what mining pays, per pattern
 ```

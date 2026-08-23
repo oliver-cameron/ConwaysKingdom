@@ -902,14 +902,10 @@ mod tests {
         assert_eq!(resyncs, vec![vec![held[0].0]], "only the disagreeing chunk");
     }
 
-    /// Income is **net growth**, which is the whole of what stops mining being
-    /// the answer to everything.
-    ///
-    /// A birth pays what a death costs, so a pattern that merely churns earns
-    /// nothing at all. A blinker gives birth twice a generation and kills two
-    /// cells doing it, and used to be free money for as long as it ran.
+    /// A compact machine pays. Three cells and two corpses is the cheapest
+    /// thing that keeps giving birth, and it is meant to be worth building.
     #[test]
-    fn a_blinker_of_mines_only_churns_and_so_earns_nothing() {
+    fn a_blinker_of_mines_pays_because_it_is_compact() {
         let mut s = Server::new(World::infinite_empty());
         let me = s.join("me").unwrap();
 
@@ -923,64 +919,55 @@ mod tests {
         for _ in 0..20 {
             s.step();
         }
-        assert_eq!(
-            s.value_of(me).unwrap(),
-            purse,
-            "two born and two dead every generation nets nothing"
+        assert!(
+            s.value_of(me).unwrap() > purse,
+            "two births a generation against two corpses charged one time in \
+             eight should pay: {purse} -> {}",
+            s.value_of(me).unwrap()
         );
     }
 
-    /// A still life earns nothing either, for the simpler reason that nothing
-    /// happens on it at all.
+    /// And a mess does not pay, which is the point of charging for corpses.
+    ///
+    /// An r-pentomino of mines grows into a couple of hundred live cells
+    /// dragging eight hundred corpses behind it. Every one of those is charged
+    /// one generation in eight, so sprawl costs far more than its own births
+    /// bring in — measured at about twenty a generation against it. Without
+    /// the upkeep it was the best investment in the game.
     #[test]
-    fn a_block_of_mines_earns_nothing() {
+    fn sprawling_mines_cost_more_than_they_earn() {
         let mut s = Server::new(World::infinite_empty());
         let me = s.join("me").unwrap();
-        // The grant already stands a block of ordinary life in the middle;
-        // put these far enough away to be their own still life.
-        place_mines(&mut s, me, &[(1, 1), (1, 2), (2, 1), (2, 2)]);
-        s.step();
-        let purse = s.value_of(me).unwrap();
-        for _ in 0..10 {
-            s.step();
-        }
-        assert_eq!(s.value_of(me).unwrap(), purse, "a still life gives no births");
-    }
-
-    /// What does earn: a population that grows. What a mine is worth in the
-    /// end is what it grew into, because the births and deaths telescope.
-    #[test]
-    fn growth_earns_and_dying_back_costs() {
-        let count_mines = |s: &Server| {
-            s.world()
-                .live_cells()
-                .iter()
-                .filter(|&&(r, c)| {
-                    s.world().cell_at(r, c).unwrap().kind() == crate::sim::Kind::MINE
-                })
-                .count() as i32
-        };
-
-        let mut s = Server::new(World::infinite_empty());
-        let me = s.join("me").unwrap();
-        // An R-pentomino of mines, which grows for hundreds of generations
-        // before it settles.
         place_mines(&mut s, me, &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)]);
         s.step();
 
+        // Given plenty to spend, so the floor at zero does not hide the drain.
+        s.players.get_mut(&me).unwrap().value = 100_000;
         let purse = s.value_of(me).unwrap();
-        let population = count_mines(&s);
-        for _ in 0..60 {
+        for _ in 0..300 {
             s.step();
         }
-
-        let earned = s.value_of(me).unwrap() - purse;
-        let grew = count_mines(&s) - population;
-        assert!(grew > 0, "the pentomino should have grown, got {grew}");
-        assert_eq!(
-            earned, grew,
-            "what was earned is exactly what the population grew by"
+        assert!(
+            s.value_of(me).unwrap() < purse,
+            "sprawl should bleed: {purse} -> {}",
+            s.value_of(me).unwrap()
         );
+    }
+
+    /// Nothing dies on a still life, so nothing is charged. A block of mines
+    /// is free to hold and earns nothing, which is the honest answer for
+    /// something that never does anything.
+    #[test]
+    fn a_block_of_mines_costs_nothing_to_hold() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        place_mines(&mut s, me, &[(1, 1), (1, 2), (2, 1), (2, 2)]);
+        s.step();
+        let purse = s.value_of(me).unwrap();
+        for _ in 0..50 {
+            s.step();
+        }
+        assert_eq!(s.value_of(me).unwrap(), purse, "no births and no corpses");
     }
 
     /// Lay mines at offsets inside this player's granted ground, and apply

@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 
 use super::dir::Dir;
 use super::player::PlayerId;
-use super::rule::{mix, next_cell, Neighbours};
+use super::rule::{mix, next_cell, Neighbours, MINE_UPKEEP_ODDS};
 use std::ops::{Index, IndexMut};
 
 pub const CHUNK_N: usize = 16;
@@ -258,14 +258,19 @@ impl Kind {
 /// Counts rather than a sum of money: what a birth or a death is *worth* is the
 /// economy's business and the economy lives in `net`. The rule counts.
 ///
-/// Two counts rather than one net figure, so the two can be priced apart. They
-/// are not priced apart today — a birth pays what a death costs — but "income
-/// is net growth" is a choice, and one a net figure would have made
-/// permanently.
+/// `born` is a count of births. `upkeep` is a count of **charges falling due**
+/// on dead mines — not of deaths. A mine's corpse costs its owner for as long
+/// as it lies there, one generation in [`super::rule::MINE_UPKEEP_ODDS`], so a
+/// square can be counted many times and a square that dies and is never
+/// counted is possible too.
+///
+/// Two counts rather than one net figure, so the two can be priced apart —
+/// which is what lets the rule decide *how often* a corpse is charged and
+/// `net` decide *how much*.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mined {
     pub born: [u32; PlayerId::COUNT],
-    pub died: [u32; PlayerId::COUNT],
+    pub upkeep: [u32; PlayerId::COUNT],
 }
 
 impl Mined {
@@ -277,7 +282,7 @@ impl Mined {
         for (t, n) in self.born.iter_mut().zip(&other.born) {
             *t = t.saturating_add(*n);
         }
-        for (t, n) in self.died.iter_mut().zip(&other.died) {
+        for (t, n) in self.upkeep.iter_mut().zip(&other.upkeep) {
             *t = t.saturating_add(*n);
         }
     }
@@ -410,17 +415,17 @@ impl Halo {
                 let cell_seed = mix(seed, (row as u64) << 32 | col as u64);
                 let before = self.get(hr, hc);
                 let after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
-                match (before.is_alive(), after.is_alive()) {
-                    (false, true) if after.kind() == Kind::MINE => {
-                        mined.born[after.player().0 as usize] += 1;
+                if after.kind() == Kind::MINE && after.player().is_owned() {
+                    if after.is_alive() {
+                        if !before.is_alive() {
+                            mined.born[after.player().0 as usize] += 1;
+                        }
+                    } else if (cell_seed >> 17).is_multiple_of(MINE_UPKEEP_ODDS) {
+                        // A corpse costs while it lies there, not once when it
+                        // falls. Its own slice of the seed, above every slice
+                        // the rule itself takes.
+                        mined.upkeep[after.player().0 as usize] += 1;
                     }
-                    // A dying cell keeps its owner and its kind, so who is
-                    // charged is read from before rather than after -- the same
-                    // answer either way, and the one that says what is meant.
-                    (true, false) if before.kind() == Kind::MINE => {
-                        mined.died[before.player().0 as usize] += 1;
-                    }
-                    _ => {}
                 }
                 next[(row, col)] = after;
             }

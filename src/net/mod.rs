@@ -537,7 +537,7 @@ pub const MINE_COST: i32 = 10;
 /// What one birth of [`Kind::MINE`] pays its owner.
 pub const MINE_YIELD: i32 = 1;
 
-/// What one death of [`Kind::MINE`] costs its owner.
+/// What one upkeep charge on a dead [`Kind::MINE`] costs its owner.
 ///
 /// Equal to the yield, deliberately, which makes a generation's income the
 /// **net change in your mine population** and nothing else. Over the life of a
@@ -561,7 +561,7 @@ pub const MINE_DRAIN: i32 = 1;
 /// know prices — it counts births and deaths and this says what they are worth.
 pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
     let at = player.0 as usize;
-    mined.born[at] as i32 * MINE_YIELD - mined.died[at] as i32 * MINE_DRAIN
+    mined.born[at] as i32 * MINE_YIELD - mined.upkeep[at] as i32 * MINE_DRAIN
 }
 
 /// What an action is worth to the player who did it.

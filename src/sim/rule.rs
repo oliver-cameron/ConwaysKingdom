@@ -51,6 +51,48 @@ pub type RuleFn = fn(Cell, &Neighbours, u64) -> Cell;
 /// confined to your own territory, so they could never place again.
 pub const DECAY_ODDS: u64 = 16;
 
+/// One chance in this many, per generation, that a **dead** mine costs its
+/// owner.
+///
+/// A mine's corpse is not free. It pays when its line is born and it costs for
+/// as long as it lies there, so income is growth minus the upkeep of
+/// everything you have let die — which is what stops a field of mines being
+/// something you lay once and forget.
+///
+/// The drain is bounded by territory decay rather than by a timer: a corpse
+/// with nothing alive beside it loses its owner within about
+/// [`DECAY_ODDS`] generations and stops costing anybody. So abandoned ground
+/// bleeds you briefly and then goes quiet, while corpses inside a living
+/// colony are re-claimed every generation and go on costing.
+///
+/// The rule decides how *often* a corpse is charged; [`crate::net::MINE_DRAIN`]
+/// decides how *much*. Both have to move together to change the balance, and
+/// this is the one that has to be identical on every peer.
+///
+/// **Eight**, chosen by measuring rather than by argument — `cargo run
+/// --example balance` prints this table, in value per generation at steady
+/// state:
+///
+/// ```text
+///    odds     block   blinker    glider   r-pentomino
+///       1       0.0       0.0     -20.0        -695.0
+///       4       0.0       1.5      -3.5        -116.8
+///       8       0.0       1.8      -0.8         -20.4
+///      16       0.0       1.9       0.6          27.8
+///      32       0.0       1.9       1.3          51.9
+/// ```
+///
+/// Eight is the knee. A blinker — three cells and two corpses — pays; a glider
+/// dragging a trail behind it roughly breaks even; and an r-pentomino, which is
+/// two hundred live cells and eight hundred corpses of sprawl, bleeds. That is
+/// the shape wanted: **a compact machine pays and a mess does not**, which is
+/// what stops the answer to everything being "make it all mines".
+///
+/// Above sixteen everything pays and sprawl pays best, which is where this
+/// started. At one even a blinker only breaks even and a glider is ruinous,
+/// which punishes building anything that moves.
+pub const MINE_UPKEEP_ODDS: u64 = 8;
+
 /// Mix a value into a seed. SplitMix64's finaliser: cheap, and it decorrelates
 /// the near-identical inputs (adjacent cells, consecutive ticks) that a plain
 /// hash would leave visibly patterned.
