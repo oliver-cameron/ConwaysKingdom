@@ -403,6 +403,16 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 r.gpu.resize(size.width, size.height);
                 r.app.resize(&r.gpu);
             }
+            // A window dragged to a display of a different density, or a
+            // browser zoomed. The size in physical pixels may not change at
+            // all, so this cannot be left to `Resized` -- and `GpuState`
+            // re-reads the factor, so putting the size it already has back
+            // through the same path is the whole of it.
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let (width, height) = r.gpu.size;
+                r.gpu.resize(width, height);
+                r.app.resize(&r.gpu);
+            }
             WindowEvent::KeyboardInput {
                 event:
                     winit::event::KeyEvent {

@@ -92,6 +92,7 @@ pub mod stamps {
 pub mod hud {
     pub const CONNECTED: &str = "connected";
     pub const OFFLINE: &str = "offline";
+    pub const HOLDING: &str = "ground held";
     pub const BOUNDLESS: &str = "boundless world";
     pub const OVER_PANEL: &str = "over panel";
     pub const ON_WORLD: &str = "on world";

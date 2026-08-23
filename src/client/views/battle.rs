@@ -399,6 +399,11 @@ pub struct BattleApp {
     icons: icons::Icons,
     /// Whether the stamps that did not fit on the bar are on screen.
     picking_stamp: bool,
+    /// Who holds how much ground, most first, as the server last said.
+    ///
+    /// From the server because a client holds only the chunks it subscribed
+    /// to: counting locally would score its own screen rather than the world.
+    standing: Vec<(crate::sim::PlayerId, u32)>,
     /// The pattern being drawn by hand in the library, if any.
     ///
     /// Lives here rather than in the library window because the window is
@@ -678,6 +683,12 @@ impl BattleApp {
                     self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
                     self.asked_at = Some(self.elapsed);
                     return;
+                }
+                // Who is winning. Kept whole rather than merged, because a
+                // player who has lost every square drops out of the list and a
+                // merge would leave their last bar standing forever.
+                ServerMessage::Standing { held, .. } => {
+                    self.standing = held;
                 }
                 ServerMessage::Purse { value } => {
                     // Taken, not reconciled. A client only sees the mines in
@@ -1457,6 +1468,7 @@ impl App for BattleApp {
             stamps: stamp::Library::default(),
             icons: icons::Icons::default(),
             picking_stamp: false,
+            standing: Vec::new(),
             sketch: stamp::Sketch::default(),
             link,
         };
@@ -1539,6 +1551,7 @@ impl App for BattleApp {
             cursor_cell: self.cell_under_cursor(self.cursor),
             last_action: self.last_action.as_deref(),
             holding: &holding,
+            standing: &self.standing,
         };
         let (held, theme, shifted) = {
             let views = self.views.borrow();

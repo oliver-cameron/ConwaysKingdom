@@ -43,6 +43,12 @@ pub struct Server {
     victory: Option<Victory>,
 }
 
+/// How often the standings go out, in generations.
+///
+/// Every other second at the usual tick rate. It is a pass over the world to
+/// work out and a bar nobody can read is worse than one that lags.
+const STANDING_EVERY: u64 = 8;
+
 /// A secret nobody can guess, for a player to come back with.
 ///
 /// `RandomState` is seeded by the operating system for every instance, which
@@ -102,6 +108,26 @@ impl Server {
 
     pub fn victory(&self) -> Option<Victory> {
         self.victory
+    }
+
+    /// Who holds how much, most first, as a client is told it.
+    ///
+    /// Players holding nothing are left out rather than sent as zero: on a
+    /// world that has seen thirty-one people, most of the list is nobody, and
+    /// a bar of length zero says nothing a missing row does not.
+    pub fn standing(&self) -> ServerMessage {
+        let held = self.territory();
+        let mut rows: Vec<(PlayerId, u32)> = held
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|&(_, &n)| n > 0)
+            .map(|(id, &n)| (PlayerId(id as u8), n as u32))
+            .collect();
+        // Most first, and by number where two hold the same, so the order is
+        // the same on every peer and rows do not swap places at a tie.
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        ServerMessage::Standing { tick: self.tick(), held: rows }
     }
 
     /// How much ground each player holds, by their number.
@@ -555,7 +581,19 @@ impl Server {
 
         // Every generation, even an empty one: the tick is what keeps clients
         // in step, and a quiet generation still moves the world on.
-        vec![ServerMessage::Step { tick: self.tick(), actions: applied }]
+        let mut out = vec![ServerMessage::Step { tick: self.tick(), actions: applied }];
+
+        // And the standings on a cadence. One pass over the world to work out,
+        // and a bar that moved four times a second would be harder to read
+        // than one that moves every couple of seconds -- so this is a rate
+        // chosen for eyes rather than for the machine. Sent the moment a match
+        // is decided as well, whatever the cadence says, because the last one
+        // is the result.
+        if self.tick() % STANDING_EVERY == 0 || matches!(self.phase, Phase::Over { at, .. } if at == self.tick())
+        {
+            out.push(self.standing());
+        }
+        out
     }
 
     fn apply(&mut self, stamped: &Stamped) {
@@ -841,6 +879,56 @@ mod tests {
         let stopped = s.tick();
         s.step();
         assert_eq!(s.tick(), stopped, "an over match holds still");
+    }
+
+    /// Most first, ties by number, and nobody holding nothing.
+    ///
+    /// The order has to be the same on every peer or rows swap places at a tie
+    /// and the bars jump about; leaving out the empty is what stops a world
+    /// that has seen thirty-one people showing a column of mostly nobody.
+    #[test]
+    fn the_standing_is_most_first_and_leaves_out_the_empty() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (bob, _) = s.join_with("bob", None).unwrap();
+        let (carol, _) = s.join_with("carol", None).unwrap();
+
+        // A grant is not a score, so before anybody wins ground it is empty.
+        let ServerMessage::Standing { held, .. } = s.standing() else { panic!() };
+        assert!(held.is_empty(), "a grant is not a score: {held:?}");
+
+        stake(&mut s, bob, (900, 900), 4);
+        stake(&mut s, carol, (900, 940), 4);
+        stake(&mut s, alice, (940, 900), 5);
+
+        let ServerMessage::Standing { held, tick } = s.standing() else { panic!() };
+        assert_eq!(tick, s.tick());
+        assert_eq!(
+            held,
+            vec![(alice, 25), (bob, 16), (carol, 16)],
+            "most first, and a tie by the lower number"
+        );
+    }
+
+    /// The standings go out on a cadence, and the moment a match is decided
+    /// whatever the cadence says — the last one is the result.
+    #[test]
+    fn the_standing_goes_out_on_a_cadence_and_at_the_whistle() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 3 });
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        stake(&mut s, alice, (900, 900), 4);
+        s.start_match().unwrap();
+
+        let standing = |out: &[ServerMessage]| {
+            out.iter().any(|m| matches!(m, ServerMessage::Standing { .. }))
+        };
+        assert!(!standing(&s.step()), "tick 1 is not on the cadence");
+        assert!(!standing(&s.step()), "nor is tick 2");
+        // Tick 3 is the whistle, which sends one whatever the cadence says.
+        let last = s.step();
+        assert!(standing(&last), "the result goes out at once");
+        assert!(matches!(s.phase(), Phase::Over { .. }));
     }
 
     /// **Nothing happens before the whistle.** A match that let people place

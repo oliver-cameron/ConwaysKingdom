@@ -389,6 +389,21 @@ pub enum ServerMessage {
     ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
     /// The client's copy of these chunks is wrong; here they are again.
     Resync { tick: Tick, chunks: Vec<ChunkId> },
+    /// Who holds how much ground, most first.
+    ///
+    /// **From the server because a client cannot work it out.** A client holds
+    /// the chunks it subscribed to, which is its own screen, so counting
+    /// locally would score the view rather than the world — and on a match
+    /// that is the difference between a scoreboard and a rumour.
+    ///
+    /// Granted ground is not counted: `HOME` never decays, so a player wiped
+    /// out in the first minute would otherwise still be holding their patch at
+    /// the whistle, and that is points for having turned up.
+    ///
+    /// Broadcast on a cadence rather than every generation. It is one pass
+    /// over the world to work out, and a bar that moved four times a second
+    /// would be harder to read than one that moved every couple of seconds.
+    Standing { tick: Tick, held: Vec<(PlayerId, u32)> },
     /// What this player actually has to spend.
     ///
     /// Sent in reply to a `Checkpoint`, which is the only regular thing a

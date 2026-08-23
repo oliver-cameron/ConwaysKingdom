@@ -262,10 +262,14 @@ On the web the server is shown but not editable: the socket is derived from the 
 
 ## The HUD
 
-Player and their colour, value, generation, chunks held and drawn, zoom, connection state, which room, whether the world wraps, and why the last action was refused.
+Player and their colour, value, generation, **who is winning**, connection state, which room, whether the world wraps, and why the last action was refused.
+
+Who is winning is a column of **bars**, one per player in their own colour — the same one the shader gives their cells, so a bar and the ground it counts cannot disagree about whose it is. Bars rather than figures because the question is who is ahead and by how much, which is a comparison: six numbers in a column have to be read and subtracted, where six bars are one glance. The numbers sit beside them for when it is close. Scaled to the leader rather than to the world, since what is being asked is how the players compare with each other and against a boundless world every bar would be a sliver. Six of them, most first, because thirty-one people can have been through a world and a column of thirty-one bars is a screen of its own.
+
+The counts come **from the server**. A client holds the chunks it subscribed to, which is its own screen, so counting locally would score the view rather than the world. They arrive every eight generations — a pass over the world to work out, and a bar that moved four times a second would be harder to read than one that moves every couple of seconds — and again the moment a match is decided, whatever the cadence says, because the last one is the result. Granted ground is not counted: `HOME` never decays, so scoring it would be points for having turned up.
 
 "Chunks held" is what the client has **asked the server for**, not what its world has room for. A torus is allocated whole, so the second number there would be the size of the world and would say nothing about what has arrived.
 
 The room and the world's shape are there because both are invisible otherwise. A room is a whole separate world, so two players who cannot find each other are far more likely to be in different rooms than at different ends of one; and nothing on the board says whether walking east far enough brings you back.
 
-It also reports the cell under the cursor, whether the pointer is over the panel or the world, and what the last click did. That is deliberate: a click on empty ground that takes nothing looks exactly like a click that never arrived, so the client says which of the two happened.
+It can also report the cell under the cursor, whether the pointer is over the panel or the world, what the last click did, chunks held and drawn, the zoom, and the list of keys — but **not by default**. Every one of those earned its place while something was being built and none of them is what somebody playing wants a third of their screen taken by, so they are behind `hud::DEBUG`, off. Off rather than deleted, because each is the fastest way back to a whole class of bug: a stuck pointer-over-panel silently eats every click, and a click on empty ground that takes nothing looks exactly like a click that never arrived.

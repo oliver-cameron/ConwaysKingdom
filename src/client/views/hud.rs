@@ -40,7 +40,20 @@ pub struct Status<'a> {
     pub last_action: Option<&'a str>,
     /// The hotbar slot currently selected.
     pub holding: &'a str,
+    /// Who holds how much ground, most first. Empty until the server has said.
+    pub standing: &'a [(PlayerId, u32)],
 }
+
+/// Whether the panel shows what it shows for a developer rather than a player.
+///
+/// The cursor's cell, what the last click did, how many chunks are held and
+/// drawn, the zoom, and the list of keys: every one of them earned its place
+/// while something was being built, and none of them is what somebody playing
+/// wants a third of their screen taken by. Off rather than deleted, because
+/// each one is the fastest way back to a whole class of bug — a stuck
+/// `pointer_on_ui` silently eats every click, and a click on empty ground that
+/// takes nothing looks exactly like a click that never arrived.
+const DEBUG: bool = false;
 
 /// Returns the rectangle it occupied, so the client knows what it covered.
 pub fn show(
@@ -73,11 +86,15 @@ pub fn show(
             ui.separator();
             ui.label(format!("Value  {}", status.value));
             ui.label(format!("Generation  {}", status.generation));
-            ui.label(format!(
-                "Chunks  {} held, {} drawn",
-                status.chunks_held, status.chunks_drawn
-            ));
-            ui.label(format!("Zoom  {:.1} px/cell", status.zoom));
+            if DEBUG {
+                ui.label(format!(
+                    "Chunks  {} held, {} drawn",
+                    status.chunks_held, status.chunks_drawn
+                ));
+                ui.label(format!("Zoom  {:.1} px/cell", status.zoom));
+            }
+
+            standings(ui, theme, status);
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -100,26 +117,96 @@ pub fn show(
                 ui.colored_label(theme.palette.bad, notice);
             }
 
-            ui.separator();
-            ui.small(format!(
-                "cursor  ({}, {})   {}",
-                status.cursor_cell.0,
-                status.cursor_cell.1,
-                if status.pointer_on_ui { words::OVER_PANEL } else { words::ON_WORLD }
-            ));
-            ui.small(format!(
-                "last  {}",
-                status.last_action.unwrap_or(words::NOTHING_YET)
-            ));
+            if DEBUG {
+                ui.separator();
+                ui.small(format!(
+                    "cursor  ({}, {})   {}",
+                    status.cursor_cell.0,
+                    status.cursor_cell.1,
+                    if status.pointer_on_ui { words::OVER_PANEL } else { words::ON_WORLD }
+                ));
+                ui.small(format!(
+                    "last  {}",
+                    status.last_action.unwrap_or(words::NOTHING_YET)
+                ));
 
-            ui.separator();
-            ui.small(format!("holding  {}", status.holding));
-            for hint in words::HINTS {
-                ui.small(*hint);
+                ui.separator();
+                ui.small(format!("holding  {}", status.holding));
+                for hint in words::HINTS {
+                    ui.small(*hint);
+                }
             }
         });
     response.map(|r| r.response.rect)
 }
+
+/// Who is winning, as bars.
+///
+/// A bar rather than a number because the question is *who is ahead and by how
+/// much*, and that is a comparison — six figures in a column have to be read
+/// and subtracted, where six bars are one glance. The numbers are there beside
+/// them for when the answer is close.
+///
+/// Scaled to the leader rather than to the world: what is being asked is how
+/// the players compare with each other, and against the size of a boundless
+/// world every bar would be a sliver.
+///
+/// Each bar is drawn in **its player's own colour**, the same one the shader
+/// gives their cells, so a bar and the ground it counts cannot disagree about
+/// whose it is.
+fn standings(
+    ui: &mut egui::Ui,
+    theme: &crate::client::views::theme::Theme,
+    status: &Status<'_>,
+) {
+    if status.standing.is_empty() {
+        return;
+    }
+    ui.separator();
+    ui.small(words::HOLDING);
+
+    let most = status.standing.iter().map(|&(_, n)| n).max().unwrap_or(1).max(1) as f32;
+    let width = ui.available_width().max(80.0);
+    for &(player, held) in status.standing.iter().take(SHOWN) {
+        let (r, g, b) = player_colour(player);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 14.0), egui::Sense::hover());
+
+        // The full width in the faintest ink, so a short bar reads as a
+        // fraction of something rather than as a stub floating in space.
+        ui.painter().rect_filled(rect, 2.0, theme.palette.line);
+        let filled = egui::Rect::from_min_size(
+            rect.min,
+            egui::vec2(rect.width() * (held as f32 / most), rect.height()),
+        );
+        ui.painter().rect_filled(filled, 2.0, egui::Color32::from_rgb(r, g, b));
+
+        // Yours named, everybody else's numbered: on a board where every
+        // player is a colour and a number, the one thing worth spelling out is
+        // which of them is you.
+        let label = if player == status.player {
+            format!("you  {held}")
+        } else {
+            format!("{}  {held}", player.0)
+        };
+        ui.painter().text(
+            rect.left_center() + egui::vec2(6.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(10.0),
+            theme.palette.text,
+        );
+    }
+    if status.standing.len() > SHOWN {
+        ui.small(format!("+{} more", status.standing.len() - SHOWN));
+    }
+}
+
+/// How many bars fit before the panel is a leaderboard rather than a HUD.
+///
+/// Thirty-one players can have been through a world, and a column of thirty-one
+/// bars is a screen of its own. Whoever is winning is at the top, and you are
+/// interested in the rest of the field only once you are in it.
+const SHOWN: usize = 6;
 
 /// The colour the shader gives a player, computed the same way so the HUD
 /// swatch matches the cells on the board. OKLab with the chroma bisected down

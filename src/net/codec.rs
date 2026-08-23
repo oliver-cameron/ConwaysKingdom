@@ -94,6 +94,12 @@ mod tests {
     #[test]
     fn server_messages_round_trip() {
         let cases = vec![
+            // Most first, and a player holding nothing is simply absent.
+            ServerMessage::Standing {
+                tick: 40,
+                held: vec![(PlayerId(3), 1200), (PlayerId(1), 88), (PlayerId(9), 0)],
+            },
+            ServerMessage::Standing { tick: 0, held: Vec::new() },
             ServerMessage::Welcome {
                 you: PlayerId(2),
                 tick: 5,

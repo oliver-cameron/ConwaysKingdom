@@ -201,6 +201,17 @@ impl GpuState {
         if width == 0 || height == 0 {
             return; // minimized window, etc.
         }
+        // Read again rather than kept from window creation. It changes: a
+        // window moved between two displays gets a new one, a browser zoom
+        // changes `devicePixelRatio`, and on the web winit often reports the
+        // real one only after the canvas has been attached and sized.
+        //
+        // Stale, it is the difference between text drawn at the display's
+        // resolution and text drawn at half of it — egui lays out in points
+        // and rasterises at this, so a value of one on a two-times display
+        // gives glyphs rendered at half size and scaled up, which is what
+        // aliased text on a sharp screen actually is.
+        self.scale_factor = self.window.scale_factor() as f32;
         self.size = (width, height);
         self.config.width = width;
         self.config.height = height;
