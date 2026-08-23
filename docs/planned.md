@@ -84,11 +84,11 @@ What is left:
 
 ## Matches
 
-**Nothing built.** A lobby, everyone starting at once, a timer, and the most territory at the whistle. What follows is the shape it takes on what is already here and the three things that have to be decided before any of it is written.
+**The server half is built** — see [server.md](server.md#matches). Phases, both win conditions, scoring that ignores granted ground, no late joining, and `match new` / `match start` / `match dispatch` at the console. A match is a room with a phase and it needed nothing in `sim`, as expected; gathering does not step, so the opening is drawn into a frozen world rather than raced, and the deadline is a tick so it needs no clock synchronisation.
 
-**A match is a room with a lifecycle**, and that is the whole of the architecture. Rooms are already separate worlds with their own players, tick, value and file; what a match adds is a phase — gathering, running, finished — and a deadline. It needs nothing in `sim`. The simulation does not know what a match is, the same way it does not know what money is, and that boundary is worth more than any convenience of breaking it.
+**Nothing of it reaches the client.** That is the gap, and it is most of what makes a match feel like one: there is no timer on screen, no scoreboard, no result, and no lobby — a player joins a match by typing its room name like any other room, and finds out it started because the world began moving. Two of those need a message on the wire that does not exist yet. The scoreboard has to come from the server, because a client holds only the chunks it subscribed to and so can count its own screen and nothing else.
 
-The deadline is a **tick**, not a wall clock. The tick is the generation and it is already what a client adopts from `Welcome`, so a match that ends at tick N needs no clock synchronisation, cannot be lengthened by a client that pauses, and is the same instant for everybody by construction.
+**A starting value of zero is not in.** It was in the original description and it is held back on purpose: life costs one, zero buys none of it, and the granted block never gives birth, so a match starting everybody at zero under today's rules is one where nobody can ever act. The income question below has to be settled first.
 
 ### The opening is the problem, not the income
 

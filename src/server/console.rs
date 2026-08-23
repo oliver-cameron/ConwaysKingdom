@@ -17,6 +17,7 @@
 //! a record, and routing it through the logger would let a `--quiet` swallow
 //! the reply to a command.
 
+use crate::server::matches::{Phase, Victory};
 use crate::server::rooms::Rooms;
 use crate::sim::WorldKind;
 
@@ -44,6 +45,10 @@ impl Reply {
 pub const HELP: &[(&str, &str)] = &[
     ("new NAME [ROWSxCOLS]", "make a room; wrapping if a size is given"),
     ("rooms", "what rooms there are, and who is in them"),
+    ("match new SHAPE [ROWSxCOLS] HOW N", "make a match: infinite|toroidal, timer|territory"),
+    ("match start NAME", "start that match's clock"),
+    ("match dispatch", "start the one match that is waiting"),
+    ("match", "what matches there are, and what they are doing"),
     ("stop", "save every room and shut down"),
     ("help", "this"),
 ];
@@ -112,7 +117,110 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
             }
         }
 
+        "match" | "m" => match_command(&rest, rooms),
+
         other => Reply::say(format!("no command \"{other}\"; try help")),
+    }
+}
+
+/// `match`, and everything under it.
+///
+/// Its own function because it is a small vocabulary of its own rather than
+/// one more verb, and because the parsing is the part worth reading: the shape
+/// and the win condition are both two words, and telling them apart is what
+/// the whole form turns on.
+fn match_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
+    match rest.first().copied() {
+        // Bare `match` lists them, the way bare `rooms` does. A verb that
+        // needs an argument to do anything should say what there is when it
+        // is given none.
+        None | Some("ls") | Some("list") => {
+            let listing = rooms.matches();
+            if listing.is_empty() {
+                return Reply::say("no matches; try match new infinite timer 2000");
+            }
+            Reply::lines(
+                listing
+                    .iter()
+                    .map(|(name, phase, victory, players)| {
+                        let how = victory.map(|v| v.describe()).unwrap_or_default();
+                        let result = match phase {
+                            Phase::Over { winner: Some(id), held, .. } => {
+                                format!("  won by player {} with {held}", id.0)
+                            }
+                            Phase::Over { winner: None, .. } => "  nobody held anything".into(),
+                            _ => String::new(),
+                        };
+                        format!("  {name:<12} {:<10} {players} in   {how}{result}", phase.name())
+                    })
+                    .collect(),
+            )
+        }
+
+        Some("new") => {
+            // shape [size] how n -- the size is there only for a torus, so the
+            // count of words is what says whether it was given.
+            let args = &rest[1..];
+            let (shape, how) = match args {
+                [shape, how, n] => (parse_shape(shape, None), Some((*how, *n))),
+                [shape, size, how, n] => (parse_shape(shape, Some(size)), Some((*how, *n))),
+                _ => (Err(String::new()), None),
+            };
+            let Some((how, n)) = how else {
+                return Reply::say(
+                    "match new SHAPE [ROWSxCOLS] HOW N -- infinite|toroidal, timer|territory",
+                );
+            };
+            let shape = match shape {
+                Ok(shape) => shape,
+                Err(e) => return Reply::say(e),
+            };
+            let victory = match Victory::parse(how, n) {
+                Ok(v) => v,
+                Err(e) => return Reply::say(e),
+            };
+            match rooms.new_match(shape, victory) {
+                Ok(name) => Reply::lines(vec![
+                    format!("made \"{name}\", {}, {}", describe(shape), victory.describe()),
+                    format!("  gathering; nothing steps until `match start {name}`"),
+                ]),
+                Err(e) => Reply::say(e),
+            }
+        }
+
+        Some("start") => match rest.get(1) {
+            None => Reply::say("match start NAME -- or `match dispatch` if only one is waiting"),
+            Some(name) => match rooms.start_match(name) {
+                Ok(name) => Reply::say(format!("\"{name}\" is running; no more joining")),
+                Err(e) => Reply::say(e),
+            },
+        },
+
+        Some("dispatch" | "go") => match rooms.dispatch() {
+            Ok(name) => Reply::say(format!("\"{name}\" is running; no more joining")),
+            Err(e) => Reply::say(e),
+        },
+
+        Some(other) => Reply::say(format!("no match command \"{other}\"; try help")),
+    }
+}
+
+/// `infinite`, or `toroidal` and a size.
+///
+/// A torus without a size is refused rather than given a default: how big a
+/// wrapping world is, is the whole of what makes one match different from
+/// another, and guessing it would make the important number the invisible one.
+fn parse_shape(shape: &str, size: Option<&str>) -> Result<WorldKind, String> {
+    match (shape, size) {
+        ("infinite" | "boundless", None) => Ok(WorldKind::Infinite),
+        ("infinite" | "boundless", Some(_)) => {
+            Err("an infinite world has no size to give".into())
+        }
+        ("toroidal" | "torus" | "wrapping", Some(size)) => crate::sim::parse_torus(size),
+        ("toroidal" | "torus" | "wrapping", None) => {
+            Err("a wrapping world needs a size, as ROWSxCOLS".into())
+        }
+        (other, _) => Err(format!("no world shape \"{other}\"; try infinite or toroidal")),
     }
 }
 
@@ -207,9 +315,13 @@ mod tests {
     #[test]
     fn help_and_the_parser_agree() {
         let mut rooms = rooms();
-        let listed: Vec<&str> =
+        let mut listed: Vec<&str> =
             HELP.iter().map(|(form, _)| form.split_whitespace().next().unwrap()).collect();
-        assert_eq!(listed, ["new", "rooms", "stop", "help"]);
+        // `match` has a vocabulary under it, so it earns several lines and is
+        // one command. Deduplicated rather than listed once, because the
+        // subcommands are what somebody reading help needs to see.
+        listed.dedup();
+        assert_eq!(listed, ["new", "rooms", "match", "stop", "help"]);
         for word in &listed {
             let reply = run(word, &mut rooms, WorldKind::Infinite);
             assert!(
@@ -217,5 +329,63 @@ mod tests {
                 "help lists {word}, which the parser does not know"
             );
         }
+    }
+
+    /// The whole `match` vocabulary, as somebody would type it.
+    #[test]
+    fn a_match_is_made_started_and_listed() {
+        let mut rooms = rooms();
+
+        assert!(out("match", &mut rooms).contains("no matches"));
+
+        let made = out("match new infinite timer 2000", &mut rooms);
+        assert!(made.contains("match-1"), "{made}");
+        assert!(made.contains("2000 generations"), "{made}");
+        assert!(made.contains("gathering"), "{made}");
+
+        // A gathering match does not step, which is what makes the opening
+        // drawn rather than raced.
+        let before = rooms.get("match-1").unwrap().tick();
+        rooms.step();
+        assert_eq!(rooms.get("match-1").unwrap().tick(), before, "gathering holds still");
+
+        assert!(out("match", &mut rooms).contains("gathering"));
+        assert!(out("match dispatch", &mut rooms).contains("running"));
+        assert!(out("match dispatch", &mut rooms).contains("no match is waiting"));
+
+        rooms.step();
+        assert_eq!(rooms.get("match-1").unwrap().tick(), before + 1, "running steps");
+        assert!(out("match", &mut rooms).contains("running"));
+    }
+
+    /// A torus needs its size and an infinite world will not take one: how big
+    /// a wrapping world is, is most of what makes one match different from
+    /// another, so guessing it would hide the important number.
+    #[test]
+    fn a_match_needs_a_shape_it_can_actually_build() {
+        let mut rooms = rooms();
+        assert!(out("match new toroidal timer 10", &mut rooms).contains("needs a size"));
+        assert!(out("match new infinite 18x18 timer 10", &mut rooms).contains("no size to give"));
+        assert!(out("match new spherical timer 10", &mut rooms).contains("no world shape"));
+        assert!(out("match new infinite vibes 10", &mut rooms).contains("no win condition"));
+        assert!(out("match new infinite timer 0", &mut rooms).contains("over already"));
+
+        let made = out("match new toroidal 18x18 territory 500", &mut rooms);
+        assert!(made.contains("first to 500 squares"), "{made}");
+        assert!(made.contains("wrapping"), "{made}");
+    }
+
+    /// Two waiting matches make `dispatch` ambiguous, and starting the wrong
+    /// one is not something that can be taken back.
+    #[test]
+    fn dispatch_refuses_to_guess_between_two() {
+        let mut rooms = rooms();
+        out("match new infinite timer 10", &mut rooms);
+        out("match new infinite timer 20", &mut rooms);
+        let answer = out("match dispatch", &mut rooms);
+        assert!(answer.contains("2 matches are waiting"), "{answer}");
+        assert!(answer.contains("match-1") && answer.contains("match-2"), "{answer}");
+        assert!(out("match start match-2", &mut rooms).contains("running"));
+        assert!(out("match dispatch", &mut rooms).contains("running"), "one left, so no guess");
     }
 }

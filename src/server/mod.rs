@@ -13,6 +13,7 @@
 //! [`ws`] is what carries them today.
 
 pub mod console;
+pub mod matches;
 pub mod persist;
 pub mod rooms;
 #[cfg(feature = "server")]
@@ -23,6 +24,7 @@ use std::path::Path;
 
 use crate::net::{ChunkId, ClientMessage, RoomName, ServerMessage, Stamped, Tick, DEFAULT_ROOM};
 use crate::sim::{Player, PlayerId, World};
+use matches::{Phase, Victory};
 
 pub struct Server {
     /// Which room this is. Not stored in the save file: the file's name *is*
@@ -34,6 +36,11 @@ pub struct Server {
     subscriptions: HashMap<PlayerId, Vec<ChunkId>>,
     /// Actions received for a tick that has not been simulated yet.
     pending: Vec<Stamped>,
+    /// Whether this room is a match, and what it is doing. [`Phase::Open`] is
+    /// an ordinary room: steps forever, anybody may join, nobody wins.
+    phase: Phase,
+    /// How this match is won, once it is running. `None` on an open room.
+    victory: Option<Victory>,
 }
 
 /// A secret nobody can guess, for a player to come back with.
@@ -64,7 +71,95 @@ impl Server {
             players: HashMap::new(),
             subscriptions: HashMap::new(),
             pending: Vec::new(),
+            phase: Phase::Open,
+            victory: None,
         }
+    }
+
+    /// Make this room a match, gathering and not yet stepping.
+    pub fn make_match(&mut self, victory: Victory) {
+        self.phase = Phase::Gathering;
+        self.victory = Some(victory);
+    }
+
+    /// Start the clock. The tick it starts at is what the deadline is measured
+    /// from, so a match that gathered for an hour still runs its full length.
+    pub fn start_match(&mut self) -> Result<(), String> {
+        match self.phase {
+            Phase::Gathering => {
+                self.phase = Phase::Running { from: self.tick() };
+                Ok(())
+            }
+            Phase::Open => Err("that room is not a match".into()),
+            Phase::Running { .. } => Err("that match is already running".into()),
+            Phase::Over { .. } => Err("that match is over".into()),
+        }
+    }
+
+    pub fn phase(&self) -> &Phase {
+        &self.phase
+    }
+
+    pub fn victory(&self) -> Option<Victory> {
+        self.victory
+    }
+
+    /// How much ground each player holds, by their number.
+    ///
+    /// One pass over what is held, the way `ice_cells` and the turret sweep
+    /// are — the world keeps no running total, and a count that was kept up to
+    /// date would have to be corrected by every rule that moves ownership.
+    ///
+    /// **Granted ground does not count.** `HOME` never decays, so a player
+    /// whose life was wiped out in the first minute still holds their patch at
+    /// the whistle; scoring it would be points for having turned up. The floor
+    /// stays — they can still build on it — it simply does not win anything.
+    pub fn territory(&self) -> [usize; PlayerId::COUNT] {
+        let mut held = [0usize; PlayerId::COUNT];
+        for (_, chunk) in self.world.stored() {
+            for row in 0..crate::sim::CHUNK_N {
+                for col in 0..crate::sim::CHUNK_N {
+                    let cell = chunk[(row, col)];
+                    if cell.is_home() {
+                        continue;
+                    }
+                    if cell.player().is_owned() {
+                        held[cell.player().0 as usize] += 1;
+                    }
+                }
+            }
+        }
+        held
+    }
+
+    /// Has this match been decided, and by whom.
+    ///
+    /// Checked after a step rather than before, so the generation that met the
+    /// condition is the one the score is read from.
+    fn decide(&mut self) -> Option<&Phase> {
+        let (Some(victory), Phase::Running { from }) = (self.victory, self.phase.clone()) else {
+            return None;
+        };
+        let held = self.territory();
+        let (winner, count) = matches::leader(&held);
+        let done = match victory {
+            Victory::Timer { generations } => self.tick().saturating_sub(from) >= generations,
+            Victory::Territory { squares } => count >= squares,
+        };
+        if !done {
+            return None;
+        }
+        self.phase = Phase::Over { winner, held: count, at: self.tick() };
+        log::info!(
+            "match \"{}\" is over at tick {}: {}",
+            self.room,
+            self.tick(),
+            match winner {
+                Some(id) => format!("{id:?} holds {count} squares"),
+                None => "nobody held anything".into(),
+            }
+        );
+        Some(&self.phase)
     }
 
     pub fn room(&self) -> &str {
@@ -272,6 +367,21 @@ impl Server {
             // The room was resolved before this message was routed here -- a
             // Server *is* one room, so by the time it arrives the question of
             // which world has been answered.
+            // No late joining. A match is a race from a shared start, and
+            // somebody arriving at generation four hundred is not in it:
+            // everybody else has four hundred generations of ground and they
+            // have a block. A player already seated here is unaffected — this
+            // is the door, not the room.
+            ClientMessage::Join { .. }
+                if !self.phase.open_to_newcomers()
+                    && !self.players.values().any(|p| {
+                        matches!(&msg, ClientMessage::Join { token: Some(t), .. } if &p.token == t)
+                    }) =>
+            {
+                vec![ServerMessage::Rejected {
+                    reason: format!("\"{}\" is a match already under way", self.room),
+                }]
+            }
             ClientMessage::Join { name, token, room: _ } => match self.join_with(name, token.as_deref()) {
                 Ok((you, token)) => {
                     let spawn = crate::net::spawn_for(you, &self.world);
@@ -401,9 +511,24 @@ impl Server {
     /// Apply everything queued for this tick, advance one generation, and hand
     /// back what every client needs to stay in step.
     pub fn step(&mut self) -> Vec<ServerMessage> {
+        // A match that has not started yet, or is over, holds still. Actions
+        // are still applied — gathering is when the opening is drawn, and a
+        // pattern laid into a frozen world is exactly what ice already does
+        // for one region, promoted here to the whole of it.
+        //
+        // The tick does not move either, which is what makes gathering fair:
+        // somebody who joined a minute earlier has not had a minute of
+        // generations the others did not.
         let applied = std::mem::take(&mut self.pending);
         for stamped in &applied {
             self.apply(stamped);
+        }
+        if !self.phase.stepping() {
+            return if applied.is_empty() {
+                Vec::new()
+            } else {
+                vec![ServerMessage::Step { tick: self.tick(), actions: applied }]
+            };
         }
         let mined = self.world.step();
 
@@ -416,6 +541,8 @@ impl Server {
             // who cannot act and has no way to stop owing.
             player.value = (player.value + crate::net::earnings(&mined, player.id)).max(0);
         }
+
+        self.decide();
 
         // Every generation, even an empty one: the tick is what keeps clients
         // in step, and a quiet generation still moves the world on.
@@ -431,7 +558,7 @@ impl Server {
 mod tests {
     use super::*;
     // Only the tests take a chunk apart; the server passes them through whole.
-    use crate::sim::{Chunk, CHUNK_N};
+    use crate::sim::{Cell, Chunk, CHUNK_N};
 
     /// Cells inside a player's granted ground. Placing anywhere else is
     /// refused now, so a test that wants a placement to land has to say where
@@ -660,6 +787,117 @@ mod tests {
         assert_eq!(after.players[&me].value, 42, "with what they had");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Ground far from anybody's granted patch, so it counts towards a score.
+    fn stake(s: &mut Server, id: PlayerId, at: (i32, i32), n: i32) {
+        for r in at.0..at.0 + n {
+            for c in at.1..at.1 + n {
+                s.world.set_cell_at(r, c, Cell::DEAD.with_player(id));
+            }
+        }
+    }
+
+    /// A match runs its length and names whoever holds most.
+    #[test]
+    fn a_timer_match_ends_and_names_a_winner() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 5 });
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (bob, _) = s.join_with("bob", None).unwrap();
+
+        // Gathering holds still, which is what makes the opening drawn rather
+        // than raced: nobody gains generations by arriving early.
+        s.step();
+        s.step();
+        assert_eq!(s.tick(), 0, "a gathering match does not step");
+
+        stake(&mut s, alice, (900, 900), 6);
+        stake(&mut s, bob, (900, 940), 4);
+        s.start_match().unwrap();
+
+        for _ in 0..5 {
+            s.step();
+        }
+        match s.phase() {
+            Phase::Over { winner, held, at } => {
+                assert_eq!(*winner, Some(alice), "alice staked more");
+                assert!(*held >= 36, "she held {held}");
+                assert_eq!(*at, 5, "decided at the generation the clock ran out");
+            }
+            other => panic!("should be over, not {other:?}"),
+        }
+
+        // And it stops: a decided match does not go on running.
+        let stopped = s.tick();
+        s.step();
+        assert_eq!(s.tick(), stopped, "an over match holds still");
+    }
+
+    /// The other condition: first to a count rather than most at a whistle.
+    #[test]
+    fn a_territory_match_ends_when_somebody_reaches_the_count() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Territory { squares: 50 });
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        s.start_match().unwrap();
+
+        s.step();
+        assert!(matches!(s.phase(), Phase::Running { .. }), "nobody holds fifty yet");
+
+        stake(&mut s, alice, (900, 900), 8);
+        s.step();
+        match s.phase() {
+            Phase::Over { winner, held, .. } => {
+                assert_eq!(*winner, Some(alice));
+                assert!(*held >= 50, "held {held}");
+            }
+            other => panic!("should be over, not {other:?}"),
+        }
+    }
+
+    /// Granted ground never decays, so scoring it would be points for having
+    /// turned up. The floor stays — they can still build on it — it simply
+    /// does not win anything.
+    #[test]
+    fn granted_ground_does_not_count_towards_a_score() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        assert_eq!(s.territory()[alice.0 as usize], 0, "a grant is not a score");
+
+        stake(&mut s, alice, (900, 900), 3);
+        assert_eq!(s.territory()[alice.0 as usize], 9, "ground won is");
+    }
+
+    /// **No late joining.** A match is a race from a shared start, and
+    /// somebody arriving at generation four hundred is not in it. Somebody
+    /// already seated is a different question: a refresh must still get them
+    /// back to their own seat.
+    #[test]
+    fn a_running_match_takes_no_newcomers_but_takes_its_own_back() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 1000 });
+        let (alice, token) = s.join_with("alice", None).unwrap();
+        s.start_match().unwrap();
+
+        let refused = s.handle(
+            None,
+            ClientMessage::Join { name: "late".into(), token: None, room: None },
+        );
+        assert!(
+            matches!(refused.as_slice(), [ServerMessage::Rejected { reason }] if reason.contains("already under way")),
+            "{refused:?}"
+        );
+
+        s.leave(alice);
+        let back = s.handle(
+            None,
+            ClientMessage::Join { name: "alice".into(), token: Some(token), room: None },
+        );
+        assert!(
+            matches!(back.first(), Some(ServerMessage::Welcome { you, .. }) if *you == alice),
+            "a player already in the match comes back: {back:?}"
+        );
     }
 
     /// The whole point of the token: a player who drops comes back to their

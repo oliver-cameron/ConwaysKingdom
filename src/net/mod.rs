@@ -707,7 +707,15 @@ pub fn grant(world: &mut World, player: PlayerId) {
     // is not a still life -- it is three cells that die.
     if let Some((r0, c0)) = block_site(world, player, row, col) {
         for (dr, dc) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-            world.set_cell_at(r0 + dr, c0 + dc, Cell::alive(player));
+            // Keeping whatever `HOME` the square already had. `Cell::alive`
+            // builds a cell from nothing, and the mark lives in the owner
+            // byte's spare bits, so laying the block over the patch was
+            // rubbing out the mark under its own four squares -- which left
+            // the middle of a granted patch decaying like ordinary ground once
+            // the block died, and the ring around it permanent. The mark is on
+            // the **square**, not on what is standing there.
+            let was = world.cell_at(r0 + dr, c0 + dc).unwrap_or(Cell::DEAD);
+            world.set_cell_at(r0 + dr, c0 + dc, Cell::alive(player).with_home(was.is_home()));
         }
     } else {
         log::warn!("{player:?} was granted ground with nowhere to stand a block");
@@ -1419,6 +1427,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The mark is on the **square**, not on what is standing on it, so the
+    /// block does not rub out the `HOME` under its own four cells — which
+    /// would leave the middle of a granted patch decaying like ordinary ground
+    /// once the block died, with the ring around it permanent.
+    #[test]
+    fn the_block_stands_on_home_ground_like_the_rest_of_the_patch() {
+        let mut world = World::infinite_empty();
+        let me = PlayerId(1);
+        grant(&mut world, me);
+        let (row, col) = spawn_for(me, &world);
+
+        let mut live = 0;
+        for r in row..row + SPAWN_N {
+            for c in col..col + SPAWN_N {
+                let cell = world.cell_at(r, c).unwrap();
+                assert!(cell.is_home(), "({r}, {c}) in the patch should be home ground");
+                live += cell.is_alive() as usize;
+            }
+        }
+        assert_eq!(live, 4, "and the block is on it");
     }
 
     /// Neighbouring grants are a patch apart plus the gap, and the gap is in

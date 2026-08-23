@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use crate::net::{ClientMessage, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
 use crate::server::Server;
+use crate::server::matches::{Phase, Victory};
 use crate::sim::{PlayerId, WorldKind};
 
 /// Where a connected player is: which world, and who they are in it. Player
@@ -251,6 +252,13 @@ impl Rooms {
         }
         let mut first_error = None;
         for (name, server) in &self.rooms {
+            // A match is an event rather than a world to keep: it has an end,
+            // and a half-finished one restored into a server that has
+            // forgotten it was a match would run on forever with nobody able
+            // to win it. Losing it on a restart is the honest outcome.
+            if !matches!(server.phase(), crate::server::matches::Phase::Open) {
+                continue;
+            }
             let path = save_path(&self.dir, name);
             if let Err(e) = server.save(&path) {
                 log::error!("saving room \"{name}\" to {}: {e}", path.display());
@@ -292,6 +300,82 @@ impl Rooms {
         log::info!("created room \"{name}\"");
         self.rooms.insert(name.clone(), server);
         Ok(name)
+    }
+
+    /// Make a match: a room with a beginning, an end and a winner.
+    ///
+    /// The name is made rather than asked for, because a match is a thing that
+    /// happens rather than a place people go back to — `match-1`, `match-2`,
+    /// counting past whatever is already here so a name is never reused while
+    /// its match is still on screen.
+    ///
+    /// Not saved, so unlike [`Self::create`] there is no file to fail on.
+    pub fn new_match(
+        &mut self,
+        shape: WorldKind,
+        victory: Victory,
+    ) -> Result<RoomName, String> {
+        let name = (1..)
+            .map(|n| format!("match-{n}"))
+            .find(|name| !self.rooms.contains_key(name.as_str()))
+            .expect("an unbounded range holds an unused name");
+        let name = crate::net::room_name(&name)?;
+        let mut server = Server::named(name.clone(), shape.build());
+        server.make_match(victory);
+        log::info!("made match \"{name}\": {}", victory.describe());
+        self.rooms.insert(name.clone(), server);
+        Ok(name)
+    }
+
+    /// Start a named match's clock.
+    pub fn start_match(&mut self, name: &str) -> Result<RoomName, String> {
+        let name = crate::net::room_name(name)?;
+        let server = self
+            .rooms
+            .get_mut(&name)
+            .ok_or_else(|| format!("there is no room called \"{name}\""))?;
+        server.start_match()?;
+        log::info!("match \"{name}\" started at tick {}", server.tick());
+        Ok(name)
+    }
+
+    /// Start the one match that is waiting.
+    ///
+    /// A convenience for the common case, and it refuses rather than guesses
+    /// when there is more than one: starting the wrong match is not something
+    /// that can be taken back.
+    pub fn dispatch(&mut self) -> Result<RoomName, String> {
+        let waiting: Vec<RoomName> = self
+            .rooms
+            .iter()
+            .filter(|(_, s)| matches!(s.phase(), Phase::Gathering))
+            .map(|(name, _)| name.clone())
+            .collect();
+        match waiting.as_slice() {
+            [] => Err("no match is waiting to start".into()),
+            [only] => self.start_match(only),
+            several => Err(format!(
+                "{} matches are waiting; name one of {}",
+                several.len(),
+                several.join(", ")
+            )),
+        }
+    }
+
+    /// Every match, and what it is doing.
+    pub fn matches(&self) -> Vec<(&str, &Phase, Option<Victory>, usize)> {
+        self.rooms
+            .iter()
+            .filter(|(_, s)| !matches!(s.phase(), Phase::Open))
+            .map(|(name, s)| {
+                (
+                    name.as_str(),
+                    s.phase(),
+                    s.victory(),
+                    s.players().filter(|p| p.online).count(),
+                )
+            })
+            .collect()
     }
 
     /// Every room, as a menu needs to see it.

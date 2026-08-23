@@ -32,6 +32,46 @@ Every room runs on **one clock**. Separate worlds, but one generation span: a ro
 
 There is one broadcast channel, and every message on it carries the room it came from; each connection drops what is not its own. One channel per room would save that comparison and cost a shared map of senders that connections and the simulation task would both have to lock — a lock, to avoid a string compare, on the one path that must not have one.
 
+## Matches
+
+A room with a beginning, an end and a winner. An ordinary room runs forever and nobody wins it; a match is the same world with three things added — everybody starts together, it stops, and when it stops somebody has the most ground.
+
+**Nothing about it is in `sim`.** A match is an arrangement of when a room steps and who may join it, and both are the server's business. What that buys is that a match cannot introduce a rule the world has to honour, so a match world behaves exactly like the one people practise in.
+
+Three phases, on `server::matches::Phase`:
+
+| | steps | admits newcomers |
+|---|---|---|
+| `Open` | yes | yes |
+| `Gathering` | **no** | yes |
+| `Running` | yes | **no** |
+| `Over` | no | no |
+
+**Gathering does not step**, and that is what makes the opening fair rather than a race: actions still apply, so the opening is *drawn* into a frozen world, and somebody who joined a minute earlier has not had a minute of generations the others did not. It is what ice already does for one region — a schematic laid out without the rule eating the half-built work — promoted to the whole world.
+
+**No late joining.** A player arriving at generation four hundred is not in the same race: everyone else has four hundred generations of ground and they have a block. A `Join` into a running match is refused with a reason rather than allowed and hopeless, which would read as the game being broken. A player *already* in the match is a different question and still gets back in with their token — that is the door, not the room.
+
+The deadline is a **tick**, not a clock. The tick is the generation and is already what a client adopts from its `Welcome`, so a match ending at generation N needs no clock synchronisation, cannot be lengthened by a client that pauses, and is the same instant for everybody by construction. It is measured from the tick the match started at, so a match that gathered for an hour still runs its full length.
+
+Two win conditions. `timer N` is most ground after N generations; `territory N` is first to N squares. Both are read from `Server::territory`, one pass over what is held — the world keeps no running total, and one kept up to date would have to be corrected by every rule that moves ownership.
+
+**Granted ground does not count towards a score.** `HOME` never decays, so a player wiped out in the first minute still holds their patch at the whistle, and scoring it would be points for having turned up. The floor stays — they can still build on it — it simply wins nothing.
+
+A match is **not saved**. It is an event rather than a world to keep, and a half-finished one restored into a server that had forgotten it was a match would run on forever with nobody able to win it. A restart loses it, which is the honest outcome.
+
+### At the console
+
+```
+match                                   what matches there are, and what they are doing
+match new infinite timer 2000           most ground after two thousand generations
+match new toroidal 18x18 territory 500  first to five hundred squares, on a wrapping world
+match start match-1                     start that one's clock
+match dispatch                          start the one that is waiting
+```
+
+The name is made rather than asked for — `match-1`, `match-2` — because a match is a thing that happens rather than a place people go back to. A torus without a size is refused rather than given a default: how big a wrapping world is, is most of what makes one match different from another, so guessing it would hide the important number. `dispatch` refuses to choose between two waiting matches, because starting the wrong one cannot be taken back.
+
+
 ## Players
 
 The lowest unused number, from 1. Zero is reserved for unowned cells, and the cell has five bits, so **31 players** is the capacity — a full server refuses rather than truncating a number into a cell.
