@@ -46,7 +46,7 @@ render = ["dep:wgpu", "dep:winit", "dep:egui", "dep:egui-wgpu"]
 # compile them for wasm32 where tokio's net stack does not build.
 #
 # `cargo serve` and `cargo server` in .cargo/config.toml are the shorthand.
-server = ["dep:axum", "dep:tower-http"]
+server = ["dep:axum", "dep:tower-http", "dep:rustyline"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
@@ -66,6 +66,16 @@ png = "0.18"
 axum = { version = "0.8", features = ["ws"], optional = true }
 
 tower-http = { version = "0.6", features = ["fs"], optional = true }
+
+# The server's own terminal: history on the up arrow, and line editing.
+#
+# Not clap, which is a different problem. clap parses argv; what a console
+# wants is a *line editor*, and the two do not overlap -- clap would not give
+# the up arrow and rustyline does not parse anything.
+#
+# Native only and behind `server`, because `server::console` is compiled for
+# wasm32 as well and the browser has no terminal to read.
+rustyline = { version = "18", optional = true, default-features = false, features = ["with-file-history"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "30", features = ["webgl"], optional = true }

@@ -94,10 +94,14 @@ The subscribe line is the useful one when a client sees nothing: it says whether
 The server reads its own terminal. `help` lists what it takes:
 
 ```
-  new NAME [ROWSxCOLS]   make a room; wrapping if a size is given
-  rooms                  what rooms there are, and who is in them
-  stop                   save every room and shut down
-  help                   this
+  new NAME [ROWSxCOLS]                 make a room; wrapping if a size is given
+  rooms                                what rooms there are, and who is in them
+  match new NAME SHAPE [ROWSxCOLS] HOW N   a match: infinite|toroidal, timer|territory
+  match start NAME                     start that match's clock
+  match dispatch                       start the one match that is waiting
+  match                                what matches there are, and what they are doing
+  stop                                 save every room and shut down
+  help                                 this
 ```
 
 `new` exists because a room was declared on the command line and there was no way to make one afterwards, so adding a world meant restarting — which disconnects everybody in every *other* world to add one nobody is in yet. A room made this way is **saved before anything is in it**: one that lived only in memory until the next periodic save would vanish on a crash, and the person who made it would have no way to tell whether it had ever been real.
@@ -105,6 +109,10 @@ The server reads its own terminal. `help` lists what it takes:
 The size argument is the first per-room shape there is. `--torus` applies to every room a run creates, so a server could not offer a wrapping world and a boundless one side by side; `new ring 18x18` can. Without a size a room gets whatever the command line asked for, so `new arena` means what `--room arena` would have meant.
 
 An existing name is refused rather than reopened, because "create" that sometimes means "and empty it" is one keystroke from destroying a world somebody is standing in. A name that is not a room name is refused with the same rule a join is refused by.
+
+**The up arrow works**, and `rustyline` is why. Not clap, which is a different problem: clap parses argv, and what a console wants is a *line editor* — the two do not overlap, and clap would not have given the up arrow. The parser stays hand-written because it is a hundred lines, is a pure function of a string and the worlds, and is tested command by command including that `help` and the parser agree; clap is argv-shaped, wants to print usage and exit, and would put the tested surface inside a dependency. It is also native-only and behind the `server` feature, since `server::console` compiles for wasm32 too and a browser has no terminal.
+
+History is kept in a file as well as in memory, because restarting is exactly when you want the command you typed before. Where there is no terminal to edit — a pipe, a file, systemd's `/dev/null` — it falls back to reading plain lines, so `echo rooms | server` still works. One caveat: the server logs while you type, and a log line arriving mid-line scrambles the prompt until the next keystroke redraws it. `ExternalPrinter` is the proper fix and wants the logger routed through it, which is more than it is worth until it annoys somebody.
 
 **Parsing and doing are in `server::console`; reading is not.** `console::run` takes a line and the `Rooms` and returns what to print, which is the only way any of it can be tested — a terminal is not something a test has. The reading is a thread of its own in `server::ws`, not `tokio::io::stdin`, whose reads are documented as not cancellation-safe: a pending read dropped inside a `select!` swallows the line it was in the middle of, so a command would go missing whenever a generation ticked at the wrong moment.
 

@@ -72,6 +72,89 @@ pub struct Config {
     pub shape: WorldKind,
 }
 
+/// A prompt, with history on the up arrow.
+///
+/// **History is the whole reason there is a library here.** Typing
+/// `match new arena toroidal 18x18 territory 500` a second time to correct one
+/// number is the sort of thing that makes a console not worth using, and none
+/// of it is something to hand-roll: the up arrow is a terminal escape, and
+/// once you are decoding those you are writing a line editor.
+///
+/// Kept in a file as well as in memory, so the commands survive a restart —
+/// which is the case that matters, since restarting is when you are most
+/// likely to want the command you typed before.
+///
+/// One caveat worth knowing: the server logs while you type, and a log line
+/// arriving mid-line scrambles the prompt until the next keystroke redraws it.
+/// rustyline's `ExternalPrinter` is the proper fix and wants the logger routed
+/// through it, which is more than this is worth until it annoys somebody.
+#[cfg(feature = "server")]
+fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<String>) {
+    let history = history_path();
+    if let Some(path) = &history {
+        let _ = editor.load_history(path);
+    }
+    loop {
+        match editor.readline("> ") {
+            Ok(line) => {
+                // Blank lines are somebody pressing return, and a history full
+                // of them is a history you cannot page through.
+                if !line.trim().is_empty() {
+                    let _ = editor.add_history_entry(line.as_str());
+                }
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+            // Ctrl-C abandons the line rather than the server: the way to
+            // stop is `stop`, which saves on the way out, and a stray Ctrl-C
+            // taking every world down unsaved would be an expensive twitch.
+            Err(rustyline::error::ReadlineError::Interrupted) => continue,
+            Err(rustyline::error::ReadlineError::Eof) => {
+                let _ = tx.send("stop".into());
+                break;
+            }
+            Err(e) => {
+                log::debug!("console closed ({e})");
+                break;
+            }
+        }
+    }
+    if let Some(path) = &history {
+        let _ = editor.save_history(path);
+    }
+}
+
+/// Where the typed history is kept, beside the rest of a user's data.
+#[cfg(feature = "server")]
+fn history_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))?;
+    let dir = home.join("conwayskingdom");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("console-history"))
+}
+
+/// Lines, with no editing and no prompt: a pipe, a file, or a terminal the
+/// editor could not take.
+#[cfg(feature = "server")]
+fn plain(tx: &mpsc::UnboundedSender<String>) {
+    use std::io::BufRead;
+    for line in std::io::stdin().lock().lines() {
+        match line {
+            Ok(line) => {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+            // Not UTF-8, or the terminal went away. Either way there is
+            // nothing more to read.
+            Err(_) => break,
+        }
+    }
+}
+
 /// Read the server's own terminal, a line at a time, on a thread of its own.
 ///
 /// A thread rather than `tokio::io::stdin`, whose reads are documented as not
@@ -89,17 +172,16 @@ fn read_console() -> mpsc::UnboundedReceiver<String> {
     std::thread::Builder::new()
         .name("console".into())
         .spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::stdin().lock().lines() {
-                match line {
-                    Ok(line) => {
-                        if tx.send(line).is_err() {
-                            break;
-                        }
-                    }
-                    // Not UTF-8, or the terminal went away. Either way there
-                    // is nothing more to read.
-                    Err(_) => break,
+            match rustyline::DefaultEditor::new() {
+                Ok(editor) => edited(editor, &tx),
+                // No terminal to edit: input is a pipe, a file, or systemd's
+                // /dev/null. Piped commands still have to work -- a script
+                // that says `echo rooms | server` is a reasonable thing to
+                // write -- so this falls back to reading lines rather than
+                // giving up on a console altogether.
+                Err(e) => {
+                    log::debug!("no line editor ({e}); reading plainly");
+                    plain(&tx);
                 }
             }
         })
