@@ -160,6 +160,22 @@ pub fn load(path: &Path) -> io::Result<Snapshot> {
         p.value = r.i32()?;
         let len = r.u16()? as usize;
         p.token = String::from_utf8_lossy(r.take(len)?).into_owned();
+        // Nobody is connected to a world that has just been read off a disk.
+        //
+        // `Player::new` is what a player *joins* with, and joining means being
+        // online, so a player rebuilt from a file came back marked connected
+        // and stayed that way. A player who is online cannot be returned to by
+        // their token -- that check is what stops two tabs being one player --
+        // so every player who was in the room when it was saved found their
+        // token refused on the next run and joined as somebody new, beside
+        // territory they could see and could not build on.
+        //
+        // Set here rather than at the call site because this is where a
+        // `Player` who never joined is built, and it is the file's business to
+        // hand back what it holds: the file holds a player's standing in a
+        // world, not the state of a connection that ended when the process
+        // did. `online` is not in the format for the same reason.
+        p.online = false;
         players.push(p);
     }
 
@@ -244,6 +260,23 @@ mod tests {
         assert_eq!(back.world.live_cells(), vec![(20, 5)]);
         assert_eq!(back.world.cell_at(20, 5).unwrap().player(), PlayerId(2));
         assert_eq!(back.players.len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A player read out of a file is not connected, whatever they were doing
+    /// when it was written. The flag is not in the format at all — it is a
+    /// fact about a socket, and the socket ended with the process.
+    #[test]
+    fn a_player_restored_from_a_file_is_not_online() {
+        let path = scratch("offline");
+        let mut alice = Player::new(PlayerId(2), "alice");
+        alice.token = "aaaa".into();
+        assert!(alice.online, "a player who joins is online");
+        save(&path, &World::toroidal_empty(3, 3), &[alice], 0).unwrap();
+
+        let back = load(&path).unwrap();
+        assert!(!back.players[0].online, "and one read off a disk is not");
+        assert_eq!(back.players[0].token, "aaaa", "but the token still is theirs");
         let _ = std::fs::remove_file(&path);
     }
 }

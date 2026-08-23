@@ -627,6 +627,41 @@ mod tests {
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
     }
 
+    /// And it has to survive the server closing, which is the case it was
+    /// failing.
+    ///
+    /// A player is not saved as online — the flag is not in the format — so
+    /// one rebuilt from a file came back marked connected, because
+    /// `Player::new` is what a player *joins* with. A player who is online
+    /// cannot be returned to by their token, that being what stops two tabs
+    /// becoming one player, so everybody who was in the room when it was
+    /// written found their token refused on the next run and joined as
+    /// somebody new, beside territory they could see and could not build on.
+    #[test]
+    fn a_token_survives_the_server_closing() {
+        let path = std::env::temp_dir()
+            .join(format!("ck-restart-{}.ckw", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut before = Server::named("arena", World::infinite_empty());
+        let (me, token) = before.join_with("alice", None).unwrap();
+        before.players.get_mut(&me).unwrap().value = 42;
+        assert!(before.players[&me].online, "connected while playing");
+        before.save(&path).unwrap();
+
+        // A new process, reading the file the old one left.
+        let mut after =
+            Server::load_or_new(&path, "arena", World::infinite_empty).unwrap();
+        assert!(!after.players[&me].online, "nobody is connected to a world off a disk");
+
+        let (back, same) = after.join_with("alice", Some(&token)).unwrap();
+        assert_eq!(back, me, "the token brings them back to their own number");
+        assert_eq!(same, token, "and the same secret, so it goes on working");
+        assert_eq!(after.players[&me].value, 42, "with what they had");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// The whole point of the token: a player who drops comes back to their
     /// own number, their own value and their own ground, rather than to a
     /// fresh number beside a patch they can see and cannot build on.
