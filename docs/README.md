@@ -8,6 +8,7 @@
 | [game.md](game.md) | Value, placement, ice, and the controls |
 | [networking.md](networking.md) | The protocol, prediction, and desync detection |
 | [server.md](server.md) | Running it, and the save format |
+| [planned.md](planned.md) | What is not built yet: a menu, rooms, auto-mining, stamps, and what each runs into |
 | [gotchas.md](gotchas.md) | Things that cost a day, so they only cost one |
 
 ## Running it
