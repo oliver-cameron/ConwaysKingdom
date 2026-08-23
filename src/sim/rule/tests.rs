@@ -103,6 +103,44 @@ fn not_inheriting_does_not_move_the_roll() {
     }
 }
 
+/// **Spread is a transfer, not only a gain.** `living_owners` collects the
+/// owner of every living neighbour whoever it belongs to, and the roll picks
+/// one of them — so a dead square of yours touching somebody else's life
+/// becomes theirs most generations.
+///
+/// Worth pinning because it is the only way the rule takes ground away with
+/// creep and decay at zero, and because reading `SPREAD` as "my ground
+/// spreads" is the natural mistake: it is creep that moves ownership across
+/// dead ground, and spread only ever acts on a square something is alive
+/// beside.
+#[test]
+fn ground_beside_somebody_elses_life_changes_hands() {
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    let mine = Cell::DEAD.with_player(me);
+
+    let mut theirs = [Cell::DEAD; 8];
+    theirs[0] = Cell::alive(them);
+    let taken = (0..640u64)
+        .filter(|&seed| next_cell(mine, &theirs, seed).player() == them)
+        .count();
+    // Out of sixty-four, so most generations but not all of them. A band
+    // rather than a figure: what is being pinned is that it happens and that
+    // the rate is the constant, not the exact output of the hash.
+    let expected = 640 * SPREAD as usize / crate::sim::seed::OUT_OF as usize;
+    assert!(
+        taken.abs_diff(expected) < 90,
+        "{taken} of 640 went to their owner, expected about {expected}"
+    );
+
+    // And a living neighbour of your own leaves it alone, which is why ground
+    // under your own life is held rather than churned.
+    let mut ours = [Cell::DEAD; 8];
+    ours[0] = Cell::alive(me);
+    for seed in 0..640 {
+        assert_eq!(next_cell(mine, &ours, seed).player(), me, "seed {seed}");
+    }
+}
+
 /// All three parents must be reachable, or "random" is a lie.
 #[test]
 fn every_parent_can_win() {

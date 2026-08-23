@@ -57,7 +57,14 @@ Both clients open on a **menu**: a name, a server, and — once that server has 
 
 The browser client needs no address; it derives its socket from the page's own origin. `?room=lobby` in the URL skips the menu and goes straight to that room, which is how a link takes somebody to a world.
 
-Rebuild the browser client with `wasm-pack build --target web`.
+Rebuild the browser client with `wasm-pack build --target web` — but **not while iterating**, because most of that wall clock is `wasm-opt` rather than the compiler. wasm-pack runs it over the whole module after wasm-bindgen, single-threaded and whole-program, and this module is large: wgpu, naga, winit and egui are all linked into it. It earns its ninety seconds for a build that ships, taking 12.1 MB down to 7.5 MB, and earns nothing for one served from localhost.
+
+```
+wasm-pack build --profiling --target web   # iterating: same codegen, no wasm-opt
+wasm-pack build --target web               # shipping
+```
+
+The `--profiling` profile is release codegen with the second optimiser switched off, in `[package.metadata.wasm-pack.profile.profiling]`.
 
 ## Testing
 
