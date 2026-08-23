@@ -33,7 +33,20 @@ default = ["render"]
 # neither wgpu nor winit compiled at all.
 render = ["dep:wgpu", "dep:winit", "dep:egui", "dep:egui-wgpu"]
 # The websocket server. Native only.
-server = ["dep:axum", "dep:tower-http", "server"]
+#
+# It cannot turn itself on for the `server` binary, and listing itself here is
+# a cyclic feature dependency that cargo refuses outright -- `cyclic feature
+# dependency: feature \`server\` depends on itself`, and nothing builds.
+# `required-features` is a gate rather than a switch: features resolve for the
+# whole package before a target is chosen, so there is nowhere for "building
+# this bin implies this feature" to live (rust-lang/cargo#1982).
+#
+# Making it a default feature would work and would break the browser: axum and
+# tower-http sit in plain `[dependencies]`, so `wasm-pack build` would try to
+# compile them for wasm32 where tokio's net stack does not build.
+#
+# `cargo serve` and `cargo server` in .cargo/config.toml are the shorthand.
+server = ["dep:axum", "dep:tower-http"]
 
 [dependencies]
 wgpu = { version = "30", optional = true }
