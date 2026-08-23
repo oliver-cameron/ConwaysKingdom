@@ -45,7 +45,7 @@ impl Reply {
 pub const HELP: &[(&str, &str)] = &[
     ("new NAME [ROWSxCOLS]", "make a room; wrapping if a size is given"),
     ("rooms", "what rooms there are, and who is in them"),
-    ("match new SHAPE [ROWSxCOLS] HOW N", "make a match: infinite|toroidal, timer|territory"),
+    ("match new NAME SHAPE [ROWSxCOLS] HOW N", "a match: infinite|toroidal, timer|territory"),
     ("match start NAME", "start that match's clock"),
     ("match dispatch", "start the one match that is waiting"),
     ("match", "what matches there are, and what they are doing"),
@@ -158,17 +158,18 @@ fn match_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
         }
 
         Some("new") => {
-            // shape [size] how n -- the size is there only for a torus, so the
-            // count of words is what says whether it was given.
-            let args = &rest[1..];
-            let (shape, how) = match args {
-                [shape, how, n] => (parse_shape(shape, None), Some((*how, *n))),
-                [shape, size, how, n] => (parse_shape(shape, Some(size)), Some((*how, *n))),
-                _ => (Err(String::new()), None),
+            // name shape [size] how n -- the size is there only for a torus,
+            // so the count of words is what says whether it was given.
+            let parsed = match &rest[1..] {
+                [name, shape, how, n] => Some((*name, parse_shape(shape, None), *how, *n)),
+                [name, shape, size, how, n] => {
+                    Some((*name, parse_shape(shape, Some(size)), *how, *n))
+                }
+                _ => None,
             };
-            let Some((how, n)) = how else {
+            let Some((name, shape, how, n)) = parsed else {
                 return Reply::say(
-                    "match new SHAPE [ROWSxCOLS] HOW N -- infinite|toroidal, timer|territory",
+                    "match new NAME SHAPE [ROWSxCOLS] HOW N -- infinite|toroidal, timer|territory",
                 );
             };
             let shape = match shape {
@@ -179,7 +180,7 @@ fn match_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
                 Ok(v) => v,
                 Err(e) => return Reply::say(e),
             };
-            match rooms.new_match(shape, victory) {
+            match rooms.new_match(name, shape, victory) {
                 Ok(name) => Reply::lines(vec![
                     format!("made \"{name}\", {}, {}", describe(shape), victory.describe()),
                     format!("  gathering; nothing steps until `match start {name}`"),
@@ -338,23 +339,23 @@ mod tests {
 
         assert!(out("match", &mut rooms).contains("no matches"));
 
-        let made = out("match new infinite timer 2000", &mut rooms);
-        assert!(made.contains("match-1"), "{made}");
+        let made = out("match new arena infinite timer 2000", &mut rooms);
+        assert!(made.contains("arena"), "{made}");
         assert!(made.contains("2000 generations"), "{made}");
         assert!(made.contains("gathering"), "{made}");
 
         // A gathering match does not step, which is what makes the opening
         // drawn rather than raced.
-        let before = rooms.get("match-1").unwrap().tick();
+        let before = rooms.get("arena").unwrap().tick();
         rooms.step();
-        assert_eq!(rooms.get("match-1").unwrap().tick(), before, "gathering holds still");
+        assert_eq!(rooms.get("arena").unwrap().tick(), before, "gathering holds still");
 
         assert!(out("match", &mut rooms).contains("gathering"));
         assert!(out("match dispatch", &mut rooms).contains("running"));
         assert!(out("match dispatch", &mut rooms).contains("no match is waiting"));
 
         rooms.step();
-        assert_eq!(rooms.get("match-1").unwrap().tick(), before + 1, "running steps");
+        assert_eq!(rooms.get("arena").unwrap().tick(), before + 1, "running steps");
         assert!(out("match", &mut rooms).contains("running"));
     }
 
@@ -364,15 +365,34 @@ mod tests {
     #[test]
     fn a_match_needs_a_shape_it_can_actually_build() {
         let mut rooms = rooms();
-        assert!(out("match new toroidal timer 10", &mut rooms).contains("needs a size"));
-        assert!(out("match new infinite 18x18 timer 10", &mut rooms).contains("no size to give"));
-        assert!(out("match new spherical timer 10", &mut rooms).contains("no world shape"));
-        assert!(out("match new infinite vibes 10", &mut rooms).contains("no win condition"));
-        assert!(out("match new infinite timer 0", &mut rooms).contains("over already"));
+        assert!(out("match new a toroidal timer 10", &mut rooms).contains("needs a size"));
+        assert!(out("match new a infinite 18x18 timer 10", &mut rooms).contains("no size to give"));
+        assert!(out("match new a spherical timer 10", &mut rooms).contains("no world shape"));
+        assert!(out("match new a infinite vibes 10", &mut rooms).contains("no win condition"));
+        assert!(out("match new a infinite timer 0", &mut rooms).contains("over already"));
 
-        let made = out("match new toroidal 18x18 territory 500", &mut rooms);
+        let made = out("match new a toroidal 18x18 territory 500", &mut rooms);
         assert!(made.contains("first to 500 squares"), "{made}");
         assert!(made.contains("wrapping"), "{made}");
+    }
+
+    /// A match is a room, so it is named like one and cannot take a name a
+    /// room already has — "make" that sometimes means "and empty it" is one
+    /// keystroke from destroying a world somebody is standing in.
+    #[test]
+    fn a_match_is_named_and_will_not_take_a_name_in_use() {
+        let mut rooms = rooms();
+        assert!(out("match new infinite timer 10", &mut rooms).contains("match new NAME"));
+
+        assert!(out("match new arena infinite timer 10", &mut rooms).contains("arena"));
+        let clash = out("match new arena infinite timer 10", &mut rooms);
+        assert!(clash.contains("already a room called"), "{clash}");
+        let over_a_room = out("match new main infinite timer 10", &mut rooms);
+        assert!(over_a_room.contains("already a room called"), "{over_a_room}");
+
+        // And the name is the one you join by and the one `start` takes.
+        assert!(rooms.get("arena").is_some());
+        assert!(out("match start arena", &mut rooms).contains("running"));
     }
 
     /// Two waiting matches make `dispatch` ambiguous, and starting the wrong
@@ -380,12 +400,12 @@ mod tests {
     #[test]
     fn dispatch_refuses_to_guess_between_two() {
         let mut rooms = rooms();
-        out("match new infinite timer 10", &mut rooms);
-        out("match new infinite timer 20", &mut rooms);
+        out("match new dawn infinite timer 10", &mut rooms);
+        out("match new dusk infinite timer 20", &mut rooms);
         let answer = out("match dispatch", &mut rooms);
         assert!(answer.contains("2 matches are waiting"), "{answer}");
-        assert!(answer.contains("match-1") && answer.contains("match-2"), "{answer}");
-        assert!(out("match start match-2", &mut rooms).contains("running"));
+        assert!(answer.contains("dawn") && answer.contains("dusk"), "{answer}");
+        assert!(out("match start dusk", &mut rooms).contains("running"));
         assert!(out("match dispatch", &mut rooms).contains("running"), "one left, so no guess");
     }
 }

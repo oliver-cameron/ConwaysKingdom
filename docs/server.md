@@ -62,14 +62,16 @@ A match is **not saved**. It is an event rather than a world to keep, and a half
 ### At the console
 
 ```
-match                                   what matches there are, and what they are doing
-match new infinite timer 2000           most ground after two thousand generations
-match new toroidal 18x18 territory 500  first to five hundred squares, on a wrapping world
-match start match-1                     start that one's clock
-match dispatch                          start the one that is waiting
+match                                        what matches there are, and what they are doing
+match new dawn infinite timer 2000           most ground after two thousand generations
+match new arena toroidal 18x18 territory 500 first to five hundred squares, wrapping
+match start dawn                             start that one's clock
+match dispatch                               start the one that is waiting
 ```
 
-The name is made rather than asked for — `match-1`, `match-2` — because a match is a thing that happens rather than a place people go back to. A torus without a size is refused rather than given a default: how big a wrapping world is, is most of what makes one match different from another, so guessing it would hide the important number. `dispatch` refuses to choose between two waiting matches, because starting the wrong one cannot be taken back.
+Named like any other room, because a match **is** one: that is the name people type to join it, the name `match start` takes, and the name it is listed under, so a generated one would be a second vocabulary for the same thing. A name a room already has is refused rather than reopened, for the reason `new` refuses one — "make" that sometimes means "and empty it" is one keystroke from destroying a world somebody is standing in.
+
+A torus without a size is refused rather than given a default: how big a wrapping world is, is most of what makes one match different from another, so guessing it would hide the important number. `dispatch` refuses to choose between two waiting matches, because starting the wrong one cannot be taken back.
 
 
 ## Players

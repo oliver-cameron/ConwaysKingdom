@@ -304,22 +304,26 @@ impl Rooms {
 
     /// Make a match: a room with a beginning, an end and a winner.
     ///
-    /// The name is made rather than asked for, because a match is a thing that
-    /// happens rather than a place people go back to — `match-1`, `match-2`,
-    /// counting past whatever is already here so a name is never reused while
-    /// its match is still on screen.
+    /// Named like any other room, because a match **is** a room and that is
+    /// the name people type to join it, the name `match start` takes, and the
+    /// name it is listed under. A generated one would be a second vocabulary
+    /// for the same thing.
+    ///
+    /// An existing name is refused rather than reopened, for the reason
+    /// [`Self::create`] refuses one: "make" that sometimes means "and empty
+    /// it" is one keystroke from destroying a world somebody is standing in.
     ///
     /// Not saved, so unlike [`Self::create`] there is no file to fail on.
     pub fn new_match(
         &mut self,
+        name: &str,
         shape: WorldKind,
         victory: Victory,
     ) -> Result<RoomName, String> {
-        let name = (1..)
-            .map(|n| format!("match-{n}"))
-            .find(|name| !self.rooms.contains_key(name.as_str()))
-            .expect("an unbounded range holds an unused name");
-        let name = crate::net::room_name(&name)?;
+        let name = crate::net::room_name(name)?;
+        if self.rooms.contains_key(&name) {
+            return Err(format!("there is already a room called \"{name}\""));
+        }
         let mut server = Server::named(name.clone(), shape.build());
         server.make_match(victory);
         log::info!("made match \"{name}\": {}", victory.describe());
