@@ -3,6 +3,18 @@
 
 <head>
   <meta charset="utf-8" />
+  <!-- Without this a mobile browser lays the page out at 980 CSS pixels, the
+       width it assumes a page written for desktops wants, and then scales the
+       result down to fit the screen: on a phone everything comes out at about
+       forty per cent and the HUD is unreadable. `device-width` says the page
+       knows what it is doing.
+
+       Scaling is pinned off because the game has a pinch of its own. Left on,
+       the browser's zoom and the world's fight over the same gesture, and the
+       one that wins is the one that got the event first. `touch-action: none`
+       on the canvas is the other half of that. -->
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>ConwaysKingdom</title>
   <style>
     html,

@@ -315,6 +315,11 @@ impl<A: App> ApplicationHandler for Harness<A> {
     }
 }
 
+/// The most device pixels per point the canvas will ask for. See
+/// `wanted_canvas_size` for why it is capped rather than followed.
+#[cfg(target_arch = "wasm32")]
+const MAX_PIXEL_RATIO: f64 = 2.0;
+
 /// The backing store the canvas ought to have, in physical pixels.
 ///
 /// A canvas has two sizes: the `width`/`height` attributes, which are the
@@ -330,7 +335,12 @@ fn wanted_canvas_size(window: &Window) -> Option<(u32, u32)> {
     use winit::platform::web::WindowExtWebSys;
 
     let (win, canvas) = (web_sys::window()?, window.canvas()?);
-    let dpr = win.device_pixel_ratio().max(1.0);
+    // Capped. A phone at three device pixels a point asks for nine times the
+    // fragments of one at a point apiece -- on an emulated iPhone that is a
+    // backing store of 2940x5004, fifteen million pixels to fill every frame
+    // for a picture made of flat 16x16 tiles. Two is past the point where
+    // anyone can see the difference in pixel art and costs less than half.
+    let dpr = win.device_pixel_ratio().clamp(1.0, MAX_PIXEL_RATIO);
     let (w, h) = (canvas.client_width(), canvas.client_height());
     if w <= 0 || h <= 0 {
         return None;

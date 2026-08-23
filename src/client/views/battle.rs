@@ -170,29 +170,17 @@ impl Drag {
             laid: 0,
         };
         if stroke == hotbar::Stroke::Pencil {
+            // The press marks where it landed whatever part of the cell it hit:
+            // you aimed at it. Everything after has to pass through a middle.
             drag.mark(cell);
         }
         drag
     }
 
     /// Note where the press has got to. `slop` is in the same physical pixels
-    /// the positions are, and `cell` is what is under it now.
-    fn reached(&mut self, px: (f64, f64), slop: f64, cell: (i32, i32)) {
+    /// the positions are.
+    fn reached(&mut self, px: (f64, f64), slop: f64) {
         self.moved |= travelled(self.from_px, px, slop);
-        if self.stroke != hotbar::Stroke::Pencil {
-            return;
-        }
-        // Every cell between the last one and this, not just this one. Pointer
-        // events arrive far apart when the hand moves quickly — a fast stroke
-        // can cross twenty cells between two of them — so a pencil that marked
-        // only where the pointer was reported would draw a dotted line.
-        let last = self.path.last().copied().unwrap_or(self.from);
-        for step in line(last, cell) {
-            if self.path.len() as i64 >= MAX_DRAG_CELLS {
-                return;
-            }
-            self.mark(step);
-        }
     }
 
     fn mark(&mut self, cell: (i32, i32)) {
@@ -221,27 +209,31 @@ impl Drag {
     }
 }
 
-/// The cells a straight line from `from` to `to` passes through, `from`
-/// excluded. Bresenham, so it is the same set whichever end it starts from.
-fn line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
-    let (mut r, mut c) = from;
-    let (dr, dc) = ((to.0 - r).abs(), -(to.1 - c).abs());
-    let (sr, sc) = (if r < to.0 { 1 } else { -1 }, if c < to.1 { 1 } else { -1 });
-    let mut err = dr + dc;
-    let mut out = Vec::new();
-    while (r, c) != to {
-        let e2 = 2 * err;
-        if e2 >= dc {
-            err += dc;
-            r += sr;
-        }
-        if e2 <= dr {
-            err += dr;
-            c += sc;
-        }
-        out.push((r, c));
-    }
-    out
+/// How much of a cell counts as being on it, across the middle.
+///
+/// The rest is a gap, and the gap is the point. Filling in every cell between
+/// one pointer position and the next drew a solid line: a hand crossing near a
+/// corner caught the cells either side of it, so a diagonal came out thick and
+/// a shape with holes in it could not be drawn at all. Requiring the pointer
+/// to pass through the middle of a cell instead makes a diagonal a diagonal —
+/// and a glider, which is five cells with holes between them, can be drawn in
+/// one stroke.
+///
+/// Too small and a careful stroke misses cells it plainly crossed; too large
+/// and the gaps close up and it is a solid line again.
+const CELL_COLLIDER: f32 = 0.55;
+
+/// The cell a world position is on, if it is far enough inside one to count.
+///
+/// Fractional cell coordinates in, so it is the same arithmetic at every zoom
+/// and can be tested without a camera to point at anything.
+fn cell_under((x, y): (f32, f32)) -> Option<(i32, i32)> {
+    let edge = (1.0 - CELL_COLLIDER) / 2.0;
+    let inside = |v: f32| {
+        let fraction = v - v.floor();
+        fraction >= edge && fraction <= 1.0 - edge
+    };
+    (inside(x) && inside(y)).then(|| (y.floor() as i32, x.floor() as i32))
 }
 
 /// Whether a press that landed at `from` and has reached `to` is a drag.
@@ -715,6 +707,40 @@ impl BattleApp {
         }
     }
 
+    /// Mark every cell the pointer passed through the middle of on its way
+    /// here.
+    ///
+    /// Sampled along the segment rather than read off its ends, because
+    /// pointer events arrive far apart when the hand moves quickly: a fast
+    /// stroke crosses several cells between two of them, and a pencil that
+    /// only marked where it was told would draw a dotted line. Sampling finely
+    /// enough not to step over a collider, and then counting only the cells
+    /// whose middle was actually crossed, is what draws a clean diagonal
+    /// rather than a thick one.
+    fn extend_stroke(&mut self, from_px: (f64, f64), to_px: (f64, f64)) {
+        if !matches!(&self.gesture, Gesture::Drawing(d) if d.stroke == hotbar::Stroke::Pencil) {
+            return;
+        }
+        // A quarter of a cell, so nothing narrower than a collider is stepped
+        // over, and bounded so a pointer that jumps the screen is not sampled
+        // a quarter-cell at a time all the way across it.
+        let step = (self.camera.zoom as f64 / 4.0).max(1.0);
+        let (dx, dy) = (to_px.0 - from_px.0, to_px.1 - from_px.1);
+        let samples = ((dx.hypot(dy) / step).ceil() as usize).clamp(1, 512);
+
+        for i in 1..=samples {
+            let t = i as f64 / samples as f64;
+            let at = (from_px.0 + dx * t, from_px.1 + dy * t);
+            let Some(cell) = cell_under(self.camera.cell_at_f(at)) else { continue };
+            if let Gesture::Drawing(drag) = &mut self.gesture {
+                if drag.full() {
+                    return;
+                }
+                drag.mark(cell);
+            }
+        }
+    }
+
     /// Lay down whatever the pencil has crossed since the last frame.
     ///
     /// Priced and refused a batch at a time, so a stroke that runs out of
@@ -1182,13 +1208,15 @@ impl App for BattleApp {
     }
 
     fn on_cursor(&mut self, x: f64, y: f64) {
-        let (dx, dy) = (x - self.cursor.0, y - self.cursor.1);
+        let was = self.cursor;
+        let (dx, dy) = (x - was.0, y - was.1);
         self.cursor = (x, y);
         self.hovering = true;
 
-        let (slop, cell) = (self.slop(), self.cell_under_cursor((x, y)));
+        let slop = self.slop();
         if let Gesture::Drawing(drag) = &mut self.gesture {
-            drag.reached((x, y), slop, cell);
+            drag.reached((x, y), slop);
+            self.extend_stroke(was, (x, y));
         } else if self.is_panning() {
             self.camera.pan_by_pixels(dx, dy);
         }
@@ -1295,13 +1323,15 @@ impl App for BattleApp {
             return;
         }
 
+        let was = self.cursor;
         self.cursor = at;
         self.touch_count = self.touches.len();
-        let (slop, cell) = (self.slop(), self.cell_under_cursor(at));
+        let slop = self.slop();
         if matches!(phase, P::Started) {
             self.begin_drawing(at);
         } else if let Gesture::Drawing(drag) = &mut self.gesture {
-            drag.reached(at, slop, cell);
+            drag.reached(at, slop);
+            self.extend_stroke(was, at);
         }
     }
 
@@ -1496,7 +1526,7 @@ mod tests {
     fn a_slow_sweep_is_a_drag() {
         let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
         for step in 1..=60 {
-            drag.reached((100.0 + step as f64, 100.0), DRAG_SLOP, (0, 0));
+            drag.reached((100.0 + step as f64, 100.0), DRAG_SLOP);
             assert!(
                 !drag.moved || step as f64 > DRAG_SLOP,
                 "a press should not become a drag inside the slop"
@@ -1511,7 +1541,7 @@ mod tests {
     fn a_shaky_press_is_a_click() {
         let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
         for at in [(102.0, 100.0), (98.0, 101.0), (100.0, 98.0), (101.0, 101.0)] {
-            drag.reached(at, DRAG_SLOP, (0, 0));
+            drag.reached(at, DRAG_SLOP);
         }
         assert!(!drag.moved);
     }
@@ -1521,8 +1551,8 @@ mod tests {
     #[test]
     fn a_drag_does_not_become_a_click_again() {
         let mut drag = Drag::begin((100.0, 100.0), (0, 0), hotbar::Stroke::Rectangle);
-        drag.reached((400.0, 400.0), DRAG_SLOP, (0, 0));
-        drag.reached((100.0, 100.0), DRAG_SLOP, (0, 0));
+        drag.reached((400.0, 400.0), DRAG_SLOP);
+        drag.reached((100.0, 100.0), DRAG_SLOP);
         assert!(drag.moved);
     }
 
@@ -1535,22 +1565,41 @@ mod tests {
         assert!(span((0, 0), (i32::MAX, i32::MAX)).0 > MAX_DRAG_CELLS);
     }
 
-    /// A pencil that only marked where the pointer was reported would draw a
-    /// dotted line: events arrive far apart when the hand moves quickly. Every
-    /// step must touch the one before it.
+    /// A cell is only marked when the pointer passes through the middle of
+    /// it, and the gap around that middle is what lets a diagonal be drawn.
+    ///
+    /// Filling in every cell between one position and the next caught both
+    /// cells either side of a corner, so a diagonal came out thick and a shape
+    /// with holes in it could not be drawn at all.
     #[test]
-    fn a_line_has_no_gaps() {
-        for to in [(9, 2), (2, 9), (-7, 4), (0, 5), (5, 0), (-3, -8)] {
-            let cells = line((0, 0), to);
-            assert_eq!(*cells.last().unwrap(), to, "should arrive at {to:?}");
-            let mut previous = (0, 0);
-            for &at in &cells {
-                let step = ((at.0 - previous.0).abs(), (at.1 - previous.1).abs());
-                assert!(step.0 <= 1 && step.1 <= 1, "jumped from {previous:?} to {at:?}");
-                previous = at;
-            }
-        }
-        assert!(line((3, 3), (3, 3)).is_empty(), "going nowhere marks nothing");
+    fn only_the_middle_of_a_cell_counts() {
+        assert_eq!(cell_under((4.5, 7.5)), Some((7, 4)), "dead centre");
+        assert_eq!(cell_under((4.02, 7.5)), None, "barely inside the left edge");
+        assert_eq!(cell_under((4.5, 7.98)), None, "barely inside the bottom");
+        assert_eq!(cell_under((4.98, 7.02)), None, "a corner, which is the case");
+
+        // Negative coordinates behave the same: the world has no origin.
+        assert_eq!(cell_under((-3.5, -8.5)), Some((-9, -4)));
+        assert_eq!(cell_under((-3.02, -8.5)), None);
+    }
+
+    /// A diagonal sweep marks the cells it crosses the middle of and not the
+    /// ones either side, which is what draws a glider rather than a wedge.
+    #[test]
+    fn a_diagonal_sweep_marks_a_diagonal() {
+        let marked: Vec<(i32, i32)> = (0..=40)
+            .filter_map(|i| {
+                let t = i as f32 / 10.0;
+                cell_under((0.5 + t, 0.5 + t))
+            })
+            .collect();
+        let mut unique: Vec<(i32, i32)> = marked.clone();
+        unique.dedup();
+        assert_eq!(
+            unique,
+            vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)],
+            "a clean diagonal, with nothing beside it"
+        );
     }
 
     /// A stroke that crosses itself must list each cell once. The pricing
@@ -1560,8 +1609,8 @@ mod tests {
     fn a_stroke_that_crosses_itself_lists_each_cell_once() {
         let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil);
         // Out along a row, back along it, and out again.
-        for cell in [(0, 6), (0, 0), (0, 6)] {
-            drag.reached((100.0, 100.0), DRAG_SLOP, cell);
+        for col in (0..=6).chain((0..=5).rev()).chain(1..=6) {
+            drag.mark((0, col));
         }
         let unique: std::collections::HashSet<_> = drag.path.iter().collect();
         assert_eq!(unique.len(), drag.path.len(), "a cell is listed twice");
@@ -1573,7 +1622,12 @@ mod tests {
     #[test]
     fn a_stroke_stops_at_its_limit() {
         let mut drag = Drag::begin((0.0, 0.0), (0, 0), hotbar::Stroke::Pencil);
-        drag.reached((100.0, 100.0), DRAG_SLOP, (0, MAX_DRAG_CELLS as i32 * 2));
+        for col in 0..MAX_DRAG_CELLS as i32 * 2 {
+            if drag.full() {
+                break;
+            }
+            drag.mark((0, col));
+        }
         assert!(drag.full());
         assert_eq!(drag.path.len() as i64, MAX_DRAG_CELLS);
     }
