@@ -31,7 +31,9 @@ use tower_http::services::ServeDir;
 
 use crate::net::codec::{decode_client, encode_server};
 use crate::net::{ClientMessage, RoomName, ServerMessage};
+use crate::server::console;
 use crate::server::rooms::{Rooms, Seat};
+use crate::sim::WorldKind;
 
 /// What a connection sends to the simulation task.
 enum ToSim {
@@ -64,6 +66,78 @@ pub struct Config {
     /// which [`Rooms`] already knows.
     pub save_every: Duration,
     pub generation_span: Duration,
+    /// What shape a room made from the console gets when it is not given one.
+    /// The same shape the command line asked for, so `new arena` means what
+    /// `--room arena` would have meant.
+    pub shape: WorldKind,
+}
+
+/// Read the server's own terminal, a line at a time, on a thread of its own.
+///
+/// A thread rather than `tokio::io::stdin`, whose reads are documented as not
+/// cancellation-safe: a pending read dropped inside a `select!` swallows the
+/// line it was in the middle of, so a command would go missing whenever a
+/// generation ticked at the wrong moment. A blocking read on its own thread
+/// has no such problem, and a channel receiver is cancel-safe.
+///
+/// Returns `None` when there is no terminal to read — a server under systemd,
+/// or one started with `< /dev/null`. That is the ordinary case for a server
+/// nobody is sitting at, not a failure, and it must not turn into a loop that
+/// spins on end-of-file.
+fn read_console() -> mpsc::UnboundedReceiver<String> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    std::thread::Builder::new()
+        .name("console".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::stdin().lock().lines() {
+                match line {
+                    Ok(line) => {
+                        if tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                    // Not UTF-8, or the terminal went away. Either way there
+                    // is nothing more to read.
+                    Err(_) => break,
+                }
+            }
+        })
+        .expect("spawning the console thread");
+    rx
+}
+
+/// Everything that means "stop now".
+///
+/// Ctrl-C is SIGINT and is what a person at a terminal sends. **SIGTERM is
+/// what everything else sends** — `kill`, `systemctl stop`, `docker stop`,
+/// a `timeout` in a script — and listening only for the first meant every one
+/// of those killed the process outright, taking up to `save_every` of every
+/// room with it. The one that a person is least likely to use is the one that
+/// matters most, because it is how a server is stopped when nobody is
+/// watching.
+async fn signalled() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(term) => term,
+            Err(e) => {
+                log::error!("cannot listen for SIGTERM ({e}); ctrl-c only");
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => log::info!("interrupted"),
+            _ = term.recv() => log::info!("terminated"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        log::info!("interrupted");
+    }
 }
 
 /// Run until the process is asked to stop, saving on the way out.
@@ -74,16 +148,70 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     let sim_broadcast = broadcast_tx.clone();
     let save_every = config.save_every;
     let span = config.generation_span;
+    let shape = config.shape;
 
-    // The one task that touches the world.
+    // Three things say stop -- a signal, a `stop` typed at the console, and
+    // the connections all going away -- and they must all mean the same
+    // thing, or one of them is a shutdown that does not save. A `watch` rather
+    // than a `Notify`: it remembers, so a waiter that arrives after the signal
+    // still sees it, and it has as many receivers as there are things to stop.
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let stop_rx_for_http = stop_tx.subscribe();
+    let signal_stop = stop_tx.clone();
+    tokio::spawn(async move {
+        signalled().await;
+        let _ = signal_stop.send(true);
+    });
+
+    // The one task that touches the world -- and now the console too, because
+    // making a room is touching one and there is exactly one place that is
+    // allowed to.
     let sim = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(span);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut save_timer = tokio::time::interval(save_every);
         save_timer.tick().await; // the first tick is immediate; skip it
+        let mut console = Some(read_console());
 
         loop {
             tokio::select! {
+                // Asked to stop, by a signal or by somebody typing it.
+                _ = stop_rx.changed() => break,
+
+                // Typed at the server's own terminal. Guarded, because once
+                // there is no terminal the receiver is closed and would
+                // otherwise answer instantly and forever.
+                typed = async {
+                    match console.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        // Unreachable under the guard below, which select!
+                        // evaluates before it polls this. Never-ready rather
+                        // than a panic anyway: a branch that cannot fire is
+                        // worth expressing as one, not as a crash if the order
+                        // ever changed.
+                        None => std::future::pending().await,
+                    }
+                }, if console.is_some() => {
+                    match typed {
+                        Some(line) => {
+                            let reply = console::run(&line, &mut rooms, shape);
+                            for line in reply.lines {
+                                println!("{line}");
+                            }
+                            if reply.stop {
+                                let _ = stop_tx.send(true);
+                                break;
+                            }
+                        }
+                        // No terminal: a server under systemd, or one started
+                        // with `< /dev/null`. Ordinary, not a failure.
+                        None => {
+                            console = None;
+                            log::debug!("no console; running headless");
+                        }
+                    }
+                }
+
                 // Every room advances on the same clock. Separate worlds, but
                 // one generation span: a room with its own rate would be a
                 // second thing for a client to be told and a second way for
@@ -103,6 +231,8 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                 }
                 incoming = from_conns.recv() => {
                     match incoming {
+                        // Every sender is gone, so the router has been
+                        // dropped and nothing more can arrive.
                         None => break,
                         Some(ToSim::Left(seat)) => rooms.leave(&seat),
                         Some(ToSim::Message { from, msg, reply }) => {
@@ -173,10 +303,21 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
             log::warn!("IPv4 only; a client arriving over IPv6 will be refused");
         }
     }
+    // The console is only worth mentioning where there is one to type at.
+    log::info!("console: type `help` for commands, `stop` to shut down");
+
+    let mut http_stop = stop_rx_for_http;
     let served = axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            log::info!("shutting down");
+        .with_graceful_shutdown(async move {
+            // Any of the three: a signal, `stop` typed at the console, or the
+            // simulation task ending of its own accord. One place to wait
+            // rather than three, so a shutdown started from anywhere drains
+            // connections the same way.
+            let _ = http_stop.changed().await;
+            // Not "shutting down": that has already been said, by whichever
+            // of the three asked for it. This is the part that is only about
+            // the socket.
+            log::info!("closing connections");
         })
         .await;
 

@@ -47,6 +47,45 @@ leave: PlayerId(1) "late" from room lobby after 10 ticks (0 still on)
 
 The subscribe line is the useful one when a client sees nothing: it says whether the viewport is even pointed somewhere the server has data.
 
+## The console
+
+The server reads its own terminal. `help` lists what it takes:
+
+```
+  new NAME [ROWSxCOLS]   make a room; wrapping if a size is given
+  rooms                  what rooms there are, and who is in them
+  stop                   save every room and shut down
+  help                   this
+```
+
+`new` exists because a room was declared on the command line and there was no way to make one afterwards, so adding a world meant restarting — which disconnects everybody in every *other* world to add one nobody is in yet. A room made this way is **saved before anything is in it**: one that lived only in memory until the next periodic save would vanish on a crash, and the person who made it would have no way to tell whether it had ever been real.
+
+The size argument is the first per-room shape there is. `--torus` applies to every room a run creates, so a server could not offer a wrapping world and a boundless one side by side; `new ring 18x18` can. Without a size a room gets whatever the command line asked for, so `new arena` means what `--room arena` would have meant.
+
+An existing name is refused rather than reopened, because "create" that sometimes means "and empty it" is one keystroke from destroying a world somebody is standing in. A name that is not a room name is refused with the same rule a join is refused by.
+
+**Parsing and doing are in `server::console`; reading is not.** `console::run` takes a line and the `Rooms` and returns what to print, which is the only way any of it can be tested — a terminal is not something a test has. The reading is a thread of its own in `server::ws`, not `tokio::io::stdin`, whose reads are documented as not cancellation-safe: a pending read dropped inside a `select!` swallows the line it was in the middle of, so a command would go missing whenever a generation ticked at the wrong moment.
+
+Commands run on the **simulation task**, because making a room is touching the worlds and there is exactly one place allowed to do that.
+
+Answers go to stdout rather than to the log. A log line is something that happened; the answer to a question somebody typed is neither a warning nor a record, and routing it through the logger would let a quiet log level swallow the reply to a command.
+
+A server with no terminal — under systemd, or started with `< /dev/null` — reads end-of-file, drops the console and runs on. That is the ordinary case for a server nobody is sitting at, so it is not a failure, and it must not become a loop that spins on end-of-file: the branch is guarded, and a headless server idles under one per cent of a core.
+
+## Stopping
+
+Three things mean stop, and they all mean the same thing:
+
+| | |
+|---|---|
+| **SIGINT** | ctrl-C, what a person at a terminal sends |
+| **SIGTERM** | `kill`, `systemctl stop`, `docker stop`, `timeout` in a script |
+| `stop` | typed at the console |
+
+SIGTERM is the one that matters most and the one a person is least likely to use, because it is how a server is stopped when nobody is watching. Listening only for ctrl-C meant every one of those killed the process outright, taking up to `save_every` of every room with it.
+
+They meet at one `tokio::sync::watch` channel — a `watch` rather than a `Notify` because it remembers, so a waiter that arrives after the signal still sees it, and it has as many receivers as there are things to stop. The HTTP server drains connections on it and the simulation task breaks its loop and saves.
+
 ## Saving
 
 Every 30 seconds and on a clean shutdown, every room at once. Writes go to a temporary beside the target and are renamed into place, so a crash mid-write cannot leave a half-written world where the real one was.
@@ -57,7 +96,7 @@ A player record carries their token, so a restart does not hand every returning 
 
 A missing file starts fresh. A corrupt or mismatched one is an **error** naming the room that failed, not a silent reset — discarding a world is the worst possible response to a bad read, and with several of them "cannot read the world" no longer says which. A file in the directory that is not a room name is skipped with a warning rather than opened: refusing to start over one stray name would take every other world down with it. One room failing to save does not stop the others, for the same reason.
 
-The shutdown save is **waited for**, not aborted. The simulation task saves after its loop, and the loop only ends once every sender is gone; `sim.abort()` cancelled it at its next await point, which is inside the loop, so the save never ran and a clean exit quietly lost up to thirty seconds of every room. The wait is bounded at ten seconds, because a shutdown that does not shut down is worse than one that loses a save it warned about.
+The shutdown save is **waited for**, not aborted. The simulation task saves after its loop; `sim.abort()` cancelled it at its next await point, which is inside the loop, so the save never ran and a clean exit quietly lost up to thirty seconds of every room. The wait is bounded at ten seconds, because a shutdown that does not shut down is worse than one that loses a save it warned about.
 
 ### The `.ckw` format
 

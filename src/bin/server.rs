@@ -16,8 +16,11 @@
 //! A room is a whole separate world. `--room` declares one; every `<name>.ckw`
 //! already in the rooms directory is one too, so a restart keeps what a
 //! previous run was asked for. Joining a name nobody declared is refused, and
-//! the refusal says what is actually here — until there is a menu, that reply
-//! is how a player finds out.
+//! the refusal says what is actually here.
+//!
+//! The server reads its own terminal as well: `help` lists the commands,
+//! `new NAME [ROWSxCOLS]` makes a room without a restart, and `stop` saves
+//! every room and shuts down. So do SIGINT and SIGTERM.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -157,6 +160,9 @@ fn main() -> std::io::Result<()> {
             static_dir,
             save_every: Duration::from_secs(30),
             generation_span: span,
+            // What `new NAME` at the console makes when it is not given a
+            // size, so typing it means what --room would have meant.
+            shape,
         },
     ))
 }

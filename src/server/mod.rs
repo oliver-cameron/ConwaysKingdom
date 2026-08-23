@@ -12,6 +12,7 @@
 //! replies, so whatever carries the bytes is somebody else's problem;
 //! [`ws`] is what carries them today.
 
+pub mod console;
 pub mod persist;
 pub mod rooms;
 #[cfg(feature = "server")]

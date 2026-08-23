@@ -263,6 +263,37 @@ impl Rooms {
         }
     }
 
+    /// Make a room while the server is running.
+    ///
+    /// The shape is per room, which the command line cannot say: `--torus`
+    /// applies to every room a run creates, so a server could not offer a
+    /// wrapping world and a boundless one side by side. Made here it can.
+    ///
+    /// **Saved at once**, before anything is in it. A room that existed only
+    /// in memory until the next periodic save would vanish on a crash, and
+    /// the person who made it would have no way to tell whether it had ever
+    /// been real — worse than a failure, which at least says so.
+    ///
+    /// An existing name is refused rather than reopened. "Create" that
+    /// sometimes means "and empty it" is one keystroke from destroying a world
+    /// somebody is standing in.
+    pub fn create(&mut self, name: &str, shape: WorldKind) -> Result<RoomName, String> {
+        let name = crate::net::room_name(name)?;
+        if self.rooms.contains_key(&name) {
+            return Err(format!("there is already a room called \"{name}\""));
+        }
+        let server = Server::named(name.clone(), shape.build());
+        let path = save_path(&self.dir, &name);
+        if !self.dir.as_os_str().is_empty() {
+            server
+                .save(&path)
+                .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        }
+        log::info!("created room \"{name}\"");
+        self.rooms.insert(name.clone(), server);
+        Ok(name)
+    }
+
     /// Every room, as a menu needs to see it.
     ///
     /// In name order, because `rooms` is a `BTreeMap` and a listing that
@@ -569,6 +600,42 @@ mod tests {
             panic!("expected a welcome, got {replies:?}");
         };
         assert_eq!(*world, WorldKind::Toroidal { rows: 4, cols: 6 });
+    }
+
+    /// A room made while the server runs is a room, on disk immediately, and
+    /// the shape is its own rather than the one the server was started with.
+    #[test]
+    fn a_room_can_be_made_while_the_server_is_running() {
+        let dir = temp_dir("create");
+        let mut rooms = Rooms::open(&dir, &[], WorldKind::Infinite, true).unwrap();
+        assert_eq!(rooms.names().collect::<Vec<_>>(), [DEFAULT_ROOM]);
+
+        let made = rooms.create("Arena", WorldKind::Toroidal { rows: 4, cols: 4 }).unwrap();
+        assert_eq!(made, "arena", "names fold to lowercase, as they do on a join");
+        assert_eq!(rooms.names().collect::<Vec<_>>(), ["arena", DEFAULT_ROOM]);
+        assert_eq!(
+            rooms.get("arena").unwrap().world().kind(),
+            WorldKind::Toroidal { rows: 4, cols: 4 },
+            "its own shape, not the one the server was started with"
+        );
+        assert_eq!(rooms.resolve(Some("arena")).unwrap(), "arena", "and joinable at once");
+
+        // On disk before anything is in it, so a crash does not take a room
+        // somebody was told they had made.
+        assert!(dir.join("arena.ckw").exists());
+
+        // A name that is not one, and a name already taken, are both refused
+        // rather than silently doing something else.
+        assert!(rooms.create("../escape", WorldKind::Infinite).is_err());
+        let taken = rooms.create("arena", WorldKind::Infinite).unwrap_err();
+        assert!(taken.contains("already"), "{taken}");
+        assert_eq!(
+            rooms.get("arena").unwrap().world().kind(),
+            WorldKind::Toroidal { rows: 4, cols: 4 },
+            "and the refusal left the existing world alone"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A file that is not a room must not stop the server, and must not become

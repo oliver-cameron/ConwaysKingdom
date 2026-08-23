@@ -35,6 +35,8 @@ A save is authoritative, so the shape a `--torus` asks for only applies to rooms
 
 A room opens empty. There is no seeded pattern: the first life arrives with the first player, who is granted ground and a block on joining.
 
+The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
+
 `--world PATH` is gone. A world is now one room among several, saved under its room's name, so the flag says a thing that no longer has a meaning; passing it is an error that says what to do instead. The file format is unchanged, so an old `world.ckw` becomes a room by moving it to `rooms/main.ckw`.
 
 ### The client
