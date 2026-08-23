@@ -56,6 +56,14 @@ What is left is numbers rather than mechanism.
 
 **The remedy for a corpse gets dearer the longer it is left.** A dead turret is cleared by building on it — placing life sets the kind back to ordinary, as it does over a dead mine — and what the corpse is doing is taking your ground away a square at a time, so the square you need to build on stops being yours and the fix goes from one to ten. That may be exactly the right shape and it has not been played enough to say.
 
+**A turret should not also kill, and the reason is that a claim is contested and a kill is not.** Ground a turret takes is taken straight back by `SPREAD` at forty in sixty-four, which is why it cannot touch ground anything is alive on and why one square a generation is nearly nothing. Nothing does that to a kill: a dead cell stays dead unless Conway hands it back. So the same "one a generation, forever" that is almost nothing for claiming is decisive for killing — and a turret is a **still life**, four cells, immortal, free after purchase and unreachable without flying something into it. A block of them killing four cells a generation forever is not a territory tool, it is area denial with no answer.
+
+It would also cost the two things that make a turret readable. The dead turret's kill is not a rule about killing — it is the `Cell::alive` invariant showing through, since unowning a live square kills what stands on it — and that reads as a mirror only while the live turret does not kill. And a turret inside its owner's ground idles, which is what makes it a frontier piece placed without a rule about placement; one that kills always has something to shoot at, and that goes.
+
+So: **another kind**, and the interesting question is what powers it, because "stands there and fires" is exactly what the turret does and exactly what should not have a kill attached. The shape that fits this game is a kind that spends a **birth** — a cell that, when one of its kind is born, kills the nearest enemy life. Its rate is then your pattern's birth rate, which is what the game already rewards building; a gun feeds it and a block does not; and it is counted where `Halo::step_into` already counts a mine's births, holding each cell before and after in one breath. That makes killing something you run a machine for rather than something you park.
+
+Worth saying out loud first: **Conway already has a weapon.** A glider is five cells and one gesture and it kills what it hits. Whatever this kind turns out to be has to be worth more than that, or it is a button for a thing players can already do.
+
 **The art is a stand-in** like the rest of the sheet: the ordinary cell with a solid plus stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 8–11 with the mine's own mark colours so the two read as siblings. It is legible against all four states and in any player's hue, and it is not what anybody would draw on purpose.
 
 ## Stamps
@@ -73,6 +81,46 @@ What is left:
 **Rotation and mirroring**, and what to do when a stamp will not fit inside your territory: refuse it whole, as it does now, or place the part that fits.
 
 **Naming.** A stamp is called `3x4` because nothing has asked what it is. The library is where a name would be typed, and the shape beside it already does most of the work a name would.
+
+## Matches
+
+**Nothing built.** A lobby, everyone starting at once, a timer, and the most territory at the whistle. What follows is the shape it takes on what is already here and the three things that have to be decided before any of it is written.
+
+**A match is a room with a lifecycle**, and that is the whole of the architecture. Rooms are already separate worlds with their own players, tick, value and file; what a match adds is a phase — gathering, running, finished — and a deadline. It needs nothing in `sim`. The simulation does not know what a match is, the same way it does not know what money is, and that boundary is worth more than any convenience of breaking it.
+
+The deadline is a **tick**, not a wall clock. The tick is the generation and it is already what a client adopts from `Welcome`, so a match that ends at tick N needs no clock synchronisation, cannot be lengthened by a client that pauses, and is the same instant for everybody by construction.
+
+### Where the first value comes from
+
+**A starting value of zero currently leaves nobody anything to do.** Life costs one and zero buys none of it. The grant is a 2×2 block, which is a still life: it never gives birth, so even a block of mines earns nothing — `game.md` calls that the honest edge case. A match that starts everyone at zero under the present rules is one where nobody can ever act. This is the decision to make first, and there are three candidates.
+
+**Territory pays**, and this is the recommendation. Value per generation in proportion to ground held. It makes the win condition and the economy the same thing: you are paid for exactly what you are scored on, every player has income from their grant in the first generation, and the whole match is a fight over ground rather than over where to put mines. It also falls the right way at the end — a player losing ground earns less and falls further behind, which is what a match wants and a sandbox does not.
+
+**A grant that earns.** Start people on an oscillator of mines rather than a block of life: a blinker gives births every other generation, so a blinker of mines is an income. A smaller change, and it makes the first decision "what do I build" rather than "how do I get money". It does not tie the economy to the score.
+
+**A stipend**, a flat income per generation. Simplest and says nothing — a clock rather than a game.
+
+### Scoring
+
+Nothing counts ground per player. The `territory` example's `survey` does it for one player by walking every stored chunk, and a scoreboard is that for all thirty-one: one pass over the world, the same cost as `ice_cells` or `turrets`, of which there are already two a generation. Fine once a second, not fine every step.
+
+It must also be the **same number for everyone**, and a client cannot compute it — it only holds the chunks it subscribed to, so it can count its own screen and nothing else. So the server counts and broadcasts, which is a new message and the first thing in the protocol that is about a match rather than about a world.
+
+### What a scored match does to `HOME`
+
+Granted ground never decays, so a player whose life is wiped out still holds their patch and still scores for it at the whistle. In a sandbox that is a floor that keeps them playing; in a match it is points for having turned up. Either home stops being exempt once a match is running, or it stops counting toward the score — the second is the smaller change and keeps the floor doing its job.
+
+### What the lobby actually buys
+
+More than it looks. Grants are laid out on a fixed grid at a fixed pitch sized for thirty-one players, whether two turn up or twenty, and `spawn_for` derives a position from a player number alone. With the roster known before the world starts, the grid can be packed to the players actually in it — everybody the same distance from their neighbours, and no advantage in having joined early or late. That is a change to `spawn_for`, and it is the one place a match touches something that already works.
+
+### What is left over
+
+A finished match should stop stepping, which is the same machinery as the sleeping rooms above and has the same trap: the tick is what a returning client adopts, so a room that stops must not look like one that never ran.
+
+Reconnecting matters more here than in a sandbox — a refresh in the middle of a match has to put you back in your seat, which the rejoin token now does across a server restart as well.
+
+And a player who cannot afford anything is a player watching. With a zero start that is the opening position for everybody, so whatever the income turns out to be, it wants to arrive before the first decision rather than after it.
 
 ## Mobile
 
