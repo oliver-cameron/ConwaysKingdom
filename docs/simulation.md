@@ -81,9 +81,9 @@ Ice is cleared on a birth because a parent may be *under a pane* and still count
 
 ### Mines, and what the rule counts
 
-`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner for every generation one of its corpses **lies there** — `rule::MINE_UPKEEP`, sixteen times in sixty-four. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
+`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner **once** for each corpse it leaves — `rule::MINE_UPKEEP`, sixteen times in sixty-four, and when the charge falls due the square loses its kind and is ordinary ground. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
 
-Note what `upkeep` counts. Not deaths — charges falling due. A square is counted many times over its life as a corpse, and a square that dies and is never counted is possible too.
+Note what `upkeep` counts. Not deaths — charges falling due. A corpse reborn before its charge lands escapes it entirely, which is the whole of why a blinker pays and a glider does not: one re-uses its ground and the other abandons it.
 
 Counted inside `Halo::step_into`, which is the one place that holds a cell before and after in the same breath, so it costs a comparison and no second pass over the world. The tally is returned rather than applied, because a world holds cells and not purses: the server folds it into the authoritative values and a client folds it into its predicted one.
 

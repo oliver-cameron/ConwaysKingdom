@@ -6,7 +6,9 @@
 use std::cell::RefCell;
 
 use crate::render::app::App;
-use super::{camera, hotbar, hud, menu, overlay, Views};
+use super::words;
+use super::{camera, hotbar, hud, menu, overlay, stamp, Views};
+use hotbar::{Held, Key};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -388,8 +390,12 @@ pub struct BattleApp {
     value: i32,
     /// A finished gesture waiting to be resolved to cells.
     pending: Option<Pending>,
-    /// Which hotbar slot is selected.
-    slot: usize,
+    /// What the hotbar is holding.
+    held: Held,
+    /// Every pattern captured so far.
+    stamps: stamp::Library,
+    /// Whether the stamps that did not fit on the bar are on screen.
+    picking_stamp: bool,
 }
 
 impl BattleApp {
@@ -451,14 +457,14 @@ impl BattleApp {
 
     /// Start drawing, with the shape the held slot lays.
     fn begin_drawing(&mut self, at: (f64, f64)) {
-        let stroke = hotbar::SLOTS[self.slot].stroke;
+        let stroke = self.held.stroke();
         self.gesture = Gesture::Drawing(Drag::begin(at, self.camera.cell_at(at), stroke));
     }
 
     /// Whether what the hotbar holds is already on this cell. Taking it away
     /// would change something, which is exactly what "already there" means.
     fn already_there(&self, row: i32, col: i32) -> bool {
-        let placement = hotbar::SLOTS[self.slot].placement;
+        let Some(placement) = self.held.placement() else { return false };
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
         placement.remove_from(existing) != existing
     }
@@ -761,7 +767,7 @@ impl BattleApp {
                 // message names.
                 Screen::Menu(m) => {
                     let address = m.address.clone();
-                    self.show_menu(menu::Stage::Failed(format!("no server answered at {address}")));
+                    self.show_menu(menu::Stage::Failed(words::menu::no_answer(&address)));
                 }
                 // Mid-game. The simulation is deterministic, so the world
                 // carries on locally rather than stopping -- offline is a
@@ -793,10 +799,7 @@ impl BattleApp {
         // stop somewhere the hand did not, and the player would be left
         // working out where it ran out and why.
         if self.value + delta < 0 {
-            self.notice = Some(format!(
-                "{count} cells costs {}, you have {}",
-                -delta, self.value
-            ));
+            self.notice = Some(words::refused::cannot_afford(count, -delta, self.value));
             return;
         }
         self.notice = None;
@@ -810,7 +813,7 @@ impl BattleApp {
     /// One function for both shapes and for both callers, so the preview
     /// cannot draw one thing and the release lay another.
     fn drag_cells(&self, drag: &Drag, to: (i32, i32)) -> Result<(Vec<(i32, i32)>, String), String> {
-        let name = hotbar::SLOTS[self.slot].name;
+        let name = self.holding().to_string();
         let outside = |cells: &[(i32, i32)]| {
             cells
                 .iter()
@@ -821,7 +824,7 @@ impl BattleApp {
             hotbar::Stroke::Pencil => {
                 let stray = outside(&drag.path);
                 if stray > 0 {
-                    return Err(format!("{stray} of those cells are not your territory"));
+                    return Err(words::refused::cells_not_yours(stray));
                 }
                 let full = if drag.full() { ", full" } else { "" };
                 Ok((
@@ -842,7 +845,7 @@ impl BattleApp {
                     .collect();
                 let stray = outside(&cells);
                 if stray > 0 {
-                    return Err(format!("{stray} of those cells are not your territory"));
+                    return Err(words::refused::cells_not_yours(stray));
                 }
                 Ok((cells, format!("{name} {rows}x{cols}")))
             }
@@ -953,7 +956,12 @@ impl BattleApp {
     /// preview cannot promise something the release then refuses and a drag
     /// cannot be priced differently from the click it is made of.
     fn quote(&self, cells: Vec<(i32, i32)>, taking: bool) -> (Stamped, i32) {
-        let placement = hotbar::SLOTS[self.slot].placement;
+        self.quote_as(cells, taking, self.held.placement().unwrap_or(Placement::Life))
+    }
+
+    /// The same, for a placement the hotbar is not holding — a stamp lays
+    /// whatever it captured, which may be two kinds at once.
+    fn quote_as(&self, cells: Vec<(i32, i32)>, taking: bool, placement: Placement) -> (Stamped, i32) {
         let action = if taking {
             Action::Erase { cells, placement }
         } else {
@@ -993,7 +1001,6 @@ impl BattleApp {
             return None;
         }
         let to = self.cell_under_cursor(self.cursor);
-        let slot = &hotbar::SLOTS[self.slot];
 
         let (cells, label, allowed) = match self.drag_cells(drag, to) {
             Err(why) => (Vec::new(), why, false),
@@ -1024,7 +1031,7 @@ impl BattleApp {
             cells: rects,
             outlined: drag.stroke == hotbar::Stroke::Rectangle,
             tint: egui::Color32::from_rgb(r, g, b),
-            hatched: slot.placement == Placement::Ice,
+            hatched: self.held == Held::Ice,
             label,
             allowed,
         })
@@ -1050,18 +1057,25 @@ impl BattleApp {
     /// answer a round trip early. If the server disagrees the chunk digests
     /// will not match and the resync puts it right.
     fn click(&mut self, row: i32, col: i32) {
+        // A stamp is not a cell, so a click with one held stamps rather than
+        // placing or taking.
+        if let Held::Stamp(index) = self.held {
+            self.stamp_at(index, (row, col));
+            return;
+        }
+
         let player = self.player();
-        let name = hotbar::SLOTS[self.slot].name;
+        let name = self.holding().to_string();
 
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
-        let placement = hotbar::SLOTS[self.slot].placement;
+        let Some(placement) = self.held.placement() else { return };
         let already_there = self.already_there(row, col);
 
         // Placing is confined to a player's own territory, which grows where
         // their life goes. Refused here on the same terms the server refuses
         // it, so the answer is instant rather than a round trip away.
         if !already_there && !crate::net::may_place(&self.world, player, row, col) {
-            self.notice = Some(format!("({row}, {col}) is not your territory"));
+            self.notice = Some(words::refused::not_your_territory(row, col));
             self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
             return;
         }
@@ -1099,6 +1113,87 @@ impl BattleApp {
         self.value += delta;
         self.commit(&stamped);
         log::debug!("clicked ({row}, {col}); value {}", self.value);
+    }
+
+    /// What the hotbar is holding, for the HUD and for a drag's label.
+    fn holding(&self) -> &str {
+        match self.held {
+            Held::Stamp(i) => self.stamps.get(i).map(|s| s.name.as_str()).unwrap_or("Stamp"),
+            other => other.tool().map(|t| t.name).unwrap_or("nothing"),
+        }
+    }
+
+    /// Take what the hotbar was clicked or keyed for.
+    fn pick(&mut self, key: Key) {
+        match key {
+            Key::Held(held) => {
+                self.held = held;
+                self.picking_stamp = false;
+            }
+            Key::More => self.picking_stamp = !self.picking_stamp,
+        }
+    }
+
+    /// Lay a stamp with its middle under the pointer.
+    ///
+    /// One action per placement it holds, because a `Paint` lays one kind and
+    /// a stamp may have caught two. All or nothing across both: half a pattern
+    /// is not the pattern, so it is priced whole before any of it is sent.
+    fn stamp_at(&mut self, index: usize, at: (i32, i32)) {
+        let Some(stamp) = self.stamps.get(index).cloned() else {
+            self.notice = Some(words::stamps::GONE.into());
+            return;
+        };
+        let corner = stamp.centred_on(at);
+        let player = self.player();
+
+        let quotes: Vec<(Stamped, i32)> = stamp
+            .placements()
+            .into_iter()
+            .map(|placement| self.quote_as(stamp.of(corner, placement), false, placement))
+            .collect();
+
+        let cells: usize = stamp.cells.len();
+        let stray = stamp
+            .at(corner)
+            .iter()
+            .filter(|&&((r, c), _)| !crate::net::may_place(&self.world, player, r, c))
+            .count();
+        if stray > 0 {
+            self.notice = Some(words::refused::cells_not_yours(stray));
+            return;
+        }
+
+        let delta: i32 = quotes.iter().map(|(_, d)| d).sum();
+        if self.value + delta < 0 {
+            self.notice = Some(words::refused::cannot_afford(cells, -delta, self.value));
+            return;
+        }
+
+        self.notice = None;
+        self.value += delta;
+        for (stamped, _) in &quotes {
+            self.commit(stamped);
+        }
+        self.last_action = Some(words::stamps::placed(&stamp.name, cells, delta));
+    }
+
+    /// Take the rectangle a drag swept into a new stamp.
+    fn capture(&mut self, from: (i32, i32), to: (i32, i32)) {
+        match stamp::Stamp::capture(&self.world, self.player(), from, to) {
+            Some(taken) => {
+                let (name, cells) = (taken.name.clone(), taken.cells.len());
+                self.stamps.keep(taken);
+                // Held straight away: you swept it out because you want to put
+                // it somewhere, and it is the newest so it is at index zero.
+                self.held = Held::Stamp(0);
+                self.notice = None;
+                self.last_action = Some(words::stamps::captured(&name, cells));
+            }
+            None => {
+                self.notice = Some(words::stamps::NOTHING_TO_CAPTURE.into());
+            }
+        }
     }
 
     /// Whether input from the world should be acted on at all.
@@ -1160,12 +1255,12 @@ impl BattleApp {
                         self.show_menu(menu::Stage::Asking);
                     }
                     None => self
-                        .show_menu(menu::Stage::Failed(format!("{address} is not an address"))),
+                        .show_menu(menu::Stage::Failed(words::menu::not_an_address(&address))),
                 }
             }
             menu::Chose::Join(room) => {
                 let Some(link) = &self.link else {
-                    self.show_menu(menu::Stage::Failed("the connection went away".into()));
+                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
                     return;
                 };
                 let name = match &self.screen {
@@ -1196,7 +1291,7 @@ impl BattleApp {
         self.asked_at = None;
         self.link = None;
         let address = self.address_hint();
-        self.show_menu(menu::Stage::Failed(format!("{address} did not answer")));
+        self.show_menu(menu::Stage::Failed(words::menu::no_reply(&address)));
     }
 
     fn subscribe_to_view(&mut self) {
@@ -1354,7 +1449,9 @@ impl App for BattleApp {
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
             pending: None,
-            slot: 0,
+            held: Held::default(),
+            stamps: stamp::Library::default(),
+            picking_stamp: false,
             link,
         };
         app.world.dirty = false;
@@ -1391,9 +1488,13 @@ impl App for BattleApp {
             // where a click would take, so which of the two happens must not
             // turn on a few pixels of hand shake at high zoom.
             if drag.moved && drag.cell_count(to) > 1 {
-                match self.drag_cells(&drag, to) {
-                    Ok((cells, shape)) => self.lay(cells, shape),
-                    Err(why) => self.notice = Some(why),
+                if self.held.captures() {
+                    self.capture(drag.from, to);
+                } else {
+                    match self.drag_cells(&drag, to) {
+                        Ok((cells, shape)) => self.lay(cells, shape),
+                        Err(why) => self.notice = Some(why),
+                    }
                 }
             } else {
                 self.click(to.0, to.1);
@@ -1413,6 +1514,7 @@ impl App for BattleApp {
             self.world.dirty = false;
         }
         self.elapsed += dt as f64;
+        let holding = self.holding().to_string();
         let status = hud::Status {
             player: self.player(),
             value: self.value,
@@ -1430,11 +1532,18 @@ impl App for BattleApp {
             pointer_on_ui: self.views.borrow().wants_pointer(),
             cursor_cell: self.cell_under_cursor(self.cursor),
             last_action: self.last_action.as_deref(),
-            holding: hotbar::SLOTS[self.slot].name,
+            holding: &holding,
         };
-        let (slot, theme) = {
+        let (held, theme, shifted) = {
             let views = self.views.borrow();
-            (self.slot, views.theme)
+            let learned: Vec<Option<String>> =
+                (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect();
+            (self.held, views.theme, learned)
+        };
+        // What shift and a digit types on this keyboard, as far as anyone has
+        // found out by pressing it.
+        let typed = move |digit: u32| {
+            shifted.get(digit.checked_sub(1)? as usize).cloned().flatten()
         };
         let (r, g, b) = hud::player_colour(self.player());
         let marks = overlay::Marks {
@@ -1443,6 +1552,8 @@ impl App for BattleApp {
             selection: self.selection_mark(),
         };
         let mut picked = None;
+        let mut from_library = stamp::Picked::Nothing;
+        let picking = self.picking_stamp;
         let mut chose = menu::Chose::Nothing;
         // Taken out for the frame, because the closure needs `&mut` on it and
         // `self` is already borrowed by `views`. Put back below, whatever the
@@ -1462,8 +1573,13 @@ impl App for BattleApp {
             Screen::Playing => {
                 overlay::show(ctx, &theme, &marks);
                 let hud_rect = hud::show(ctx, &theme, &status);
-                let bar = hotbar::show(ctx, &theme, slot);
+                let bar = hotbar::show(ctx, &theme, held, &self.stamps, &typed);
                 picked = bar.picked;
+                if picking {
+                    let (chose, rect) = stamp::show(ctx, &theme, &self.stamps);
+                    from_library = chose;
+                    return [hud_rect, bar.rect, rect].into_iter().flatten().collect();
+                }
                 // Each panel on its own. Folding them together first would
                 // claim everything between them, and they sit in opposite
                 // corners.
@@ -1472,8 +1588,23 @@ impl App for BattleApp {
         });
         self.screen = screen;
         self.chose(chose);
-        if let Some(index) = picked {
-            self.slot = index;
+        if let Some(key) = picked {
+            self.pick(key);
+        }
+        match from_library {
+            stamp::Picked::Nothing => {}
+            stamp::Picked::Hold(i) => {
+                self.held = Held::Stamp(i);
+                self.picking_stamp = false;
+            }
+            // Held by index, so forgetting one shifts everything after it --
+            // drop back to a tool rather than quietly holding a different
+            // pattern than the one that was on screen a moment ago.
+            stamp::Picked::Forget(i) => {
+                self.stamps.forget(i);
+                self.held = Held::default();
+            }
+            stamp::Picked::Close => self.picking_stamp = false,
         }
         *self.ui_output.borrow_mut() = Some(output);
 
@@ -1522,9 +1653,21 @@ impl App for BattleApp {
             return;
         }
         use winit::keyboard::KeyCode as K;
-        if let Some(index) = digit(code).and_then(hotbar::slot_for_digit) {
+        if let Some(d) = digit(code) {
             if pressed {
-                self.slot = index;
+                // Shift reaches the tools, which never change and never grow,
+                // so the bare digits can belong to the stamps -- the thing you
+                // hold ten of and swap between without looking.
+                let key = if self.shift {
+                    hotbar::shifted_for_digit(d, &self.stamps)
+                } else {
+                    hotbar::stamp_for_digit(d)
+                        .filter(|&i| i < self.stamps.len())
+                        .map(|i| Key::Held(Held::Stamp(i)))
+                };
+                if let Some(key) = key {
+                    self.pick(key);
+                }
             }
             return;
         }

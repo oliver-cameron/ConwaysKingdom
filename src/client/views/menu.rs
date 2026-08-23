@@ -19,6 +19,7 @@
 //! it does, rather than offering a name that might be there.
 
 use crate::client::views::theme::Theme;
+use crate::client::views::words::menu as words;
 use crate::net::RoomInfo;
 use crate::sim::WorldKind;
 
@@ -112,14 +113,14 @@ pub fn show(
                     ui.set_width(300.0);
                     ui.spacing_mut().item_spacing.y = m.item_spacing;
 
-                    ui.heading("Conway's Kingdom");
+                    ui.heading(words::TITLE);
                     ui.add_space(m.item_spacing);
 
-                    ui.label("Name");
+                    ui.label(words::NAME);
                     ui.add(
                         egui::TextEdit::singleline(&mut menu.name)
                             .desired_width(f32::INFINITY)
-                            .hint_text("player"),
+                            .hint_text(words::NAME_HINT),
                     );
 
                     ui.add_space(m.item_spacing);
@@ -127,14 +128,14 @@ pub fn show(
                         // Not a field. The socket is derived from the page's
                         // origin, so a typed address here would be a promise
                         // the client cannot keep.
-                        ui.label("Server");
+                        ui.label(words::SERVER);
                         ui.colored_label(p.text_dim, &menu.address);
                     } else {
-                        ui.label("Server");
+                        ui.label(words::SERVER);
                         ui.add(
                             egui::TextEdit::singleline(&mut menu.address)
                                 .desired_width(f32::INFINITY)
-                                .hint_text("ws://host:8080/ws"),
+                                .hint_text(words::SERVER_HINT),
                         );
                     }
 
@@ -148,7 +149,7 @@ pub fn show(
                             if ui
                                 .add_sized(
                                     [ui.available_width(), 30.0],
-                                    egui::Button::new("See what rooms are there"),
+                                    egui::Button::new(words::LOOK),
                                 )
                                 .clicked()
                             {
@@ -156,7 +157,7 @@ pub fn show(
                             }
                         }
                         Stage::Asking => {
-                            ui.colored_label(p.text_dim, "asking the server…");
+                            ui.colored_label(p.text_dim, words::ASKING);
                         }
                         Stage::Choosing { rooms, note } => {
                             if let Some(note) = note {
@@ -169,9 +170,9 @@ pub fn show(
                                 // out loud rather than drawn as an empty gap,
                                 // because a blank panel reads as the menu
                                 // being broken.
-                                ui.colored_label(p.warn, "this server has no rooms");
+                                ui.colored_label(p.warn, words::NO_ROOMS);
                             } else {
-                                ui.label("Rooms");
+                                ui.label(words::ROOMS);
                                 for room in rooms {
                                     if room_button(ui, theme, room) {
                                         chose = Chose::Join(room.name.clone());
@@ -185,12 +186,12 @@ pub fn show(
                     ui.separator();
                     ui.add_space(m.item_spacing);
                     if ui
-                        .add_sized([ui.available_width(), 26.0], egui::Button::new("Play alone"))
+                        .add_sized([ui.available_width(), 26.0], egui::Button::new(words::ALONE))
                         .clicked()
                     {
                         chose = Chose::Offline;
                     }
-                    ui.small("The rules are the same offline. Nobody else is.");
+                    ui.small(words::ALONE_NOTE);
                 });
         });
 
@@ -252,9 +253,9 @@ pub fn describe(world: WorldKind) -> String {
 /// is the first thing anybody reads.
 fn players(n: u32) -> String {
     match n {
-        0 => "empty".to_string(),
-        1 => "1 player".to_string(),
-        n => format!("{n} players"),
+        0 => words::EMPTY_ROOM.to_string(),
+        1 => words::one_player(),
+        n => words::players(n),
     }
 }
 

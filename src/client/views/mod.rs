@@ -23,7 +23,9 @@ pub mod camera;
 pub mod hud;
 pub mod menu;
 pub mod overlay;
+pub mod stamp;
 pub mod theme;
+pub mod words;
 
 use crate::render::context::GpuState;
 
@@ -50,8 +52,47 @@ pub struct Views {
     /// still belongs to the panel.
     dragging_widget: bool,
     start: f64,
+    /// What each digit key types with shift held.
+    ///
+    /// Starts as what the **common layout** types, and is corrected the moment
+    /// a key says otherwise. Both halves matter: seeding means the great
+    /// majority see the right label on the first frame without pressing
+    /// anything, and correcting means somebody on Programmer Dvorak — where
+    /// the digits are shifted to begin with, so shift and `1` is not `!` — is
+    /// only shown the wrong one until they use it.
+    ///
+    /// Guessed rather than asked, because there is no portable way to ask. On
+    /// the web `navigator.keyboard.getLayoutMap()` would answer properly and is
+    /// Chrome-only and asynchronous; natively there is nothing. What is *not*
+    /// guessed is the binding: keys are bound by physical position, so every
+    /// layout has the same key in the same place and only the label is ever in
+    /// question.
+    shifted_digits: [Option<String>; 9],
     pub theme: theme::Theme,
     renderer: egui_wgpu::Renderer,
+}
+
+/// What shift and the digits type on the layout most people have. A starting
+/// guess, corrected by [`Views::shifted_digits`] as soon as a key disagrees.
+const COMMON_SHIFTED_DIGITS: [&str; 9] = ["!", "@", "#", "$", "%", "^", "&", "*", "("];
+
+/// Which of the nine shift-keyed squares a physical key is, if any. By
+/// position on the board, not by what it prints, so it is the same key on
+/// every layout.
+fn digit_index(code: winit::keyboard::KeyCode) -> Option<usize> {
+    use winit::keyboard::KeyCode as K;
+    Some(match code {
+        K::Digit1 => 0,
+        K::Digit2 => 1,
+        K::Digit3 => 2,
+        K::Digit4 => 3,
+        K::Digit5 => 4,
+        K::Digit6 => 5,
+        K::Digit7 => 6,
+        K::Digit8 => 7,
+        K::Digit9 => 8,
+        _ => return None,
+    })
 }
 
 /// Borrowed out so the match arm above reads as one thing. `KeyEvent::state`
@@ -160,6 +201,7 @@ impl Views {
             claimed: Vec::new(),
             dragging_widget: false,
             start: 0.0,
+            shifted_digits: COMMON_SHIFTED_DIGITS.map(|c| Some(c.to_string())),
             // No depth buffer and one sample, matching the world's pipeline;
             // egui has to agree with it because they share a pass.
             renderer: egui_wgpu::Renderer::new(
@@ -177,6 +219,13 @@ impl Views {
     /// Whether the interface, rather than the world, should get the pointer.
     pub fn wants_pointer(&self) -> bool {
         self.dragging_widget || claims(&self.claimed, self.pointer)
+    }
+
+    /// What shift and this digit type on the keyboard in front of the player,
+    /// once they have pressed it. `None` until then.
+    pub fn shifted_digit(&self, digit: u32) -> Option<&str> {
+        let index = (digit as usize).checked_sub(1)?;
+        self.shifted_digits.get(index)?.as_deref()
     }
 
     /// Whether the interface, rather than the world, should get the keyboard.
@@ -275,6 +324,22 @@ impl Views {
                         repeat: event.repeat,
                         modifiers: self.modifiers,
                     });
+                }
+                // Watch what shift and a digit actually types, so the hotbar
+                // can label its keys with what is on the keyboard rather than
+                // with what a US layout would have printed.
+                if pressed && self.modifiers.shift {
+                    if let (winit::keyboard::PhysicalKey::Code(code), Some(text)) =
+                        (event.physical_key, event.text.as_ref())
+                    {
+                        if let Some(index) = digit_index(code) {
+                            let typed: String =
+                                text.chars().filter(|c| !c.is_control()).collect();
+                            if !typed.is_empty() {
+                                self.shifted_digits[index] = Some(typed);
+                            }
+                        }
+                    }
                 }
                 // Only on the way down, and never while a command modifier is
                 // held: ctrl+V is a paste, and inserting a literal "v" beside

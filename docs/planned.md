@@ -40,13 +40,19 @@ Also unsettled: **a mine under ice**. A pane freezes what it covers, so a frozen
 
 ## Stamps
 
-A pattern you capture once and place again, at **double cost** — the convenience is the thing being paid for.
+**Started** — see [game.md](game.md#stamps). Capture with Grab, place with a click, ten on the bar and the rest behind a key. Captured as live cells and their kind rather than as a rectangle of ground, trimmed to what was caught, and only ever your own life.
 
-Decided: a **separate hotbar** rather than slots in the existing one, a **library** of them rather than a single clipboard, and a file that can hold **several stamps at once** so they can be shared as one thing. Its own branch.
+The old plan wanted a **separate hotbar**, and it turned out not to need one: segmenting the single bar does the same job, and the gesture the second bar existed to disambiguate — is this drag a pane or a capture? — is answered by what you are holding.
 
-It needs nothing new on the wire. A stamp is a `Paint` of the cells it covers, judged against territory and value like anything else — the doubling is a client-side price and a server-side check on the same action. The capture gesture is the interesting part: dragging a rectangle over your own cells is the obvious way to take one, and it is also how ice is placed, so the second hotbar has to make clear which of the two a drag means.
+What is left:
 
-The open questions are all interface. Where a second bar sits on a phone, whether a stamp can be rotated or mirrored when placed, and what happens when a stamp will not fit inside your territory — refuse it whole, as a drag does, or place the part that fits.
+**The double cost.** It was decided that a stamp costs twice what drawing it would, and it does not yet. That needs the action to say on the wire that it is a stamp: the doubling has to be a server-side check as well as a client-side price, or the client charges two and the server charges one and `Purse` quietly hands the difference back. An `Action::Stamp` beside `Paint` is the obvious shape.
+
+**A file.** A stamp lives as long as the client does. The plan wanted a file holding several at once, so a library can be shared as one thing — which is `net::keep`'s business now that it is where a client keeps what it has.
+
+**Rotation and mirroring**, and what to do when a stamp will not fit inside your territory: refuse it whole, as it does now, or place the part that fits.
+
+**Naming.** A stamp is called `3x4` because nothing has asked what it is. The library menu is where a name would be typed.
 
 ## Mobile
 

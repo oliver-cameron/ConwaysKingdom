@@ -415,17 +415,19 @@ impl Halo {
                 let (hr, hc) = (row + 1, col + 1);
                 let cell_seed = mix(seed, (row as u64) << 32 | col as u64);
                 let before = self.get(hr, hc);
-                let after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
+                let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
                 if after.kind() == Kind::MINE && after.player().is_owned() {
                     if after.is_alive() {
                         if !before.is_alive() {
                             mined.born[after.player().0 as usize] += 1;
                         }
                     } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, MINE_UPKEEP) {
-                        // A corpse costs while it lies there, not once when it
-                        // falls. Its own stream, so it is independent of every
-                        // roll the rule itself takes.
+                        // A corpse costs once and is then ordinary ground.
+                        // Charging it for as long as it lay there made a mine
+                        // field a debt you could not pay off; this way what a
+                        // mine costs in the end is bounded by how many died.
                         mined.upkeep[after.player().0 as usize] += 1;
+                        after = after.with_kind(Kind::NORMAL);
                     }
                 }
                 next[(row, col)] = after;

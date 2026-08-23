@@ -31,23 +31,23 @@ Cost is read **before** the action is applied, since it depends on what is there
 
 A **mine** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a mine's children are mines — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
 
-**A mine's corpse costs while it lies there**, sixteen generations in sixty-four, for as long as the ground is still yours. Not once when it falls — a standing charge. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
+**A mine's corpse costs once and is then ordinary ground.** The charge falls due at `MINE_UPKEEP`, sixteen in sixty-four, and when it does the square loses its kind — so a mine field is a debt with a bottom to it rather than one you cannot pay off.
+
+It costs `MINE_DRAIN`, which is **two** against a birth's **one**. That is what decides which patterns pay, and the discriminator is *how long your corpses lie about*: a corpse that is reborn before its charge falls due escapes it entirely. A blinker re-uses its own ground every other generation and escapes most of them; a glider abandons its corpses behind it and escapes none. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
 
 So income is births minus the upkeep of everything you have let die, and the thing being rewarded is a **compact machine**. `cargo run --no-default-features --example balance` prints the table, in value per generation at steady state:
 
-| upkeep | block | blinker | glider | r-pentomino |
+| drain | block | blinker | glider | r-pentomino |
 |---|---|---|---|---|
-| 1 in 1 | 0.0 | 0.0 | −20.0 | −695.0 |
-| **1 in 4** | **0.0** | **1.5** | **−3.5** | **−116.8** |
-| 1 in 8 | 0.0 | 1.8 | −0.8 | −20.4 |
-| 1 in 16 | 0.0 | 1.9 | 0.6 | 27.8 |
-| 1 in 32 | 0.0 | 1.9 | 1.3 | 51.9 |
+| 1 | −40 | +434 | +137 | +11552 |
+| **2** | **−40** | **+298** | **−276** | **−7754** |
+| 3 | −40 | +162 | −689 | −27060 |
 
-Four is the line where **a blinker pays and a glider does not**, and that is the rule the number was chosen to satisfy. A machine that stays where you put it earns; anything that wanders off dragging a trail of corpses costs. Over three hundred generations that is +432 for the blinker against −1049 for the glider, both placed for less than fifty. Above sixteen everything pays and *sprawl pays best*, which is where this started; at one even a blinker only breaks even.
+Net over three hundred generations, placement included. **Two is the line where a blinker pays and a glider does not**, and that is the rule the number was chosen to satisfy: a machine that stays where you put it earns, and anything that wanders off dragging a trail of corpses costs. At one everything pays and sprawl pays best, which is where this started; at three even a blinker is barely worth building.
 
 A block of mines is the honest edge case: nothing is ever born and nothing ever dies, so it neither earns nor costs. It is simply forty spent on nothing.
 
-The drain is bounded by territory decay rather than by a timer. A corpse with nothing alive beside it loses its owner within about sixteen generations and stops costing anybody, so abandoned ground bleeds you briefly and then goes quiet — while corpses inside a living colony are re-claimed every generation and go on costing. There is no other way to clear them: a dead cell cannot be reclaimed, so a mine field you regret is a liability until the life on it goes out.
+A corpse whose ground decays away is never charged at all, because nobody owns it to charge — so a trail far from anything alive fades before the bill arrives.
 
 Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_UPKEEP` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
 
@@ -170,9 +170,35 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 
 ## The hotbar
 
+Two segments, and one thing selected across both:
+
+```
+    [ Life  Mine │ Ice ]   [ Grab  stamps … +7 ]
+```
+
+The tools are the game's own vocabulary and never change; the stamps are whatever you happened to capture, and there may be none or thirty. Run together, the Ice key would move every time you saved a pattern. Ice sits with the tools but behind a rule, because it is the one that walls people off and should not be a neighbour of the one you draw with.
+
+**The digits are the stamps** — `1` to `9` then `0`, which is ten and is why the bar holds ten — and **shift and a digit is a tool**. The stamps get the bare keys because they are what you hold ten of and swap between without looking; the three tools never change and never grow, so they can afford a modifier.
+
+Binding is by *physical* key, so it is the same key on every layout and only the **label** is ever in question. The label starts as what the common layout types — `!` `@` `#` `$` — and is corrected the moment a key says otherwise, so the great majority see the right thing on the first frame and somebody on Programmer Dvorak, where the digits are shifted to begin with, is only shown the wrong one until they use it.
+
+Guessed rather than asked because there is no portable way to ask: `navigator.keyboard.getLayoutMap()` would answer properly on the web and is Chrome-only and asynchronous, and natively there is nothing.
+
+## Stamps
+
+A pattern captured once and placed again. Nothing on the wire is a stamp: placing one is a `Paint` over the cells it covers, judged against territory and value like anything else.
+
+**Grab** is a square of its own, at the front of the stamps segment. Hold it, drag a box round your own life, and what was inside becomes a stamp. It needs its own square because otherwise there is nowhere to start — capturing was "drag with a stamp held", which is fine once you have one and impossible before. Holding an existing stamp and dragging captures too, since by then you are already thinking about stamps.
+
+A stamp is **the live cells and their kind**, not the rectangle you swept. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of mines is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
+
+Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern. Past ten, the rest are behind a `+N` key that opens the library.
+
+**Not yet: the double cost.** `planned.md` decided a stamp should cost twice what drawing it would, and it does not — it costs the same. Doubling needs the action to say on the wire that it is a stamp, or the client charges double and the server charges single and the two disagree about money.
+
 Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The placement is named for what is put down, since a cell is the square and life is one of the things that can be on it.
 
-The three slots are `Life`, `Mine` and `Ice`. Mine is a pencil rather than a rectangle, because a mine is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out.
+Mine is a pencil rather than a rectangle, because a mine is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 

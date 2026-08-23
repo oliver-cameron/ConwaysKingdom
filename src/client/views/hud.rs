@@ -4,6 +4,7 @@
 //! it needs arrives as arguments, so it has no opinion about where the numbers
 //! came from and cannot change them.
 
+use crate::client::views::words::hud as words;
 use crate::sim::{PlayerId, WorldKind};
 
 /// What the HUD shows. Assembled by the client each frame.
@@ -81,16 +82,16 @@ pub fn show(
             ui.separator();
             ui.horizontal(|ui| {
                 if status.connected {
-                    ui.colored_label(theme.palette.good, "connected");
+                    ui.colored_label(theme.palette.good, words::CONNECTED);
                 } else {
-                    ui.colored_label(theme.palette.warn, "offline");
+                    ui.colored_label(theme.palette.warn, words::OFFLINE);
                 }
                 if let Some(room) = status.room {
                     ui.label(format!("· room {room}"));
                 }
             });
             ui.small(match status.world {
-                WorldKind::Infinite => "boundless world".to_string(),
+                WorldKind::Infinite => words::BOUNDLESS.to_string(),
                 WorldKind::Toroidal { rows, cols } => {
                     format!("{rows}x{cols} chunks, wrapping")
                 }
@@ -104,21 +105,18 @@ pub fn show(
                 "cursor  ({}, {})   {}",
                 status.cursor_cell.0,
                 status.cursor_cell.1,
-                if status.pointer_on_ui { "over panel" } else { "on world" }
+                if status.pointer_on_ui { words::OVER_PANEL } else { words::ON_WORLD }
             ));
             ui.small(format!(
                 "last  {}",
-                status.last_action.unwrap_or("nothing yet")
+                status.last_action.unwrap_or(words::NOTHING_YET)
             ));
 
             ui.separator();
             ui.small(format!("holding  {}", status.holding));
-            ui.small("left click acts, left drag draws");
-            ui.small("right, middle or space+drag to pan");
-            ui.small("arrows or WASD to pan, shift to hurry");
-            ui.small("wheel or pinch to zoom, 1-9 to choose");
-            ui.small("one finger draws, two move the view");
-            ui.small("escape abandons the drag in progress");
+            for hint in words::HINTS {
+                ui.small(*hint);
+            }
         });
     response.map(|r| r.response.rect)
 }
