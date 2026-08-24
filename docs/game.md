@@ -254,6 +254,10 @@ What is being placed travels in the action as a named `Placement`, not as cell b
 
 A **match** is a room that starts together, ends, and has a winner. It gathers first: you can join it, and until it starts **nothing happens at all** — the world does not step and nothing you do is taken. That is not an honour system, it is a screen. A still world with a hotbar that does nothing is indistinguishable from a broken game, so a match that has not started shows a panel over the board saying so, listing who else is here and how it will be won.
 
+**A match's world does not exist until it starts.** Nobody is granted anything while it gathers — no patch, no block, and no value at all. Granting on arrival would put the first player's block on a world the last player has not seen yet, and would hand out ground in the order people happened to click; so a gathering match is an empty world and a list of names, and the whistle lays every seat at once, in player order.
+
+Starting with **nothing to spend** is the other half of the same rule. An ordinary room hands out a hundred so you can build the moment you arrive; in a match that would be an opening bought rather than played, and whatever you did with it before the whistle would be a head start measured in wall-clock time.
+
 Letting people build while gathering was tried and is wrong. It is fair in *generations* — the world is frozen, so nobody gains any — and unfair in **time**, because holding the tick still does not hold a clock still and whoever joined ten minutes early has had ten minutes to think. So the opening is a race: everybody is looking at the same thing when the clock starts, and hesitating costs generations rather than nothing.
 
 **No late joining.** Somebody arriving at generation four hundred is not in the same race — everybody else has four hundred generations of ground and they have a block — so the join is refused with a reason rather than allowed and hopeless. Coming back to a match you are already in is a different question, and your token still gets you your own seat.

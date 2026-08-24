@@ -171,6 +171,13 @@ pub fn outside(n: usize) -> String {
 
 /// What the world says back when it refuses something.
 pub mod refused {
+    /// A match that has not started, or one that is decided. Said rather than
+    /// silently ignored: a click that does nothing looks exactly like a click
+    /// that never arrived.
+    pub fn not_started() -> &'static str {
+        "nothing can be placed until the match starts"
+    }
+
 
     pub fn cannot_afford(cells: usize, costs: i32, have: i32) -> String {
         format!("{cells} cells costs {costs}, you have {have}")

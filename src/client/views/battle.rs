@@ -489,6 +489,20 @@ impl BattleApp {
         self.gesture = Gesture::Drawing(Drag::begin(at, self.camera.cell_at(at), stroke));
     }
 
+    /// Whether the world will take anything this player does right now.
+    ///
+    /// A match that has not started takes nothing, and neither does one that
+    /// is decided — the server drops those actions, and a client that went on
+    /// predicting them would draw cells that appear under the hand and vanish
+    /// a moment later when the next `Checkpoint` corrects the world. Which
+    /// looks like the game losing your work rather than like a rule.
+    ///
+    /// `None` for a room that is not a match, and for one that has not said
+    /// yet, both of which are ordinary rooms as far as this is concerned.
+    fn may_act(&self) -> bool {
+        self.lobby.as_ref().is_none_or(|(phase, _, _)| phase.accepts_actions())
+    }
+
     /// Whether what the hotbar holds is already on this cell.
     ///
     /// `Placement::is_on` asks whether the square holds *this* thing, not
@@ -837,6 +851,10 @@ impl BattleApp {
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
     fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
+        if !self.may_act() {
+            self.notice = Some(words::refused::not_started().into());
+            return;
+        }
         let count = cells.len();
         let (stamped, delta) = self.quote(cells, false);
 
@@ -1110,6 +1128,10 @@ impl BattleApp {
         let player = self.player();
         let name = self.holding().to_string();
 
+        if !self.may_act() {
+            self.notice = Some(words::refused::not_started().into());
+            return;
+        }
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
         let Some(placement) = self.held.placement() else { return };
         let already_there = self.already_there(row, col);
@@ -1179,6 +1201,10 @@ impl BattleApp {
     /// a stamp may have caught two. All or nothing across both: half a pattern
     /// is not the pattern, so it is priced whole before any of it is sent.
     fn stamp_at(&mut self, index: usize, at: (i32, i32)) {
+        if !self.may_act() {
+            self.notice = Some(words::refused::not_started().into());
+            return;
+        }
         let Some(stamp) = self.stamps.get(index).cloned() else {
             self.notice = Some(words::stamps::GONE.into());
             return;

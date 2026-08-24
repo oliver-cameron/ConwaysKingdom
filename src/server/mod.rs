@@ -90,6 +90,19 @@ impl Server {
         }
     }
 
+    /// What a player joins this room with.
+    ///
+    /// Zero in a match, and the reason is the same one that stops anybody
+    /// placing before the whistle: value spent while gathering is an opening
+    /// bought in wall-clock time, and holding the tick still does not hold a
+    /// clock still.
+    pub fn starting_value(&self) -> i32 {
+        match self.phase {
+            Phase::Open => Player::STARTING_VALUE,
+            _ => 0,
+        }
+    }
+
     /// Make this room a match, gathering and not yet stepping.
     pub fn make_match(&mut self, victory: Victory) {
         self.phase = Phase::Gathering;
@@ -104,6 +117,21 @@ impl Server {
             Phase::Gathering => {
                 self.phase = Phase::Running { from: self.tick() };
                 self.lobby_changed = true;
+                // **Everybody spawns at the whistle, together.** Granting on
+                // arrival would put the first player's block on a world the
+                // last player has not seen yet, and would hand out seats in
+                // the order people happened to click -- so a match's world is
+                // empty until it starts, and then it is laid out all at once.
+                //
+                // In player order rather than in whatever order the map
+                // iterates, because grants are laid on a spiral by number and
+                // two peers must lay the same one.
+                let mut here: Vec<PlayerId> =
+                    self.players.values().filter(|p| p.online).map(|p| p.id).collect();
+                here.sort_unstable();
+                for id in here {
+                    self.grant_territory(id);
+                }
                 Ok(())
             }
             Phase::Open => Err("that room is not a match".into()),
@@ -300,8 +328,14 @@ impl Server {
                     p.online = true;
                     let (id, token) = (p.id, p.token.clone());
                     self.lobby_changed = true;
+                    let started = self.phase.accepts_actions();
                     log::info!("rejoin: {id:?} \"{}\" came back", self.players[&id].name);
-                    self.grant_territory(id);
+                    // Nothing is laid out until the match starts; see
+                    // `start_match`. An ordinary room grants at once, as it
+                    // always did.
+                    if started {
+                        self.grant_territory(id);
+                    }
                     return Ok((id, token));
                 }
                 // Theirs, and somebody is already playing as them. Nobody gets
@@ -337,6 +371,12 @@ impl Server {
         };
         let mut player = Player::new(id, name);
         player.last_seen = self.tick();
+        // **A match starts everybody with nothing.** An ordinary room hands
+        // out `STARTING_VALUE` so somebody can build the moment they arrive;
+        // in a match that would be an opening bought rather than played, and
+        // whatever a player did with it before the whistle would be a head
+        // start measured in wall-clock time rather than in generations.
+        player.value = self.starting_value();
         log::info!(
             "join: {:?} \"{}\" in room {} at tick {} ({} online)",
             id,
@@ -346,7 +386,12 @@ impl Server {
             self.players.len() + 1
         );
         self.players.insert(id, player);
-        self.grant_territory(id);
+        // A match lays out nothing until the whistle -- `start_match` does
+        // every player at once -- where an ordinary room grants on arrival, as
+        // it always has.
+        if self.phase.accepts_actions() {
+            self.grant_territory(id);
+        }
         Ok(id)
     }
 
@@ -920,6 +965,43 @@ mod tests {
         assert_eq!(s.tick(), stopped, "an over match holds still");
     }
 
+    /// **A match's world does not exist until it starts.** Granting on
+    /// arrival would put the first player's block on a world the last player
+    /// has not seen yet, and would hand out ground in the order people
+    /// happened to click. So a gathering match is an empty world and a list of
+    /// names, and the whistle lays every seat at once.
+    #[test]
+    fn a_match_spawns_everybody_at_the_whistle_and_nobody_before_it() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 100 });
+
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (bob, _) = s.join_with("bob", None).unwrap();
+        assert!(s.world().live_cells().is_empty(), "no world yet");
+        assert_eq!(s.territory().iter().sum::<usize>(), 0, "and no ground either");
+        assert_eq!(s.value_of(alice), Some(0), "and nothing to spend");
+        assert_eq!(s.value_of(bob), Some(0));
+
+        s.start_match().unwrap();
+
+        // Two blocks, one each, and each on its own granted patch.
+        assert_eq!(s.world().live_cells().len(), 8, "a block each, laid together");
+        for id in [alice, bob] {
+            let (row, col) = crate::net::spawn_for(id, s.world());
+            assert_eq!(s.world().cell_at(row, col).unwrap().player(), id);
+        }
+    }
+
+    /// An ordinary room is unchanged: it grants on arrival and hands out
+    /// something to build with, because there is no whistle to wait for.
+    #[test]
+    fn an_ordinary_room_still_grants_on_arrival() {
+        let mut s = Server::named("main", World::infinite_empty());
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        assert_eq!(s.world().live_cells().len(), 4, "a block, at once");
+        assert_eq!(s.value_of(alice), Some(Player::STARTING_VALUE));
+    }
+
     /// **A gathering match does not step, so a lobby cannot be told on a
     /// cadence.** There is no tick to hang "every so often" from, and a lobby
     /// that only refreshed when the world moved would never refresh at all —
@@ -1033,10 +1115,15 @@ mod tests {
         );
         s.step();
         assert_eq!(s.world().live_cells().len(), before, "nothing laid before the whistle");
-        assert_eq!(s.value_of(alice), Some(Player::STARTING_VALUE), "and nothing spent");
+        assert_eq!(s.value_of(alice), Some(0), "and a match starts you with nothing");
+        assert_eq!(before, 0, "nor is there a world yet to lay it on");
 
-        // The whistle, and the same action lands.
+        // The whistle: everybody is granted at once, and only then is there
+        // anything to act on or with.
         s.start_match().unwrap();
+        s.players.get_mut(&alice).unwrap().value = 100;
+        let before = s.world().live_cells().len();
+        assert_eq!(before, 4, "a block, laid at the whistle");
         s.handle(
             Some(alice),
             ClientMessage::Act(Stamped {
