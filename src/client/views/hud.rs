@@ -55,12 +55,14 @@ pub struct Status<'a> {
 /// takes nothing looks exactly like a click that never arrived.
 const DEBUG: bool = false;
 
-/// Returns the rectangle it occupied, so the client knows what it covered.
+/// Draw it. Returns the rectangle it occupied, so the client knows what it
+/// covered, and whether the way out was clicked.
 pub fn show(
     ctx: &egui::Context,
     theme: &crate::client::views::theme::Theme,
     status: &Status<'_>,
-) -> Option<egui::Rect> {
+) -> (Option<egui::Rect>, bool) {
+    let mut back = false;
     let response = egui::Window::new("kingdom")
         .title_bar(false)
         .resizable(false)
@@ -73,6 +75,16 @@ pub fn show(
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // The way out, in the row that is already about who you are
+                // and where. A floating button would have to sit somewhere,
+                // and everywhere it could sit is over the world.
+                if ui
+                    .add(egui::Button::new(words::BACK).min_size(egui::vec2(22.0, 20.0)))
+                    .on_hover_text(words::BACK_HINT)
+                    .clicked()
+                {
+                    back = true;
+                }
                 // The same colour the shader gives this player's cells, so the
                 // swatch and the board cannot disagree about who is who.
                 let (r, g, b) = player_colour(status.player);
@@ -137,7 +149,7 @@ pub fn show(
                 }
             }
         });
-    response.map(|r| r.response.rect)
+    (response.map(|r| r.response.rect), back)
 }
 
 /// Who is winning, as bars.

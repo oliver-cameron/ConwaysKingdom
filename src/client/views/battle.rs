@@ -1260,6 +1260,37 @@ impl BattleApp {
     ///
     /// Rebuilt from what is remembered when there was no menu to return to,
     /// which is the case of a game started from a command line being refused.
+    /// Whether the board is what the player is looking at.
+    ///
+    /// Not on the menu, and not in a lobby: a gathering match has an empty
+    /// world, so there is literally nothing to see behind it. A **decided**
+    /// match is the other way round — the board is the result, and covering it
+    /// to say who won would hide the thing that says why.
+    fn showing_world(&self) -> bool {
+        if matches!(self.screen, Screen::Menu(_)) {
+            return false;
+        }
+        !matches!(
+            self.lobby.as_ref().map(|(phase, _, _)| phase),
+            Some(crate::net::MatchPhase::Gathering)
+        )
+    }
+
+    /// Back to the menu, from wherever.
+    ///
+    /// The socket is kept and the room list asked for again, so going back is
+    /// a step rather than a disconnection — the seat is held until another
+    /// `Join` takes its place, which is what the server treats a second join
+    /// as anyway.
+    fn back_to_menu(&mut self) {
+        let asking = self.link.is_some();
+        self.show_menu(if asking { menu::Stage::Asking } else { menu::Stage::Idle });
+        if let Some(link) = self.link.as_ref() {
+            link.send(ClientMessage::Rooms);
+            self.asked_at = Some(self.elapsed);
+        }
+    }
+
     fn show_menu(&mut self, stage: menu::Stage) {
         match &mut self.screen {
             Screen::Menu(m) => m.stage = stage,
@@ -1657,6 +1688,7 @@ impl App for BattleApp {
         // Taken out for the frame, because the closure needs `&mut` on it and
         // `self` is already borrowed by `views`. Put back below, whatever the
         // menu did with it.
+        let mut leaving = false;
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
         // Taken out for the frame for the same reason the screen is: the
         // closure needs `&mut` on it while `self` is already borrowed by
@@ -1676,8 +1708,23 @@ impl App for BattleApp {
                 rect.into_iter().collect()
             }
             Screen::Playing => {
+                // A gathering match is a screen of its own: its world is
+                // empty until the whistle, so there is nothing to draw the
+                // lobby over and nothing for a HUD or a hotbar to act on.
+                if matches!(
+                    lobby.as_ref().map(|(phase, _, _)| phase),
+                    Some(crate::net::MatchPhase::Gathering)
+                ) {
+                    let (rect, back) = lobby.as_ref().map_or((None, false), |(p, v, who)| {
+                        lobby_view::show(ctx, &theme, me, p, *v, who)
+                    });
+                    leaving = back;
+                    return rect.into_iter().collect();
+                }
+
                 overlay::show(ctx, &theme, &marks);
-                let hud_rect = hud::show(ctx, &theme, &status);
+                let (hud_rect, back) = hud::show(ctx, &theme, &status);
+                leaving = back;
                 let look = hotbar::Look {
                     theme: &theme,
                     sheet,
@@ -1689,8 +1736,12 @@ impl App for BattleApp {
                 // Over the world rather than instead of it: a match that has
                 // not started looks exactly like a game that is broken, since
                 // nothing moves and nothing a player does appears.
+                // A decided match keeps its board: the result is what is on
+                // it, and covering that to say who won would hide the reason.
                 let waiting = lobby.as_ref().and_then(|(phase, victory, players)| {
-                    lobby_view::show(ctx, &theme, me, phase, *victory, players)
+                    let (rect, back) = lobby_view::show(ctx, &theme, me, phase, *victory, players);
+                    leaving |= back;
+                    rect
                 });
                 if picking {
                     let (chose, rect) =
@@ -1733,6 +1784,11 @@ impl App for BattleApp {
             stamp::Picked::Close => self.picking_stamp = false,
         }
         self.sketch = sketch;
+        // Acted on after the frame is built, because it changes the screen and
+        // the screen is what the frame was drawn from.
+        if leaving {
+            self.back_to_menu();
+        }
         *self.ui_output.borrow_mut() = Some(output);
 
         if self.camera.dirty {
@@ -1745,7 +1801,20 @@ impl App for BattleApp {
         }
     }
 
+    /// The world, unless there is nothing to show.
+    ///
+    /// It used to be drawn behind the menu, on the reasoning that a menu over
+    /// a dead grey rectangle says the game has not started where a menu over a
+    /// world says it is waiting for you. That was true when the menu was a
+    /// small panel. It stopped being true once the menu had the screen to
+    /// itself: a world sliding about behind a full-height panel is motion
+    /// nobody asked for beside the thing they are reading, and a match that
+    /// has not started has nothing behind it anyway — its world is empty until
+    /// the whistle.
     fn draw_calls(&self) -> Vec<DrawCall<'_>> {
+        if !self.showing_world() {
+            return Vec::new();
+        }
         vec![DrawCall {
             pipeline: &self.pipeline,
             bind_groups: &self.bind_groups,

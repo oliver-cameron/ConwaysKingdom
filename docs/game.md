@@ -272,7 +272,11 @@ The list **refreshes itself** every few seconds while it is on screen, and there
 
 The room list is **asked for, not guessed**. A room is a whole separate world, so a name that does not exist is not a mistyped filter, it is nowhere — and a client cannot know what a server has without asking. So the menu shows nothing under Rooms until `ServerMessage::Rooms` comes back, rather than offering a name that might be there. A server that never answers becomes a message naming the address after eight seconds, because a menu that says "asking" forever is indistinguishable from one that is broken, and the two likeliest causes — a wrong address, and a server that is not running — both look exactly like it.
 
-The world is still drawn behind the panel, and still running when the client is offline. A menu over a dead grey rectangle says the game has not started; a menu over a world says it is waiting for you.
+**The menu has the screen to itself.** The world used to be drawn behind it, on the reasoning that a menu over a dead grey rectangle says the game has not started where a menu over a world says it is waiting for you. That was true while the menu was a small panel in a corner, and stopped being true once it was not: a world sliding about behind a full-height panel is motion nobody asked for beside the thing they are reading. What the extra room bought is buttons the size of things you click rather than the size of a HUD row.
+
+A **gathering match** gets a screen of its own for a plainer reason — its world does not exist yet, so there is nothing to draw behind it. A **decided** one keeps its board, because the result is what is on it and covering that to say who won would hide the reason why.
+
+**There is a way back.** An arrow in the corner of the HUD, and a button in the lobby, return to the menu from wherever you are. The socket is kept and the room list asked for again, so going back is a step rather than a disconnection: your seat is held until another join takes its place, which is what the server treats a second join as anyway.
 
 On the web the server is shown but not editable: the socket is derived from the page's origin, so a typed address would be a promise the client cannot keep. Natively it is a field, because there is no page to have come from.
 

@@ -135,6 +135,10 @@ pub mod hud {
     pub const CONNECTED: &str = "connected";
     pub const OFFLINE: &str = "offline";
     pub const HOLDING: &str = "ground held";
+    /// The arrow out. A glyph rather than the word, because it sits beside a
+    /// player's name in a row that is already full.
+    pub const BACK: &str = "\u{2190}";
+    pub const BACK_HINT: &str = "back to the menu";
     pub const BOUNDLESS: &str = "boundless world";
     pub const OVER_PANEL: &str = "over panel";
     pub const ON_WORLD: &str = "on world";

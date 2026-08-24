@@ -110,11 +110,17 @@ pub fn show(
                 .corner_radius(m.rounding)
                 .inner_margin(m.panel_padding * 1.6)
                 .show(ui, |ui| {
-                    // Wide enough for an address and no wider. A panel sized
-                    // by its contents jumps every time the room list changes
-                    // length, and a menu that resizes under the pointer is one
-                    // whose buttons move as you reach for them.
-                    ui.set_width(300.0);
+                    // A fixed width, because a panel sized by its contents
+                    // jumps every time the room list changes length and a menu
+                    // that resizes under the pointer is one whose buttons move
+                    // as you reach for them.
+                    //
+                    // Wide, now that the menu has the screen rather than a
+                    // corner of it: the world used to be drawn behind and the
+                    // panel had to stay out of its way. It does not any more,
+                    // so the things you actually click are the size of things
+                    // you click rather than the size of a HUD row.
+                    ui.set_width(420.0);
                     ui.spacing_mut().item_spacing.y = m.item_spacing;
 
                     ui.heading(words::TITLE);
@@ -152,8 +158,10 @@ pub fn show(
                             }
                             if ui
                                 .add_sized(
-                                    [ui.available_width(), 30.0],
-                                    egui::Button::new(words::LOOK),
+                                    [ui.available_width(), 40.0],
+                                    egui::Button::new(
+                                        egui::RichText::new(words::LOOK).size(15.0),
+                                    ),
                                 )
                                 .clicked()
                             {
@@ -200,7 +208,10 @@ pub fn show(
                     ui.separator();
                     ui.add_space(m.item_spacing);
                     if ui
-                        .add_sized([ui.available_width(), 26.0], egui::Button::new(words::ALONE))
+                        .add_sized(
+                            [ui.available_width(), 36.0],
+                            egui::Button::new(egui::RichText::new(words::ALONE).size(14.0)),
+                        )
                         .clicked()
                     {
                         chose = Chose::Offline;
@@ -216,7 +227,7 @@ pub fn show(
 fn room_button(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo) -> bool {
     let p = theme.palette;
     let response = ui.add_sized(
-        [ui.available_width(), 38.0],
+        [ui.available_width(), 54.0],
         egui::Button::new("").fill(p.surface_lift),
     );
 
@@ -249,17 +260,17 @@ fn room_button(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo) -> bool {
         );
     }
     painter.text(
-        rect.left_center() + egui::vec2(10.0, 9.0),
+        rect.left_center() + egui::vec2(14.0, 13.0),
         egui::Align2::LEFT_CENTER,
         under,
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(12.0),
         if matches!(room.phase, crate::net::MatchPhase::Gathering) { p.good } else { p.text_dim },
     );
     painter.text(
-        rect.right_center() - egui::vec2(10.0, 0.0),
+        rect.right_center() - egui::vec2(14.0, 0.0),
         egui::Align2::RIGHT_CENTER,
         players(room.players),
-        egui::FontId::proportional(11.0),
+        egui::FontId::proportional(13.0),
         if room.players > 0 { p.good } else { p.text_dim },
     );
 

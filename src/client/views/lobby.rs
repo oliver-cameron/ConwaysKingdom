@@ -25,13 +25,14 @@ pub fn show(
     phase: &MatchPhase,
     victory: Option<Victory>,
     players: &[(PlayerId, String)],
-) -> Option<egui::Rect> {
+) -> (Option<egui::Rect>, bool) {
+    let mut back = false;
     // An open room is not a match, and a running one is a game — neither wants
     // a panel in the middle of it. Only the two ends have anything to say.
     let heading = match phase {
         MatchPhase::Gathering => words::WAITING,
         MatchPhase::Over { .. } => words::FINISHED,
-        _ => return None,
+        _ => return (None, false),
     };
     let p = theme.palette;
     let m = theme.metrics;
@@ -93,10 +94,23 @@ pub fn show(
                             ui.small(words::HOW);
                         }
                     }
+                    ui.add_space(m.item_spacing);
+                    ui.separator();
+                    // A lobby with no way out is a room you are locked in
+                    // until somebody else decides otherwise.
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 30.0],
+                            egui::Button::new(crate::client::views::words::hud::BACK_HINT),
+                        )
+                        .clicked()
+                    {
+                        back = true;
+                    }
                 });
         });
 
-    Some(area.response.rect)
+    (Some(area.response.rect), back)
 }
 
 /// The same colour the shader gives this player's cells, so the lobby and the
