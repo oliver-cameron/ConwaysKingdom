@@ -22,6 +22,7 @@ pub mod hotbar;
 pub mod camera;
 pub mod hud;
 pub mod icons;
+pub mod clock;
 pub mod lobby;
 pub mod menu;
 pub mod overlay;

@@ -88,7 +88,7 @@ What is left:
 
 **Most of it reaches the client now.** `ServerMessage::Match` carries the phase, the win condition and who is here, and there is a lobby panel over the board while a match gathers and a result panel when it is decided; `ServerMessage::Standing` carries who holds most ground, drawn as bars in the HUD; and `RoomInfo` carries the phase, so the room list says which rooms are matches and which have started.
 
-**What is left is the clock.** A running match shows no time remaining and no target, so a player in one cannot tell whether there are ten generations left or ten thousand. `MatchPhase::Running` carries the tick it started from and the client has the generation, so a timer is arithmetic the client can already do — it is the drawing that is missing. A territory match wants the same thing as a bar against its target rather than against the leader.
+**The clock is in**, along the top: generations left and the same figure as a clock for a timer match, the leader's distance from the target for a territory one, with a bar under either. What is left of a match is the smaller things — no countdown into the start, so `match dispatch` is the only thing that begins one, and no way for a player to leave a lobby they have joined.
 
 **A starting value of zero is not in.** It was in the original description and it is held back on purpose: life costs one, zero buys none of it, and the granted block never gives birth, so a match starting everybody at zero under today's rules is one where nobody can ever act. The income question below has to be settled first.
 

@@ -7,7 +7,9 @@ use std::cell::RefCell;
 
 use crate::render::app::App;
 use super::words;
-use super::{camera, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views};
+use super::{
+    camera, clock, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views,
+};
 use hotbar::{Held, Key};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
@@ -1695,6 +1697,8 @@ impl App for BattleApp {
         // `views`. Put back below, whatever was drawn on it.
         let mut sketch = std::mem::take(&mut self.sketch);
         let lobby = self.lobby.clone();
+        let standing = self.standing.clone();
+        let generation = self.world.generation;
         let on_web = cfg!(target_arch = "wasm32");
         let me = self.player();
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
@@ -1725,6 +1729,11 @@ impl App for BattleApp {
                 overlay::show(ctx, &theme, &marks);
                 let (hud_rect, back) = hud::show(ctx, &theme, &status);
                 leaving = back;
+                // How much of the match is left, which is the one thing on
+                // screen that is about the room rather than about a player.
+                let clock_rect = lobby.as_ref().and_then(|(phase, victory, _)| {
+                    clock::show(ctx, &theme, generation, phase, *victory, &standing)
+                });
                 let look = hotbar::Look {
                     theme: &theme,
                     sheet,
@@ -1747,12 +1756,15 @@ impl App for BattleApp {
                     let (chose, rect) =
                         stamp::show(ctx, &theme, &self.stamps, &mut sketch, me, sheet);
                     from_library = chose;
-                    return [hud_rect, bar.rect, rect, waiting].into_iter().flatten().collect();
+                    return [hud_rect, bar.rect, rect, waiting, clock_rect]
+                        .into_iter()
+                        .flatten()
+                        .collect();
                 }
                 // Each panel on its own. Folding them together first would
                 // claim everything between them, and they sit in opposite
                 // corners.
-                [hud_rect, bar.rect, waiting].into_iter().flatten().collect()
+                [hud_rect, bar.rect, waiting, clock_rect].into_iter().flatten().collect()
             }
         });
         self.screen = screen;

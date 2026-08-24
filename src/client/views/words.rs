@@ -89,6 +89,26 @@ pub mod stamps {
     pub const GONE: &str = "that stamp is gone";
 }
 
+/// How much of a match is left.
+pub mod clock {
+    pub fn generations_left(generations: u64, seconds: u64) -> String {
+        if generations == 0 {
+            return "time".into();
+        }
+        format!("{generations} left  ·  {}", clocked(seconds))
+    }
+
+    /// Minutes and seconds, because "224 seconds" is a number somebody has to
+    /// do arithmetic on to know whether to hurry.
+    fn clocked(seconds: u64) -> String {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+
+    pub fn squares_left(target: u64, most: u64) -> String {
+        format!("{most} of {target} squares")
+    }
+}
+
 /// The screen before a match starts, and the word for what one is doing.
 pub fn phase(phase: &crate::net::MatchPhase) -> &'static str {
     use crate::net::MatchPhase::*;

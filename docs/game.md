@@ -262,6 +262,10 @@ Letting people build while gathering was tried and is wrong. It is fair in *gene
 
 **No late joining.** Somebody arriving at generation four hundred is not in the same race — everybody else has four hundred generations of ground and they have a block — so the join is refused with a reason rather than allowed and hopeless. Coming back to a match you are already in is a different question, and your token still gets you your own seat.
 
+**A running match says how much of itself is left**, along the top of the screen. A board in a match otherwise looks like any other world, and a player cannot tell whether there are ten generations left or ten thousand — which is the whole of the difference between a match and a sandbox, since everything you decide in one depends on how much is left to decide in. Along the top because it is the one thing on screen that is about the *room* rather than about you: the HUD's corner is a player's own business.
+
+A timer says the generations left and the same figure as minutes and seconds, from the rate the world is stepped at. A territory match says how close the **leader** is to the target instead, because the question a target asks is how close anybody is to ending it. Both draw a bar underneath, which is the part a number does badly — "1240 left" means nothing without "of what" — and it turns colour in the last tenth, so the end of a match is visible without reading anything.
+
 It is won either on a **timer**, which is most ground when the generations run out, or on **territory**, which is first to a number of squares. Granted ground counts for neither: your home patch never decays, so scoring it would be points for having turned up.
 
 ## The menu
