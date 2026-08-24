@@ -95,6 +95,21 @@ mod tests {
     fn server_messages_round_trip() {
         let cases = vec![
             // Most first, and a player holding nothing is simply absent.
+            // A decided match, which is the shape with the most in it.
+            ServerMessage::Match {
+                phase: crate::net::MatchPhase::Over {
+                    winner: Some(PlayerId(4)),
+                    held: 812,
+                    at: 2000,
+                },
+                victory: Some(crate::net::Victory::Timer { generations: 2000 }),
+                players: vec![(PlayerId(1), "alice".into()), (PlayerId(4), "bob".into())],
+            },
+            ServerMessage::Match {
+                phase: crate::net::MatchPhase::Gathering,
+                victory: Some(crate::net::Victory::Territory { squares: 500 }),
+                players: vec![],
+            },
             ServerMessage::Standing {
                 tick: 40,
                 held: vec![(PlayerId(3), 1200), (PlayerId(1), 88), (PlayerId(9), 0)],
@@ -132,14 +147,19 @@ mod tests {
             ServerMessage::Rooms { rooms: vec![] },
             ServerMessage::Rooms {
                 rooms: vec![
+                    // A match, so the list can say so before anybody clicks.
                     crate::net::RoomInfo {
                         name: "arena".into(),
                         players: 3,
+                        phase: crate::net::MatchPhase::Gathering,
+                        victory: Some(crate::net::Victory::Territory { squares: 500 }),
                         world: crate::sim::WorldKind::Toroidal { rows: 6, cols: 6 },
                     },
                     crate::net::RoomInfo {
                         name: "lobby".into(),
                         players: 0,
+                        phase: crate::net::MatchPhase::Open,
+                        victory: None,
                         world: crate::sim::WorldKind::Infinite,
                     },
                 ],

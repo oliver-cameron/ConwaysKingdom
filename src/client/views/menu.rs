@@ -56,6 +56,10 @@ pub struct Menu {
 /// What the player chose this frame, if anything.
 pub enum Chose {
     Nothing,
+    /// Ask the server what rooms it has, again. The list refreshes itself
+    /// every few seconds; this is for the moment somebody has just made a room
+    /// on the other screen and does not want to wait out the interval.
+    Refresh,
     /// Play with no server at all. The simulation is deterministic, so this is
     /// a whole game rather than a broken one — just a solitary one.
     Offline,
@@ -172,7 +176,17 @@ pub fn show(
                                 // being broken.
                                 ui.colored_label(p.warn, words::NO_ROOMS);
                             } else {
-                                ui.label(words::ROOMS);
+                                ui.horizontal(|ui| {
+                                    ui.label(words::ROOMS);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.small_button(words::REFRESH).clicked() {
+                                                chose = Chose::Refresh;
+                                            }
+                                        },
+                                    );
+                                });
                                 for room in rooms {
                                     if room_button(ui, theme, room) {
                                         chose = Chose::Join(room.name.clone());
@@ -223,12 +237,23 @@ fn room_button(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo) -> bool {
         egui::FontId::proportional(14.0),
         p.text,
     );
+    // A room and a match are the same thing to everything else, so this list
+    // is the one place the difference has to show — clicking into a match that
+    // has already started only to be refused is a worse way to find out.
+    let mut under = describe(room.world);
+    if let Some(victory) = room.victory {
+        under = format!(
+            "{under} · {} · {}",
+            crate::client::views::words::phase(&room.phase),
+            crate::client::views::lobby::describe(victory)
+        );
+    }
     painter.text(
         rect.left_center() + egui::vec2(10.0, 9.0),
         egui::Align2::LEFT_CENTER,
-        describe(room.world),
+        under,
         egui::FontId::proportional(10.0),
-        p.text_dim,
+        if matches!(room.phase, crate::net::MatchPhase::Gathering) { p.good } else { p.text_dim },
     );
     painter.text(
         rect.right_center() - egui::vec2(10.0, 0.0),

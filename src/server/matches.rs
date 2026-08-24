@@ -1,8 +1,6 @@
-//! A match: a room with a beginning, an end and a winner.
-//!
-//! An ordinary room runs forever and nobody wins it. A match is the same world
-//! with three things added — everybody starts together, it stops, and when it
-//! stops somebody has the most ground.
+//! What a match *does*. The types it does it to are in [`crate::net`], because
+//! a client has to be told what a match is doing and the wire is where the two
+//! sides agree on a vocabulary.
 //!
 //! **Nothing here is in `sim`.** The simulation does not know what a match is,
 //! the same way it does not know what money is: a match is an arrangement of
@@ -11,82 +9,10 @@
 //! has to honour, and so cannot make a match world behave differently from the
 //! one people practise in.
 
+pub use crate::net::Victory;
 use crate::sim::PlayerId;
 
-/// What a room is doing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Phase {
-    /// Not a match. Steps forever, anybody may join, nobody wins.
-    Open,
-    /// Made and waiting. Players may join and place, and **the world does not
-    /// step** — so the opening is drawn rather than raced, and somebody who
-    /// joined a minute earlier has not had a minute of generations the others
-    /// did not.
-    Gathering,
-    /// Running, from the tick it started at. Nobody else may join.
-    Running { from: u64 },
-    /// Decided. The world has stopped and the result stands.
-    Over { winner: Option<PlayerId>, held: usize, at: u64 },
-}
-
-impl Phase {
-    /// Whether the world should advance.
-    pub fn stepping(&self) -> bool {
-        matches!(self, Self::Open | Self::Running { .. })
-    }
-
-    /// Whether somebody who is not already here may join.
-    ///
-    /// **No late joining.** A match is a race from a shared start, and a
-    /// player arriving at generation four hundred is not in the same race:
-    /// everybody else has four hundred generations of ground and they have a
-    /// block. Refused rather than allowed-and-hopeless, which reads as the
-    /// game being broken rather than as a rule.
-    pub fn open_to_newcomers(&self) -> bool {
-        matches!(self, Self::Open | Self::Gathering)
-    }
-
-    /// Whether a player may change the world.
-    ///
-    /// **Nothing happens before the whistle.** The same set as
-    /// [`Self::stepping`] today, and a different question: a match that let
-    /// people place while gathering would be fair in *generations* and unfair
-    /// in **time**, since somebody who joined ten minutes early has had ten
-    /// minutes to think and draw and the last to arrive has had none. Holding
-    /// the tick still does not hold a clock still.
-    ///
-    /// So a match opens with everybody looking at the same thing, and the
-    /// first thing anybody does is done against a running clock — which is a
-    /// better opening than a leisurely draw, since hesitating costs
-    /// generations rather than nothing.
-    pub fn accepts_actions(&self) -> bool {
-        matches!(self, Self::Open | Self::Running { .. })
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Gathering => "gathering",
-            Self::Running { .. } => "running",
-            Self::Over { .. } => "over",
-        }
-    }
-}
-
-/// How a match is won.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Victory {
-    /// Most ground when this many generations have passed.
-    ///
-    /// The deadline is a **tick**, not a clock. The tick is the generation and
-    /// it is already what a client adopts from its `Welcome`, so a match that
-    /// ends at generation N needs no clock synchronisation, cannot be
-    /// lengthened by a client that pauses, and is the same instant for
-    /// everybody by construction.
-    Timer { generations: u64 },
-    /// First to hold this many squares.
-    Territory { squares: usize },
-}
+pub use crate::net::MatchPhase as Phase;
 
 impl Victory {
     /// Read `timer 2000` or `territory 500`.
@@ -101,15 +27,6 @@ impl Victory {
             "timer" | "time" | "ticks" => Ok(Self::Timer { generations: n }),
             "territory" | "ground" | "land" => Ok(Self::Territory { squares: n as usize }),
             other => Err(format!("no win condition \"{other}\"; try timer or territory")),
-        }
-    }
-
-    pub fn describe(&self) -> String {
-        match self {
-            Self::Timer { generations } => {
-                format!("most ground after {generations} generations")
-            }
-            Self::Territory { squares } => format!("first to {squares} squares"),
         }
     }
 }

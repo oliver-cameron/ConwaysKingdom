@@ -86,7 +86,9 @@ What is left:
 
 **The server half is built** — see [server.md](server.md#matches). Phases, both win conditions, scoring that ignores granted ground, no late joining, and `match new` / `match start` / `match dispatch` at the console. A match is a room with a phase and it needed nothing in `sim`, as expected; gathering does not step, so the opening is drawn into a frozen world rather than raced, and the deadline is a tick so it needs no clock synchronisation.
 
-**Nothing of it reaches the client.** That is the gap, and it is most of what makes a match feel like one: there is no timer on screen, no scoreboard, no result, and no lobby — a player joins a match by typing its room name like any other room, and finds out it started because the world began moving. Two of those need a message on the wire that does not exist yet. The scoreboard has to come from the server, because a client holds only the chunks it subscribed to and so can count its own screen and nothing else.
+**Most of it reaches the client now.** `ServerMessage::Match` carries the phase, the win condition and who is here, and there is a lobby panel over the board while a match gathers and a result panel when it is decided; `ServerMessage::Standing` carries who holds most ground, drawn as bars in the HUD; and `RoomInfo` carries the phase, so the room list says which rooms are matches and which have started.
+
+**What is left is the clock.** A running match shows no time remaining and no target, so a player in one cannot tell whether there are ten generations left or ten thousand. `MatchPhase::Running` carries the tick it started from and the client has the generation, so a timer is arithmetic the client can already do — it is the drawing that is missing. A territory match wants the same thing as a bar against its target rather than against the leader.
 
 **A starting value of zero is not in.** It was in the original description and it is held back on purpose: life costs one, zero buys none of it, and the granted block never gives birth, so a match starting everybody at zero under today's rules is one where nobody can ever act. The income question below has to be settled first.
 

@@ -7,7 +7,7 @@ use std::cell::RefCell;
 
 use crate::render::app::App;
 use super::words;
-use super::{camera, hotbar, hud, icons, menu, overlay, stamp, Views};
+use super::{camera, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views};
 use hotbar::{Held, Key};
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
@@ -144,6 +144,8 @@ enum Screen {
 /// Generous, because it covers a connection being made as well as answered,
 /// and short enough that a wrong address is a mistake you correct rather than
 /// a page you reload.
+/// How often the room list is asked for again while it is on screen.
+const ROOM_LIST_REFRESH: f64 = 3.0;
 const ROOM_LIST_TIMEOUT: f64 = 8.0;
 
 /// What the pointer is doing.
@@ -361,6 +363,12 @@ pub struct BattleApp {
     /// When the room list was asked for, so a server that never answers
     /// becomes a message rather than a menu that says "asking" forever.
     asked_at: Option<f64>,
+    /// When the room list last arrived, so it can be asked for again before it
+    /// goes stale.
+    listed_at: f64,
+    /// What the match in this room is doing, once the server has said. `None`
+    /// in an ordinary room, and in one that has not answered yet.
+    lobby: Option<(crate::net::MatchPhase, Option<crate::net::Victory>, Vec<(PlayerId, String)>)>,
     /// Which room the server put us in, once it has said.
     ///
     /// Taken from the `Welcome` rather than from what was asked for: a client
@@ -626,6 +634,8 @@ impl BattleApp {
                     // a token stored against the wrong room brings you back to
                     // the wrong world.
                     crate::net::keep::store_token(&room, &token);
+                    // A different room is a different match, or none.
+                    self.lobby = None;
                     log::info!(
                         "joined room \"{room}\" as {you:?} at tick {tick}, in a {} world",
                         match world {
@@ -687,6 +697,9 @@ impl BattleApp {
                 // Who is winning. Kept whole rather than merged, because a
                 // player who has lost every square drops out of the list and a
                 // merge would leave their last bar standing forever.
+                ServerMessage::Match { phase, victory, players } => {
+                    self.lobby = Some((phase, victory, players));
+                }
                 ServerMessage::Standing { held, .. } => {
                     self.standing = held;
                 }
@@ -703,8 +716,9 @@ impl BattleApp {
                     }
                 }
                 ServerMessage::Rooms { rooms } => {
-                    log::info!("the server has {} room(s)", rooms.len());
+                    log::debug!("the server has {} room(s)", rooms.len());
                     self.asked_at = None;
+                    self.listed_at = self.elapsed;
                     if let Screen::Menu(m) = &mut self.screen {
                         // A refusal already on screen is carried over rather
                         // than replaced: the reason and the list of rooms that
@@ -1253,6 +1267,13 @@ impl BattleApp {
                 log::info!("playing alone");
                 self.screen = Screen::Playing;
             }
+            // The list refreshes itself; this is for somebody who has just
+            // made a room elsewhere and does not want to wait out the
+            // interval. Asking again is one small message.
+            menu::Chose::Refresh => {
+                self.listed_at = self.elapsed;
+                self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
+            }
             menu::Chose::Connect(address) => {
                 if let Screen::Menu(m) = &mut self.screen {
                     crate::net::keep::remember_name(&m.name);
@@ -1291,6 +1312,30 @@ impl BattleApp {
                 });
             }
         }
+    }
+
+    /// Ask for the room list again, so it does not go stale under the pointer.
+    ///
+    /// A list is a photograph of the moment it was asked for, and rooms come
+    /// and go — somebody makes a match while you are reading, or the one you
+    /// are about to click empties out. Re-asked rather than left with a button
+    /// to press, because a list that is only right when you remember to
+    /// refresh it is a list you cannot trust, and asking costs one small
+    /// message every few seconds to a server that is already sending you a
+    /// generation four times a second.
+    ///
+    /// Only while the list is what is on screen. Asking from inside a world
+    /// would be answering a question nobody has open.
+    fn refresh_room_list(&mut self) {
+        if !matches!(self.screen, Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { .. }, .. }))
+        {
+            return;
+        }
+        if self.elapsed - self.listed_at < ROOM_LIST_REFRESH {
+            return;
+        }
+        self.listed_at = self.elapsed;
+        self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
     }
 
     /// Give up on a server that has not answered.
@@ -1459,6 +1504,8 @@ impl App for BattleApp {
             value: Player::STARTING_VALUE,
             screen,
             asked_at: None,
+            listed_at: 0.0,
+            lobby: None,
             me: None,
             room: None,
             subscribed: std::collections::HashSet::new(),
@@ -1498,6 +1545,7 @@ impl App for BattleApp {
             self.pump_link();
         }
         self.time_out_room_list();
+        self.refresh_room_list();
 
         if let Some(Pending { drag, to_px }) = self.pending.take() {
             let to = self.cell_under_cursor(to_px);
@@ -1588,6 +1636,7 @@ impl App for BattleApp {
         // closure needs `&mut` on it while `self` is already borrowed by
         // `views`. Put back below, whatever was drawn on it.
         let mut sketch = std::mem::take(&mut self.sketch);
+        let lobby = self.lobby.clone();
         let on_web = cfg!(target_arch = "wasm32");
         let me = self.player();
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
@@ -1611,16 +1660,22 @@ impl App for BattleApp {
                 };
                 let bar = hotbar::show(ctx, &look, held, &self.stamps);
                 picked = bar.picked;
+                // Over the world rather than instead of it: a match that has
+                // not started looks exactly like a game that is broken, since
+                // nothing moves and nothing a player does appears.
+                let waiting = lobby.as_ref().and_then(|(phase, victory, players)| {
+                    lobby_view::show(ctx, &theme, me, phase, *victory, players)
+                });
                 if picking {
                     let (chose, rect) =
                         stamp::show(ctx, &theme, &self.stamps, &mut sketch, me, sheet);
                     from_library = chose;
-                    return [hud_rect, bar.rect, rect].into_iter().flatten().collect();
+                    return [hud_rect, bar.rect, rect, waiting].into_iter().flatten().collect();
                 }
                 // Each panel on its own. Folding them together first would
                 // claim everything between them, and they sit in opposite
                 // corners.
-                [hud_rect, bar.rect].into_iter().flatten().collect()
+                [hud_rect, bar.rect, waiting].into_iter().flatten().collect()
             }
         });
         self.screen = screen;

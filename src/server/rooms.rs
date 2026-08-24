@@ -392,6 +392,8 @@ impl Rooms {
             .iter()
             .map(|(name, server)| RoomInfo {
                 name: name.clone(),
+                phase: server.phase().clone(),
+                victory: server.victory(),
                 players: server.players().filter(|p| p.online).count() as u32,
                 world: server.world().kind(),
             })

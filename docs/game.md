@@ -250,9 +250,21 @@ Mine is a pencil rather than a rectangle, because a mine is placed a few at a ti
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 
+## Matches
+
+A **match** is a room that starts together, ends, and has a winner. It gathers first: you can join it, and until it starts **nothing happens at all** — the world does not step and nothing you do is taken. That is not an honour system, it is a screen. A still world with a hotbar that does nothing is indistinguishable from a broken game, so a match that has not started shows a panel over the board saying so, listing who else is here and how it will be won.
+
+Letting people build while gathering was tried and is wrong. It is fair in *generations* — the world is frozen, so nobody gains any — and unfair in **time**, because holding the tick still does not hold a clock still and whoever joined ten minutes early has had ten minutes to think. So the opening is a race: everybody is looking at the same thing when the clock starts, and hesitating costs generations rather than nothing.
+
+**No late joining.** Somebody arriving at generation four hundred is not in the same race — everybody else has four hundred generations of ground and they have a block — so the join is refused with a reason rather than allowed and hopeless. Coming back to a match you are already in is a different question, and your token still gets you your own seat.
+
+It is won either on a **timer**, which is most ground when the generations run out, or on **territory**, which is first to a number of squares. Granted ground counts for neither: your home patch never decays, so scoring it would be points for having turned up.
+
 ## The menu
 
 The screen before the game. A name, a server, and the rooms that server has, or "play alone".
+
+The list **refreshes itself** every few seconds while it is on screen, and there is a button for when you have just made a room on another screen and do not want to wait out the interval. A list is a photograph of the moment it was asked for — rooms come and go, matches start — and one that is only right when you remember to refresh it is one you cannot trust. Each room says whether it is a match and what it is doing, because a room and a match are the same thing to everything else, and finding out by clicking into one that has already started and being refused is a worse way to learn it.
 
 The room list is **asked for, not guessed**. A room is a whole separate world, so a name that does not exist is not a mistyped filter, it is nowhere — and a client cannot know what a server has without asking. So the menu shows nothing under Rooms until `ServerMessage::Rooms` comes back, rather than offering a name that might be there. A server that never answers becomes a message naming the address after eight seconds, because a menu that says "asking" forever is indistinguishable from one that is broken, and the two likeliest causes — a wrong address, and a server that is not running — both look exactly like it.
 

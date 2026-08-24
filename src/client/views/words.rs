@@ -22,6 +22,7 @@ pub mod menu {
     pub const SERVER_HINT: &str = "ws://host:8080/ws";
     pub const LOOK: &str = "See what rooms are there";
     pub const ASKING: &str = "asking the server…";
+    pub const REFRESH: &str = "refresh";
     pub const ROOMS: &str = "Rooms";
     pub const NO_ROOMS: &str = "this server has no rooms";
     pub const ALONE: &str = "Play alone";
@@ -86,6 +87,47 @@ pub mod stamps {
 
     pub const NOTHING_TO_CAPTURE: &str = "nothing of yours alive in there to capture";
     pub const GONE: &str = "that stamp is gone";
+}
+
+/// The screen before a match starts, and the word for what one is doing.
+pub fn phase(phase: &crate::net::MatchPhase) -> &'static str {
+    use crate::net::MatchPhase::*;
+    match phase {
+        Open => "room",
+        Gathering => "waiting to start",
+        Running { .. } => "under way",
+        Over { .. } => "finished",
+    }
+}
+
+/// The screen before a match starts.
+pub mod lobby {
+    pub const WAITING: &str = "Waiting to start";
+    pub const FINISHED: &str = "Match over";
+    pub const NOBODY: &str = "Nobody held any ground.";
+    pub const YOU: &str = "you";
+    pub const YOU_WON: &str = "You won";
+    pub const HOW: &str = "Nothing moves until whoever made the match starts it.";
+
+    pub fn who(n: usize) -> String {
+        match n {
+            0 => "Nobody here yet".into(),
+            1 => "1 player here".into(),
+            n => format!("{n} players here"),
+        }
+    }
+
+    pub fn held(n: usize) -> String {
+        format!("{n} squares")
+    }
+
+    pub fn timer(generations: u64) -> String {
+        format!("most ground after {generations} generations")
+    }
+
+    pub fn territory(squares: usize) -> String {
+        format!("first to {squares} squares")
+    }
 }
 
 /// The panel in the corner.

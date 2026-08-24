@@ -41,6 +41,13 @@ pub struct Server {
     phase: Phase,
     /// How this match is won, once it is running. `None` on an open room.
     victory: Option<Victory>,
+    /// Somebody joined, left, or the phase moved, and the lobby on every
+    /// client is now out of date.
+    ///
+    /// A flag rather than a cadence, because a gathering match **does not
+    /// step** — there is no tick to hang "every so often" from, and a lobby
+    /// that only refreshed when the world moved would never refresh at all.
+    lobby_changed: bool,
 }
 
 /// How often the standings go out, in generations.
@@ -79,6 +86,7 @@ impl Server {
             pending: Vec::new(),
             phase: Phase::Open,
             victory: None,
+            lobby_changed: false,
         }
     }
 
@@ -86,6 +94,7 @@ impl Server {
     pub fn make_match(&mut self, victory: Victory) {
         self.phase = Phase::Gathering;
         self.victory = Some(victory);
+        self.lobby_changed = true;
     }
 
     /// Start the clock. The tick it starts at is what the deadline is measured
@@ -94,6 +103,7 @@ impl Server {
         match self.phase {
             Phase::Gathering => {
                 self.phase = Phase::Running { from: self.tick() };
+                self.lobby_changed = true;
                 Ok(())
             }
             Phase::Open => Err("that room is not a match".into()),
@@ -108,6 +118,24 @@ impl Server {
 
     pub fn victory(&self) -> Option<Victory> {
         self.victory
+    }
+
+    /// What the match is doing and who is in it, as a lobby needs it.
+    ///
+    /// Only players who are **here now**: a room remembers everybody it has
+    /// ever seen, because their number is written into their ground, and a
+    /// lobby listing people who left months ago is a lobby nobody can count.
+    pub fn lobby(&self) -> ServerMessage {
+        let mut players: Vec<(PlayerId, String)> = self
+            .players
+            .values()
+            .filter(|p| p.online)
+            .map(|p| (p.id, p.name.clone()))
+            .collect();
+        // By number, which is the order they arrived, so the list does not
+        // reshuffle itself between two frames.
+        players.sort_by_key(|&(id, _)| id);
+        ServerMessage::Match { phase: self.phase.clone(), victory: self.victory, players }
     }
 
     /// Who holds how much, most first, as a client is told it.
@@ -176,6 +204,7 @@ impl Server {
             return None;
         }
         self.phase = Phase::Over { winner, held: count, at: self.tick() };
+        self.lobby_changed = true;
         log::info!(
             "match \"{}\" is over at tick {}: {}",
             self.room,
@@ -270,6 +299,7 @@ impl Server {
                     p.last_seen = 0;
                     p.online = true;
                     let (id, token) = (p.id, p.token.clone());
+                    self.lobby_changed = true;
                     log::info!("rejoin: {id:?} \"{}\" came back", self.players[&id].name);
                     self.grant_territory(id);
                     return Ok((id, token));
@@ -289,6 +319,7 @@ impl Server {
             }
         }
         let id = self.join(name)?;
+        self.lobby_changed = true;
         let token = new_token();
         self.players
             .get_mut(&id)
@@ -367,6 +398,7 @@ impl Server {
     /// carries it, so giving it to the next player to arrive would give away
     /// their territory with it. They come back to it with their token.
     pub fn leave(&mut self, id: PlayerId) {
+        self.lobby_changed = true;
         if let Some(p) = self.players.get_mut(&id) {
             p.online = false;
             let (name, since) = (p.name.clone(), p.last_seen);
@@ -557,9 +589,15 @@ impl Server {
         // phases. Emptied rather than left, so an action that arrived in the
         // same breath as the whistle cannot be applied a phase later than it
         // was priced.
+        let lobby: Vec<ServerMessage> = if std::mem::take(&mut self.lobby_changed) {
+            vec![self.lobby()]
+        } else {
+            Vec::new()
+        };
+
         if !self.phase.stepping() {
             self.pending.clear();
-            return Vec::new();
+            return lobby;
         }
         let applied = std::mem::take(&mut self.pending);
         for stamped in &applied {
@@ -581,7 +619,8 @@ impl Server {
 
         // Every generation, even an empty one: the tick is what keeps clients
         // in step, and a quiet generation still moves the world on.
-        let mut out = vec![ServerMessage::Step { tick: self.tick(), actions: applied }];
+        let mut out = lobby;
+        out.push(ServerMessage::Step { tick: self.tick(), actions: applied });
 
         // And the standings on a cadence. One pass over the world to work out,
         // and a bar that moved four times a second would be harder to read
@@ -879,6 +918,47 @@ mod tests {
         let stopped = s.tick();
         s.step();
         assert_eq!(s.tick(), stopped, "an over match holds still");
+    }
+
+    /// **A gathering match does not step, so a lobby cannot be told on a
+    /// cadence.** There is no tick to hang "every so often" from, and a lobby
+    /// that only refreshed when the world moved would never refresh at all —
+    /// so it goes out when it changes, and a still world still sends one.
+    #[test]
+    fn a_lobby_is_told_when_it_changes_even_though_nothing_steps() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 100 });
+
+        let lobby = |out: &[ServerMessage]| {
+            out.iter().find_map(|m| match m {
+                ServerMessage::Match { players, phase, .. } => Some((players.clone(), phase.clone())),
+                _ => None,
+            })
+        };
+
+        // Making it is a change, and the world is frozen.
+        let (players, phase) = lobby(&s.step()).expect("the making of it");
+        assert_eq!(phase, Phase::Gathering);
+        assert!(players.is_empty());
+        assert_eq!(s.tick(), 0, "and still nothing stepped");
+
+        // Quiet in between: a lobby nobody has touched is not resent.
+        assert!(lobby(&s.step()).is_none(), "nothing changed, so nothing is said");
+
+        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (players, _) = lobby(&s.step()).expect("somebody arrived");
+        assert_eq!(players, vec![(alice, "alice".to_string())]);
+
+        s.leave(alice);
+        let (players, _) = lobby(&s.step()).expect("and left");
+        assert!(players.is_empty(), "a lobby lists who is here now: {players:?}");
+
+        // Starting is a change too, and it is the one a client must not miss:
+        // a lobby still saying "waiting to start" after it has started is a
+        // screen telling a lie.
+        s.start_match().unwrap();
+        let (_, phase) = lobby(&s.step()).expect("the whistle");
+        assert!(matches!(phase, Phase::Running { .. }));
     }
 
     /// Most first, ties by number, and nobody holding nothing.

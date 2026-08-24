@@ -275,6 +275,92 @@ pub struct Stamped {
     pub action: Action,
 }
 
+/// What a room is doing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MatchPhase {
+    /// Not a match. Steps forever, anybody may join, nobody wins.
+    Open,
+    /// Made and waiting. Players may join and place, and **the world does not
+    /// step** — so the opening is drawn rather than raced, and somebody who
+    /// joined a minute earlier has not had a minute of generations the others
+    /// did not.
+    Gathering,
+    /// Running, from the tick it started at. Nobody else may join.
+    Running { from: u64 },
+    /// Decided. The world has stopped and the result stands.
+    Over { winner: Option<PlayerId>, held: usize, at: u64 },
+}
+
+impl MatchPhase {
+    /// Whether the world should advance.
+    pub fn stepping(&self) -> bool {
+        matches!(self, Self::Open | Self::Running { .. })
+    }
+
+    /// Whether somebody who is not already here may join.
+    ///
+    /// **No late joining.** A match is a race from a shared start, and a
+    /// player arriving at generation four hundred is not in the same race:
+    /// everybody else has four hundred generations of ground and they have a
+    /// block. Refused rather than allowed-and-hopeless, which reads as the
+    /// game being broken rather than as a rule.
+    pub fn open_to_newcomers(&self) -> bool {
+        matches!(self, Self::Open | Self::Gathering)
+    }
+
+    /// Whether a player may change the world.
+    ///
+    /// **Nothing happens before the whistle.** The same set as
+    /// [`Self::stepping`] today, and a different question: a match that let
+    /// people place while gathering would be fair in *generations* and unfair
+    /// in **time**, since somebody who joined ten minutes early has had ten
+    /// minutes to think and draw and the last to arrive has had none. Holding
+    /// the tick still does not hold a clock still.
+    ///
+    /// So a match opens with everybody looking at the same thing, and the
+    /// first thing anybody does is done against a running clock — which is a
+    /// better opening than a leisurely draw, since hesitating costs
+    /// generations rather than nothing.
+    pub fn accepts_actions(&self) -> bool {
+        matches!(self, Self::Open | Self::Running { .. })
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Gathering => "gathering",
+            Self::Running { .. } => "running",
+            Self::Over { .. } => "over",
+        }
+    }
+}
+
+/// How a match is won.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Victory {
+    /// Most ground when this many generations have passed.
+    ///
+    /// The deadline is a **tick**, not a clock. The tick is the generation and
+    /// it is already what a client adopts from its `Welcome`, so a match that
+    /// ends at generation N needs no clock synchronisation, cannot be
+    /// lengthened by a client that pauses, and is the same instant for
+    /// everybody by construction.
+    Timer { generations: u64 },
+    /// First to hold this many squares.
+    Territory { squares: usize },
+}
+
+impl Victory {
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Timer { generations } => {
+                format!("most ground after {generations} generations")
+            }
+            Self::Territory { squares } => format!("first to {squares} squares"),
+        }
+    }
+}
+
 /// One room, as a menu needs to show it.
 ///
 /// Enough to choose by and no more: which world, whether anybody is in it, and
@@ -283,6 +369,12 @@ pub struct Stamped {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomInfo {
     pub name: RoomName,
+    /// Whether this room is a match and what it is doing. A room and a match
+    /// are the same thing to everything else, so the one place the difference
+    /// has to show is the list somebody picks from.
+    pub phase: MatchPhase,
+    /// How it is won, if it is a match.
+    pub victory: Option<Victory>,
     /// Players connected right now, not players the room has ever seen. The
     /// second number is the one the world remembers and the wrong one to
     /// choose a room by.
@@ -389,6 +481,16 @@ pub enum ServerMessage {
     ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
     /// The client's copy of these chunks is wrong; here they are again.
     Resync { tick: Tick, chunks: Vec<ChunkId> },
+    /// What the match in this room is doing, and who is in it.
+    ///
+    /// Sent on joining and again whenever it changes, because a lobby is a
+    /// screen that has to be right rather than eventually right: somebody
+    /// looking at "waiting to start" after it has started is looking at a lie.
+    ///
+    /// Names as well as numbers. A lobby is the one screen where players are
+    /// people rather than colours, since the whole of it is finding out who
+    /// else turned up.
+    Match { phase: MatchPhase, victory: Option<Victory>, players: Vec<(PlayerId, String)> },
     /// Who holds how much ground, most first.
     ///
     /// **From the server because a client cannot work it out.** A client holds
