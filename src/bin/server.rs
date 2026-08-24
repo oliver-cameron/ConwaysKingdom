@@ -30,7 +30,13 @@ use conwayskingdom::server::rooms::Rooms;
 use conwayskingdom::server::ws;
 
 fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Through the console's printer, so a log line arriving while somebody is
+    // typing appears *above* the half-typed command rather than through the
+    // middle of it. With no terminal there is no prompt to protect and it
+    // falls through to stderr, which is where these always went.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .target(conwayskingdom::server::ws::ConsoleLog::target())
+        .init();
 
     // `[::]` rather than `0.0.0.0`: unspecified **IPv6**, which on Linux
     // accepts IPv4 as well because `net.ipv6.bindv6only` is 0 by default. An

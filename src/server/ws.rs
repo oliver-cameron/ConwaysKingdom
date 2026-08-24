@@ -72,6 +72,72 @@ pub struct Config {
     pub shape: WorldKind,
 }
 
+/// Where log lines go while somebody is typing.
+///
+/// A log line written straight to the terminal lands **in the middle of the
+/// half-typed command**, because the cursor is sitting after a prompt the
+/// logger knows nothing about. rustyline's external printer is the fix: it
+/// wipes the prompt, writes the line, and draws the prompt and whatever was
+/// typed back underneath — so the log scrolls past above and the command being
+/// typed stays put.
+///
+/// A global because the logger is set up before there is a terminal to print
+/// to, and may never get one: a server under systemd has no prompt to protect,
+/// and its lines go to stderr as they always did. So this is empty until the
+/// console thread has an editor, and every write asks.
+#[cfg(feature = "server")]
+static PRINTER: std::sync::Mutex<Option<Box<dyn rustyline::ExternalPrinter + Send>>> =
+    std::sync::Mutex::new(None);
+
+/// Somewhere for `env_logger` to write that respects a prompt.
+///
+/// A `Write` rather than a `log::Log`, so env_logger goes on doing the
+/// formatting — the timestamps, the levels and the colours are its business
+/// and there is no reason to reimplement them to change where the bytes land.
+///
+/// Buffered to the newline, because a printer call is a whole line: env_logger
+/// writes a record in several `write` calls, and printing each one separately
+/// would redraw the prompt in the middle of a log line.
+#[cfg(feature = "server")]
+pub struct ConsoleLog {
+    line: Vec<u8>,
+}
+
+#[cfg(feature = "server")]
+impl ConsoleLog {
+    /// Hand this to `env_logger::Builder::target`, and log lines will appear
+    /// above whatever is being typed for as long as there is a prompt.
+    pub fn target() -> env_logger::Target {
+        env_logger::Target::Pipe(Box::new(Self { line: Vec::new() }))
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::io::Write for ConsoleLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.line.extend_from_slice(buf);
+        while let Some(at) = self.line.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.line.drain(..=at).collect();
+            let text = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
+            let printed = PRINTER
+                .lock()
+                .ok()
+                .and_then(|mut p| p.as_mut().map(|p| p.print(text.clone()).is_ok()))
+                .unwrap_or(false);
+            // No prompt to protect, or the printer gave up: stderr, which is
+            // where these went before there was a line editor at all.
+            if !printed {
+                let _ = writeln!(std::io::stderr(), "{text}");
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// A prompt, with history on the up arrow.
 ///
 /// **History is the whole reason there is a library here.** Typing
@@ -90,6 +156,17 @@ pub struct Config {
 /// through it, which is more than this is worth until it annoys somebody.
 #[cfg(feature = "server")]
 fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<String>) {
+    // Installed before the first prompt is drawn, so a line arriving in the
+    // same breath as the console starting does not land on top of it.
+    match editor.create_external_printer() {
+        Ok(printer) => {
+            if let Ok(mut slot) = PRINTER.lock() {
+                *slot = Some(Box::new(printer));
+            }
+        }
+        Err(e) => log::debug!("no external printer ({e}); logs will interrupt the prompt"),
+    }
+
     let history = history_path();
     if let Some(path) = &history {
         let _ = editor.load_history(path);
@@ -110,8 +187,14 @@ fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<Strin
             // stop is `stop`, which saves on the way out, and a stray Ctrl-C
             // taking every world down unsaved would be an expensive twitch.
             Err(rustyline::error::ReadlineError::Interrupted) => continue,
+            // End of input is **not** `stop`. It arrives when a terminal
+            // closes, and it arrives at once for a server started in the
+            // background or with its input redirected -- so treating it as a
+            // command shuts down a server nobody asked to shut down, which is
+            // exactly what it did the first time this was tried. The way out
+            // is to type it.
             Err(rustyline::error::ReadlineError::Eof) => {
-                let _ = tx.send("stop".into());
+                log::debug!("console closed; running headless");
                 break;
             }
             Err(e) => {
@@ -122,6 +205,11 @@ fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<Strin
     }
     if let Some(path) = &history {
         let _ = editor.save_history(path);
+    }
+    // There is no prompt to write above any more, and a printer for a dead
+    // editor is a line that goes nowhere.
+    if let Ok(mut slot) = PRINTER.lock() {
+        *slot = None;
     }
 }
 
