@@ -48,6 +48,10 @@ pub struct Status<'a> {
     /// a link that is open and a link that is keeping up are two facts, and
     /// only the first of them was on screen.
     pub geiger: Geiger,
+    /// Watching without a seat, which the HUD says for the whole visit rather
+    /// than once: a spectator whose clicks do nothing needs to know why the
+    /// first time and not the fifth.
+    pub watching: bool,
 }
 
 /// Whether the panel shows what it shows for a developer rather than a player.
@@ -135,6 +139,12 @@ pub fn show(
                 }
                 if let Some(room) = status.room {
                     ui.label(format!("· room {room}"));
+                }
+                if status.watching {
+                    ui.colored_label(
+                        theme.palette.accent,
+                        crate::client::views::words::menu::watch::WATCHING,
+                    );
                 }
             });
             ui.small(match status.world {

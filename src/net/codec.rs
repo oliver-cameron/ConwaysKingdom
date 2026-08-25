@@ -89,11 +89,13 @@ mod tests {
                 name: "arena".into(),
                 shape: crate::sim::WorldKind::Toroidal { rows: 6, cols: 8 },
                 victory: None,
+                private: false,
             },
             ClientMessage::Create {
                 name: "cup".into(),
                 shape: crate::sim::WorldKind::Infinite,
                 victory: Some(crate::net::Victory::Timer { generations: 2000 }),
+                private: true,
             },
         ];
         for msg in cases {

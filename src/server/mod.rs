@@ -524,6 +524,25 @@ impl Server {
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             },
             ClientMessage::Act(stamped) => {
+                // **An action belongs to the connection that sent it**, not to
+                // the player it names. Without this the `player` field is a
+                // claim rather than an identity: any connection in the room
+                // could act as anybody in it, spending their value and placing
+                // their cells, and a connection with no seat at all — a
+                // spectator — could act as everybody.
+                //
+                // Checked here rather than by rewriting `stamped.player` to
+                // `from`, because the two disagreeing is a client that is
+                // wrong or lying and neither should be quietly obeyed under a
+                // corrected name.
+                if from != Some(stamped.player) {
+                    log::warn!(
+                        "dropped an action attributed to {:?} from {:?}",
+                        stamped.player,
+                        from
+                    );
+                    return Vec::new();
+                }
                 // Nothing happens before the whistle, and nothing after it.
                 // Dropped rather than answered, which is what an action the
                 // server will not take already does -- the client predicted it
@@ -611,10 +630,13 @@ impl Server {
                 }
                 Vec::new()
             }
-            // A room cannot list the rooms, and it cannot make one: it is one
-            // of them, and it knows of no others. `Rooms::handle` answers both
-            // before it routes anything here.
-            ClientMessage::Rooms | ClientMessage::Create { .. } => Vec::new(),
+            // A room cannot answer these three. It is one room, so it knows
+            // of no others to list, cannot make one, and cannot admit a
+            // watcher to somewhere that is not itself. `Rooms::handle`
+            // answers all three before it routes anything here.
+            ClientMessage::Rooms
+            | ClientMessage::Create { .. }
+            | ClientMessage::Watch { .. } => Vec::new(),
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.
@@ -1444,6 +1466,50 @@ mod tests {
         s.step();
         assert!(s.world().cell_at(row, col).unwrap().is_ice(), "the pane should still be there");
         assert_eq!(s.value_of(me), spent, "and nothing should have been paid for it");
+    }
+
+    /// An action belongs to the connection that sent it. Without this the
+    /// `player` field is a claim rather than an identity: anybody in the room
+    /// could act as anybody else in it, spending their value and placing their
+    /// cells, and a connection with no seat at all — a spectator — could act
+    /// as everybody.
+    ///
+    /// Measured on the purse rather than on the world, because a single live
+    /// cell dies of loneliness in the same step that applies it. The value is
+    /// the honest witness: it moves exactly when an action was taken.
+    #[test]
+    fn an_action_attributed_to_somebody_else_is_dropped() {
+        let mut s = Server::new(World::infinite_empty());
+        let alice = s.join("alice").unwrap();
+        let bob = s.join("bob").unwrap();
+        // Ground Alice owns with nothing standing on it, so the only reason
+        // an action there could fail is the one being tested.
+        let at = (10_000, 10_000);
+        stake(&mut s, alice, at, 3);
+        let before = s.value_of(alice).unwrap();
+
+        let forged = |tick| Stamped {
+            tick,
+            player: alice,
+            action: Action::Paint { cells: vec![at], placement: Placement::Life },
+        };
+
+        // Bob's connection, claiming to be Alice.
+        s.handle(Some(bob), ClientMessage::Act(forged(s.tick())));
+        assert_eq!(s.value_of(alice).unwrap(), before, "Alice paid for Bob's action");
+
+        // And a connection with no seat at all, which is what a spectator is.
+        s.handle(None, ClientMessage::Act(forged(s.tick())));
+        assert_eq!(s.value_of(alice).unwrap(), before, "a watcher acted");
+
+        // The same action from Alice's own connection is taken, so this is a
+        // test about attribution and not about the action being invalid.
+        s.handle(Some(alice), ClientMessage::Act(forged(s.tick())));
+        assert_eq!(
+            s.value_of(alice).unwrap(),
+            before - crate::sim::LIFE_COST,
+            "Alice's own action was refused too"
+        );
     }
 
     #[test]

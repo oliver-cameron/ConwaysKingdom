@@ -418,6 +418,20 @@ pub enum ClientMessage {
     /// outside every room. It names no world itself, which is why it is one of
     /// the messages a connection with no seat may send.
     Rooms,
+    /// Watch a room without taking a seat in it.
+    ///
+    /// A spectator is **not a player with the actions taken away**, it is a
+    /// connection with a room and no `PlayerId`. That distinction is the whole
+    /// design, and it is forced by two facts rather than chosen. A seat is one
+    /// of fifteen — `PlayerId::MAX`, four bits in the cell — so spending one
+    /// on somebody who is only watching costs a real player their place. And
+    /// **no late joining is a rule about players**: somebody arriving at
+    /// generation four hundred is exactly what watching is for, so the refusal
+    /// has to be able to tell the two apart.
+    ///
+    /// Answerable without a seat, like `Join`, and it names its own room for
+    /// the same reason.
+    Watch { room: RoomName },
     /// Make a room that is not here yet.
     ///
     /// Answerable without a seat, like `Rooms` and `Join` and for a sharper
@@ -442,6 +456,11 @@ pub enum ClientMessage {
         /// How it is won. `None` makes a world, which is a match with no way
         /// to end.
         victory: Option<Victory>,
+        /// Kept out of the room listing, reachable only by the code the
+        /// server generates — which becomes the room's name, because a
+        /// generated name is already unique and already what `Join` carries.
+        /// `name` is ignored when this is set.
+        private: bool,
     },
 }
 
@@ -487,6 +506,18 @@ pub enum ServerMessage {
     },
     Rejected {
         reason: String,
+    },
+    /// Watching, and here is the world to build in order to watch it.
+    ///
+    /// A `Welcome` without a player: no number, no token, no value and no
+    /// spawn, because a spectator has none of those and sending zeroes would
+    /// have the client draw a purse and a home patch belonging to nobody.
+    /// What is left is what watching actually needs — which world, and where
+    /// it has got to.
+    Watching {
+        room: RoomName,
+        tick: Tick,
+        world: WorldKind,
     },
     /// The answer to [`ClientMessage::Create`]: what the room ended up being
     /// called, or why there is not one.

@@ -111,6 +111,28 @@ pub fn remember_name(name: &str) {
     set("name", name);
 }
 
+/// Every game this client has finished, as lines — the format is
+/// [`crate::client::record`]'s business, not this module's.
+///
+/// Kept here because this is where a client keeps what it has, and a second
+/// store beside it would be a second answer to "where does the browser put
+/// things" for no reason. Empty rather than `None` when there is nothing: a
+/// history that has not started and one that could not be read are the same
+/// thing to a home screen, and both draw nothing.
+pub fn games() -> String {
+    imp::get(&field("games")).unwrap_or_default()
+}
+
+pub fn remember_games(lines: &str) {
+    set("games", lines);
+}
+
+/// The field name, so the one caller that needs an untrimmed value can ask for
+/// it the same way [`get`] does.
+fn field(name: &str) -> String {
+    name.to_string()
+}
+
 fn get(field: &str) -> Option<String> {
     imp::get(field).map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }

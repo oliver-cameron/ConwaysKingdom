@@ -26,6 +26,10 @@ pub mod menu {
     pub const ROOMS: &str = "Rooms";
     pub const NO_ROOMS: &str = "this server has no rooms";
     pub const ALONE: &str = "Play alone";
+    /// Out of a screen, by pointer. Escape does the same, and both exist
+    /// because a phone has no escape key and a keyboard user should not have
+    /// to reach for the mouse.
+    pub const BACK: &str = "‹ back";
     pub const ALONE_NOTE: &str = "The rules are the same offline. Nobody else is.";
     pub const EMPTY_ROOM: &str = "empty";
 
@@ -51,6 +55,56 @@ pub mod menu {
 
     pub const LOST_CONNECTION: &str = "the connection went away";
 
+    /// The home screen: who you are, what you have done, and the way in.
+    pub mod home {
+        pub const PLAY: &str = "Play";
+        pub const WHO: &str = "You are";
+        pub const RECORD: &str = "So far";
+        /// A first visit has nothing to show, and five zeroes would say only
+        /// that the game keeps score.
+        pub const NOTHING_YET: &str = "Nothing played yet. That is what Play is for.";
+
+        pub fn games(n: usize) -> String {
+            if n == 1 {
+                "1 world".into()
+            } else {
+                format!("{n} worlds")
+            }
+        }
+
+        pub fn matches(won: usize, played: usize) -> String {
+            format!("{won} of {played} matches won")
+        }
+
+        pub fn best(squares: u32) -> String {
+            format!("{squares} squares at your largest")
+        }
+
+        pub fn generations(n: u64) -> String {
+            format!("{n} generations lived through")
+        }
+    }
+
+    /// Reaching a room that is not in the listing.
+    pub mod code {
+        pub const LABEL: &str = "Have a code?";
+        pub const HINT: &str = "abc234";
+        pub const GO: &str = "Go";
+        /// What the server hands back after making a private room. The thing
+        /// you send somebody, so it is worth saying that out loud.
+        pub const MADE: &str = "Your code — send it to whoever is playing:";
+    }
+
+    /// Watching without a seat.
+    pub mod watch {
+        pub const WATCH: &str = "Watch";
+        /// Said on the HUD for the whole visit, because a spectator whose
+        /// clicks do nothing needs to know why the first time rather than the
+        /// fifth.
+        pub const WATCHING: &str = "watching";
+        pub const NO_SEAT: &str = "You are watching this world, not playing in it.";
+    }
+
     /// Making a room. One label per decision, and a label appears only when
     /// the decision it belongs to is live — see [planned.md].
     ///
@@ -67,10 +121,29 @@ pub mod menu {
         pub const BOUNDLESS: &str = "Boundless";
         pub const WRAPPING: &str = "Wrapping";
         pub const SIZE: &str = "Size";
-        pub const SIZE_HINT: &str = "12x12";
+        /// Two fields, because a size is two numbers. Naming them separately
+        /// is also what lets an error say which one is wrong.
+        pub const ROWS: &str = "Rows";
+        pub const COLS: &str = "Columns";
         /// Chunks, not cells. Said out loud because the number is small and
         /// would otherwise read as a tiny world.
         pub const SIZE_NOTE: &str = "in chunks, each 16 cells square";
+        pub const PRIVATE: &str = "Who can find it";
+        pub const LISTED: &str = "Anyone";
+        pub const UNLISTED: &str = "By code";
+        pub const LISTED_NOTE: &str = "In the room list, for whoever is on this server.";
+        /// The name field is ignored for a private room, and a field being
+        /// quietly discarded is worse than one that is not there.
+        pub const UNLISTED_NOTE: &str =
+            "Not listed. The server gives it a code to share, instead of a name.";
+
+        pub fn not_a_number_for(which: &str, text: &str) -> String {
+            format!("{which}: \"{text}\" is not a number")
+        }
+
+        pub fn out_of_range(which: &str, most: i32) -> String {
+            format!("{which}: between 1 and {most}")
+        }
         pub const ENDS: &str = "Ends";
         pub const NEVER: &str = "Never";
         pub const TIMER: &str = "Timer";

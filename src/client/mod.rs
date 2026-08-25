@@ -5,6 +5,7 @@
 //! where the camera points, what a click means.
 
 pub mod desync;
+pub mod record;
 pub mod views;
 
 pub use views::battle::{BattleApp, GENERATION_SPAN};

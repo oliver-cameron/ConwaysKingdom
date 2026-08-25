@@ -87,16 +87,20 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
         // -- the whole server goes with it, and everybody in every room.
         "stop" | "quit" | "exit" => Reply { lines: vec!["stopping".into()], stop: true },
 
+        // Everything, private rooms included and marked. Whoever is running
+        // the server can read the save directory anyway, and an operator who
+        // cannot see a room cannot delete one that is being misused.
         "rooms" | "ls" => {
-            let listing = rooms.listing();
+            let listing = rooms.everything();
             Reply::lines(
                 listing
                     .iter()
-                    .map(|room| {
+                    .map(|(room, private)| {
                         let here =
                             if room.name == rooms.default_room() { " (default)" } else { "" };
+                        let hidden = if *private { "  private" } else { "" };
                         format!(
-                            "  {:<24} {:<22} {} online{here}",
+                            "  {:<24} {:<22} {} online{here}{hidden}",
                             room.name,
                             describe(room.world),
                             room.players

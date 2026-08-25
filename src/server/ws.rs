@@ -558,13 +558,28 @@ async fn connection(socket: WebSocket, state: AppState) {
     // from the `Welcome`: player numbers are per room, so the number alone
     // does not say where its owner is sitting.
     let mut me: Option<Seat> = None;
+    // Which world this connection is watching without a seat in it. Set by a
+    // `Watching` and cleared by a `Welcome`, because joining a room you were
+    // watching makes you a player in it rather than both at once.
+    let mut watching: Option<RoomName> = None;
 
     loop {
         tokio::select! {
             // Replies addressed to this connection.
             Some(msg) = reply_rx.recv() => {
-                if let ServerMessage::Welcome { you, room, .. } = &msg {
-                    me = Some((room.clone(), *you));
+                match &msg {
+                    ServerMessage::Welcome { you, room, .. } => {
+                        me = Some((room.clone(), *you));
+                        watching = None;
+                    }
+                    // A watcher hears the room's broadcast and holds no seat,
+                    // so leaving is a socket closing and nothing more -- there
+                    // is no player to mark offline and no ground to keep.
+                    ServerMessage::Watching { room, .. } => {
+                        me = None;
+                        watching = Some(room.clone());
+                    }
+                    _ => {}
                 }
                 if !send(&mut sink, &msg).await { break; }
             }
@@ -575,7 +590,11 @@ async fn connection(socket: WebSocket, state: AppState) {
             broadcast = subscribed.recv() => {
                 match broadcast {
                     Ok((room, msg)) => {
-                        if me.as_ref().is_some_and(|(mine, _)| *mine == room)
+                        // Seated or watching: both are in the room, and a
+                        // spectator that heard no `Step` would be watching a
+                        // world that never moved.
+                        let mine = me.as_ref().map(|(r, _)| r).or(watching.as_ref());
+                        if mine.is_some_and(|mine| *mine == room)
                             && !send(&mut sink, &msg).await
                         {
                             break;
@@ -596,7 +615,11 @@ async fn connection(socket: WebSocket, state: AppState) {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
                             let _ = state.to_sim.send(ToSim::Message {
-                                from: Caller { connection: id, seat: me.clone() },
+                                from: Caller {
+                                    connection: id,
+                                    seat: me.clone(),
+                                    watching: watching.clone(),
+                                },
                                 msg,
                                 reply: reply_tx.clone(),
                             });

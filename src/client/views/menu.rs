@@ -44,6 +44,20 @@ pub enum Stage {
     Failed(String),
 }
 
+/// Which of the menu's screens is showing.
+///
+/// Two, and the depth stops there. Clash Royale's interface almost never goes
+/// more than one level down and disguises it where it does, which is the whole
+/// argument for this being a page rather than a stack: home is who you are and
+/// what you have done, play is where you go, and there is nothing under either.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    /// Your name, your record, and the way in.
+    Home,
+    /// A server, its rooms, a code, and the form that makes one.
+    Play,
+}
+
 pub struct Menu {
     pub name: String,
     /// Where to connect. Fixed on the web — the page came from a server, so
@@ -51,6 +65,20 @@ pub struct Menu {
     /// have come from.
     pub address: String,
     pub stage: Stage,
+    /// Which screen is showing.
+    pub page: Page,
+    /// A code typed in to reach a room that is not in the listing.
+    ///
+    /// Beside the room list rather than instead of it: a code is how you reach
+    /// somebody's private game, and the list is how you find a public one.
+    /// They are two ways in, not two versions of one.
+    pub code: String,
+    /// What this client has played before, read once when the menu opens.
+    ///
+    /// Read once rather than every frame, because it comes out of
+    /// `localStorage` or a file and neither wants touching sixty times a
+    /// second for a number that changes when a game ends.
+    pub record: crate::client::record::Summary,
     /// The world being described, if the form is open.
     ///
     /// On the menu rather than inside [`Stage::Choosing`] because the room
@@ -87,8 +115,15 @@ pub enum Shape {
 pub struct Draft {
     pub name: String,
     pub shape: Shape,
-    /// `ROWSxCOLS`, read only when the shape is wrapping.
-    pub size: String,
+    /// How many chunks tall and wide, read only when the shape is wrapping.
+    ///
+    /// Two fields rather than one `ROWSxCOLS` string, because a size is two
+    /// numbers and typing it as one was asking the player to learn a format
+    /// in order to answer a question they already understood. It also puts the
+    /// error where it belongs: a rows field that will not parse is a wrong
+    /// number in a labelled box, not a whole size that "is not a size".
+    pub rows: String,
+    pub cols: String,
     pub ends: Ends,
     /// Generations or squares, read only when it ends.
     pub target: String,
@@ -97,6 +132,12 @@ pub struct Draft {
     /// Sent, and waiting for an answer. The form stays on screen while it is
     /// true, because a refusal has to arrive back into something.
     pub asking: bool,
+    /// Kept out of the listing and reached by a code the server generates.
+    ///
+    /// The name field is ignored when this is set, and the form says so — a
+    /// field that is being quietly discarded is worse than one that is not
+    /// there.
+    pub private: bool,
 }
 
 impl Default for Draft {
@@ -105,11 +146,13 @@ impl Default for Draft {
         Self {
             name: String::new(),
             shape: Shape::Boundless,
-            size: format!("{rows}x{cols}"),
+            rows: rows.to_string(),
+            cols: cols.to_string(),
             ends: Ends::Never,
             target: crate::net::DEFAULT_TIMER.to_string(),
             note: None,
             asking: false,
+            private: false,
         }
     }
 }
@@ -128,11 +171,15 @@ impl Draft {
     /// somebody changing their mind — refusing on it would be refusing a
     /// number nobody is asking to use.
     pub fn parse(&self) -> Result<(RoomName, WorldKind, Option<Victory>), String> {
-        let name = crate::net::room_name(&self.name)?;
+        // A private room's name is the code the server generates, so there is
+        // nothing here to check and nothing to refuse.
+        let name = if self.private { String::new() } else { crate::net::room_name(&self.name)? };
         let shape = match self.shape {
             Shape::Boundless => WorldKind::Infinite,
-            Shape::Wrapping => crate::sim::parse_torus(self.size.trim())
-                .map_err(|_| words::make::not_a_size(self.size.trim()))?,
+            Shape::Wrapping => WorldKind::Toroidal {
+                rows: chunks(&self.rows, words::make::ROWS)?,
+                cols: chunks(&self.cols, words::make::COLS)?,
+            },
         };
         let victory = match self.ends {
             Ends::Never => None,
@@ -190,7 +237,10 @@ pub enum Chose {
         name: RoomName,
         shape: WorldKind,
         victory: Option<Victory>,
+        private: bool,
     },
+    /// Watch this room without taking a seat in it.
+    Watch(RoomName),
 }
 
 impl Menu {
@@ -209,6 +259,9 @@ impl Menu {
             name: crate::net::keep::name().unwrap_or_else(|| "player".to_string()),
             address,
             stage: Stage::Idle,
+            page: Page::Home,
+            code: String::new(),
+            record: crate::client::record::Summary::of(&crate::client::record::games()),
             draft: None,
         }
     }
@@ -222,7 +275,6 @@ pub fn show(
     menu: &mut Menu,
     on_web: bool,
 ) -> (Chose, Option<egui::Rect>) {
-    let p = theme.palette;
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
@@ -230,8 +282,8 @@ pub fn show(
         ctx,
         |ui| {
             egui::Frame::new()
-                .fill(p.surface)
-                .stroke(egui::Stroke::new(1.0, p.line))
+                .fill(theme.palette.surface)
+                .stroke(egui::Stroke::new(1.0, theme.palette.line))
                 .corner_radius(m.rounding)
                 .inner_margin(m.panel_padding * 1.6)
                 .show(ui, |ui| {
@@ -239,146 +291,12 @@ pub fn show(
                     // jumps every time the room list changes length and a menu
                     // that resizes under the pointer is one whose buttons move
                     // as you reach for them.
-                    //
-                    // Wide, now that the menu has the screen rather than a
-                    // corner of it: the world used to be drawn behind and the
-                    // panel had to stay out of its way. It does not any more,
-                    // so the things you actually click are the size of things
-                    // you click rather than the size of a HUD row.
                     ui.set_width(m.panel_width);
                     ui.spacing_mut().item_spacing.y = m.item_spacing;
-
-                    ui.heading(words::TITLE);
-                    ui.add_space(m.item_spacing);
-
-                    ui.label(words::NAME);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut menu.name)
-                            .desired_width(f32::INFINITY)
-                            .hint_text(words::NAME_HINT),
-                    );
-
-                    ui.add_space(m.item_spacing);
-                    if on_web {
-                        // Not a field. The socket is derived from the page's
-                        // origin, so a typed address here would be a promise
-                        // the client cannot keep.
-                        ui.label(words::SERVER);
-                        ui.colored_label(p.text_dim, &menu.address);
-                    } else {
-                        ui.label(words::SERVER);
-                        ui.add(
-                            egui::TextEdit::singleline(&mut menu.address)
-                                .desired_width(f32::INFINITY)
-                                .hint_text(words::SERVER_HINT),
-                        );
+                    match menu.page {
+                        Page::Home => chose = home(ui, theme, menu),
+                        Page::Play => chose = play(ui, theme, menu, on_web),
                     }
-
-                    ui.add_space(m.item_spacing * 2.0);
-                    match &menu.stage {
-                        Stage::Idle | Stage::Failed(_) => {
-                            if let Stage::Failed(why) = &menu.stage {
-                                ui.colored_label(p.bad, why);
-                                ui.add_space(m.item_spacing);
-                            }
-                            if ui
-                                .add_sized(
-                                    [ui.available_width(), m.action_height],
-                                    egui::Button::new(
-                                        egui::RichText::new(words::LOOK).size(m.text_action),
-                                    ),
-                                )
-                                .clicked()
-                            {
-                                chose = Chose::Connect(menu.address.clone());
-                            }
-                        }
-                        Stage::Asking => {
-                            ui.colored_label(p.text_dim, words::ASKING);
-                        }
-                        Stage::Choosing { rooms, note } => {
-                            if let Some(note) = note {
-                                ui.colored_label(p.bad, note);
-                                ui.add_space(m.item_spacing);
-                            }
-                            if rooms.is_empty() {
-                                // Cannot happen with the server as it stands,
-                                // which always keeps a default room -- said
-                                // out loud rather than drawn as an empty gap,
-                                // because a blank panel reads as the menu
-                                // being broken.
-                                ui.colored_label(p.warn, words::NO_ROOMS);
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.label(words::ROOMS);
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if ui.small_button(words::REFRESH).clicked() {
-                                                chose = Chose::Refresh;
-                                            }
-                                        },
-                                    );
-                                });
-                                for room in rooms {
-                                    if room_button(ui, theme, room) {
-                                        chose = Chose::Join(room.name.clone());
-                                    }
-                                }
-                                // What is behind the list, before anybody
-                                // reads the names -- generals.io puts the
-                                // count on the way in for the same reason.
-                                ui.colored_label(
-                                    p.text_dim,
-                                    egui::RichText::new(words::rooms_here(
-                                        rooms.len(),
-                                        rooms.iter().map(|r| r.players).sum(),
-                                    ))
-                                    .size(m.text_small),
-                                );
-                            }
-
-                            ui.add_space(m.item_spacing);
-                            match &mut menu.draft {
-                                // Opening it is one press and no screen
-                                // change: the form appears where the button
-                                // was. Depth is what a menu spends first.
-                                None => {
-                                    if ui
-                                        .add_sized(
-                                            [ui.available_width(), m.button_height],
-                                            egui::Button::new(
-                                                egui::RichText::new(words::make::OPEN)
-                                                    .size(m.text_body),
-                                            ),
-                                        )
-                                        .clicked()
-                                    {
-                                        menu.draft = Some(Draft::default());
-                                    }
-                                }
-                                Some(draft) => {
-                                    if let Some(made) = make_form(ui, theme, draft) {
-                                        chose = made;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ui.add_space(m.item_spacing * 2.0);
-                    ui.separator();
-                    ui.add_space(m.item_spacing);
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), m.button_height],
-                            egui::Button::new(egui::RichText::new(words::ALONE).size(m.text_body)),
-                        )
-                        .clicked()
-                    {
-                        chose = Chose::Offline;
-                    }
-                    ui.small(words::ALONE_NOTE);
                 });
         },
     );
@@ -386,21 +304,253 @@ pub fn show(
     (chose, Some(area.response.rect))
 }
 
-/// The form, in place under the room list. `Some` when it was submitted.
+/// Who you are, what you have done, and the way in.
 ///
-/// **One labelled row per decision, and a row appears only when the decision
-/// it belongs to is live** — the shape of the thing is borrowed from Infinite
-/// Chess, which never shows a board size for a variant that has none. Three
-/// rows for a world, five for a match, rather than five rows with two of them
-/// greyed out and nothing to say why.
-///
-/// Toggle rows rather than drop-downs: every choice here is two or three wide,
-/// so a row of buttons shows the whole of it where a list shows one of it —
-/// and a drop-down wants a popup layer, which is one more thing to keep off
-/// the world behind the menu.
-///
-/// The action sits at the **foot**, under the fields rather than over them,
-/// because on a phone that is where a thumb is.
+/// **One accent-coloured control**, and it is Play. Everything else on this
+/// screen is something you read rather than something you press, which is the
+/// hierarchy Clash Royale gets right: one thing you are meant to do next, in
+/// one colour, and no second thing competing to be it.
+fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let mut chose = Chose::Nothing;
+
+    ui.heading(words::TITLE);
+    ui.add_space(m.item_spacing * 2.0);
+
+    // The name lives here rather than on the play screen, because it is who
+    // you are and not part of choosing a world -- and because it is the same
+    // answer whichever world you end up in.
+    ui.label(egui::RichText::new(words::home::WHO).size(m.text_small));
+    ui.add(
+        egui::TextEdit::singleline(&mut menu.name)
+            .desired_width(f32::INFINITY)
+            .hint_text(words::NAME_HINT),
+    );
+
+    ui.add_space(m.item_spacing * 2.0);
+    ui.label(egui::RichText::new(words::home::RECORD).size(m.text_small));
+    record(ui, theme, &menu.record);
+
+    ui.add_space(m.item_spacing * 2.0);
+    if ui
+        .add_sized(
+            [ui.available_width(), m.action_height],
+            egui::Button::new(
+                egui::RichText::new(words::home::PLAY).size(m.text_action).color(p.ground),
+            )
+            .fill(p.accent),
+        )
+        .clicked()
+    {
+        menu.page = Page::Play;
+    }
+
+    // Offline sits here because it is a way to play, and because a player with
+    // no server to reach should not have to walk through a screen about
+    // servers to get to it.
+    ui.add_space(m.item_spacing);
+    if ui
+        .add_sized(
+            [ui.available_width(), m.button_height],
+            egui::Button::new(egui::RichText::new(words::ALONE).size(m.text_body)),
+        )
+        .clicked()
+    {
+        chose = Chose::Offline;
+    }
+    ui.small(words::ALONE_NOTE);
+
+    chose
+}
+
+/// What this client has played, in four lines it can read at a glance.
+fn record(ui: &mut egui::Ui, theme: &Theme, summary: &crate::client::record::Summary) {
+    let p = theme.palette;
+    let m = theme.metrics;
+    if !summary.any() {
+        ui.colored_label(
+            p.text_dim,
+            egui::RichText::new(words::home::NOTHING_YET).size(m.text_small),
+        );
+        return;
+    }
+    egui::Frame::new()
+        .fill(p.surface_lift)
+        .corner_radius(m.rounding)
+        .inner_margin(m.panel_padding)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(words::home::games(summary.games)).size(m.text_body));
+            // Only if there has been one. "0 of 0 matches won" is a line about
+            // nothing, and a home screen is not a form to be filled in.
+            if summary.matches > 0 {
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(words::home::matches(summary.won, summary.matches))
+                        .size(m.text_small),
+                );
+            }
+            ui.colored_label(
+                p.text_dim,
+                egui::RichText::new(words::home::best(summary.best)).size(m.text_small),
+            );
+            ui.colored_label(
+                p.text_dim,
+                egui::RichText::new(words::home::generations(summary.generations))
+                    .size(m.text_small),
+            );
+        });
+}
+
+/// A server, its rooms, a code, and the form that makes one.
+fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chose {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let mut chose = Chose::Nothing;
+
+    ui.horizontal(|ui| {
+        // Every screen has a way out of it, by pointer as well as by escape.
+        if ui.small_button(words::BACK).clicked() {
+            menu.page = Page::Home;
+        }
+        ui.heading(words::home::PLAY);
+    });
+    ui.add_space(m.item_spacing);
+
+    if on_web {
+        // Not a field. The socket is derived from the page's origin, so a
+        // typed address here would be a promise the client cannot keep.
+        ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
+        ui.colored_label(p.text_dim, &menu.address);
+    } else {
+        ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
+        ui.add(
+            egui::TextEdit::singleline(&mut menu.address)
+                .desired_width(f32::INFINITY)
+                .hint_text(words::SERVER_HINT),
+        );
+    }
+
+    ui.add_space(m.item_spacing * 2.0);
+    match &menu.stage {
+        Stage::Idle | Stage::Failed(_) => {
+            if let Stage::Failed(why) = &menu.stage {
+                ui.colored_label(p.bad, why);
+                ui.add_space(m.item_spacing);
+            }
+            if ui
+                .add_sized(
+                    [ui.available_width(), m.action_height],
+                    egui::Button::new(
+                        egui::RichText::new(words::LOOK).size(m.text_action).color(p.ground),
+                    )
+                    .fill(p.accent),
+                )
+                .clicked()
+            {
+                chose = Chose::Connect(menu.address.clone());
+            }
+        }
+        Stage::Asking => {
+            ui.colored_label(p.text_dim, words::ASKING);
+        }
+        Stage::Choosing { rooms, note } => {
+            if let Some(note) = note {
+                ui.colored_label(p.bad, note);
+                ui.add_space(m.item_spacing);
+            }
+            if rooms.is_empty() {
+                ui.colored_label(p.warn, words::NO_ROOMS);
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(words::ROOMS).size(m.text_small));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(words::REFRESH).clicked() {
+                            chose = Chose::Refresh;
+                        }
+                    });
+                });
+                for room in rooms {
+                    match room_button(ui, theme, room) {
+                        Picked::Nothing => {}
+                        Picked::Join => chose = Chose::Join(room.name.clone()),
+                        Picked::Watch => chose = Chose::Watch(room.name.clone()),
+                    }
+                }
+                // What is behind the list, before anybody reads the names --
+                // generals.io puts the count on the way in for the same
+                // reason.
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(words::rooms_here(
+                        rooms.len(),
+                        rooms.iter().map(|r| r.players).sum(),
+                    ))
+                    .size(m.text_small),
+                );
+            }
+
+            // A code, beside the list rather than instead of it: the list is
+            // how you find a public world and a code is how you reach
+            // somebody's private one. Two ways in, not two versions of one.
+            ui.add_space(m.item_spacing * 2.0);
+            ui.label(egui::RichText::new(words::code::LABEL).size(m.text_small));
+            ui.horizontal(|ui| {
+                let go = ui.add_sized(
+                    [m.action_height * 1.4, m.button_height],
+                    egui::Button::new(egui::RichText::new(words::code::GO).size(m.text_small)),
+                );
+                let field = ui.add_sized(
+                    [ui.available_width(), m.button_height],
+                    egui::TextEdit::singleline(&mut menu.code).hint_text(words::code::HINT),
+                );
+                // Return submits, because a six-character field is one you
+                // type and press enter on without looking for a button.
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (go.clicked() || entered) && !menu.code.trim().is_empty() {
+                    chose = Chose::Join(menu.code.trim().to_string());
+                }
+            });
+
+            ui.add_space(m.item_spacing);
+            match &mut menu.draft {
+                // Opening it is one press and no screen change: the form
+                // appears where the button was. Depth is what a menu spends
+                // first.
+                None => {
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), m.button_height],
+                            egui::Button::new(
+                                egui::RichText::new(words::make::OPEN).size(m.text_body),
+                            ),
+                        )
+                        .clicked()
+                    {
+                        menu.draft = Some(Draft::default());
+                    }
+                }
+                Some(draft) => {
+                    if let Some(made) = make_form(ui, theme, draft) {
+                        chose = made;
+                    }
+                }
+            }
+        }
+    }
+
+    chose
+}
+
+/// What a room row was clicked for. Two things can be done with a room, so a
+/// bool would have to be a bool about which.
+enum Picked {
+    Nothing,
+    Join,
+    Watch,
+}
+
 fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chose> {
     let p = theme.palette;
     let m = theme.metrics;
@@ -415,12 +565,19 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
             ui.label(egui::RichText::new(words::make::TITLE).size(m.text_body));
             ui.add_space(m.item_spacing);
 
-            ui.label(egui::RichText::new(words::make::NAME).size(m.text_small));
-            ui.add(
-                egui::TextEdit::singleline(&mut draft.name)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(words::make::NAME_HINT),
-            );
+            // Not asked for on a private room, whose name is the code the
+            // server generates. A field being quietly discarded is worse than
+            // one that is not there — the same rule that hides the size on a
+            // boundless world.
+            if !draft.private {
+                ui.label(egui::RichText::new(words::make::NAME).size(m.text_small));
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft.name)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(words::make::NAME_HINT),
+                );
+                ui.add_space(m.item_spacing);
+            }
 
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::SHAPE).size(m.text_small));
@@ -439,16 +596,56 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
             if draft.shape == Shape::Wrapping {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::SIZE).size(m.text_small));
-                ui.add(
-                    egui::TextEdit::singleline(&mut draft.size)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(words::make::SIZE_HINT),
-                );
+                // Two labelled numbers rather than one `ROWSxCOLS` string. A
+                // size *is* two numbers, and asking for it as one made the
+                // player learn a format to answer a question they already
+                // understood — and put the error on the whole size rather than
+                // on the field with the wrong number in it.
+                ui.horizontal_top(|ui| {
+                    ui.set_min_height(m.button_height);
+                    let each = (ui.available_width() - m.item_spacing) / 2.0;
+                    for (label, field) in
+                        [(words::make::ROWS, &mut draft.rows), (words::make::COLS, &mut draft.cols)]
+                    {
+                        ui.vertical(|ui| {
+                            ui.set_width(each);
+                            ui.colored_label(
+                                p.text_dim,
+                                egui::RichText::new(label).size(m.text_small),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(field)
+                                    .desired_width(f32::INFINITY)
+                                    .horizontal_align(egui::Align::Center),
+                            );
+                        });
+                    }
+                });
                 ui.colored_label(
                     p.text_dim,
                     egui::RichText::new(words::make::SIZE_NOTE).size(m.text_small),
                 );
             }
+
+            ui.add_space(m.item_spacing);
+            ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
+            let mut private = draft.private;
+            toggles(
+                ui,
+                theme,
+                &mut private,
+                &[(false, words::make::LISTED), (true, words::make::UNLISTED)],
+            );
+            draft.private = private;
+            ui.colored_label(
+                p.text_dim,
+                egui::RichText::new(if draft.private {
+                    words::make::UNLISTED_NOTE
+                } else {
+                    words::make::LISTED_NOTE
+                })
+                .size(m.text_small),
+            );
 
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::ENDS).size(m.text_small));
@@ -521,7 +718,8 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
                     Ok((name, shape, victory)) => {
                         draft.note = None;
                         draft.asking = true;
-                        chose = Some(Chose::Create { name, shape, victory });
+                        chose =
+                            Some(Chose::Create { name, shape, victory, private: draft.private });
                     }
                     Err(why) => draft.note = Some(why),
                 }
@@ -540,6 +738,30 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
 
     chose
 }
+
+/// One side of a wrapping world, in chunks, or what is wrong with it.
+///
+/// Named in the error, because with two fields "that is not a number" would
+/// not say which one. Bounded above as well as below: a torus is allocated
+/// whole, so a thousand by a thousand is not a slow world, it is a client that
+/// asks its own machine for sixteen gigabytes and stops.
+fn chunks(text: &str, which: &str) -> Result<i32, String> {
+    let text = text.trim();
+    match text.parse::<i32>() {
+        Ok(n) if (1..=MAX_CHUNKS).contains(&n) => Ok(n),
+        Ok(_) => Err(words::make::out_of_range(which, MAX_CHUNKS)),
+        Err(_) => Err(words::make::not_a_number_for(which, text)),
+    }
+}
+
+/// The largest a wrapping world may be asked for, per side, in chunks.
+///
+/// A torus is allocated whole rather than growing into what is used, so this
+/// is a real memory figure and not a preference: at sixty-four, a side is a
+/// thousand cells and the world is about a megabyte of cells, which is
+/// nothing. It is here to stop a typo asking for a world that will not fit,
+/// not to say what makes a good arena.
+pub const MAX_CHUNKS: i32 = 64;
 
 /// One decision as a row of buttons, the chosen one wearing the accent.
 ///
@@ -579,57 +801,93 @@ fn toggles<T: Copy + PartialEq>(
 }
 
 /// One room: what it is called, whether anybody is in it, and whether it ends.
-fn room_button(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo) -> bool {
+/// One room: what it is called, whether anybody is in it, and whether it ends
+/// — with the two things that can be done to it.
+///
+/// Watching is a small button rather than a second full-width row, because it
+/// is the rarer of the two and a list where every entry is two equal choices
+/// is a list twice as long to read. It is offered on every room and not only
+/// on matches: **no late joining is a rule about players**, so a match already
+/// running is exactly the room whose only way in is to watch.
+fn room_button(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo) -> Picked {
     let p = theme.palette;
-    let response = ui.add_sized(
-        [ui.available_width(), theme.metrics.row_height],
-        egui::Button::new("").fill(p.surface_lift),
-    );
+    let m = theme.metrics;
+    let mut picked = Picked::Nothing;
 
-    let rect = response.rect;
-    let painter = ui.painter();
-    if response.hovered() {
-        painter.rect_stroke(
-            rect,
-            theme.metrics.rounding,
-            egui::Stroke::new(1.0, p.accent),
-            egui::StrokeKind::Inside,
+    ui.horizontal_top(|ui| {
+        ui.set_min_height(m.row_height);
+        let watch_width = m.action_height * 1.6;
+        let response = ui.add_sized(
+            [ui.available_width() - watch_width - m.item_spacing, m.row_height],
+            egui::Button::new("").fill(p.surface_lift),
         );
-    }
-    painter.text(
-        rect.left_center() + egui::vec2(10.0, -6.0),
-        egui::Align2::LEFT_CENTER,
-        &room.name,
-        egui::FontId::proportional(theme.metrics.text_body),
-        p.text,
-    );
-    // A room and a match are the same thing to everything else, so this list
-    // is the one place the difference has to show — clicking into a match that
-    // has already started only to be refused is a worse way to find out.
-    let mut under = describe(room.world);
-    if let Some(victory) = room.victory {
-        under = format!(
-            "{under} · {} · {}",
-            crate::client::views::words::phase(&room.phase),
-            crate::client::views::lobby::describe(victory)
-        );
-    }
-    painter.text(
-        rect.left_center() + egui::vec2(14.0, 13.0),
-        egui::Align2::LEFT_CENTER,
-        under,
-        egui::FontId::proportional(theme.metrics.text_small),
-        if matches!(room.phase, crate::net::MatchPhase::Gathering) { p.good } else { p.text_dim },
-    );
-    painter.text(
-        rect.right_center() - egui::vec2(14.0, 0.0),
-        egui::Align2::RIGHT_CENTER,
-        players(room.players),
-        egui::FontId::proportional(theme.metrics.text_small),
-        if room.players > 0 { p.good } else { p.text_dim },
-    );
 
-    response.clicked()
+        let rect = response.rect;
+        let painter = ui.painter();
+        if response.hovered() {
+            painter.rect_stroke(
+                rect,
+                m.rounding,
+                egui::Stroke::new(1.0, p.accent),
+                egui::StrokeKind::Inside,
+            );
+        }
+        painter.text(
+            rect.left_center() + egui::vec2(10.0, -6.0),
+            egui::Align2::LEFT_CENTER,
+            &room.name,
+            egui::FontId::proportional(m.text_body),
+            p.text,
+        );
+        // A room and a match are the same thing to everything else, so this
+        // list is the one place the difference has to show — clicking into a
+        // match that has already started only to be refused is a worse way to
+        // find out.
+        let mut under = describe(room.world);
+        if let Some(victory) = room.victory {
+            under = format!(
+                "{under} · {} · {}",
+                crate::client::views::words::phase(&room.phase),
+                crate::client::views::lobby::describe(victory)
+            );
+        }
+        painter.text(
+            rect.left_center() + egui::vec2(14.0, 13.0),
+            egui::Align2::LEFT_CENTER,
+            under,
+            egui::FontId::proportional(m.text_small),
+            if matches!(room.phase, crate::net::MatchPhase::Gathering) {
+                p.good
+            } else {
+                p.text_dim
+            },
+        );
+        painter.text(
+            rect.right_center() - egui::vec2(14.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            players(room.players),
+            egui::FontId::proportional(m.text_small),
+            if room.players > 0 { p.good } else { p.text_dim },
+        );
+
+        if response.clicked() {
+            picked = Picked::Join;
+        }
+        if ui
+            .add_sized(
+                [watch_width, m.row_height],
+                egui::Button::new(
+                    egui::RichText::new(crate::client::views::words::menu::watch::WATCH)
+                        .size(m.text_small),
+                ),
+            )
+            .clicked()
+        {
+            picked = Picked::Watch;
+        }
+    });
+
+    picked
 }
 
 /// How a world's shape reads to somebody choosing between two of them.
@@ -678,7 +936,8 @@ mod tests {
         let torus = Draft {
             name: "ring".into(),
             shape: Shape::Wrapping,
-            size: "6x8".into(),
+            rows: "6".into(),
+            cols: "8".into(),
             ..Draft::default()
         };
         assert_eq!(torus.parse().unwrap().1, WorldKind::Toroidal { rows: 6, cols: 8 });
@@ -689,7 +948,7 @@ mod tests {
             target: "500".into(),
             // Left behind by a change of mind, and never read, because the
             // shape is boundless.
-            size: "nonsense".into(),
+            rows: "nonsense".into(),
             ..Draft::default()
         };
         assert_eq!(cup.parse().unwrap().2, Some(Victory::Territory { squares: 500 }));
@@ -701,10 +960,27 @@ mod tests {
         let sizeless = Draft {
             name: "ring".into(),
             shape: Shape::Wrapping,
-            size: "big".into(),
+            rows: "big".into(),
             ..Draft::default()
         };
-        assert!(sizeless.parse().is_err());
+        let why = sizeless.parse().unwrap_err();
+        assert!(why.contains(words::make::ROWS), "the error says which field: {why}");
+        assert!(!why.contains(words::make::COLS), "and not the one that is fine: {why}");
+
+        // A torus is allocated whole, so an enormous side is a client that
+        // asks its own machine for gigabytes and stops.
+        let huge = Draft {
+            name: "ring".into(),
+            shape: Shape::Wrapping,
+            cols: "100000".into(),
+            ..Draft::default()
+        };
+        assert!(huge.parse().is_err());
+
+        // A private room takes the server's code for a name, so there is
+        // nothing here to refuse.
+        let coded = Draft { name: String::new(), private: true, ..Draft::default() };
+        assert!(coded.parse().is_ok(), "a private room needs no typed name");
         let endless =
             Draft { name: "cup".into(), ends: Ends::Timer, target: "0".into(), ..Draft::default() };
         assert!(endless.parse().is_err(), "a match of zero is over already");

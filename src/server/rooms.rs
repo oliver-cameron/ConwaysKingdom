@@ -59,12 +59,21 @@ pub struct Caller {
     pub connection: ConnectionId,
     /// Which world, and who in it. `None` until this connection has joined.
     pub seat: Option<Seat>,
+    /// Which world this connection is watching without a seat in it.
+    ///
+    /// Beside `seat` rather than folded into it, because they are answers to
+    /// different questions: a seat says what this connection may *do*, and
+    /// this says what it may *see*. A connection has at most one of them —
+    /// watching a room and then joining it clears this — but the code that
+    /// judges an action asks the first and the code that routes a read asks
+    /// either, and one field would make those the same question.
+    pub watching: Option<RoomName>,
 }
 
 impl Caller {
     /// A connection that has not joined anything.
     pub fn new(connection: ConnectionId) -> Self {
-        Self { connection, seat: None }
+        Self { connection, seat: None, watching: None }
     }
 
     /// For tests, and for the console, which is nobody's socket.
@@ -73,9 +82,38 @@ impl Caller {
     }
 
     pub fn sitting(connection: ConnectionId, seat: Seat) -> Self {
-        Self { connection, seat: Some(seat) }
+        Self { connection, seat: Some(seat), watching: None }
+    }
+
+    /// Which room's messages this connection may be routed to, seated or not.
+    fn room(&self) -> Option<&RoomName> {
+        self.seat.as_ref().map(|(room, _)| room).or(self.watching.as_ref())
     }
 }
+
+/// A short code that reaches a room the listing does not mention.
+///
+/// The thing you send somebody, rather than the thing you type. Room names are
+/// typed, and typed names collide, are guessed, and have to be spelled out
+/// over a phone; a code is generated, so it does neither.
+pub type Code = String;
+
+/// How long a code is.
+///
+/// Six from [`CODE_ALPHABET`]'s thirty-one characters is about thirty bits —
+/// a billion codes, against a server holding at most a few dozen rooms. What
+/// that buys is not secrecy, it is that guessing is not worth anybody's time.
+/// A code is a **latch rather than a lock**: it keeps a room out of the
+/// listing and off the end of a guess, and it is not a password.
+pub const CODE_LEN: usize = 6;
+
+/// What a code is spelled from.
+///
+/// No `0`, `O`, `1`, `I` or `L`. A code is read off one screen and typed into
+/// another, or said out loud, and those five are the whole of why a code gets
+/// mistyped. Lowercase, because [`crate::net::room_name`] folds case and a
+/// code is a room name.
+const CODE_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 
 /// How many rooms a server will hold once clients are the ones making them.
 ///
@@ -111,6 +149,14 @@ pub struct Rooms {
     made: BTreeMap<RoomName, ConnectionId>,
     /// The cap on `made`. [`MAX_MADE_ROOMS`] unless a flag says otherwise.
     max_made: usize,
+    /// Rooms that are not in the listing, and the code that reaches each.
+    ///
+    /// A set rather than a map from code to room, because the code **is** the
+    /// room's name: a generated name is already unique, already valid, and
+    /// already what `Join` carries, so a second namespace to keep in step
+    /// would be a second thing that can disagree. What is private about a
+    /// private room is that [`Self::listing`] does not mention it.
+    unlisted: std::collections::BTreeSet<RoomName>,
 }
 
 impl Rooms {
@@ -163,7 +209,14 @@ impl Rooms {
             rooms.entry(name.clone()).or_insert_with(|| Server::named(name, shape.build()));
         }
 
-        Ok(Self { rooms, dir, default_room, made: BTreeMap::new(), max_made: MAX_MADE_ROOMS })
+        Ok(Self {
+            rooms,
+            dir,
+            default_room,
+            made: BTreeMap::new(),
+            max_made: MAX_MADE_ROOMS,
+            unlisted: Default::default(),
+        })
     }
 
     /// A single room, with nothing on disk behind it. What the tests want.
@@ -175,11 +228,18 @@ impl Rooms {
             default_room: name,
             made: BTreeMap::new(),
             max_made: MAX_MADE_ROOMS,
+            unlisted: Default::default(),
         }
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.rooms.keys().map(String::as_str)
+    }
+
+    /// Every room anybody may be told about, which is every room but the
+    /// private ones. What a refusal names, and what a listing lists.
+    pub fn public_names(&self) -> impl Iterator<Item = &str> {
+        self.rooms.keys().map(String::as_str).filter(|n| !self.unlisted.contains(*n))
     }
 
     pub fn default_room(&self) -> &str {
@@ -215,9 +275,13 @@ impl Rooms {
         if self.rooms.contains_key(&name) {
             return Ok(name);
         }
+        // The refusal names the rooms that **are** listed, and no others. It
+        // used to name every room, which with private ones in the map would
+        // hand every code on the server to anybody who mistyped a name once —
+        // and a code that is printed on a refusal is not a code.
         Err(format!(
             "no room \"{name}\" here; this server has {}",
-            self.names().collect::<Vec<_>>().join(", ")
+            self.public_names().collect::<Vec<_>>().join(", ")
         ))
     }
 
@@ -252,8 +316,32 @@ impl Rooms {
         // Answered without a seat for a sharper version of the same reason: it
         // names a room that does not exist, so there is nowhere to have been
         // standing when it was sent.
-        if let ClientMessage::Create { name, shape, victory } = msg {
-            return vec![ServerMessage::Made(self.make(caller.connection, &name, shape, victory))];
+        if let ClientMessage::Create { name, shape, victory, private } = msg {
+            return vec![ServerMessage::Made(self.make(
+                caller.connection,
+                &name,
+                shape,
+                victory,
+                private,
+            ))];
+        }
+        // Admitted at any generation, and that is the point rather than an
+        // oversight: **no late joining is a rule about players.** Somebody
+        // turning up at generation four hundred is exactly what watching is
+        // for, so this asks only whether the room is here.
+        if let ClientMessage::Watch { room } = &msg {
+            return match self.resolve(Some(room)) {
+                Ok(name) => {
+                    let server = self.rooms.get(&name).expect("resolve only returns rooms here");
+                    log::info!("connection {} is watching \"{name}\"", caller.connection);
+                    vec![ServerMessage::Watching {
+                        room: name.clone(),
+                        tick: server.tick(),
+                        world: server.world().kind(),
+                    }]
+                }
+                Err(reason) => vec![ServerMessage::Rejected { reason }],
+            };
         }
         let seat = caller.seat.as_ref();
         if let ClientMessage::Join { room, .. } = &msg {
@@ -276,17 +364,23 @@ impl Rooms {
             };
         }
 
-        let Some((room, id)) = seat else {
-            log::debug!("a message from a connection that has not joined; dropped");
+        // A watcher is routed like a player with no number. `Server::handle`
+        // already takes `Option<PlayerId>` and already answers a `Subscribe`
+        // from nobody with the chunks it asked for, so reading works out of
+        // the box — and everything that *acts* is refused for want of an id
+        // rather than for want of a check somebody has to remember to write.
+        let Some(room) = caller.room() else {
+            log::debug!("a message from a connection in no room; dropped");
             return Vec::new();
         };
+        let id = seat.map(|(_, id)| *id);
         match self.rooms.get_mut(room) {
-            Some(server) => server.handle(Some(*id), msg),
+            Some(server) => server.handle(id, msg),
             // Only reachable if a room could go away under a seated player,
             // which nothing does yet. Said out loud rather than ignored,
             // because the symptom would be one client silently going deaf.
             None => {
-                log::warn!("{id:?} is seated in room \"{room}\", which is not here");
+                log::warn!("{id:?} is in room \"{room}\", which is not here");
                 Vec::new()
             }
         }
@@ -413,6 +507,7 @@ impl Rooms {
         name: &str,
         shape: WorldKind,
         victory: Option<Victory>,
+        private: bool,
     ) -> Result<RoomName, String> {
         // Checked before the name is, so a server that is full says so rather
         // than arguing about a name it was never going to use. Counted over
@@ -424,13 +519,44 @@ impl Rooms {
                 self.made.len()
             ));
         }
+        // A private room's name **is** its code, and the typed one is not
+        // used at all. Two names for one room would be two things to keep in
+        // step and a second way to reach it, where the whole point of a code
+        // is that there is exactly one way in and it is not guessable.
+        let name = if private { self.free_code()? } else { crate::net::room_name(name)? };
         let name = match victory {
-            Some(victory) => self.new_match(name, shape, victory)?,
-            None => self.create(name, shape)?,
+            Some(victory) => self.new_match(&name, shape, victory)?,
+            None => self.create(&name, shape)?,
         };
+        if private {
+            self.unlisted.insert(name.clone());
+        }
         self.made.insert(name.clone(), by);
-        log::info!("connection {by} made room \"{name}\"");
+        log::info!(
+            "connection {by} made {} room \"{name}\"",
+            if private { "a private" } else { "an open" }
+        );
         Ok(name)
+    }
+
+    /// A code no room is using.
+    ///
+    /// Retried rather than assumed unique: a collision is vanishingly
+    /// unlikely and silently reopening somebody else's private room would be
+    /// the worst possible way to find out it was not impossible. Giving up
+    /// after a few tries rather than looping, because a server that cannot
+    /// find a free code in ten attempts has something wrong with it that a
+    /// tighter loop will not fix.
+    fn free_code(&self) -> Result<RoomName, String> {
+        (0..10)
+            .map(|_| code())
+            .find(|c| !self.rooms.contains_key(c))
+            .ok_or_else(|| "could not find a free code".to_string())
+    }
+
+    /// Whether this room is kept out of the listing.
+    pub fn is_unlisted(&self, name: &str) -> bool {
+        self.unlisted.contains(name)
     }
 
     /// Which connection asked for this room, if a client did.
@@ -518,6 +644,7 @@ impl Rooms {
         // Forgotten here too, or a server that made and deleted its cap's
         // worth of rooms would refuse to make another while holding none.
         self.made.remove(&name);
+        self.unlisted.remove(&name);
         log::info!("deleted room \"{name}\"");
         Ok(name)
     }
@@ -566,9 +693,40 @@ impl Rooms {
     /// In name order, because `rooms` is a `BTreeMap` and a listing that
     /// reordered itself between two requests would be a menu whose buttons
     /// move under the pointer.
+    /// Every room anybody may see, which is every room but the private ones.
+    ///
+    /// Filtered here rather than at the call site because this is the only
+    /// listing there is: the menu shows what comes back, the console prints
+    /// it, and a refusal names it. One place that decides what is public is
+    /// one place to be wrong.
+    /// Every room, private ones included, with whether each is unlisted.
+    ///
+    /// For the **console** and nothing else. Whoever is running the server can
+    /// already read the save directory and the log, so hiding a room from them
+    /// would be theatre — and an operator who cannot see a room cannot delete
+    /// one that is being misused.
+    pub fn everything(&self) -> Vec<(RoomInfo, bool)> {
+        self.rooms
+            .iter()
+            .map(|(name, server)| {
+                (
+                    RoomInfo {
+                        name: name.clone(),
+                        phase: server.phase().clone(),
+                        victory: server.victory(),
+                        players: server.players().filter(|p| p.online).count() as u32,
+                        world: server.world().kind(),
+                    },
+                    self.unlisted.contains(name),
+                )
+            })
+            .collect()
+    }
+
     pub fn listing(&self) -> Vec<RoomInfo> {
         self.rooms
             .iter()
+            .filter(|(name, _)| !self.unlisted.contains(*name))
             .map(|(name, server)| RoomInfo {
                 name: name.clone(),
                 phase: server.phase().clone(),
@@ -583,6 +741,25 @@ impl Rooms {
     pub fn online(&self) -> usize {
         self.rooms.values().map(|s| s.players().filter(|p| p.online).count()).sum()
     }
+}
+
+/// One code, from [`CODE_ALPHABET`].
+///
+/// The same source of randomness the rejoin token uses: `RandomState`, which
+/// is seeded per process from the OS. Not a cryptographic generator, and it
+/// does not need to be — see [`CODE_LEN`] for what a code is and is not.
+fn code() -> Code {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let mut bits = RandomState::new().build_hasher().finish();
+    (0..CODE_LEN)
+        .map(|_| {
+            let c = CODE_ALPHABET[(bits % CODE_ALPHABET.len() as u64) as usize] as char;
+            bits /= CODE_ALPHABET.len() as u64;
+            c
+        })
+        .collect()
 }
 
 fn save_path(dir: &Path, room: &str) -> PathBuf {
@@ -881,6 +1058,7 @@ mod tests {
                 name: "  Arena  ".into(),
                 shape: WorldKind::Toroidal { rows: 4, cols: 6 },
                 victory: None,
+                private: false,
             },
         );
         let [ServerMessage::Made(Ok(name))] = &replies[..] else {
@@ -908,9 +1086,9 @@ mod tests {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let me = Caller::new(1);
 
-        rooms.make(1, "plain", WorldKind::Infinite, None).unwrap();
+        rooms.make(1, "plain", WorldKind::Infinite, None, false).unwrap();
         rooms
-            .make(1, "cup", WorldKind::Infinite, Some(Victory::Territory { squares: 500 }))
+            .make(1, "cup", WorldKind::Infinite, Some(Victory::Territory { squares: 500 }), false)
             .unwrap();
 
         let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(&me, ClientMessage::Rooms)[..]
@@ -938,6 +1116,7 @@ mod tests {
                 name: "hall".into(),
                 shape: WorldKind::Infinite,
                 victory: None,
+                private: false,
             },
         );
         let [ServerMessage::Made(Err(why))] = &replies[..] else {
@@ -962,12 +1141,12 @@ mod tests {
         rooms.cap_made(2);
         assert_eq!(rooms.len(), 3, "three declared, none of them counted");
 
-        assert!(rooms.make(1, "a", WorldKind::Infinite, None).is_ok());
-        assert!(rooms.make(1, "b", WorldKind::Infinite, None).is_ok());
+        assert!(rooms.make(1, "a", WorldKind::Infinite, None, false).is_ok());
+        assert!(rooms.make(1, "b", WorldKind::Infinite, None, false).is_ok());
         let (made, cap) = rooms.made_count();
         assert_eq!((made, cap), (2, 2));
 
-        let refused = rooms.make(1, "c", WorldKind::Infinite, None).unwrap_err();
+        let refused = rooms.make(1, "c", WorldKind::Infinite, None, false).unwrap_err();
         assert!(refused.contains('2'), "the refusal says how many: {refused}");
         assert!(rooms.get("c").is_none(), "and made none");
 
@@ -975,7 +1154,143 @@ mod tests {
         // cap's worth would refuse for ever while holding nothing.
         rooms.delete("a").unwrap();
         assert_eq!(rooms.made_count().0, 1);
-        assert!(rooms.make(1, "c", WorldKind::Infinite, None).is_ok());
+        assert!(rooms.make(1, "c", WorldKind::Infinite, None, false).is_ok());
+    }
+
+    /// A private room is reachable by its code and mentioned nowhere else —
+    /// including in the refusal a mistyped name gets back, which used to name
+    /// every room on the server and would have handed out every code.
+    #[test]
+    fn a_private_room_is_reachable_by_code_and_named_nowhere() {
+        let mut rooms =
+            Rooms::open(temp_dir("private"), &["hall".into()], WorldKind::Infinite, true).unwrap();
+
+        let code = rooms.make(3, "ignored", WorldKind::Infinite, None, true).unwrap();
+        assert_eq!(code.len(), CODE_LEN);
+        assert_ne!(code, "ignored", "the code is the name; what was typed is not used");
+        assert!(rooms.is_unlisted(&code));
+
+        let listing = rooms.listing();
+        let listed: Vec<&str> = listing.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(listed, ["hall"], "the listing does not mention it");
+
+        // The code still joins, which is the whole point of having one.
+        assert_eq!(rooms.resolve(Some(&code)).unwrap(), code);
+
+        // And a wrong name is refused without naming it.
+        let refused = rooms.resolve(Some("nowhere")).unwrap_err();
+        assert!(refused.contains("hall"));
+        assert!(!refused.contains(&code), "the refusal leaked a code: {refused}");
+    }
+
+    /// Whoever is running the server can read the save directory anyway, and
+    /// an operator who cannot see a room cannot delete one being misused.
+    #[test]
+    fn the_console_sees_private_rooms_and_the_wire_does_not() {
+        let mut rooms =
+            Rooms::open(temp_dir("console-sees"), &["hall".into()], WorldKind::Infinite, true)
+                .unwrap();
+        let code = rooms.make(3, "", WorldKind::Infinite, None, true).unwrap();
+
+        let everything = rooms.everything();
+        let found = everything.iter().find(|(r, _)| r.name == code).expect("the console sees it");
+        assert!(found.1, "and knows it is private");
+        assert_eq!(everything.len(), 2);
+
+        assert_eq!(rooms.listing().len(), 1, "the wire sees only the open one");
+
+        // What the console actually prints, since that is the thing being
+        // claimed. Both rooms, and the private one said to be private.
+        let printed = crate::server::console::run("rooms", &mut rooms, WorldKind::Infinite);
+        let text = printed.lines.join("\n");
+        assert!(text.contains("hall"), "{text}");
+        assert!(text.contains(&code), "{text}");
+        assert!(text.contains("private"), "{text}");
+    }
+
+    /// A code is read off one screen and typed into another. The five
+    /// characters that make that go wrong are not in it.
+    #[test]
+    fn a_code_has_nothing_confusable_in_it() {
+        for _ in 0..500 {
+            let c = code();
+            assert_eq!(c.len(), CODE_LEN);
+            assert!(!c.contains(['0', 'o', '1', 'i', 'l']), "confusable character in {c}");
+            assert!(crate::net::room_name(&c).is_ok(), "a code must be a legal room name: {c}");
+        }
+    }
+
+    /// The whole reason a spectator is not "a player with the actions taken
+    /// away": a seat is one of fifteen, and a match under way admits no new
+    /// players at all. Neither of those should keep somebody from watching.
+    #[test]
+    fn watching_needs_no_seat_and_no_room_in_the_roster() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        // Fill every seat there is. `PlayerId::MAX` is four bits of cell.
+        for n in 0..PlayerId::MAX {
+            rooms
+                .get_mut("hall")
+                .unwrap()
+                .join(format!("player{n}"))
+                .unwrap_or_else(|e| panic!("seat {n}: {e}"));
+        }
+        assert!(
+            rooms.get_mut("hall").unwrap().join("one-too-many").is_err(),
+            "the room is full, which is the situation being tested"
+        );
+
+        let replies = rooms.handle(&Caller::new(9), ClientMessage::Watch { room: "hall".into() });
+        let [ServerMessage::Watching { room, world, .. }] = &replies[..] else {
+            panic!("a full room still admits a watcher, got {replies:?}");
+        };
+        assert_eq!(room, "hall");
+        assert_eq!(*world, WorldKind::Infinite);
+    }
+
+    /// A watcher reads and does not act. Both halves matter: one that could
+    /// not read would be watching nothing, and one that could act would be a
+    /// player who never took a seat.
+    #[test]
+    fn a_watcher_is_sent_chunks_and_changes_nothing() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let seated = rooms.get_mut("hall").unwrap().join("alice").unwrap();
+        let watcher = Caller { connection: 4, seat: None, watching: Some("hall".into()) };
+
+        let before = rooms.get("hall").unwrap().world().digest();
+
+        // Reads.
+        let replies = rooms.handle(&watcher, ClientMessage::Subscribe { chunks: vec![(0, 0)] });
+        assert!(
+            replies.iter().any(|m| matches!(m, ServerMessage::ChunkData { .. })),
+            "a watcher gets the chunks it asks for, got {replies:?}"
+        );
+
+        // And does not act. The action names a seated player, which is the
+        // stronger version of the test: it is refused for coming from a
+        // connection with no seat, not for naming a player who is not here.
+        rooms.handle(
+            &watcher,
+            ClientMessage::Act(crate::net::Stamped {
+                tick: rooms.get("hall").unwrap().tick(),
+                player: seated,
+                action: crate::net::Action::Paint {
+                    cells: vec![(0, 0)],
+                    placement: crate::net::Placement::Life,
+                },
+            }),
+        );
+        rooms.step();
+        assert_eq!(
+            rooms.get("hall").unwrap().world().digest(),
+            {
+                let mut clean = Rooms::just(Server::named("hall", World::infinite_empty()));
+                clean.get_mut("hall").unwrap().join("alice").unwrap();
+                clean.step();
+                clean.get("hall").unwrap().world().digest()
+            },
+            "a watcher put something in the world"
+        );
+        let _ = before;
     }
 
     /// A room made while the server runs is a room, on disk immediately, and
