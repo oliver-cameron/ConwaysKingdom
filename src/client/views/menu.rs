@@ -20,7 +20,7 @@
 
 use crate::client::views::theme::Theme;
 use crate::client::views::words::menu as words;
-use crate::net::{RoomInfo, RoomName, Victory};
+use crate::net::{RoomId, RoomInfo, RoomName, Victory};
 use crate::sim::WorldKind;
 
 /// What the menu is doing, which is mostly what it is waiting for.
@@ -226,8 +226,9 @@ pub enum Chose {
     Offline,
     /// Reach this server and ask what rooms it has.
     Connect(String),
-    /// Join this room on the server already reached.
-    Join(String),
+    /// Join this room on the server already reached. An **id**, not a name:
+    /// what the listing sent back, or what was typed into the code field.
+    Join(RoomId),
     /// Shut the form without making anything.
     Cancel,
     /// Make this world on the server already reached, then join it. Parsed
@@ -240,7 +241,7 @@ pub enum Chose {
         private: bool,
     },
     /// Watch this room without taking a seat in it.
-    Watch(RoomName),
+    Watch(RoomId),
 }
 
 impl Menu {
@@ -474,8 +475,11 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chos
                 for room in rooms {
                     match room_button(ui, theme, room) {
                         Picked::Nothing => {}
-                        Picked::Join => chose = Chose::Join(room.name.clone()),
-                        Picked::Watch => chose = Chose::Watch(room.name.clone()),
+                        // The **id**, not the name on the button: two rooms
+                        // may read alike and only one of them is the one that
+                        // was clicked.
+                        Picked::Join => chose = Chose::Join(room.id.clone()),
+                        Picked::Watch => chose = Chose::Watch(room.id.clone()),
                     }
                 }
                 // What is behind the list, before anybody reads the names --
@@ -509,7 +513,10 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chos
                 // type and press enter on without looking for a button.
                 let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if (go.clicked() || entered) && !menu.code.trim().is_empty() {
-                    chose = Chose::Join(menu.code.trim().to_string());
+                    // A code reaches a room the same way an id does -- the
+                    // server resolves an id, then a name, then a code -- so
+                    // the client does not need a second message for it.
+                    chose = Chose::Join(RoomId(menu.code.trim().to_string()));
                 }
             });
 

@@ -31,14 +31,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::net::{ClientMessage, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
+use crate::net::{ClientMessage, Made, RoomId, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
 use crate::server::matches::{Phase, Victory};
 use crate::server::Server;
 use crate::sim::{PlayerId, WorldKind};
 
 /// Where a connected player is: which world, and who they are in it. Player
 /// numbers are per room, so the number alone does not identify anybody.
-pub type Seat = (RoomName, PlayerId);
+pub type Seat = (RoomId, PlayerId);
 
 /// The extension a room's world is saved under.
 const SAVE_EXT: &str = "ckw";
@@ -67,7 +67,7 @@ pub struct Caller {
     /// watching a room and then joining it clears this — but the code that
     /// judges an action asks the first and the code that routes a read asks
     /// either, and one field would make those the same question.
-    pub watching: Option<RoomName>,
+    pub watching: Option<RoomId>,
 }
 
 impl Caller {
@@ -86,33 +86,49 @@ impl Caller {
     }
 
     /// Which room's messages this connection may be routed to, seated or not.
-    fn room(&self) -> Option<&RoomName> {
+    fn room(&self) -> Option<&RoomId> {
         self.seat.as_ref().map(|(room, _)| room).or(self.watching.as_ref())
     }
 }
+
+/// What a private room is called when whoever made it named nothing. Nobody
+/// browses for it, so a name is a courtesy rather than a requirement.
+const UNNAMED: &str = "private game";
 
 /// A short code that reaches a room the listing does not mention.
 ///
 /// The thing you send somebody, rather than the thing you type. Room names are
 /// typed, and typed names collide, are guessed, and have to be spelled out
 /// over a phone; a code is generated, so it does neither.
+///
+/// A **credential, not an identity**. It is separate from [`crate::net::RoomId`]
+/// so that it can be changed later without the room becoming a different room,
+/// and separate from the name so that a private room can still be called
+/// whatever its owner chose.
 pub type Code = String;
 
-/// How long a code is.
+/// How long a code is, and what it is spelled from.
 ///
-/// Six from [`CODE_ALPHABET`]'s thirty-one characters is about thirty bits —
-/// a billion codes, against a server holding at most a few dozen rooms. What
-/// that buys is not secrecy, it is that guessing is not worth anybody's time.
-/// A code is a **latch rather than a lock**: it keeps a room out of the
-/// listing and off the end of a guess, and it is not a password.
+/// Six characters, case-insensitive — which comes free, because
+/// [`crate::net::room_name`] already folds case for every identifier here.
+///
+/// The alphabet leaves out `0`, `o`, `1`, `i` and `l`: those five are the
+/// whole of why a code gets mistyped when it is read off one screen and typed
+/// into another, or said out loud. That costs 1.3 bits — 31⁶ = 887,503,681
+/// codes, or **29.7 bits**, against 36⁶ = 2,176,782,336 and 31.0 bits for the
+/// full alphanumeric set — and it is a good trade, because the keyspace is not
+/// what protects a private room.
+///
+/// It is worth being clear about what does. With [`MAX_MADE_ROOMS`] rooms in
+/// play, a random guess finds one in about twenty-eight million, so the
+/// defence is that guessing is not worth anybody's time; if it ever became
+/// worth somebody's time the answer would be a limit on how fast a connection
+/// may guess, not a longer code. A code is a **latch rather than a lock**.
 pub const CODE_LEN: usize = 6;
 
-/// What a code is spelled from.
-///
-/// No `0`, `O`, `1`, `I` or `L`. A code is read off one screen and typed into
-/// another, or said out loud, and those five are the whole of why a code gets
-/// mistyped. Lowercase, because [`crate::net::room_name`] folds case and a
-/// code is a room name.
+/// What a code is spelled from: thirty-one characters, being the digits and
+/// lowercase letters less the five confusable ones. Lowercase because
+/// `room_name` folds case, so a code typed in capitals is the same code.
 const CODE_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 
 /// How many rooms a server will hold once clients are the ones making them.
@@ -130,10 +146,27 @@ pub const MAX_MADE_ROOMS: usize = 32;
 pub struct Rooms {
     /// Sorted, so every listing — a log line, a rejection, a save sweep — is
     /// in the same order however the map was filled.
-    rooms: BTreeMap<RoomName, Server>,
+    ///
+    /// Keyed by **id**, not by name. A name is typed and may be changed; an id
+    /// is generated once and never is, so the seat a player holds, the token
+    /// filed against it and the file it saves to all go on meaning the same
+    /// room after a rename.
+    rooms: BTreeMap<RoomId, Server>,
     dir: PathBuf,
     /// Where a client that names no room is put.
-    default_room: RoomName,
+    default_room: RoomId,
+    /// What each room is called. Separate from the map because a name is a
+    /// label on a room rather than a fact the room keeps about itself, and
+    /// because it has to be possible for two rooms to have swapped names
+    /// without either becoming the other.
+    names: BTreeMap<RoomId, RoomName>,
+    /// The code that reaches each private room.
+    ///
+    /// A credential, not an identity: it is separate from the id so that a
+    /// code can be changed later without the room becoming a different room,
+    /// and separate from the name so that a private room can still be called
+    /// something its owner chose.
+    codes: BTreeMap<RoomId, Code>,
     /// Rooms made over the wire, and which connection asked for each.
     ///
     /// Separate from `rooms` rather than a field on [`Server`], because it is
@@ -146,7 +179,7 @@ pub struct Rooms {
     /// you opened" and "you have three open already" are both answerable later
     /// without a migration, and that the log line for a room that appeared
     /// says who asked for it.
-    made: BTreeMap<RoomName, ConnectionId>,
+    made: BTreeMap<RoomId, ConnectionId>,
     /// The cap on `made`. [`MAX_MADE_ROOMS`] unless a flag says otherwise.
     max_made: usize,
     /// Rooms that are not in the listing, and the code that reaches each.
@@ -156,7 +189,7 @@ pub struct Rooms {
     /// already what `Join` carries, so a second namespace to keep in step
     /// would be a second thing that can disagree. What is private about a
     /// private room is that [`Self::listing`] does not mention it.
-    unlisted: std::collections::BTreeSet<RoomName>,
+    unlisted: std::collections::BTreeSet<RoomId>,
 }
 
 impl Rooms {
@@ -182,10 +215,16 @@ impl Rooms {
     ) -> std::io::Result<Self> {
         let dir = dir.into();
         let mut rooms = BTreeMap::new();
+        // A room that came from a save or a flag takes its name as its id, so
+        // an existing directory keeps working and `--room arena` still reaches
+        // "arena" after a restart. Only rooms made over the wire get a
+        // generated one; what the id buys there is that a room can be renamed
+        // without every token filed against it going stale.
+        let mut names: BTreeMap<RoomId, RoomName> = BTreeMap::new();
 
         if !fresh {
             for name in saved_in(&dir)? {
-                let path = save_path(&dir, &name);
+                let path = save_path(&dir, &RoomId(name.clone()));
                 let server =
                     Server::load_or_new(&path, name.clone(), || shape.build()).map_err(|e| {
                         std::io::Error::new(
@@ -193,7 +232,8 @@ impl Rooms {
                             format!("room \"{name}\" ({}): {e}", path.display()),
                         )
                     })?;
-                rooms.insert(name, server);
+                rooms.insert(RoomId(name.clone()), server);
+                names.insert(RoomId(name.clone()), name);
             }
         }
 
@@ -202,17 +242,22 @@ impl Rooms {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
             None => DEFAULT_ROOM.to_string(),
         };
+        let default_room = RoomId(default_room);
 
         for raw in declared.iter().map(String::as_str).chain([default_room.as_str()]) {
             let name = crate::net::room_name(raw)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-            rooms.entry(name.clone()).or_insert_with(|| Server::named(name, shape.build()));
+            let id = RoomId(name.clone());
+            rooms.entry(id.clone()).or_insert_with(|| Server::named(name.clone(), shape.build()));
+            names.insert(id, name);
         }
 
         Ok(Self {
             rooms,
             dir,
             default_room,
+            names,
+            codes: BTreeMap::new(),
             made: BTreeMap::new(),
             max_made: MAX_MADE_ROOMS,
             unlisted: Default::default(),
@@ -222,35 +267,54 @@ impl Rooms {
     /// A single room, with nothing on disk behind it. What the tests want.
     pub fn just(server: Server) -> Self {
         let name = server.room().to_string();
+        let id = RoomId(name.clone());
         Self {
-            rooms: BTreeMap::from([(name.clone(), server)]),
+            rooms: BTreeMap::from([(id.clone(), server)]),
             dir: PathBuf::new(),
-            default_room: name,
+            default_room: id.clone(),
+            names: BTreeMap::from([(id, name)]),
+            codes: BTreeMap::new(),
             made: BTreeMap::new(),
             max_made: MAX_MADE_ROOMS,
             unlisted: Default::default(),
         }
     }
 
+    /// What this room is called, or its id if nothing has named it.
+    pub fn name_of<'a>(&'a self, id: &'a RoomId) -> &'a str {
+        self.names.get(id).map(String::as_str).unwrap_or_else(|| id.as_str())
+    }
+
+    /// The code that reaches this room, if it is private.
+    pub fn code_of(&self, id: &RoomId) -> Option<&str> {
+        self.codes.get(id).map(String::as_str)
+    }
+
+    /// Every room's id.
+    pub fn ids(&self) -> impl Iterator<Item = &RoomId> {
+        self.rooms.keys()
+    }
+
+    /// Every room's name, for a log line or a listing.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.rooms.keys().map(String::as_str)
+        self.rooms.keys().map(|id| self.name_of(id))
     }
 
     /// Every room anybody may be told about, which is every room but the
     /// private ones. What a refusal names, and what a listing lists.
     pub fn public_names(&self) -> impl Iterator<Item = &str> {
-        self.rooms.keys().map(String::as_str).filter(|n| !self.unlisted.contains(*n))
+        self.rooms.keys().filter(|id| !self.unlisted.contains(*id)).map(|id| self.name_of(id))
     }
 
-    pub fn default_room(&self) -> &str {
+    pub fn default_room(&self) -> &RoomId {
         &self.default_room
     }
 
-    pub fn get(&self, room: &str) -> Option<&Server> {
+    pub fn get(&self, room: &RoomId) -> Option<&Server> {
         self.rooms.get(room)
     }
 
-    pub fn get_mut(&mut self, room: &str) -> Option<&mut Server> {
+    pub fn get_mut(&mut self, room: &RoomId) -> Option<&mut Server> {
         self.rooms.get_mut(room)
     }
 
@@ -267,20 +331,39 @@ impl Rooms {
     /// The error is written to be read by a player: it says what they asked
     /// for and what is actually here, because with no menu yet this reply is
     /// the only way anybody finds out what a server holds.
-    pub fn resolve(&self, asked: Option<&str>) -> Result<RoomName, String> {
+    /// Which room a client asking for this one gets, or why it gets none.
+    ///
+    /// Three things can be typed and all three reach a room: its **id**, which
+    /// is what a client that has seen the listing sends back; its **name**,
+    /// which is what a person types on a command line or in a link; and its
+    /// **code**, which is how a private room is reached. Tried in that order,
+    /// and the order matters only if a name collides with another room's id,
+    /// which is why ids generated for new rooms are not spelled like names
+    /// people choose.
+    ///
+    /// The error is written to be read by a player: it says what they asked
+    /// for and what is actually here. It names only rooms that are **listed** —
+    /// it used to name every room, which with private ones in the map would
+    /// hand out every code on the server to anybody who mistyped a name once.
+    pub fn resolve(&self, asked: Option<&str>) -> Result<RoomId, String> {
         let Some(asked) = asked else {
             return Ok(self.default_room.clone());
         };
-        let name = crate::net::room_name(asked)?;
-        if self.rooms.contains_key(&name) {
-            return Ok(name);
+        // Folded the same way a room name is, so a code typed in capitals and
+        // one typed in lowercase are the same code.
+        let asked = crate::net::room_name(asked)?;
+        let id = RoomId(asked.clone());
+        if self.rooms.contains_key(&id) {
+            return Ok(id);
         }
-        // The refusal names the rooms that **are** listed, and no others. It
-        // used to name every room, which with private ones in the map would
-        // hand every code on the server to anybody who mistyped a name once —
-        // and a code that is printed on a refusal is not a code.
+        if let Some((id, _)) = self.names.iter().find(|(_, name)| **name == asked) {
+            return Ok(id.clone());
+        }
+        if let Some((id, _)) = self.codes.iter().find(|(_, code)| **code == asked) {
+            return Ok(id.clone());
+        }
         Err(format!(
-            "no room \"{name}\" here; this server has {}",
+            "no room \"{asked}\" here; this server has {}",
             self.public_names().collect::<Vec<_>>().join(", ")
         ))
     }
@@ -330,12 +413,14 @@ impl Rooms {
         // turning up at generation four hundred is exactly what watching is
         // for, so this asks only whether the room is here.
         if let ClientMessage::Watch { room } = &msg {
-            return match self.resolve(Some(room)) {
-                Ok(name) => {
-                    let server = self.rooms.get(&name).expect("resolve only returns rooms here");
-                    log::info!("connection {} is watching \"{name}\"", caller.connection);
+            return match self.resolve(Some(room.as_str())) {
+                Ok(id) => {
+                    let name = self.name_of(&id).to_string();
+                    let server = self.rooms.get(&id).expect("resolve only returns rooms here");
+                    log::info!("connection {} is watching \"{name}\" ({id})", caller.connection);
                     vec![ServerMessage::Watching {
-                        room: name.clone(),
+                        room: id.clone(),
+                        name,
                         tick: server.tick(),
                         world: server.world().kind(),
                     }]
@@ -346,16 +431,30 @@ impl Rooms {
         let seat = caller.seat.as_ref();
         if let ClientMessage::Join { room, .. } = &msg {
             let asked = room.clone();
-            return match self.resolve(asked.as_deref()) {
+            return match self.resolve(asked.as_ref().map(RoomId::as_str)) {
                 Ok(name) => {
                     if let Some(seat) = seat {
                         log::info!("{:?} is leaving room \"{}\" for \"{name}\"", seat.1, seat.0);
                         self.leave(seat);
                     }
-                    self.rooms
+                    // A `Server` is one room and knows only what it is
+                    // called; ids are this map's business, so the id and the
+                    // name are stamped on the way out rather than passed in.
+                    // Keeping `Server` ignorant of ids is what stops a room
+                    // needing to be told its own identity to answer a join.
+                    let room_name = self.name_of(&name).to_string();
+                    let mut out = self
+                        .rooms
                         .get_mut(&name)
                         .expect("resolve only returns rooms that are here")
-                        .handle(None, msg)
+                        .handle(None, msg);
+                    for reply in &mut out {
+                        if let ServerMessage::Welcome { room, name: called, .. } = reply {
+                            *room = name.clone();
+                            *called = room_name.clone();
+                        }
+                    }
+                    out
                 }
                 Err(reason) => {
                     log::info!("refused a join for {asked:?}: {reason}");
@@ -390,7 +489,7 @@ impl Rooms {
     /// belongs to. A `Step` is only meaningful to the clients in its own
     /// world, so the room travels with it as far as the connection that
     /// decides whether to send it on.
-    pub fn step(&mut self) -> Vec<(RoomName, ServerMessage)> {
+    pub fn step(&mut self) -> Vec<(RoomId, ServerMessage)> {
         self.rooms
             .iter_mut()
             .flat_map(|(name, server)| server.step().into_iter().map(move |m| (name.clone(), m)))
@@ -411,7 +510,7 @@ impl Rooms {
             return Ok(());
         }
         let mut first_error = None;
-        for (name, server) in &self.rooms {
+        for (id, server) in &self.rooms {
             // A match is an event rather than a world to keep: it has an end,
             // and a half-finished one restored into a server that has
             // forgotten it was a match would run on forever with nobody able
@@ -419,9 +518,9 @@ impl Rooms {
             if !matches!(server.phase(), crate::server::matches::Phase::Open) {
                 continue;
             }
-            let path = save_path(&self.dir, name);
+            let path = save_path(&self.dir, id);
             if let Err(e) = server.save(&path) {
-                log::error!("saving room \"{name}\" to {}: {e}", path.display());
+                log::error!("saving room \"{}\" to {}: {e}", self.name_of(id), path.display());
                 first_error.get_or_insert(e);
             }
         }
@@ -445,19 +544,25 @@ impl Rooms {
     /// An existing name is refused rather than reopened. "Create" that
     /// sometimes means "and empty it" is one keystroke from destroying a world
     /// somebody is standing in.
-    pub fn create(&mut self, name: &str, shape: WorldKind) -> Result<RoomName, String> {
+    pub fn create(&mut self, name: &str, shape: WorldKind) -> Result<RoomId, String> {
         let name = crate::net::room_name(name)?;
-        if self.rooms.contains_key(&name) {
+        // A room made at the console takes its name as its id, so the
+        // directory on disk stays readable and `--room arena` reaches the same
+        // room after a restart. Only rooms made over the wire get a generated
+        // id — that is where a rename has to survive.
+        let id = RoomId(name.clone());
+        if self.rooms.contains_key(&id) {
             return Err(format!("there is already a room called \"{name}\""));
         }
         let server = Server::named(name.clone(), shape.build());
-        let path = save_path(&self.dir, &name);
+        let path = save_path(&self.dir, &id);
         if !self.dir.as_os_str().is_empty() {
             server.save(&path).map_err(|e| format!("could not write {}: {e}", path.display()))?;
         }
         log::info!("created room \"{name}\"");
-        self.rooms.insert(name.clone(), server);
-        Ok(name)
+        self.rooms.insert(id.clone(), server);
+        self.names.insert(id.clone(), name);
+        Ok(id)
     }
 
     /// Make a match: a room with a beginning, an end and a winner.
@@ -477,16 +582,18 @@ impl Rooms {
         name: &str,
         shape: WorldKind,
         victory: Victory,
-    ) -> Result<RoomName, String> {
+    ) -> Result<RoomId, String> {
         let name = crate::net::room_name(name)?;
-        if self.rooms.contains_key(&name) {
+        let id = RoomId(name.clone());
+        if self.rooms.contains_key(&id) {
             return Err(format!("there is already a room called \"{name}\""));
         }
         let mut server = Server::named(name.clone(), shape.build());
         server.make_match(victory);
         log::info!("made match \"{name}\": {}", victory.describe());
-        self.rooms.insert(name.clone(), server);
-        Ok(name)
+        self.rooms.insert(id.clone(), server);
+        self.names.insert(id.clone(), name);
+        Ok(id)
     }
 
     /// Make a room because a client asked for one.
@@ -508,7 +615,7 @@ impl Rooms {
         shape: WorldKind,
         victory: Option<Victory>,
         private: bool,
-    ) -> Result<RoomName, String> {
+    ) -> Result<Made, String> {
         // Checked before the name is, so a server that is full says so rather
         // than arguing about a name it was never going to use. Counted over
         // rooms made this way and not over every room: an operator who
@@ -519,24 +626,59 @@ impl Rooms {
                 self.made.len()
             ));
         }
-        // A private room's name **is** its code, and the typed one is not
-        // used at all. Two names for one room would be two things to keep in
-        // step and a second way to reach it, where the whole point of a code
-        // is that there is exactly one way in and it is not guessable.
-        let name = if private { self.free_code()? } else { crate::net::room_name(name)? };
-        let name = match victory {
-            Some(victory) => self.new_match(&name, shape, victory)?,
-            None => self.create(&name, shape)?,
-        };
-        if private {
-            self.unlisted.insert(name.clone());
+        // A name is still a name on a private room. What used to happen here
+        // was that the code *became* the name, which conflated a credential
+        // with an identity: the code could never be changed, and somebody
+        // making a game for four friends could not call it anything.
+        let name = crate::net::room_name(name).or_else(|e| {
+            // A private room may go unnamed, since nobody browses for it.
+            if private && name.trim().is_empty() {
+                Ok(UNNAMED.to_string())
+            } else {
+                Err(e)
+            }
+        })?;
+        if self.names.values().any(|n| *n == name) {
+            return Err(format!("there is already a room called \"{name}\""));
         }
-        self.made.insert(name.clone(), by);
+        let id = self.free_id()?;
+        let mut server = Server::named(name.clone(), shape.build());
+        if let Some(victory) = victory {
+            server.make_match(victory);
+        }
+        let path = save_path(&self.dir, &id);
+        if victory.is_none() && !self.dir.as_os_str().is_empty() {
+            server.save(&path).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        }
+        self.rooms.insert(id.clone(), server);
+        self.names.insert(id.clone(), name.clone());
+        let code = if private {
+            self.unlisted.insert(id.clone());
+            let code = self.free_code()?;
+            self.codes.insert(id.clone(), code.clone());
+            Some(code)
+        } else {
+            None
+        };
+        self.made.insert(id.clone(), by);
         log::info!(
-            "connection {by} made {} room \"{name}\"",
-            if private { "a private" } else { "an open" }
+            "connection {by} made {} room \"{name}\" ({id}){}",
+            if private { "a private" } else { "an open" },
+            code.as_ref().map(|c| format!(", code {c}")).unwrap_or_default()
         );
-        Ok(name)
+        Ok(Made { id, name, code })
+    }
+
+    /// An id no room is using.
+    ///
+    /// Spelled `r-` and a code, so a generated id can never collide with a
+    /// name somebody chose — `room_name` forbids nothing about a leading `r-`,
+    /// but nobody types one, and [`Self::resolve`] tries ids before names.
+    fn free_id(&self) -> Result<RoomId, String> {
+        (0..10)
+            .map(|_| RoomId(format!("r-{}", code())))
+            .find(|id| !self.rooms.contains_key(id))
+            .ok_or_else(|| "could not find a free room id".to_string())
     }
 
     /// A code no room is using.
@@ -547,21 +689,21 @@ impl Rooms {
     /// after a few tries rather than looping, because a server that cannot
     /// find a free code in ten attempts has something wrong with it that a
     /// tighter loop will not fix.
-    fn free_code(&self) -> Result<RoomName, String> {
+    fn free_code(&self) -> Result<Code, String> {
         (0..10)
             .map(|_| code())
-            .find(|c| !self.rooms.contains_key(c))
+            .find(|c| !self.codes.values().any(|used| used == c))
             .ok_or_else(|| "could not find a free code".to_string())
     }
 
     /// Whether this room is kept out of the listing.
-    pub fn is_unlisted(&self, name: &str) -> bool {
-        self.unlisted.contains(name)
+    pub fn is_unlisted(&self, id: &RoomId) -> bool {
+        self.unlisted.contains(id)
     }
 
     /// Which connection asked for this room, if a client did.
-    pub fn made_by(&self, name: &str) -> Option<ConnectionId> {
-        self.made.get(name).copied()
+    pub fn made_by(&self, id: &RoomId) -> Option<ConnectionId> {
+        self.made.get(id).copied()
     }
 
     /// How many rooms clients have made, and how many they may.
@@ -575,15 +717,12 @@ impl Rooms {
     }
 
     /// Start a named match's clock.
-    pub fn start_match(&mut self, name: &str) -> Result<RoomName, String> {
-        let name = crate::net::room_name(name)?;
-        let server = self
-            .rooms
-            .get_mut(&name)
-            .ok_or_else(|| format!("there is no room called \"{name}\""))?;
+    pub fn start_match(&mut self, name: &str) -> Result<RoomId, String> {
+        let id = self.resolve(Some(name))?;
+        let server = self.rooms.get_mut(&id).expect("resolve only returns rooms that are here");
         server.start_match()?;
-        log::info!("match \"{name}\" started at tick {}", server.tick());
-        Ok(name)
+        log::info!("match \"{}\" started at tick {}", server.room(), server.tick());
+        Ok(id)
     }
 
     /// Start the one match that is waiting.
@@ -591,20 +730,20 @@ impl Rooms {
     /// A convenience for the common case, and it refuses rather than guesses
     /// when there is more than one: starting the wrong match is not something
     /// that can be taken back.
-    pub fn dispatch(&mut self) -> Result<RoomName, String> {
-        let waiting: Vec<RoomName> = self
+    pub fn dispatch(&mut self) -> Result<RoomId, String> {
+        let waiting: Vec<RoomId> = self
             .rooms
             .iter()
             .filter(|(_, s)| matches!(s.phase(), Phase::Gathering))
-            .map(|(name, _)| name.clone())
+            .map(|(id, _)| id.clone())
             .collect();
         match waiting.as_slice() {
             [] => Err("no match is waiting to start".into()),
-            [only] => self.start_match(only),
+            [only] => self.start_match(only.as_str()),
             several => Err(format!(
                 "{} matches are waiting; name one of {}",
                 several.len(),
-                several.join(", ")
+                several.iter().map(|id| self.name_of(id)).collect::<Vec<_>>().join(", ")
             )),
         }
     }
@@ -619,22 +758,22 @@ impl Rooms {
     /// The default room is refused too: `resolve(None)` sends every client
     /// that names no room to it, so a server without one has nowhere to put
     /// anybody.
-    pub fn delete(&mut self, name: &str) -> Result<RoomName, String> {
-        let name = crate::net::room_name(name)?;
-        if name == self.default_room {
+    pub fn delete(&mut self, name: &str) -> Result<RoomId, String> {
+        let id = self.resolve(Some(name))?;
+        let name = self.name_of(&id).to_string();
+        if id == self.default_room {
             return Err(format!(
                 "\"{name}\" is the default room; every client that names none goes there"
             ));
         }
-        let server =
-            self.rooms.get(&name).ok_or_else(|| format!("there is no room called \"{name}\""))?;
+        let server = self.rooms.get(&id).expect("resolve only returns rooms that are here");
         let here = server.players().filter(|p| p.online).count();
         if here > 0 {
             return Err(format!("{here} still in \"{name}\""));
         }
-        self.rooms.remove(&name);
+        self.rooms.remove(&id);
         if !self.dir.as_os_str().is_empty() {
-            let path = save_path(&self.dir, &name);
+            let path = save_path(&self.dir, &id);
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     log::warn!("removed room \"{name}\" but not {}: {e}", path.display());
@@ -643,22 +782,21 @@ impl Rooms {
         }
         // Forgotten here too, or a server that made and deleted its cap's
         // worth of rooms would refuse to make another while holding none.
-        self.made.remove(&name);
-        self.unlisted.remove(&name);
+        self.made.remove(&id);
+        self.unlisted.remove(&id);
+        self.codes.remove(&id);
+        self.names.remove(&id);
         log::info!("deleted room \"{name}\"");
-        Ok(name)
+        Ok(id)
     }
 
     /// Stop or start a world.
-    pub fn set_asleep(&mut self, name: &str, asleep: bool) -> Result<RoomName, String> {
-        let name = crate::net::room_name(name)?;
-        let server = self
-            .rooms
-            .get_mut(&name)
-            .ok_or_else(|| format!("there is no room called \"{name}\""))?;
+    pub fn set_asleep(&mut self, name: &str, asleep: bool) -> Result<RoomId, String> {
+        let id = self.resolve(Some(name))?;
+        let server = self.rooms.get_mut(&id).expect("resolve only returns rooms that are here");
         server.set_asleep(asleep)?;
-        log::info!("room \"{name}\" is {}", if asleep { "asleep" } else { "awake" });
-        Ok(name)
+        log::info!("room \"{}\" is {}", self.name_of(&id), if asleep { "asleep" } else { "awake" });
+        Ok(id)
     }
 
     /// Every room that is not a match, and whether it is running.
@@ -708,16 +846,17 @@ impl Rooms {
     pub fn everything(&self) -> Vec<(RoomInfo, bool)> {
         self.rooms
             .iter()
-            .map(|(name, server)| {
+            .map(|(id, server)| {
                 (
                     RoomInfo {
-                        name: name.clone(),
+                        id: id.clone(),
+                        name: self.name_of(id).to_string(),
                         phase: server.phase().clone(),
                         victory: server.victory(),
                         players: server.players().filter(|p| p.online).count() as u32,
                         world: server.world().kind(),
                     },
-                    self.unlisted.contains(name),
+                    self.unlisted.contains(id),
                 )
             })
             .collect()
@@ -726,9 +865,10 @@ impl Rooms {
     pub fn listing(&self) -> Vec<RoomInfo> {
         self.rooms
             .iter()
-            .filter(|(name, _)| !self.unlisted.contains(*name))
-            .map(|(name, server)| RoomInfo {
-                name: name.clone(),
+            .filter(|(id, _)| !self.unlisted.contains(*id))
+            .map(|(id, server)| RoomInfo {
+                id: id.clone(),
+                name: self.name_of(id).to_string(),
                 phase: server.phase().clone(),
                 victory: server.victory(),
                 players: server.players().filter(|p| p.online).count() as u32,
@@ -745,24 +885,33 @@ impl Rooms {
 
 /// One code, from [`CODE_ALPHABET`].
 ///
-/// The same source of randomness the rejoin token uses: `RandomState`, which
-/// is seeded per process from the OS. Not a cryptographic generator, and it
-/// does not need to be — see [`CODE_LEN`] for what a code is and is not.
+/// Each character is drawn from its own `RandomState`, hashed together with
+/// the position. `RandomState::new()` reuses one process-wide key and varies a
+/// counter, so consecutive draws are **correlated** — taking one `u64` and
+/// dividing it down, which is what this used to do and what [`new_token`] in
+/// `server::mod` still does, spreads that correlation across every character
+/// of one code. Hashing the counter breaks it up.
+///
+/// Still not a cryptographic generator, and it does not need to be: see
+/// [`CODE_LEN`] for what a code is and is not. What this buys is that two
+/// codes minted in the same second are not neighbours.
+///
+/// [`new_token`]: crate::server
 fn code() -> Code {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
 
-    let mut bits = RandomState::new().build_hasher().finish();
     (0..CODE_LEN)
-        .map(|_| {
-            let c = CODE_ALPHABET[(bits % CODE_ALPHABET.len() as u64) as usize] as char;
-            bits /= CODE_ALPHABET.len() as u64;
-            c
+        .map(|i| {
+            let mut h = RandomState::new().build_hasher();
+            h.write_usize(i);
+            let n = h.finish() % CODE_ALPHABET.len() as u64;
+            CODE_ALPHABET[n as usize] as char
         })
         .collect()
 }
 
-fn save_path(dir: &Path, room: &str) -> PathBuf {
+fn save_path(dir: &Path, room: &RoomId) -> PathBuf {
     dir.join(format!("{room}.{SAVE_EXT}"))
 }
 
@@ -827,9 +976,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(rooms.names().collect::<Vec<_>>(), ["arena", "lobby"]);
-        assert_eq!(rooms.default_room(), "lobby", "the first declared is the default");
-        assert_eq!(rooms.resolve(None).unwrap(), "lobby");
-        assert_eq!(rooms.resolve(Some("ARENA")).unwrap(), "arena", "names fold to lowercase");
+        assert_eq!(rooms.default_room().as_str(), "lobby", "the first declared is the default");
+        assert_eq!(rooms.resolve(None).unwrap().as_str(), "lobby");
+        assert_eq!(
+            rooms.resolve(Some("ARENA")).unwrap().as_str(),
+            "arena",
+            "names fold to lowercase"
+        );
 
         // A typo is refused, and the refusal says what is actually here --
         // which, with no menu yet, is the only way a player finds out.
@@ -853,22 +1006,22 @@ mod tests {
             Rooms::open(temp_dir("two"), &["a".into(), "b".into()], WorldKind::Infinite, true)
                 .unwrap();
 
-        let a = rooms.get_mut("a").unwrap().join("alice").unwrap();
-        let b = rooms.get_mut("b").unwrap().join("bob").unwrap();
+        let a = rooms.get_mut(&RoomId::from("a")).unwrap().join("alice").unwrap();
+        let b = rooms.get_mut(&RoomId::from("b")).unwrap().join("bob").unwrap();
         assert_eq!((a, b), (PlayerId(1), PlayerId(1)), "numbers are per room");
 
-        assert_eq!(rooms.get("a").unwrap().player_count(), 1);
-        assert_eq!(rooms.get("b").unwrap().player_count(), 1);
+        assert_eq!(rooms.get(&RoomId::from("a")).unwrap().player_count(), 1);
+        assert_eq!(rooms.get(&RoomId::from("b")).unwrap().player_count(), 1);
 
         // Alice's ground is in her world and nowhere else. Both players hold
         // number one, so a shared world would have them standing on it
         // together and this would pass for the wrong reason -- hence the
         // second player's own room being checked for emptiness too.
-        rooms.get_mut("a").unwrap().step();
-        let (row, col) = crate::net::spawn_for(a, rooms.get("a").unwrap().world());
-        assert!(rooms.get("a").unwrap().world().cell_at(row, col).is_some());
+        rooms.get_mut(&RoomId::from("a")).unwrap().step();
+        let (row, col) = crate::net::spawn_for(a, rooms.get(&RoomId::from("a")).unwrap().world());
+        assert!(rooms.get(&RoomId::from("a")).unwrap().world().cell_at(row, col).is_some());
         assert_eq!(
-            rooms.get("b").unwrap().world().generation,
+            rooms.get(&RoomId::from("b")).unwrap().world().generation,
             0,
             "stepping one room does not step the other"
         );
@@ -882,8 +1035,8 @@ mod tests {
         let stepped = rooms.step();
         let names: Vec<&str> = stepped.iter().map(|(r, _)| r.as_str()).collect();
         assert_eq!(names, ["a", "b"], "one Step per room, each labelled");
-        assert_eq!(rooms.get("a").unwrap().tick(), 1);
-        assert_eq!(rooms.get("b").unwrap().tick(), 1);
+        assert_eq!(rooms.get(&RoomId::from("a")).unwrap().tick(), 1);
+        assert_eq!(rooms.get(&RoomId::from("b")).unwrap().tick(), 1);
     }
 
     /// A room is a file, so a restart finds it without being told again.
@@ -892,16 +1045,16 @@ mod tests {
         let dir = temp_dir("saved");
         {
             let mut rooms = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
-            rooms.get_mut("kept").unwrap().join("alice").unwrap();
+            rooms.get_mut(&RoomId::from("kept")).unwrap().join("alice").unwrap();
             rooms.step();
             rooms.save().unwrap();
         }
 
         let back = Rooms::open(&dir, &[], WorldKind::Infinite, false).unwrap();
-        assert!(back.get("kept").is_some(), "the file is the declaration");
-        assert_eq!(back.get("kept").unwrap().tick(), 1, "and it kept its tick");
+        assert!(back.get(&RoomId::from("kept")).is_some(), "the file is the declaration");
+        assert_eq!(back.get(&RoomId::from("kept")).unwrap().tick(), 1, "and it kept its tick");
         assert!(
-            back.get(DEFAULT_ROOM).is_some(),
+            back.get(&RoomId::from(DEFAULT_ROOM)).is_some(),
             "a server always has somewhere to put a client that named no room"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -918,7 +1071,7 @@ mod tests {
             rooms.save().unwrap();
         }
         let back = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
-        assert_eq!(back.get("kept").unwrap().tick(), 0);
+        assert_eq!(back.get(&RoomId::from("kept")).unwrap().tick(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -932,12 +1085,16 @@ mod tests {
 
         let replies = rooms.handle(
             &Caller::nobody(),
-            ClientMessage::Join { name: "alice".into(), token: None, room: Some("hall".into()) },
+            ClientMessage::Join {
+                name: "alice".into(),
+                token: None,
+                room: Some(RoomId::from("hall")),
+            },
         );
         let [ServerMessage::Welcome { room, world, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
         };
-        assert_eq!(room, "hall", "the welcome names the room it let you into");
+        assert_eq!(room.as_str(), "hall", "the welcome names the room it let you into");
         assert_eq!(*world, WorldKind::Infinite);
 
         assert!(
@@ -960,7 +1117,7 @@ mod tests {
             true,
         )
         .unwrap();
-        rooms.get_mut("arena").unwrap().join("alice").unwrap();
+        rooms.get_mut(&RoomId::from("arena")).unwrap().join("alice").unwrap();
 
         let replies = rooms.handle(&Caller::nobody(), ClientMessage::Rooms);
         let [ServerMessage::Rooms { rooms: listed }] = &replies[..] else {
@@ -976,7 +1133,7 @@ mod tests {
         assert_eq!(listed[0].world, WorldKind::Toroidal { rows: 4, cols: 4 });
 
         // A player who left is not a player who is there.
-        rooms.get_mut("arena").unwrap().leave(PlayerId(1));
+        rooms.get_mut(&RoomId::from("arena")).unwrap().leave(PlayerId(1));
         let [ServerMessage::Rooms { rooms: listed }] =
             &rooms.handle(&Caller::nobody(), ClientMessage::Rooms)[..]
         else {
@@ -1008,10 +1165,10 @@ mod tests {
 
         rooms.handle(&Caller::sitting(1, seat.clone()), join("b"));
         assert!(
-            !rooms.get("a").unwrap().players().any(|p| p.online),
+            !rooms.get(&RoomId::from("a")).unwrap().players().any(|p| p.online),
             "nobody is left standing in the room she left"
         );
-        assert!(rooms.get("b").unwrap().players().any(|p| p.online));
+        assert!(rooms.get(&RoomId::from("b")).unwrap().players().any(|p| p.online));
 
         // A refused change leaves her where she was. Her client learns where
         // it is from the Welcome it will not get, so anything else would have
@@ -1020,7 +1177,7 @@ mod tests {
         let replies = rooms.handle(&Caller::sitting(1, seat.clone()), join("nowhere"));
         assert!(matches!(replies[..], [ServerMessage::Rejected { .. }]));
         assert!(
-            rooms.get("b").unwrap().players().any(|p| p.online),
+            rooms.get(&RoomId::from("b")).unwrap().players().any(|p| p.online),
             "a refused join must not empty the room she was in"
         );
     }
@@ -1061,21 +1218,23 @@ mod tests {
                 private: false,
             },
         );
-        let [ServerMessage::Made(Ok(name))] = &replies[..] else {
-            panic!("expected a name, got {replies:?}");
+        let [ServerMessage::Made(Ok(made))] = &replies[..] else {
+            panic!("expected a room, got {replies:?}");
         };
-        assert_eq!(name, "arena", "the server names the room it actually made");
-        assert_eq!(rooms.made_by("arena"), Some(7), "and remembers who asked");
+        assert_eq!(made.name, "arena", "trimmed and lowercased, the way it will be shown");
+        assert_eq!(made.code, None, "an open room needs no code");
+        assert_eq!(rooms.made_by(&made.id), Some(7), "and it remembers who asked");
 
-        let name = name.clone();
+        let made_id = made.id.clone();
         let replies = rooms.handle(
             &me,
-            ClientMessage::Join { name: "alice".into(), token: None, room: Some(name) },
+            ClientMessage::Join { name: "alice".into(), token: None, room: Some(made_id.clone()) },
         );
-        let [ServerMessage::Welcome { room, world, .. }] = &replies[..] else {
+        let [ServerMessage::Welcome { room, name, world, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
         };
-        assert_eq!(room, "arena");
+        assert_eq!(*room, made_id, "joined by the id it was given");
+        assert_eq!(name, "arena", "and told what it is called");
         assert_eq!(*world, WorldKind::Toroidal { rows: 4, cols: 6 }, "the shape it asked for");
     }
 
@@ -1124,7 +1283,7 @@ mod tests {
         };
         assert!(why.contains("hall"), "the refusal names the room: {why}");
         assert_eq!(rooms.len(), before, "and nothing was made");
-        assert_eq!(rooms.made_by("hall"), None, "an existing room gets no owner");
+        assert_eq!(rooms.made_by(&RoomId::from("hall")), None, "an existing room gets no owner");
     }
 
     /// The backstop. A server anybody can fill is a server that steps a
@@ -1148,7 +1307,7 @@ mod tests {
 
         let refused = rooms.make(1, "c", WorldKind::Infinite, None, false).unwrap_err();
         assert!(refused.contains('2'), "the refusal says how many: {refused}");
-        assert!(rooms.get("c").is_none(), "and made none");
+        assert!(rooms.get(&RoomId::from("c")).is_none(), "and made none");
 
         // Deleting one frees a slot, or a server that had made and deleted its
         // cap's worth would refuse for ever while holding nothing.
@@ -1165,22 +1324,27 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("private"), &["hall".into()], WorldKind::Infinite, true).unwrap();
 
-        let code = rooms.make(3, "ignored", WorldKind::Infinite, None, true).unwrap();
+        let made = rooms.make(3, "friends-only", WorldKind::Infinite, None, true).unwrap();
+        let code = made.code.clone().expect("a private room gets a code");
         assert_eq!(code.len(), CODE_LEN);
-        assert_ne!(code, "ignored", "the code is the name; what was typed is not used");
-        assert!(rooms.is_unlisted(&code));
+        assert_ne!(code, made.id.as_str(), "a code is a credential, not an identity");
+        assert_eq!(made.name, "friends-only", "a private room keeps the name it was given");
+        assert_ne!(code, made.name, "and the code is not that name");
+        assert!(rooms.is_unlisted(&made.id));
 
         let listing = rooms.listing();
         let listed: Vec<&str> = listing.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(listed, ["hall"], "the listing does not mention it");
 
         // The code still joins, which is the whole point of having one.
-        assert_eq!(rooms.resolve(Some(&code)).unwrap(), code);
+        assert_eq!(rooms.resolve(Some(&code)).unwrap(), made.id);
+        assert_eq!(rooms.resolve(Some(made.id.as_str())).unwrap(), made.id);
 
         // And a wrong name is refused without naming it.
         let refused = rooms.resolve(Some("nowhere")).unwrap_err();
         assert!(refused.contains("hall"));
         assert!(!refused.contains(&code), "the refusal leaked a code: {refused}");
+        assert!(!refused.contains(made.id.as_str()), "or an id: {refused}");
     }
 
     /// Whoever is running the server can read the save directory anyway, and
@@ -1190,10 +1354,11 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("console-sees"), &["hall".into()], WorldKind::Infinite, true)
                 .unwrap();
-        let code = rooms.make(3, "", WorldKind::Infinite, None, true).unwrap();
+        let made = rooms.make(3, "", WorldKind::Infinite, None, true).unwrap();
+        assert!(made.code.is_some(), "a private room gets a code");
 
         let everything = rooms.everything();
-        let found = everything.iter().find(|(r, _)| r.name == code).expect("the console sees it");
+        let found = everything.iter().find(|(r, _)| r.id == made.id).expect("the console sees it");
         assert!(found.1, "and knows it is private");
         assert_eq!(everything.len(), 2);
 
@@ -1204,8 +1369,12 @@ mod tests {
         let printed = crate::server::console::run("rooms", &mut rooms, WorldKind::Infinite);
         let text = printed.lines.join("\n");
         assert!(text.contains("hall"), "{text}");
-        assert!(text.contains(&code), "{text}");
+        assert!(text.contains(made.id.as_str()), "the console shows the id: {text}");
         assert!(text.contains("private"), "{text}");
+        assert!(
+            text.contains(made.code.as_ref().unwrap().as_str()),
+            "and the code, which is why an operator looks a private room up: {text}"
+        );
     }
 
     /// A code is read off one screen and typed into another. The five
@@ -1229,21 +1398,22 @@ mod tests {
         // Fill every seat there is. `PlayerId::MAX` is four bits of cell.
         for n in 0..PlayerId::MAX {
             rooms
-                .get_mut("hall")
+                .get_mut(&RoomId::from("hall"))
                 .unwrap()
                 .join(format!("player{n}"))
                 .unwrap_or_else(|e| panic!("seat {n}: {e}"));
         }
         assert!(
-            rooms.get_mut("hall").unwrap().join("one-too-many").is_err(),
+            rooms.get_mut(&RoomId::from("hall")).unwrap().join("one-too-many").is_err(),
             "the room is full, which is the situation being tested"
         );
 
-        let replies = rooms.handle(&Caller::new(9), ClientMessage::Watch { room: "hall".into() });
+        let replies =
+            rooms.handle(&Caller::new(9), ClientMessage::Watch { room: RoomId::from("hall") });
         let [ServerMessage::Watching { room, world, .. }] = &replies[..] else {
             panic!("a full room still admits a watcher, got {replies:?}");
         };
-        assert_eq!(room, "hall");
+        assert_eq!(room.as_str(), "hall");
         assert_eq!(*world, WorldKind::Infinite);
     }
 
@@ -1253,10 +1423,10 @@ mod tests {
     #[test]
     fn a_watcher_is_sent_chunks_and_changes_nothing() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
-        let seated = rooms.get_mut("hall").unwrap().join("alice").unwrap();
-        let watcher = Caller { connection: 4, seat: None, watching: Some("hall".into()) };
+        let seated = rooms.get_mut(&RoomId::from("hall")).unwrap().join("alice").unwrap();
+        let watcher = Caller { connection: 4, seat: None, watching: Some(RoomId::from("hall")) };
 
-        let before = rooms.get("hall").unwrap().world().digest();
+        let before = rooms.get(&RoomId::from("hall")).unwrap().world().digest();
 
         // Reads.
         let replies = rooms.handle(&watcher, ClientMessage::Subscribe { chunks: vec![(0, 0)] });
@@ -1271,7 +1441,7 @@ mod tests {
         rooms.handle(
             &watcher,
             ClientMessage::Act(crate::net::Stamped {
-                tick: rooms.get("hall").unwrap().tick(),
+                tick: rooms.get(&RoomId::from("hall")).unwrap().tick(),
                 player: seated,
                 action: crate::net::Action::Paint {
                     cells: vec![(0, 0)],
@@ -1281,12 +1451,12 @@ mod tests {
         );
         rooms.step();
         assert_eq!(
-            rooms.get("hall").unwrap().world().digest(),
+            rooms.get(&RoomId::from("hall")).unwrap().world().digest(),
             {
                 let mut clean = Rooms::just(Server::named("hall", World::infinite_empty()));
-                clean.get_mut("hall").unwrap().join("alice").unwrap();
+                clean.get_mut(&RoomId::from("hall")).unwrap().join("alice").unwrap();
                 clean.step();
-                clean.get("hall").unwrap().world().digest()
+                clean.get(&RoomId::from("hall")).unwrap().world().digest()
             },
             "a watcher put something in the world"
         );
@@ -1302,14 +1472,18 @@ mod tests {
         assert_eq!(rooms.names().collect::<Vec<_>>(), [DEFAULT_ROOM]);
 
         let made = rooms.create("Arena", WorldKind::Toroidal { rows: 4, cols: 4 }).unwrap();
-        assert_eq!(made, "arena", "names fold to lowercase, as they do on a join");
+        assert_eq!(made.as_str(), "arena", "names fold to lowercase, as they do on a join");
         assert_eq!(rooms.names().collect::<Vec<_>>(), ["arena", DEFAULT_ROOM]);
         assert_eq!(
-            rooms.get("arena").unwrap().world().kind(),
+            rooms.get(&RoomId::from("arena")).unwrap().world().kind(),
             WorldKind::Toroidal { rows: 4, cols: 4 },
             "its own shape, not the one the server was started with"
         );
-        assert_eq!(rooms.resolve(Some("arena")).unwrap(), "arena", "and joinable at once");
+        assert_eq!(
+            rooms.resolve(Some("arena")).unwrap(),
+            RoomId::from("arena"),
+            "and joinable at once"
+        );
 
         // On disk before anything is in it, so a crash does not take a room
         // somebody was told they had made.
@@ -1321,7 +1495,7 @@ mod tests {
         let taken = rooms.create("arena", WorldKind::Infinite).unwrap_err();
         assert!(taken.contains("already"), "{taken}");
         assert_eq!(
-            rooms.get("arena").unwrap().world().kind(),
+            rooms.get(&RoomId::from("arena")).unwrap().world().kind(),
             WorldKind::Toroidal { rows: 4, cols: 4 },
             "and the refusal left the existing world alone"
         );

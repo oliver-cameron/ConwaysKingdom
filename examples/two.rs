@@ -37,6 +37,7 @@ struct Peer {
 
 impl Peer {
     fn join(url: &str, name: &'static str, room: Option<String>) -> Self {
+        let room = room.map(conwayskingdom::net::RoomId);
         let mut link = Link::connect(url.to_string());
         link.send(ClientMessage::Join { name: name.into(), token: None, room });
         for _ in 0..200 {

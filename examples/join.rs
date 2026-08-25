@@ -23,6 +23,7 @@ fn main() {
     let url = std::env::args().nth(1).expect("usage: join <ws url> [room]");
     let room = std::env::args().nth(2);
     let mut link = Link::connect(url);
+    let room = room.map(conwayskingdom::net::RoomId);
     link.send(ClientMessage::Join { name: "late".into(), token: None, room });
 
     // Replaced on Welcome by a world of the shape the server named. A client

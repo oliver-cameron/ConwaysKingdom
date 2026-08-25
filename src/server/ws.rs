@@ -30,7 +30,7 @@ use tokio::sync::{broadcast, mpsc};
 use tower_http::services::ServeDir;
 
 use crate::net::codec::{decode_client, encode_server};
-use crate::net::{ClientMessage, RoomName, ServerMessage};
+use crate::net::{ClientMessage, RoomId, ServerMessage};
 use crate::server::console;
 use crate::server::rooms::{Caller, ConnectionId, Rooms, Seat};
 use crate::sim::WorldKind;
@@ -64,7 +64,7 @@ fn next_connection() -> ConnectionId {
 /// A message meant for everyone in one room. The room travels with it because
 /// the rooms are separate worlds: a `Step` from one is not a fact about
 /// another, and applying it there would advance a world nobody stepped.
-type Broadcast = (RoomName, ServerMessage);
+type Broadcast = (RoomId, ServerMessage);
 
 #[derive(Clone)]
 struct AppState {
@@ -561,7 +561,7 @@ async fn connection(socket: WebSocket, state: AppState) {
     // Which world this connection is watching without a seat in it. Set by a
     // `Watching` and cleared by a `Welcome`, because joining a room you were
     // watching makes you a player in it rather than both at once.
-    let mut watching: Option<RoomName> = None;
+    let mut watching: Option<RoomId> = None;
 
     loop {
         tokio::select! {

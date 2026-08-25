@@ -39,8 +39,58 @@ pub type ChunkId = Coord;
 /// so both sides apply it at the same point in the sequence.
 pub type Tick = u64;
 
-/// What a room is called. A room is a whole separate world on one server, so
-/// this names the world a player is in, not a channel inside a shared one.
+/// **What a room is**, for as long as its save file exists.
+///
+/// Distinct from the name, and that separation is the point. A name is typed,
+/// read aloud, and may be changed; an id is generated once and never changes.
+/// Everything that has to still mean the same room tomorrow keys off this: the
+/// save file, the seat a player holds, and the rejoin token filed against it.
+/// Rename a room and every one of those survives, because none of them ever
+/// knew the name.
+///
+/// A newtype rather than another `String`. Ids, names and codes are three
+/// strings about one room, and the whole failure this prevents is passing one
+/// where another was meant — which no amount of care catches and the compiler
+/// catches for free.
+///
+/// The spelling is [`crate::server::rooms`]'s business; `net` only carries it.
+/// It is always a legal [`room_name`], because it is also a filename.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RoomId(pub String);
+
+impl RoomId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RoomId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for RoomId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for RoomId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl std::borrow::Borrow<str> for RoomId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What a room is **called**: what a player reads in the list and types to
+/// reach it. Unique on a server, so that typing one is unambiguous, and not
+/// what anything durable keys off — see [`RoomId`].
 pub type RoomName = String;
 
 /// The room a client that names none is put in.
@@ -362,6 +412,22 @@ impl Victory {
     }
 }
 
+/// A room that now exists: how to reach it, what it is called, and — if it is
+/// private — the code to hand to whoever is playing.
+///
+/// Three fields because they are three different things about one room, which
+/// is the whole reason a room is not identified by its name. The id is what
+/// `Join` carries and never changes; the name is what a player reads; the code
+/// is a credential, and being separate from the id is what makes it possible
+/// to change one later without the room becoming a different room.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Made {
+    pub id: RoomId,
+    pub name: RoomName,
+    /// `None` for a room anybody can find in the listing.
+    pub code: Option<String>,
+}
+
 /// One room, as a menu needs to show it.
 ///
 /// Enough to choose by and no more: which world, whether anybody is in it, and
@@ -369,6 +435,9 @@ impl Victory {
 /// what it is like to be in, and neither of those says anything about that.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomInfo {
+    /// What to send back to join or watch it. Never shown.
+    pub id: RoomId,
+    /// What to put on the screen. Never sent back.
     pub name: RoomName,
     /// Whether this room is a match and what it is doing. A room and a match
     /// are the same thing to everything else, so the one place the difference
@@ -398,7 +467,7 @@ pub enum ClientMessage {
         /// this decides which cells the player will ever see — and player
         /// numbers, value, territory and the rejoin token are all per room. A
         /// player in two rooms is two players.
-        room: Option<RoomName>,
+        room: Option<RoomId>,
     },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
@@ -431,7 +500,7 @@ pub enum ClientMessage {
     ///
     /// Answerable without a seat, like `Join`, and it names its own room for
     /// the same reason.
-    Watch { room: RoomName },
+    Watch { room: RoomId },
     /// Make a room that is not here yet.
     ///
     /// Answerable without a seat, like `Rooms` and `Join` and for a sharper
@@ -448,9 +517,12 @@ pub enum ClientMessage {
     /// client sends `Join` with it, which is the same `Join` the room list
     /// sends. That keeps one path into a world rather than two.
     Create {
-        /// Validated by [`room_name`] on both sides — here so the menu can
-        /// refuse a name without a round trip, and again on the server
-        /// because nothing a client says about a filename is trusted.
+        /// What to call it. Validated by [`room_name`] on both sides — here
+        /// so the menu can refuse a name without a round trip, and again on
+        /// the server because nothing a client says about a filename is
+        /// trusted. The **id** is the server's to choose and is never sent
+        /// here: a client naming its own identifiers is a client that can
+        /// collide with one.
         name: RoomName,
         shape: WorldKind,
         /// How it is won. `None` makes a world, which is a match with no way
@@ -493,7 +565,11 @@ pub enum ServerMessage {
         /// keep is filed under this name — a token stored against the wrong
         /// room returns you to the wrong world, which is worse than having no
         /// token at all.
-        room: RoomName,
+        room: RoomId,
+        /// What that room is called, for the HUD. Sent beside the id rather
+        /// than looked up, because a client that has joined by code has never
+        /// seen the listing and so has no name for where it is.
+        name: RoomName,
         /// The shape of the world, so the client builds the same one.
         ///
         /// Without it a client joining a toroidal server built an infinite
@@ -515,7 +591,8 @@ pub enum ServerMessage {
     /// What is left is what watching actually needs — which world, and where
     /// it has got to.
     Watching {
-        room: RoomName,
+        room: RoomId,
+        name: RoomName,
         tick: Tick,
         world: WorldKind,
     },
@@ -531,7 +608,7 @@ pub enum ServerMessage {
     /// sends one: [`room_name`] lowercases and trims, so what was typed and
     /// what the room is called are not always the same string, and joining the
     /// second is the only thing that works.
-    Made(Result<RoomName, String>),
+    Made(Result<Made, String>),
     /// One generation happened. `tick` is the generation the world is on
     /// **after** it, and `actions` is what was applied on the way there.
     ///

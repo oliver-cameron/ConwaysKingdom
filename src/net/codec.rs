@@ -135,6 +135,7 @@ mod tests {
                 token: "0123456789abcdef".into(),
                 value: 73,
                 room: "main".into(),
+                name: "main".into(),
                 world: crate::sim::WorldKind::Infinite,
             },
             // The shape of a wrapping world has to survive the round trip, or
@@ -146,6 +147,7 @@ mod tests {
                 token: "beef".into(),
                 value: 0,
                 room: "ring".into(),
+                name: "ring".into(),
                 world: crate::sim::WorldKind::Toroidal { rows: 18, cols: 24 },
             },
             ServerMessage::Rejected { reason: "full".into() },
@@ -163,12 +165,28 @@ mod tests {
             ServerMessage::Rooms { rooms: vec![] },
             // Both arms of the answer to `Create`, since a refusal is the
             // common one and carries the only text a player will read.
-            ServerMessage::Made(Ok("arena".into())),
+            ServerMessage::Made(Ok(crate::net::Made {
+                id: "r-abc234".into(),
+                name: "arena".into(),
+                code: None,
+            })),
+            ServerMessage::Made(Ok(crate::net::Made {
+                id: "r-xyz789".into(),
+                name: "private game".into(),
+                code: Some("mn4p7q".into()),
+            })),
             ServerMessage::Made(Err("there is already a room called \"arena\"".into())),
+            ServerMessage::Watching {
+                room: "r-abc234".into(),
+                name: "arena".into(),
+                tick: 900,
+                world: crate::sim::WorldKind::Infinite,
+            },
             ServerMessage::Rooms {
                 rooms: vec![
                     // A match, so the list can say so before anybody clicks.
                     crate::net::RoomInfo {
+                        id: "r-abc234".into(),
                         name: "arena".into(),
                         players: 3,
                         phase: crate::net::MatchPhase::Gathering,
@@ -176,6 +194,7 @@ mod tests {
                         world: crate::sim::WorldKind::Toroidal { rows: 6, cols: 6 },
                     },
                     crate::net::RoomInfo {
+                        id: "lobby".into(),
                         name: "lobby".into(),
                         players: 0,
                         phase: crate::net::MatchPhase::Open,

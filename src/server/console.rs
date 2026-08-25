@@ -96,12 +96,26 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
                 listing
                     .iter()
                     .map(|(room, private)| {
-                        let here =
-                            if room.name == rooms.default_room() { " (default)" } else { "" };
-                        let hidden = if *private { "  private" } else { "" };
+                        let here = if room.id == *rooms.default_room() { " (default)" } else { "" };
+                        // The id only where it is not the name, which is only
+                        // for rooms a client made. Printing `arena (arena)`
+                        // for every room an operator declared would be noise
+                        // in the one listing they read most.
+                        let id = if room.id.as_str() == room.name {
+                            String::new()
+                        } else {
+                            format!(" ({})", room.id)
+                        };
+                        // And the code, because helping somebody into a
+                        // private room is the reason an operator looks one up.
+                        let hidden = match rooms.code_of(&room.id) {
+                            Some(code) => format!("  private, code {code}"),
+                            None if *private => "  private".into(),
+                            None => String::new(),
+                        };
                         format!(
                             "  {:<24} {:<22} {} online{here}{hidden}",
-                            room.name,
+                            format!("{}{id}", room.name),
                             describe(room.world),
                             room.players
                         )
@@ -146,7 +160,11 @@ fn world_command(verb: &str, rest: &[&str], rooms: &mut Rooms, default_shape: Wo
                 listing
                     .iter()
                     .map(|(name, world, players, asleep)| {
-                        let here = if *name == rooms.default_room() { " (default)" } else { "" };
+                        let here = if **name == *rooms.default_room().as_str() {
+                            " (default)"
+                        } else {
+                            ""
+                        };
                         let state = if *asleep { "  asleep" } else { "" };
                         format!(
                             "  {name:<24} {:<22} {players} online{here}{state}",
@@ -333,20 +351,20 @@ mod tests {
     fn a_world_reads_like_a_match_without_a_way_to_win() {
         let mut rooms = rooms();
         assert!(out("world new arena infinite", &mut rooms).contains("arena"));
-        assert_eq!(rooms.get("arena").unwrap().world().kind(), WorldKind::Infinite);
+        assert_eq!(rooms.get(&"arena".into()).unwrap().world().kind(), WorldKind::Infinite);
 
         // A size makes it wrap, which a single --torus on the command line
         // cannot do for one room and not another. Word for word what
         // `match new` takes, less the win condition.
         out("world new ring toroidal 4x6", &mut rooms);
         assert_eq!(
-            rooms.get("ring").unwrap().world().kind(),
+            rooms.get(&"ring".into()).unwrap().world().kind(),
             WorldKind::Toroidal { rows: 4, cols: 6 }
         );
 
         // `new` is what the muscle typed for months, and still lands here.
         out("new lobby toroidal 3x3", &mut rooms);
-        assert!(rooms.get("lobby").is_some());
+        assert!(rooms.get(&"lobby".into()).is_some());
 
         let listing = out("world", &mut rooms);
         assert!(listing.contains("arena") && listing.contains("ring"));
@@ -362,19 +380,19 @@ mod tests {
         out("world new arena infinite", &mut rooms);
 
         assert!(out("world sleep arena", &mut rooms).contains("sleep"));
-        assert!(rooms.get("arena").unwrap().is_asleep());
+        assert!(rooms.get(&"arena".into()).unwrap().is_asleep());
         assert!(out("world sleep arena", &mut rooms).contains("already asleep"));
 
         // The tick is the generation, so a sleeping world does not move and
         // waking is indistinguishable from never having slept.
-        let at = rooms.get("arena").unwrap().tick();
+        let at = rooms.get(&"arena".into()).unwrap().tick();
         rooms.step();
         rooms.step();
-        assert_eq!(rooms.get("arena").unwrap().tick(), at, "asleep is a whole stop");
+        assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), at, "asleep is a whole stop");
 
         assert!(out("world wake arena", &mut rooms).contains("wake"));
         rooms.step();
-        assert_eq!(rooms.get("arena").unwrap().tick(), at + 1);
+        assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), at + 1);
 
         // A match has a clock and a deadline in generations, so a sleep would
         // be a pause in a race some of whose runners are asleep.
@@ -390,21 +408,21 @@ mod tests {
 
         // The default room is where every client naming none is sent.
         assert!(out("world delete main", &mut rooms).contains("default"));
-        assert!(rooms.get("main").is_some());
+        assert!(rooms.get(&"main".into()).is_some());
 
         // And a world somebody is standing in.
-        rooms.get_mut("arena").unwrap().join_with("alice", None).unwrap();
+        rooms.get_mut(&"arena".into()).unwrap().join_with("alice", None).unwrap();
         assert!(out("world delete arena", &mut rooms).contains("still in"));
-        assert!(rooms.get("arena").is_some());
+        assert!(rooms.get(&"arena".into()).is_some());
 
-        rooms.leave(&("arena".to_string(), crate::sim::PlayerId(1)));
+        rooms.leave(&("arena".into(), crate::sim::PlayerId(1)));
         assert!(out("world delete arena", &mut rooms).contains("deleted"));
-        assert!(rooms.get("arena").is_none());
+        assert!(rooms.get(&"arena".into()).is_none());
 
         // A match goes the same way, by the same verb under its own noun.
         out("match new dawn infinite timer 100", &mut rooms);
         assert!(out("match delete dawn", &mut rooms).contains("deleted"));
-        assert!(rooms.get("dawn").is_none());
+        assert!(rooms.get(&"dawn".into()).is_none());
     }
 
     /// Every way of getting it wrong says what was wrong, and changes nothing.
@@ -491,16 +509,16 @@ mod tests {
 
         // A gathering match does not step, which is what makes the opening
         // drawn rather than raced.
-        let before = rooms.get("arena").unwrap().tick();
+        let before = rooms.get(&"arena".into()).unwrap().tick();
         rooms.step();
-        assert_eq!(rooms.get("arena").unwrap().tick(), before, "gathering holds still");
+        assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), before, "gathering holds still");
 
         assert!(out("match", &mut rooms).contains("gathering"));
         assert!(out("match dispatch", &mut rooms).contains("running"));
         assert!(out("match dispatch", &mut rooms).contains("no match is waiting"));
 
         rooms.step();
-        assert_eq!(rooms.get("arena").unwrap().tick(), before + 1, "running steps");
+        assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), before + 1, "running steps");
         assert!(out("match", &mut rooms).contains("running"));
     }
 
@@ -536,7 +554,7 @@ mod tests {
         assert!(over_a_room.contains("already a room called"), "{over_a_room}");
 
         // And the name is the one you join by and the one `start` takes.
-        assert!(rooms.get("arena").is_some());
+        assert!(rooms.get(&"arena".into()).is_some());
         assert!(out("match start arena", &mut rooms).contains("running"));
     }
 

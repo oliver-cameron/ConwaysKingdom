@@ -136,11 +136,12 @@ fn main() -> std::io::Result<()> {
         rooms.len(),
         rooms_dir.display(),
         rooms.names().collect::<Vec<_>>().join(", "),
-        rooms.default_room(),
+        rooms.name_of(rooms.default_room()),
     );
 
-    for name in rooms.names().collect::<Vec<_>>() {
-        let server = rooms.get(name).expect("just listed");
+    for id in rooms.ids().cloned().collect::<Vec<_>>() {
+        let name = rooms.name_of(&id).to_string();
+        let server = rooms.get(&id).expect("just listed");
         let world = server.world();
         // Asked of the world rather than of the flag, because a save is
         // authoritative: the world that comes back may not be the shape

@@ -387,7 +387,13 @@ pub struct BattleApp {
     /// may have named no room at all, and the rejoin token is filed under this
     /// name, so a guess here is a token that comes back to the wrong world.
     /// `None` while offline, where there is no room to be in.
-    room: Option<crate::net::RoomName>,
+    room: Option<crate::net::RoomId>,
+    /// What that room is **called**, for the HUD.
+    ///
+    /// Beside the id rather than looked up from the room list, because a
+    /// client that joined by code has never seen a listing and so has no other
+    /// way to know what it is in.
+    room_name: Option<String>,
     /// Chunks already asked for, so a moving viewport only asks for what is new.
     subscribed: std::collections::HashSet<crate::sim::Coord>,
     /// The server connection, if there is one. A client with no link still
@@ -666,7 +672,7 @@ impl BattleApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick, spawn, token, value, room, world } => {
+                ServerMessage::Welcome { you, tick, spawn, token, value, room, name, world } => {
                     // Kept first, before anything else can go wrong: the whole
                     // value of it is being able to come back, and a client that
                     // crashes on its first frame is exactly the case that needs
@@ -676,11 +682,15 @@ impl BattleApp {
                     // one that was asked for: a client may have named none, and
                     // a token stored against the wrong room brings you back to
                     // the wrong world.
-                    crate::net::keep::store_token(&room, &token);
+                    // Filed against the **id**, not the name. That is the
+                    // whole point of there being an id: a room that is
+                    // renamed is the same room, and a token that keyed off
+                    // the name would come back to nothing.
+                    crate::net::keep::store_token(room.as_str(), &token);
                     // A different room is a different match, or none.
                     self.lobby = None;
                     log::info!(
-                        "joined room \"{room}\" as {you:?} at tick {tick}, in a {} world",
+                        "joined \"{name}\" ({room}) as {you:?} at tick {tick}, in a {} world",
                         match world {
                             crate::sim::WorldKind::Infinite => "boundless".to_string(),
                             crate::sim::WorldKind::Toroidal { rows, cols } =>
@@ -695,6 +705,7 @@ impl BattleApp {
                     self.me = Some(you);
                     self.watching = false;
                     self.room = Some(room);
+                    self.room_name = Some(name);
                     // Into the game. Not before: until a Welcome arrives there
                     // is no world to be in, and a menu that closed on the
                     // click would leave the player staring at ground they
@@ -725,7 +736,7 @@ impl BattleApp {
                     self.geiger.reset();
                     self.file_game();
                     self.in_play = Some(crate::client::record::InPlay::joined(
-                        self.room.clone().unwrap_or_default(),
+                        self.room_name.clone().unwrap_or_default(),
                         world,
                         tick,
                     ));
@@ -737,8 +748,8 @@ impl BattleApp {
                     self.camera.dirty = true;
                 }
                 // Watching: the world and its clock, and no player at all.
-                ServerMessage::Watching { room, tick, world } => {
-                    log::info!("watching room \"{room}\" from tick {tick}");
+                ServerMessage::Watching { room, name, tick, world } => {
+                    log::info!("watching \"{name}\" ({room}) from tick {tick}");
                     self.lobby = None;
                     self.me = None;
                     self.watching = true;
@@ -747,6 +758,7 @@ impl BattleApp {
                     // is filed and nothing new is started.
                     self.file_game();
                     self.room = Some(room);
+                    self.room_name = Some(name);
                     self.screen = Screen::Playing;
                     self.asked_at = None;
                     self.world = world.build();
@@ -811,22 +823,21 @@ impl BattleApp {
                 // "there is already a room called that" is a thing to correct,
                 // not a thing to be told once and then hunt for.
                 ServerMessage::Made(made) => match made {
-                    Ok(room) => {
-                        log::info!("made room \"{room}\"; joining it");
-                        // A private room's name is its code, and the code is
-                        // the thing you send somebody -- so it goes in the
-                        // field, where it can be read off and copied, rather
-                        // than only into a log line nobody will see.
+                    Ok(crate::net::Made { id, name, code }) => {
+                        log::info!("made \"{name}\" ({id}); joining it");
+                        // A code is the thing you send somebody, so it goes
+                        // into the field it can be read off and copied from
+                        // rather than only into a log line nobody will see.
                         if let Screen::Menu(m) = &mut self.screen {
-                            if m.draft.as_ref().is_some_and(|d| d.private) {
-                                m.code = room.clone();
+                            if let Some(code) = code {
+                                m.code = code;
                             }
                             m.draft = None;
                         }
                         // Straight in. Making a world and then being handed
                         // back to the list to find it is a step that exists
                         // only because the messages are two.
-                        self.chose(menu::Chose::Join(room));
+                        self.chose(menu::Chose::Join(id));
                     }
                     Err(why) => {
                         log::info!("the server would not make that room: {why}");
@@ -1566,9 +1577,9 @@ impl BattleApp {
                     Screen::Playing => "player".into(),
                 };
                 crate::net::keep::remember_name(&name);
-                log::info!("joining room \"{room}\" as \"{name}\"");
+                log::info!("joining {room} as \"{name}\"");
                 link.send(ClientMessage::Join {
-                    token: crate::net::keep::token_for_join(Some(&room)),
+                    token: crate::net::keep::token_for_join(Some(room.as_str())),
                     name,
                     room: Some(room),
                 });
@@ -1651,10 +1662,14 @@ impl App for BattleApp {
         let (screen, link) = match startup() {
             Start::Join { url, name, room } => {
                 log::info!("connecting to {url}, asking for room {room:?}");
+                // `--room` and `?room=` are typed, so they are names rather
+                // than ids -- and the server resolves either, along with a
+                // code, which is what lets one flag carry all three.
+                let room = room.map(crate::net::RoomId);
                 let link = dial(&url).inspect(|link| {
                     link.send(ClientMessage::Join {
                         name,
-                        token: crate::net::keep::token_for_join(room.as_deref()),
+                        token: crate::net::keep::token_for_join(room.as_ref().map(|r| r.as_str())),
                         room,
                     })
                 });
@@ -1770,6 +1785,7 @@ impl App for BattleApp {
             me: None,
             watching: false,
             room: None,
+            room_name: None,
             subscribed: std::collections::HashSet::new(),
             cursor: (0.0, 0.0),
             pending: None,
@@ -1860,7 +1876,7 @@ impl App for BattleApp {
             chunks_drawn: self.chunks.instance_count(),
             zoom: self.camera.zoom,
             connected: self.link.is_some(),
-            room: self.room.as_deref(),
+            room: self.room_name.as_deref(),
             world: self.world.kind(),
             notice: self.notice.as_deref(),
             pointer_on_ui: self.views.borrow().wants_pointer(),

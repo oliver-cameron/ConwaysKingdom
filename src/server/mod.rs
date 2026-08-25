@@ -513,7 +513,8 @@ impl Server {
                         spawn,
                         token,
                         value,
-                        room: self.room.clone(),
+                        room: crate::net::RoomId(self.room.clone()),
+                        name: self.room.clone(),
                         // Sent rather than left to be derived: nothing a client
                         // can see says whether the ground ends, so a client
                         // told nothing builds an infinite world and disagrees
