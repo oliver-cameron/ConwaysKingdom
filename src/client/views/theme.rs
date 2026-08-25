@@ -46,10 +46,21 @@ pub struct Metrics {
     /// A hotbar slot is square, this wide.
     pub slot: f32,
     /// How wide a panel that is the whole screen's business is — the menu,
-    /// and every form on it. Fixed rather than sized by its contents: a panel
-    /// that grows and shrinks as a list changes length moves the buttons out
-    /// from under the hand reaching for them.
-    pub panel_width: f32,
+    /// and every form on it.
+    ///
+    /// A **share of the screen** between two bounds rather than one number.
+    /// A fixed 420 was right on a phone and left three quarters of a desktop
+    /// empty; a pure fraction is unreadably wide on a monitor and too narrow
+    /// on nothing. So: this much of the window, never less than `panel_min`
+    /// and never more than `panel_max`.
+    ///
+    /// Still fixed for any given window size, which is the property that
+    /// mattered: a panel sized by its *contents* jumps every time a list
+    /// changes length, and moves the buttons out from under the hand reaching
+    /// for them.
+    pub panel_share: f32,
+    pub panel_min: f32,
+    pub panel_max: f32,
     /// The one control per screen you are meant to press next. Taller than
     /// the rest, and the only one that gets the accent.
     pub action_height: f32,
@@ -91,7 +102,9 @@ impl Default for Theme {
                 item_spacing: 6.0,
                 margin: 14.0,
                 slot: 44.0,
-                panel_width: 420.0,
+                panel_share: 0.42,
+                panel_min: 360.0,
+                panel_max: 760.0,
                 action_height: 40.0,
                 button_height: 36.0,
                 row_height: 54.0,
@@ -157,6 +170,16 @@ impl Theme {
         });
     }
 
+    /// How wide the menu should be on a screen this wide.
+    ///
+    /// Clamped so that neither extreme is silly, and `min` is applied last so
+    /// that a window narrower than `panel_min` gets the whole of itself rather
+    /// than a panel wider than the screen it is on.
+    pub fn panel_width(&self, available: f32) -> f32 {
+        let m = self.metrics;
+        (available * m.panel_share).clamp(m.panel_min, m.panel_max).min(available)
+    }
+
     /// The world's clear colour, so the two agree without either guessing.
     pub fn clear_color(&self) -> wgpu::Color {
         let [r, g, b, _] = self.palette.ground.to_normalized_gamma_f32();
@@ -174,5 +197,22 @@ impl Theme {
             b: to_linear(b) as f64,
             a: 1.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A share of the screen between two bounds: neither a fixed panel that
+    /// leaves three quarters of a monitor empty, nor a fraction that is
+    /// unreadably wide on one and too narrow on a phone.
+    #[test]
+    fn the_menu_takes_a_share_of_whatever_screen_it_is_on() {
+        let t = Theme::default();
+        assert_eq!(t.panel_width(1920.0), t.metrics.panel_max, "capped on a monitor");
+        assert_eq!(t.panel_width(1400.0), 588.0, "a share of a laptop");
+        assert_eq!(t.panel_width(800.0), t.metrics.panel_min, "floored on a small window");
+        assert_eq!(t.panel_width(320.0), 320.0, "and never wider than the screen itself");
     }
 }

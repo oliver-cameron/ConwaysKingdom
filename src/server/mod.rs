@@ -50,6 +50,13 @@ pub struct Server {
     /// that is not stepping is not moving, so waking is indistinguishable from
     /// never having slept and a client adopts the tick it left off at.
     asleep: bool,
+    /// Who blew the whistle, once somebody has.
+    ///
+    /// `None` for a match the console started, which is the operator rather
+    /// than a player — and for one nobody has started yet. Not folded into
+    /// `Phase::Running` because the phase is on the wire and in every
+    /// `RoomInfo`, and a room list does not need to know whose match it was.
+    started_by: Option<PlayerId>,
     /// Somebody joined, left, or the phase moved, and the lobby on every
     /// client is now out of date.
     ///
@@ -96,6 +103,7 @@ impl Server {
             phase: Phase::Open,
             victory: None,
             asleep: false,
+            started_by: None,
             lobby_changed: false,
         }
     }
@@ -122,10 +130,13 @@ impl Server {
 
     /// Start the clock. The tick it starts at is what the deadline is measured
     /// from, so a match that gathered for an hour still runs its full length.
-    pub fn start_match(&mut self) -> Result<(), String> {
+    /// Blow the whistle. `by` is the player who pressed it, or `None` for the
+    /// console, which is the operator rather than anybody in the room.
+    pub fn start_match(&mut self, by: Option<PlayerId>) -> Result<(), String> {
         match self.phase {
             Phase::Gathering => {
                 self.phase = Phase::Running { from: self.tick() };
+                self.started_by = by;
                 self.lobby_changed = true;
                 // **Everybody spawns at the whistle, together.** Granting on
                 // arrival would put the first player's block on a world the
@@ -176,6 +187,11 @@ impl Server {
         self.victory
     }
 
+    /// Who started this match, if a player did.
+    pub fn started_by(&self) -> Option<PlayerId> {
+        self.started_by
+    }
+
     /// What the match is doing and who is in it, as a lobby needs it.
     ///
     /// Only players who are **here now**: a room remembers everybody it has
@@ -187,7 +203,16 @@ impl Server {
         // By number, which is the order they arrived, so the list does not
         // reshuffle itself between two frames.
         players.sort_by_key(|&(id, _)| id);
-        ServerMessage::Match { phase: self.phase.clone(), victory: self.victory, players }
+        ServerMessage::Match {
+            started_by: self.started_by,
+            // Filled in by `Rooms`, which is the only thing that knows who
+            // made a room. A `Server` is one room and has no idea how it came
+            // to exist, which is the same reason it does not know its own id.
+            owner: None,
+            phase: self.phase.clone(),
+            victory: self.victory,
+            players,
+        }
     }
 
     /// Who holds how much, most first, as a client is told it.
@@ -643,6 +668,9 @@ impl Server {
             ClientMessage::Rooms
             | ClientMessage::Create { .. }
             | ClientMessage::Watch { .. } => Vec::new(),
+            // Answered by `Rooms::handle`, which is the only thing that knows
+            // who made a room and so the only thing that can judge this.
+            ClientMessage::Start => Vec::new(),
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.
@@ -1022,7 +1050,7 @@ mod tests {
 
         stake(&mut s, alice, (900, 900), 6);
         stake(&mut s, bob, (900, 940), 4);
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
 
         for _ in 0..5 {
             s.step();
@@ -1059,7 +1087,7 @@ mod tests {
         assert_eq!(s.value_of(alice), Some(0), "and nothing to spend");
         assert_eq!(s.value_of(bob), Some(0));
 
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
 
         // Two blocks, one each, and each on its own granted patch.
         assert_eq!(s.world().live_cells().len(), 8, "a block each, laid together");
@@ -1117,7 +1145,7 @@ mod tests {
         // Starting is a change too, and it is the one a client must not miss:
         // a lobby still saying "waiting to start" after it has started is a
         // screen telling a lie.
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
         let (_, phase) = lobby(&s.step()).expect("the whistle");
         assert!(matches!(phase, Phase::Running { .. }));
     }
@@ -1159,7 +1187,7 @@ mod tests {
         s.make_match(matches::Victory::Timer { generations: 3 });
         let (alice, _) = s.join_with("alice", None).unwrap();
         stake(&mut s, alice, (900, 900), 4);
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
 
         let standing =
             |out: &[ServerMessage]| out.iter().any(|m| matches!(m, ServerMessage::Standing { .. }));
@@ -1198,7 +1226,7 @@ mod tests {
 
         // The whistle: everybody is granted at once, and only then is there
         // anything to act on or with.
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
         s.players.get_mut(&alice).unwrap().value = 100;
         let before = s.world().live_cells().len();
         assert_eq!(before, 4, "a block, laid at the whistle");
@@ -1221,7 +1249,7 @@ mod tests {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1 });
         let (alice, _) = s.join_with("alice", None).unwrap();
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
         s.step();
         assert!(matches!(s.phase(), Phase::Over { .. }), "one generation, then over");
 
@@ -1244,7 +1272,7 @@ mod tests {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Territory { squares: 50 });
         let (alice, _) = s.join_with("alice", None).unwrap();
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
 
         s.step();
         assert!(matches!(s.phase(), Phase::Running { .. }), "nobody holds fifty yet");
@@ -1282,7 +1310,7 @@ mod tests {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1000 });
         let (alice, token) = s.join_with("alice", None).unwrap();
-        s.start_match().unwrap();
+        s.start_match(None).unwrap();
 
         let refused =
             s.handle(None, ClientMessage::Join { name: "late".into(), token: None, room: None });

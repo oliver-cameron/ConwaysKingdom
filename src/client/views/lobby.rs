@@ -13,11 +13,21 @@
 use crate::client::views::hud::player_colour;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
+use crate::client::views::words::menu::watch as whistle;
 use crate::net::{MatchPhase, Victory};
 use crate::sim::PlayerId;
 
 /// Draw it, if this room is a match with something to say. Returns the
 /// rectangle it covered, so the client knows what the pointer is over.
+/// What a press in the lobby meant.
+pub enum Did {
+    Nothing,
+    /// Back to the menu.
+    Leave,
+    /// Blow the whistle. Only offered to whoever made the match.
+    Start,
+}
+
 pub fn show(
     ctx: &egui::Context,
     theme: &Theme,
@@ -25,14 +35,16 @@ pub fn show(
     phase: &MatchPhase,
     victory: Option<Victory>,
     players: &[(PlayerId, String)],
-) -> (Option<egui::Rect>, bool) {
-    let mut back = false;
+    owner: Option<PlayerId>,
+    started_by: Option<PlayerId>,
+) -> (Option<egui::Rect>, Did) {
+    let mut did = Did::Nothing;
     // An open room is not a match, and a running one is a game — neither wants
     // a panel in the middle of it. Only the two ends have anything to say.
     let heading = match phase {
         MatchPhase::Gathering => words::WAITING,
         MatchPhase::Over { .. } => words::FINISHED,
-        _ => return (None, false),
+        _ => return (None, Did::Nothing),
     };
     let p = theme.palette;
     let m = theme.metrics;
@@ -46,7 +58,7 @@ pub fn show(
                 .corner_radius(m.rounding)
                 .inner_margin(m.panel_padding * 1.6)
                 .show(ui, |ui| {
-                    ui.set_width(260.0);
+                    ui.set_width(theme.panel_width(ctx.content_rect().width()) * 0.7);
                     ui.heading(heading);
                     if let Some(victory) = victory {
                         ui.colored_label(p.text_dim, describe(victory));
@@ -68,6 +80,21 @@ pub fn show(
                                     who
                                 });
                                 ui.colored_label(p.text_dim, words::held(*held));
+                                // Whose match it was. A result with no idea
+                                // who called it is a result somebody has to
+                                // ask about.
+                                if let Some(who) = started_by {
+                                    let name = players
+                                        .iter()
+                                        .find(|(id, _)| *id == who)
+                                        .map(|(_, n)| n.clone())
+                                        .unwrap_or_else(|| format!("player {}", who.0));
+                                    ui.colored_label(
+                                        p.text_dim,
+                                        egui::RichText::new(whistle::started_by(&name))
+                                            .size(m.text_small),
+                                    );
+                                }
                             }
                             None => {
                                 ui.label(words::NOBODY);
@@ -86,10 +113,36 @@ pub fn show(
                                 });
                             }
                             ui.add_space(m.item_spacing);
-                            // The one thing a player in a lobby actually wants
-                            // to know, and the one thing they cannot do
-                            // anything about: it starts when it is started.
-                            ui.small(words::HOW);
+                            // **Whoever made it blows the whistle.** Anybody
+                            // may join a gathering match, and if anybody could
+                            // also start it the person who set it up could not
+                            // wait for their friends to arrive.
+                            let mine = owner.is_some_and(|o| o == me);
+                            if mine {
+                                if ui
+                                    .add_sized(
+                                        [ui.available_width(), m.action_height],
+                                        egui::Button::new(
+                                            egui::RichText::new(whistle::START)
+                                                .size(m.text_action)
+                                                .color(p.ground),
+                                        )
+                                        .fill(p.accent),
+                                    )
+                                    .clicked()
+                                {
+                                    did = Did::Start;
+                                }
+                                ui.small(whistle::START_NOTE);
+                            } else {
+                                // Said rather than left blank: a lobby that
+                                // does nothing and explains nothing is
+                                // indistinguishable from one that is broken.
+                                ui.small(match owner {
+                                    Some(_) => whistle::NOT_YOURS,
+                                    None => whistle::AT_CONSOLE,
+                                });
+                            }
                         }
                     }
                     ui.add_space(m.item_spacing);
@@ -103,12 +156,12 @@ pub fn show(
                         )
                         .clicked()
                     {
-                        back = true;
+                        did = Did::Leave;
                     }
                 });
         });
 
-    (Some(area.response.rect), back)
+    (Some(area.response.rect), did)
 }
 
 /// The same colour the shader gives this player's cells, so the lobby and the

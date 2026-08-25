@@ -67,6 +67,13 @@ pub struct Menu {
     pub stage: Stage,
     /// Which screen is showing.
     pub page: Page,
+    /// Which room in the list is picked out, so its actions can live inside it
+    /// rather than beside every row.
+    ///
+    /// A row of buttons on every entry makes the list twice as tall and twice
+    /// as busy to read, and most of those buttons belong to rooms nobody is
+    /// looking at. One selection, and Join and Watch appear in it.
+    pub selected: Option<RoomId>,
     /// A code typed in to reach a room that is not in the listing.
     ///
     /// Beside the room list rather than instead of it: a code is how you reach
@@ -231,6 +238,8 @@ pub enum Chose {
     Join(RoomId),
     /// Shut the form without making anything.
     Cancel,
+    /// Back into the world already behind this menu, without joining anything.
+    Resume,
     /// Make this world on the server already reached, then join it. Parsed
     /// rather than raw: what the player typed became what they chose in
     /// [`Draft::parse`], which is the menu's whole job.
@@ -261,6 +270,7 @@ impl Menu {
             address,
             stage: Stage::Idle,
             page: Page::Home,
+            selected: None,
             code: String::new(),
             record: crate::client::record::Summary::of(&crate::client::record::games()),
             draft: None,
@@ -270,15 +280,45 @@ impl Menu {
 
 /// Draw it, and say what was chosen. Returns the rectangle it covered, so the
 /// world behind it does not also take the click.
+/// What the client already is, which the menu cannot see for itself.
+///
+/// The menu holds what was typed and what the server said; whether there is a
+/// world behind it, and whether that world is a match you are enrolled in, are
+/// facts about the client. Passed in rather than reached for, which is what
+/// keeps this module able to read and not to act.
+#[derive(Clone, Copy, Default)]
+pub struct Where {
+    /// The socket is derived from the page's origin, so the address is shown
+    /// rather than typed.
+    pub on_web: bool,
+    /// There is a world to go back to, and it is a match that has not started.
+    /// "Play alone" becomes "back to your match", because starting a solitary
+    /// game while enrolled in one is never what the press meant.
+    pub waiting_in_a_match: bool,
+}
+
 pub fn show(
     ctx: &egui::Context,
     theme: &Theme,
     menu: &mut Menu,
-    on_web: bool,
+    at: Where,
 ) -> (Chose, Option<egui::Rect>) {
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
+    // **Escape gets you out of a text field.** egui takes the keyboard while
+    // one has focus, so the app's own escape ladder never sees the key — and a
+    // selection you cannot clear, in a field you cannot leave, is the whole of
+    // the complaint. Handled here, before anything is drawn, so it is the
+    // innermost rung: a field lets go before a form shuts.
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && ctx.memory(|mem| mem.focused().is_some())
+    {
+        ctx.memory_mut(|mem| mem.stop_text_input());
+    }
+
+    // The window, in points, which is what `Views` handed egui — not physical
+    // pixels, so this reads the same on a hidpi display as on any other.
+    let width = theme.panel_width(ctx.content_rect().width());
     let area = egui::Area::new("menu".into()).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
         ctx,
         |ui| {
@@ -288,15 +328,17 @@ pub fn show(
                 .corner_radius(m.rounding)
                 .inner_margin(m.panel_padding * 1.6)
                 .show(ui, |ui| {
-                    // A fixed width, because a panel sized by its contents
-                    // jumps every time the room list changes length and a menu
-                    // that resizes under the pointer is one whose buttons move
-                    // as you reach for them.
-                    ui.set_width(m.panel_width);
+                    // A share of the screen rather than a fixed 420, which was
+                    // right on a phone and left three quarters of a desktop
+                    // empty. Still fixed for a given window, which is the
+                    // property that mattered: a panel sized by its *contents*
+                    // jumps every time the room list changes length, and moves
+                    // the buttons out from under the hand reaching for them.
+                    ui.set_width(width);
                     ui.spacing_mut().item_spacing.y = m.item_spacing;
                     match menu.page {
-                        Page::Home => chose = home(ui, theme, menu),
-                        Page::Play => chose = play(ui, theme, menu, on_web),
+                        Page::Home => chose = home(ui, theme, menu, at),
+                        Page::Play => chose = play(ui, theme, menu, at),
                     }
                 });
         },
@@ -311,7 +353,7 @@ pub fn show(
 /// screen is something you read rather than something you press, which is the
 /// hierarchy Clash Royale gets right: one thing you are meant to do next, in
 /// one colour, and no second thing competing to be it.
-fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
+fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let p = theme.palette;
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
@@ -350,17 +392,27 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     // Offline sits here because it is a way to play, and because a player with
     // no server to reach should not have to walk through a screen about
     // servers to get to it.
+    //
+    // **Except when you are already enrolled in a match**, where the same
+    // press means the opposite: you left a lobby to look at this screen, and
+    // starting a solitary game is never what pressing the only other button
+    // meant. It becomes the way back in.
     ui.add_space(m.item_spacing);
+    let (label, note) = if at.waiting_in_a_match {
+        (words::BACK_TO_MATCH, words::BACK_TO_MATCH_NOTE)
+    } else {
+        (words::ALONE, words::ALONE_NOTE)
+    };
     if ui
         .add_sized(
             [ui.available_width(), m.button_height],
-            egui::Button::new(egui::RichText::new(words::ALONE).size(m.text_body)),
+            egui::Button::new(egui::RichText::new(label).size(m.text_body)),
         )
         .clicked()
     {
-        chose = Chose::Offline;
+        chose = if at.waiting_in_a_match { Chose::Resume } else { Chose::Offline };
     }
-    ui.small(words::ALONE_NOTE);
+    ui.small(note);
 
     chose
 }
@@ -405,7 +457,7 @@ fn record(ui: &mut egui::Ui, theme: &Theme, summary: &crate::client::record::Sum
 }
 
 /// A server, its rooms, a code, and the form that makes one.
-fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chose {
+fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let p = theme.palette;
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
@@ -419,7 +471,7 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chos
     });
     ui.add_space(m.item_spacing);
 
-    if on_web {
+    if at.on_web {
         // Not a field. The socket is derived from the page's origin, so a
         // typed address here would be a promise the client cannot keep.
         ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
@@ -472,12 +524,51 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chos
                         }
                     });
                 });
+                // Arrow keys walk the list, and enter takes the selection.
+                // A list you can only reach with a pointer is a list a
+                // keyboard cannot use and a phone can, which is the wrong way
+                // round for the client that has a keyboard.
+                //
+                // Read before the rows are drawn so a press moves the
+                // selection in the same frame it happens, rather than a frame
+                // behind what the eye expects.
+                if !ui.memory(|mem| mem.focused().is_some()) {
+                    let step = ui.input(|i| {
+                        i.key_pressed(egui::Key::ArrowDown) as i32
+                            - i.key_pressed(egui::Key::ArrowUp) as i32
+                    });
+                    if step != 0 {
+                        let at = menu
+                            .selected
+                            .as_ref()
+                            .and_then(|id| rooms.iter().position(|r| r.id == *id));
+                        let next = match at {
+                            // Nothing picked yet: down takes the first, up the
+                            // last, which is what every list does.
+                            None if step > 0 => 0,
+                            None => rooms.len() - 1,
+                            Some(i) => (i as i32 + step).rem_euclid(rooms.len() as i32) as usize,
+                        };
+                        menu.selected = Some(rooms[next].id.clone());
+                    }
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if let Some(id) = menu.selected.clone() {
+                            chose = Chose::Join(id);
+                        }
+                    }
+                }
+
                 for room in rooms {
-                    match room_button(ui, theme, room) {
+                    let selected = menu.selected.as_ref() == Some(&room.id);
+                    match room_row(ui, theme, room, selected) {
                         Picked::Nothing => {}
-                        // The **id**, not the name on the button: two rooms
-                        // may read alike and only one of them is the one that
-                        // was clicked.
+                        // Selecting the one already selected puts it away,
+                        // so a press has somewhere to go back to.
+                        Picked::Select => {
+                            menu.selected = if selected { None } else { Some(room.id.clone()) }
+                        }
+                        // The **id**, not the name on the row: two rooms may
+                        // read alike and only one of them was pressed.
                         Picked::Join => chose = Chose::Join(room.id.clone()),
                         Picked::Watch => chose = Chose::Watch(room.id.clone()),
                     }
@@ -554,8 +645,16 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, on_web: bool) -> Chos
 /// bool would have to be a bool about which.
 enum Picked {
     Nothing,
+    /// Point at this room, so its actions appear inside it.
+    Select,
     Join,
     Watch,
+}
+
+impl Picked {
+    fn is_nothing(&self) -> bool {
+        matches!(self, Self::Nothing)
+    }
 }
 
 fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chose> {
@@ -588,51 +687,13 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
 
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::SHAPE).size(m.text_small));
-            toggles(
-                ui,
-                theme,
-                &mut draft.shape,
-                &[
-                    (Shape::Boundless, words::make::BOUNDLESS),
-                    (Shape::Wrapping, words::make::WRAPPING),
-                ],
-            );
-
-            // Only where it means something. A size on a boundless world is
-            // a field with no answer.
-            if draft.shape == Shape::Wrapping {
-                ui.add_space(m.item_spacing);
-                ui.label(egui::RichText::new(words::make::SIZE).size(m.text_small));
-                // Two labelled numbers rather than one `ROWSxCOLS` string. A
-                // size *is* two numbers, and asking for it as one made the
-                // player learn a format to answer a question they already
-                // understood — and put the error on the whole size rather than
-                // on the field with the wrong number in it.
-                ui.horizontal_top(|ui| {
-                    ui.set_min_height(m.button_height);
-                    let each = (ui.available_width() - m.item_spacing) / 2.0;
-                    for (label, field) in
-                        [(words::make::ROWS, &mut draft.rows), (words::make::COLS, &mut draft.cols)]
-                    {
-                        ui.vertical(|ui| {
-                            ui.set_width(each);
-                            ui.colored_label(
-                                p.text_dim,
-                                egui::RichText::new(label).size(m.text_small),
-                            );
-                            ui.add(
-                                egui::TextEdit::singleline(field)
-                                    .desired_width(f32::INFINITY)
-                                    .horizontal_align(egui::Align::Center),
-                            );
-                        });
-                    }
-                });
-                ui.colored_label(
-                    p.text_dim,
-                    egui::RichText::new(words::make::SIZE_NOTE).size(m.text_small),
-                );
-            }
+            // **The size lives inside the Wrapping button.** As its own row it
+            // pushed everything under it down the moment the shape changed, so
+            // choosing a shape moved the button you were about to press next —
+            // and on a small screen it pushed the action off the bottom. The
+            // row grows in place instead: the option that has a size is the
+            // one that holds it.
+            shape_row(ui, theme, draft);
 
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
@@ -770,6 +831,88 @@ fn chunks(text: &str, which: &str) -> Result<i32, String> {
 /// not to say what makes a good arena.
 pub const MAX_CHUNKS: i32 = 64;
 
+/// Shape, with the size inside the option it belongs to.
+///
+/// Two cells side by side. Boundless is a plain toggle; Wrapping is a toggle
+/// with two number fields under it, which appear only when it is the one
+/// chosen — so the **row** grows and the form does not, and nothing below
+/// moves when the shape changes.
+fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let wrapping = draft.shape == Shape::Wrapping;
+    // Tall enough for the fields when they are there, and the same height
+    // either way so that choosing does not move the row's own bottom edge.
+    let tall = m.button_height * 2.0 + m.item_spacing * 2.0 + m.text_small;
+
+    ui.horizontal_top(|ui| {
+        ui.set_min_height(tall);
+        let each = (ui.available_width() - m.item_spacing) / 2.0;
+
+        ui.vertical(|ui| {
+            ui.set_width(each);
+            if ui
+                .add_sized(
+                    [each, m.button_height],
+                    toggle(theme, words::make::BOUNDLESS, !wrapping),
+                )
+                .clicked()
+            {
+                draft.shape = Shape::Boundless;
+            }
+        });
+
+        ui.vertical(|ui| {
+            ui.set_width(each);
+            if ui
+                .add_sized([each, m.button_height], toggle(theme, words::make::WRAPPING, wrapping))
+                .clicked()
+            {
+                draft.shape = Shape::Wrapping;
+            }
+            if wrapping {
+                ui.add_space(m.item_spacing);
+                ui.horizontal_top(|ui| {
+                    let half = (ui.available_width() - m.item_spacing) / 2.0;
+                    for (label, field) in
+                        [(words::make::ROWS, &mut draft.rows), (words::make::COLS, &mut draft.cols)]
+                    {
+                        ui.vertical(|ui| {
+                            ui.set_width(half);
+                            ui.colored_label(
+                                p.text_dim,
+                                egui::RichText::new(label).size(m.text_small),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(field)
+                                    .desired_width(f32::INFINITY)
+                                    .horizontal_align(egui::Align::Center),
+                            );
+                        });
+                    }
+                });
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(words::make::SIZE_NOTE).size(m.text_small),
+                );
+            }
+        });
+    });
+}
+
+/// One option in a toggle row: the chosen one wears the accent.
+fn toggle(theme: &Theme, label: &str, on: bool) -> egui::Button<'static> {
+    let p = theme.palette;
+    egui::Button::new(
+        egui::RichText::new(label.to_string()).size(theme.metrics.text_small).color(if on {
+            p.ground
+        } else {
+            p.text
+        }),
+    )
+    .fill(if on { p.accent } else { p.surface })
+}
+
 /// One decision as a row of buttons, the chosen one wearing the accent.
 ///
 /// The whole choice on screen at once, which is the argument against a
@@ -816,83 +959,97 @@ fn toggles<T: Copy + PartialEq>(
 /// is a list twice as long to read. It is offered on every room and not only
 /// on matches: **no late joining is a rule about players**, so a match already
 /// running is exactly the room whose only way in is to watch.
-fn room_button(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo) -> Picked {
+/// One room in the list: what it is called, whether anybody is in it, whether
+/// it ends — and, **if it is the one selected**, what can be done with it.
+///
+/// The actions live inside the selection rather than beside every row. A row
+/// of buttons on every entry makes the list twice as tall and twice as busy to
+/// read, and most of those buttons belong to rooms nobody is looking at. One
+/// selection, and Join and Watch appear in it.
+///
+/// Watching is offered on **every** room and not only on matches, because
+/// no late joining is a rule about players: a match already running is exactly
+/// the room whose only way in is to watch.
+fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -> Picked {
     let p = theme.palette;
     let m = theme.metrics;
     let mut picked = Picked::Nothing;
 
-    ui.horizontal_top(|ui| {
-        ui.set_min_height(m.row_height);
-        let watch_width = m.action_height * 1.6;
-        let response = ui.add_sized(
-            [ui.available_width() - watch_width - m.item_spacing, m.row_height],
-            egui::Button::new("").fill(p.surface_lift),
-        );
+    egui::Frame::new()
+        .fill(if selected { p.surface_lift } else { p.surface })
+        .stroke(egui::Stroke::new(1.0, if selected { p.accent } else { p.line }))
+        .corner_radius(m.rounding)
+        .inner_margin(m.panel_padding * 0.6)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let head = ui.horizontal(|ui| {
+                ui.set_min_height(m.row_height * 0.6);
+                ui.label(egui::RichText::new(&room.name).size(m.text_body));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.colored_label(
+                        if room.players > 0 { p.good } else { p.text_dim },
+                        egui::RichText::new(players(room.players)).size(m.text_small),
+                    );
+                });
+            });
 
-        let rect = response.rect;
-        let painter = ui.painter();
-        if response.hovered() {
-            painter.rect_stroke(
-                rect,
-                m.rounding,
-                egui::Stroke::new(1.0, p.accent),
-                egui::StrokeKind::Inside,
+            // A room and a match are the same thing to everything else, so
+            // this list is the one place the difference has to show — clicking
+            // into a match that has already started only to be refused is a
+            // worse way to find out.
+            let mut under = describe(room.world);
+            if let Some(victory) = room.victory {
+                under = format!(
+                    "{under} · {} · {}",
+                    crate::client::views::words::phase(&room.phase),
+                    crate::client::views::lobby::describe(victory)
+                );
+            }
+            ui.colored_label(
+                if matches!(room.phase, crate::net::MatchPhase::Gathering) {
+                    p.good
+                } else {
+                    p.text_dim
+                },
+                egui::RichText::new(under).size(m.text_small),
             );
-        }
-        painter.text(
-            rect.left_center() + egui::vec2(10.0, -6.0),
-            egui::Align2::LEFT_CENTER,
-            &room.name,
-            egui::FontId::proportional(m.text_body),
-            p.text,
-        );
-        // A room and a match are the same thing to everything else, so this
-        // list is the one place the difference has to show — clicking into a
-        // match that has already started only to be refused is a worse way to
-        // find out.
-        let mut under = describe(room.world);
-        if let Some(victory) = room.victory {
-            under = format!(
-                "{under} · {} · {}",
-                crate::client::views::words::phase(&room.phase),
-                crate::client::views::lobby::describe(victory)
-            );
-        }
-        painter.text(
-            rect.left_center() + egui::vec2(14.0, 13.0),
-            egui::Align2::LEFT_CENTER,
-            under,
-            egui::FontId::proportional(m.text_small),
-            if matches!(room.phase, crate::net::MatchPhase::Gathering) {
-                p.good
-            } else {
-                p.text_dim
-            },
-        );
-        painter.text(
-            rect.right_center() - egui::vec2(14.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            players(room.players),
-            egui::FontId::proportional(m.text_small),
-            if room.players > 0 { p.good } else { p.text_dim },
-        );
 
-        if response.clicked() {
-            picked = Picked::Join;
-        }
-        if ui
-            .add_sized(
-                [watch_width, m.row_height],
-                egui::Button::new(
-                    egui::RichText::new(crate::client::views::words::menu::watch::WATCH)
-                        .size(m.text_small),
-                ),
-            )
-            .clicked()
-        {
-            picked = Picked::Watch;
-        }
-    });
+            if selected {
+                ui.add_space(m.item_spacing);
+                ui.horizontal_top(|ui| {
+                    ui.set_min_height(m.button_height);
+                    let each = (ui.available_width() - m.item_spacing) / 2.0;
+                    let join = ui.add_sized(
+                        [each, m.button_height],
+                        egui::Button::new(
+                            egui::RichText::new(words::watch::JOIN)
+                                .size(m.text_small)
+                                .color(p.ground),
+                        )
+                        .fill(p.accent),
+                    );
+                    let watch = ui.add_sized(
+                        [each, m.button_height],
+                        egui::Button::new(
+                            egui::RichText::new(words::watch::WATCH).size(m.text_small),
+                        ),
+                    );
+                    if join.clicked() {
+                        picked = Picked::Join;
+                    }
+                    if watch.clicked() {
+                        picked = Picked::Watch;
+                    }
+                });
+            }
+
+            // Anywhere on the row selects it. A row that could only be
+            // selected by its title is a row most presses miss.
+            let body = ui.interact(ui.min_rect(), ui.id().with(&room.id), egui::Sense::click());
+            if (body.clicked() || head.response.clicked()) && picked.is_nothing() {
+                picked = Picked::Select;
+            }
+        });
 
     picked
 }
@@ -1011,6 +1168,27 @@ mod tests {
         draft.target = "42".into();
         draft.retarget(Ends::Territory);
         assert_eq!(draft.target, "42", "only a change of condition changes it");
+    }
+
+    /// Arrow keys walk the list and wrap at both ends, which is what every
+    /// list does and what a keyboard user reaches for first.
+    #[test]
+    fn the_arrow_keys_walk_the_room_list_and_wrap() {
+        // The arithmetic the key handler does, in the one place it is worth
+        // pinning: the wrap, and what an unselected list does on first press.
+        let step = |at: Option<usize>, step: i32, len: usize| -> usize {
+            match at {
+                None if step > 0 => 0,
+                None => len - 1,
+                Some(i) => (i as i32 + step).rem_euclid(len as i32) as usize,
+            }
+        };
+        assert_eq!(step(None, 1, 3), 0, "down from nothing takes the first");
+        assert_eq!(step(None, -1, 3), 2, "and up takes the last");
+        assert_eq!(step(Some(0), 1, 3), 1);
+        assert_eq!(step(Some(2), 1, 3), 0, "down off the end wraps");
+        assert_eq!(step(Some(0), -1, 3), 2, "and up off the front wraps");
+        assert_eq!(step(Some(0), 1, 1), 0, "a list of one goes nowhere");
     }
 
     /// The room list replaces `Stage::Choosing` wholesale every few seconds.

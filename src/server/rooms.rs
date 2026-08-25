@@ -180,6 +180,18 @@ pub struct Rooms {
     /// without a migration, and that the log line for a room that appeared
     /// says who asked for it.
     made: BTreeMap<RoomId, ConnectionId>,
+    /// Whose match each client-made room is: the player who may start it.
+    ///
+    /// A `PlayerId` and not the connection that asked, because a connection
+    /// does not survive a reconnect and the person does — a rejoin token
+    /// brings somebody back to the same number, so ownership recorded this way
+    /// survives a refresh, which is exactly when somebody would otherwise find
+    /// they could no longer start their own match.
+    ///
+    /// Set on the **creating connection's first join**, which is the moment
+    /// there is a player to record. A room whose maker never joined has none,
+    /// and so cannot be started from a client at all.
+    owner: BTreeMap<RoomId, PlayerId>,
     /// The cap on `made`. [`MAX_MADE_ROOMS`] unless a flag says otherwise.
     max_made: usize,
     /// Rooms that are not in the listing, and the code that reaches each.
@@ -259,6 +271,7 @@ impl Rooms {
             names,
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
+            owner: BTreeMap::new(),
             max_made: MAX_MADE_ROOMS,
             unlisted: Default::default(),
         })
@@ -275,6 +288,7 @@ impl Rooms {
             names: BTreeMap::from([(id, name)]),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
+            owner: BTreeMap::new(),
             max_made: MAX_MADE_ROOMS,
             unlisted: Default::default(),
         }
@@ -428,6 +442,45 @@ impl Rooms {
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
             };
         }
+        // Blowing the whistle on a match. Judged here because this is the only
+        // thing that knows who made a room -- a `Server` is one room and has
+        // no idea how it came to exist.
+        if let ClientMessage::Start = msg {
+            let Some((room, player)) = caller.seat.as_ref() else {
+                return vec![ServerMessage::NotStarted { reason: "you are not in a match".into() }];
+            };
+            // Whoever made it. Anybody may join a gathering match; if anybody
+            // could also start it, the person who set it up could not wait for
+            // their friends to arrive.
+            //
+            // A room the console made has no owner, so nobody may start it
+            // from a client -- which is right: it is the operator's match, and
+            // `match start` is theirs.
+            if self.owner.get(room) != Some(player) {
+                return vec![ServerMessage::NotStarted {
+                    reason: match self.owner.get(room) {
+                        Some(_) => "only whoever made this match can start it".into(),
+                        None => "this match is the server's; it starts at the console".into(),
+                    },
+                }];
+            }
+            let room = room.clone();
+            let server = self.rooms.get_mut(&room).expect("a seat names a room that is here");
+            return match server.start_match(Some(*player)) {
+                Ok(()) => {
+                    log::info!(
+                        "connection {} started match \"{}\"",
+                        caller.connection,
+                        self.name_of(&room)
+                    );
+                    // Nothing to reply: `start_match` sets `lobby_changed`, so
+                    // the next step broadcasts the new phase to everybody in
+                    // the room -- including whoever pressed it.
+                    Vec::new()
+                }
+                Err(reason) => vec![ServerMessage::NotStarted { reason }],
+            };
+        }
         let seat = caller.seat.as_ref();
         if let ClientMessage::Join { room, .. } = &msg {
             let asked = room.clone();
@@ -448,10 +501,26 @@ impl Rooms {
                         .get_mut(&name)
                         .expect("resolve only returns rooms that are here")
                         .handle(None, msg);
+                    // The creator's first join is where a room's owner is
+                    // recorded: it is the first moment there is a player to
+                    // record, and a `PlayerId` survives the reconnect that a
+                    // connection id does not.
+                    if self.made.get(&name) == Some(&caller.connection) {
+                        if let Some(ServerMessage::Welcome { you, .. }) =
+                            out.iter().find(|m| matches!(m, ServerMessage::Welcome { .. }))
+                        {
+                            self.owner.entry(name.clone()).or_insert(*you);
+                        }
+                    }
+                    let owner = self.owner.get(&name).copied();
                     for reply in &mut out {
-                        if let ServerMessage::Welcome { room, name: called, .. } = reply {
-                            *room = name.clone();
-                            *called = room_name.clone();
+                        match reply {
+                            ServerMessage::Welcome { room, name: called, .. } => {
+                                *room = name.clone();
+                                *called = room_name.clone();
+                            }
+                            ServerMessage::Match { owner: whose, .. } => *whose = owner,
+                            _ => {}
                         }
                     }
                     out
@@ -720,7 +789,7 @@ impl Rooms {
     pub fn start_match(&mut self, name: &str) -> Result<RoomId, String> {
         let id = self.resolve(Some(name))?;
         let server = self.rooms.get_mut(&id).expect("resolve only returns rooms that are here");
-        server.start_match()?;
+        server.start_match(None)?;
         log::info!("match \"{}\" started at tick {}", server.room(), server.tick());
         Ok(id)
     }
@@ -783,6 +852,7 @@ impl Rooms {
         // Forgotten here too, or a server that made and deleted its cap's
         // worth of rooms would refuse to make another while holding none.
         self.made.remove(&id);
+        self.owner.remove(&id);
         self.unlisted.remove(&id);
         self.codes.remove(&id);
         self.names.remove(&id);
@@ -1389,6 +1459,75 @@ mod tests {
         }
     }
 
+    /// A player can start the match they made, and nobody else can — not
+    /// another player in it, and not somebody who only joined.
+    #[test]
+    fn only_whoever_made_a_match_can_start_it() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let mine = Caller::new(5);
+        let theirs = Caller::new(6);
+
+        let made = rooms
+            .make(5, "cup", WorldKind::Infinite, Some(Victory::Timer { generations: 50 }), false)
+            .unwrap();
+        let join = |name: &str| ClientMessage::Join {
+            name: name.into(),
+            token: None,
+            room: Some(made.id.clone()),
+        };
+
+        // Nobody owns it until the maker joins: the owner is a PlayerId, and
+        // there is no player until somebody has one.
+        let out = rooms.handle(&mine, join("owner"));
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let owner = *you;
+
+        let mut sitting = Caller::sitting(6, (made.id.clone(), PlayerId(0)));
+        let out = rooms.handle(&theirs, join("guest"));
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        sitting.seat = Some((made.id.clone(), *you));
+        assert_ne!(*you, owner, "two players, not one");
+
+        // The guest cannot.
+        let out = rooms.handle(&sitting, ClientMessage::Start);
+        let [ServerMessage::NotStarted { reason }] = &out[..] else {
+            panic!("a guest started somebody else's match: {out:?}");
+        };
+        assert!(reason.contains("made"), "{reason}");
+        assert_eq!(*rooms.get(&made.id).unwrap().phase(), Phase::Gathering);
+
+        // The owner can — and from a **different connection**, because a
+        // reconnect gets a new socket and the same player, and losing your own
+        // match to a refresh would be the obvious way for this to be wrong.
+        let reconnected = Caller::sitting(99, (made.id.clone(), owner));
+        let out = rooms.handle(&reconnected, ClientMessage::Start);
+        assert!(out.is_empty(), "the whistle answers by broadcast, got {out:?}");
+        assert!(matches!(rooms.get(&made.id).unwrap().phase(), Phase::Running { .. }));
+        assert_eq!(
+            rooms.get(&made.id).unwrap().started_by(),
+            Some(owner),
+            "and it remembers who blew it"
+        );
+    }
+
+    /// A room the console made is the operator's, and starts at the console.
+    #[test]
+    fn a_match_nobody_made_cannot_be_started_from_a_client() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        rooms.new_match("cup", WorldKind::Infinite, Victory::Timer { generations: 50 }).unwrap();
+        let id = RoomId::from("cup");
+
+        let out = rooms.handle(
+            &Caller::new(3),
+            ClientMessage::Join { name: "someone".into(), token: None, room: Some(id.clone()) },
+        );
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+
+        let out = rooms.handle(&Caller::sitting(3, (id.clone(), *you)), ClientMessage::Start);
+        let [ServerMessage::NotStarted { reason }] = &out[..] else { panic!("{out:?}") };
+        assert!(reason.contains("console"), "{reason}");
+    }
+
     /// Late to a match, and what happens now: the join is **refused** and the
     /// client is told why. It is not turned into a watch.
     ///
@@ -1410,7 +1549,7 @@ mod tests {
             let server = rooms.get_mut(&RoomId::from("cup")).unwrap();
             server.make_match(Victory::Timer { generations: 100 });
             server.join("early").unwrap();
-            server.start_match().unwrap();
+            server.start_match(None).unwrap();
         }
         for _ in 0..40 {
             rooms.step();

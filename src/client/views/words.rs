@@ -31,6 +31,11 @@ pub mod menu {
     /// to reach for the mouse.
     pub const BACK: &str = "‹ back";
     pub const ALONE_NOTE: &str = "The rules are the same offline. Nobody else is.";
+    /// What the same button says when you are already enrolled in a match.
+    /// Starting a solitary game is never what pressing the only other button
+    /// meant, so the press means the opposite instead.
+    pub const BACK_TO_MATCH: &str = "Back to your match";
+    pub const BACK_TO_MATCH_NOTE: &str = "It has not started. Nothing moves until it does.";
     pub const EMPTY_ROOM: &str = "empty";
 
     pub fn one_player() -> String {
@@ -98,6 +103,16 @@ pub mod menu {
     /// Watching without a seat.
     pub mod watch {
         pub const WATCH: &str = "Watch";
+        pub const JOIN: &str = "Join";
+        /// Blowing the whistle, in the lobby, for whoever made the match.
+        pub const START: &str = "Start the match";
+        pub const START_NOTE: &str = "Everybody spawns together when you do.";
+        pub const NOT_YOURS: &str = "Waiting for whoever made this match to start it.";
+        pub const AT_CONSOLE: &str = "Waiting for the server to start it.";
+
+        pub fn started_by(who: &str) -> String {
+            format!("started by {who}")
+        }
         /// Said on the HUD for the whole visit, because a spectator whose
         /// clicks do nothing needs to know why the first time rather than the
         /// fifth.

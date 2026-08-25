@@ -110,6 +110,8 @@ mod tests {
             // Most first, and a player holding nothing is simply absent.
             // A decided match, which is the shape with the most in it.
             ServerMessage::Match {
+                started_by: None,
+                owner: None,
                 phase: crate::net::MatchPhase::Over {
                     winner: Some(PlayerId(4)),
                     held: 812,
@@ -119,6 +121,8 @@ mod tests {
                 players: vec![(PlayerId(1), "alice".into()), (PlayerId(4), "bob".into())],
             },
             ServerMessage::Match {
+                started_by: None,
+                owner: None,
                 phase: crate::net::MatchPhase::Gathering,
                 victory: Some(crate::net::Victory::Territory { squares: 500 }),
                 players: vec![],

@@ -299,6 +299,22 @@ fn travelled(from: (f64, f64), to: (f64, f64), slop: f64) -> bool {
     dx * dx + dy * dy > slop * slop
 }
 
+/// What the match in this room is doing, once the server has said.
+///
+/// A struct rather than a tuple, which it outgrew the moment it carried more
+/// than three things — and every one of them is read by name at the far end.
+#[derive(Clone)]
+struct Lobby {
+    phase: crate::net::MatchPhase,
+    victory: Option<crate::net::Victory>,
+    players: Vec<(PlayerId, String)>,
+    /// Whose match it is: the player who may start it. `None` for one the
+    /// console made, which starts at the console.
+    owner: Option<PlayerId>,
+    /// Who blew the whistle, once somebody has.
+    started_by: Option<PlayerId>,
+}
+
 /// A finished gesture waiting to be resolved to cells. Input callbacks are not
 /// handed the `GpuState`, and the screen-to-world mapping needs the viewport,
 /// so it waits for the next `update` rather than guessing here.
@@ -380,7 +396,7 @@ pub struct BattleApp {
     listed_at: f64,
     /// What the match in this room is doing, once the server has said. `None`
     /// in an ordinary room, and in one that has not answered yet.
-    lobby: Option<(crate::net::MatchPhase, Option<crate::net::Victory>, Vec<(PlayerId, String)>)>,
+    lobby: Option<Lobby>,
     /// Which room the server put us in, once it has said.
     ///
     /// Taken from the `Welcome` rather than from what was asked for: a client
@@ -535,7 +551,7 @@ impl BattleApp {
         // server, so that clicking the world says why rather than doing
         // nothing -- the server drops what it cannot attribute and sends
         // nothing back, which on its own looks exactly like a lost click.
-        !self.watching && self.lobby.as_ref().is_none_or(|(phase, _, _)| phase.accepts_actions())
+        !self.watching && self.lobby.as_ref().is_none_or(|l| l.phase.accepts_actions())
     }
 
     /// Whether what the hotbar holds is already on this cell.
@@ -786,7 +802,7 @@ impl BattleApp {
                 // Who is winning. Kept whole rather than merged, because a
                 // player who has lost every square drops out of the list and a
                 // merge would leave their last bar standing forever.
-                ServerMessage::Match { phase, victory, players } => {
+                ServerMessage::Match { started_by, owner, phase, victory, players } => {
                     // A decided match is a result, and the only moment this
                     // client is told one. Recorded when it arrives rather than
                     // when the room is left, because a player who watches the
@@ -796,7 +812,7 @@ impl BattleApp {
                     {
                         live.decided(*winner == self.me && self.me.is_some());
                     }
-                    self.lobby = Some((phase, victory, players));
+                    self.lobby = Some(Lobby { phase, victory, players, owner, started_by });
                 }
                 ServerMessage::Standing { held, .. } => {
                     if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.me) {
@@ -817,6 +833,14 @@ impl BattleApp {
                         log::debug!("purse: {} -> {value}", self.value);
                         self.value = value;
                     }
+                }
+                // A whistle that was not blown, into the lobby it was pressed
+                // in. Its own message rather than `Rejected`, which closes a
+                // connection: this leaves you exactly where you were, with a
+                // reason to read.
+                ServerMessage::NotStarted { reason } => {
+                    log::info!("the match did not start: {reason}");
+                    self.notice = Some(reason);
                 }
                 // The answer to `Create`, into the form it was sent from.
                 // A refusal has to land beside the fields that produced it:
@@ -1430,10 +1454,7 @@ impl BattleApp {
         if matches!(self.screen, Screen::Menu(_)) {
             return false;
         }
-        !matches!(
-            self.lobby.as_ref().map(|(phase, _, _)| phase),
-            Some(crate::net::MatchPhase::Gathering)
-        )
+        !matches!(self.lobby.as_ref().map(|l| &l.phase), Some(crate::net::MatchPhase::Gathering))
     }
 
     /// File the game in play, if there is one, and forget it.
@@ -1536,6 +1557,13 @@ impl BattleApp {
                         self.show_menu(menu::Stage::Failed(words::menu::not_an_address(&address)))
                     }
                 }
+            }
+            // Back into the world already behind the menu. Nothing is joined
+            // and nothing is sent: the seat was never given up, because going
+            // back to the menu keeps the socket and holds the seat until
+            // another `Join` takes its place.
+            menu::Chose::Resume => {
+                self.screen = Screen::Playing;
             }
             // The form shuts and nothing was made. Dropping the draft rather
             // than keeping it hidden: a form that comes back holding what you
@@ -1917,6 +1945,9 @@ impl App for BattleApp {
         // `self` is already borrowed by `views`. Put back below, whatever the
         // menu did with it.
         let mut leaving = false;
+        // What a press in the lobby meant, acted on after the frame is built
+        // because both answers change the screen the frame was drawn from.
+        let mut in_lobby = lobby_view::Did::Nothing;
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
         // Taken out for the frame for the same reason the screen is: the
         // closure needs `&mut` on it while `self` is already borrowed by
@@ -1925,7 +1956,15 @@ impl App for BattleApp {
         let lobby = self.lobby.clone();
         let standing = self.standing.clone();
         let generation = self.world.generation;
-        let on_web = cfg!(target_arch = "wasm32");
+        // What the client already is, which the menu cannot see for itself.
+        let at = menu::Where {
+            on_web: cfg!(target_arch = "wasm32"),
+            waiting_in_a_match: self.link.is_some()
+                && matches!(
+                    self.lobby.as_ref().map(|l| &l.phase),
+                    Some(crate::net::MatchPhase::Gathering)
+                ),
+        };
         let me = self.player();
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
             // The world is still drawn behind it, and still running if this
@@ -1933,7 +1972,7 @@ impl App for BattleApp {
             // game has not started; a menu over a world says it is waiting for
             // you.
             Screen::Menu(m) => {
-                let (picked_menu, rect) = menu::show(ctx, &theme, m, on_web);
+                let (picked_menu, rect) = menu::show(ctx, &theme, m, at);
                 chose = picked_menu;
                 rect.into_iter().collect()
             }
@@ -1942,13 +1981,23 @@ impl App for BattleApp {
                 // empty until the whistle, so there is nothing to draw the
                 // lobby over and nothing for a HUD or a hotbar to act on.
                 if matches!(
-                    lobby.as_ref().map(|(phase, _, _)| phase),
+                    lobby.as_ref().map(|l| &l.phase),
                     Some(crate::net::MatchPhase::Gathering)
                 ) {
-                    let (rect, back) = lobby.as_ref().map_or((None, false), |(p, v, who)| {
-                        lobby_view::show(ctx, &theme, me, p, *v, who)
-                    });
-                    leaving = back;
+                    let (rect, did) =
+                        lobby.as_ref().map_or((None, lobby_view::Did::Nothing), |l| {
+                            lobby_view::show(
+                                ctx,
+                                &theme,
+                                me,
+                                &l.phase,
+                                l.victory,
+                                &l.players,
+                                l.owner,
+                                l.started_by,
+                            )
+                        });
+                    in_lobby = did;
                     return rect.into_iter().collect();
                 }
 
@@ -1957,8 +2006,8 @@ impl App for BattleApp {
                 leaving = back;
                 // How much of the match is left, which is the one thing on
                 // screen that is about the room rather than about a player.
-                let clock_rect = lobby.as_ref().and_then(|(phase, victory, _)| {
-                    clock::show(ctx, &theme, generation, phase, *victory, &standing)
+                let clock_rect = lobby.as_ref().and_then(|l| {
+                    clock::show(ctx, &theme, generation, &l.phase, l.victory, &standing)
                 });
                 let look = hotbar::Look { theme: &theme, sheet, player: me, typed: &typed };
                 let bar = hotbar::show(ctx, &look, held, &self.stamps);
@@ -1968,9 +2017,20 @@ impl App for BattleApp {
                 // nothing moves and nothing a player does appears.
                 // A decided match keeps its board: the result is what is on
                 // it, and covering that to say who won would hide the reason.
-                let waiting = lobby.as_ref().and_then(|(phase, victory, players)| {
-                    let (rect, back) = lobby_view::show(ctx, &theme, me, phase, *victory, players);
-                    leaving |= back;
+                let waiting = lobby.as_ref().and_then(|l| {
+                    let (rect, did) = lobby_view::show(
+                        ctx,
+                        &theme,
+                        me,
+                        &l.phase,
+                        l.victory,
+                        &l.players,
+                        l.owner,
+                        l.started_by,
+                    );
+                    if !matches!(did, lobby_view::Did::Nothing) {
+                        in_lobby = did;
+                    }
                     rect
                 });
                 if picking {
@@ -2019,6 +2079,19 @@ impl App for BattleApp {
         self.sketch = sketch;
         // Acted on after the frame is built, because it changes the screen and
         // the screen is what the frame was drawn from.
+        match in_lobby {
+            lobby_view::Did::Nothing => {}
+            lobby_view::Did::Leave => leaving = true,
+            // Whoever made it blows the whistle. The answer comes back as a
+            // broadcast phase change, or as `NotStarted` with a reason, so
+            // there is nothing to do here but ask.
+            lobby_view::Did::Start => {
+                if let Some(link) = &self.link {
+                    log::info!("asking to start the match");
+                    link.send(ClientMessage::Start);
+                }
+            }
+        }
         if leaving {
             self.back_to_menu();
         }

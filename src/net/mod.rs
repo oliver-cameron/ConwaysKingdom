@@ -501,6 +501,18 @@ pub enum ClientMessage {
     /// Answerable without a seat, like `Join`, and it names its own room for
     /// the same reason.
     Watch { room: RoomId },
+    /// Blow the whistle on a match this connection made.
+    ///
+    /// Sent with no room, because it names one: the match you are **in**. A
+    /// player starting a match they are not in would be starting somebody
+    /// else's, and the seat is already the thing that says which room a
+    /// message belongs to.
+    ///
+    /// Refused unless this connection is the one that made the room, which is
+    /// the first thing the owner record is used for. Anybody may join a
+    /// gathering match; if anybody could also start it, the person who set it
+    /// up could not wait for their friends.
+    Start,
     /// Make a room that is not here yet.
     ///
     /// Answerable without a seat, like `Rooms` and `Join` and for a sharper
@@ -583,6 +595,14 @@ pub enum ServerMessage {
     Rejected {
         reason: String,
     },
+    /// Somebody tried to start a match and could not, and here is why.
+    ///
+    /// Its own variant rather than `Rejected`, which closes the door on a
+    /// connection: this refusal leaves you exactly where you were, in a lobby,
+    /// with a reason to read.
+    NotStarted {
+        reason: String,
+    },
     /// Watching, and here is the world to build in order to watch it.
     ///
     /// A `Welcome` without a player: no number, no token, no value and no
@@ -650,6 +670,20 @@ pub enum ServerMessage {
     /// people rather than colours, since the whole of it is finding out who
     /// else turned up.
     Match {
+        /// Who blew the whistle, once somebody has. `None` before the start,
+        /// and for a match the console started — which is the operator rather
+        /// than anybody in the room.
+        started_by: Option<PlayerId>,
+        /// Whose match this is: the player who may start it.
+        ///
+        /// A `PlayerId` rather than a "may you start it" flag, because this
+        /// message is **broadcast to the whole room** and a flag would have to
+        /// be true for one recipient and false for the rest. Every client
+        /// compares it with its own number and gets the right answer.
+        ///
+        /// `None` for a match the console made, which is the operator's and
+        /// starts at the console.
+        owner: Option<PlayerId>,
         phase: MatchPhase,
         victory: Option<Victory>,
         players: Vec<(PlayerId, String)>,
