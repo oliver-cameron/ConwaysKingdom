@@ -21,6 +21,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Designed | more than one player to a side |
 | [Rating](#rating) | Decided | an Elo-shaped number, and what it would have to survive |
+| [Many servers](#many-servers-and-what-must-not-be-decentralised) | Decided | decentralise discovery and identity; never a world |
 | [The session comes out of the battle view](#the-session-comes-out-of-the-battle-view) | Designed | the one place the architecture does not hold |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
 | [Auto-mining](#auto-mining) | Built | |
@@ -121,7 +122,51 @@ Two more, both real:
 
 **Elo is for two players.** A match here is up to fifteen, and multiplayer Elo is a genuine choice rather than a formula: treat the result as every pairwise outcome (everybody you beat, everybody who beat you), or score against the field average, or rate only the winner. The pairwise reading is the usual answer and is what a free-for-all wants, and it falls out naturally once [teams](#teams) exist, because a team result is one pairwise outcome per opposing pair.
 
-The order that makes sense is identity, then teams, then this. Doing it before identity means building a rating on a number that gets handed to somebody else next week.
+The order that makes sense is identity, then teams, then this. Doing it before identity means building a rating on a number that gets handed to somebody else next week — and the identity in question is the keypair in [many servers](#many-servers-and-what-must-not-be-decentralised), which is the same missing piece seen from a different side.
+
+## Many servers, and what must not be decentralised
+
+**Decided, and partly costed.** A client that knows several servers rather than one, and a way to find them that is not a list somebody maintains.
+
+Start with what does **not** move, because it is the constraint everything else is arranged around. **A world has exactly one authority, and that is not a limitation to be engineered away — it is what makes the simulation deterministic.** The tick is the unit of lockstep: an action is applied *at* a generation, a birth's owner is seeded from the generation, and two peers stepping the same cells at different ticks produce different worlds within a few seconds. Splitting one world across two authorities means agreeing on a tick across a network, which is precisely the problem this design exists to avoid — see [simulation.md](simulation.md) and [networking.md](networking.md#the-server-is-the-clock). A federated world is not a hard version of this feature; it is a different game.
+
+So what decentralises is **discovery and identity**. Three pieces, in the order they depend on each other.
+
+### Identity, which is the real unlock
+
+Today a player is a `PlayerId` — a seat in one room, reused when a world forgets somebody — plus a **rejoin token**, which is a secret the *server* issues and the client files under a room name. That has a bug in it already: the token is keyed by room and not by server, so two servers both holding a room called `main` share one secret and visiting the second costs you your player on the first. `client::record` has the same hole from the other end: it files a game under a room's display name, so two servers' `arena` are one line of history.
+
+Replace the token with a **keypair the client generates and never sends**. Joining becomes: the server offers a challenge, the client signs it, and the server knows it is talking to the same person as last time without ever having issued them anything. That inverts who owns an identity, and everything else here follows from it:
+
+- **A person is the same person on every server**, with no registry, no account, and nothing to federate. This is the whole of what "decentralised identity" needs to mean here.
+- **A seat becomes something a person holds**, which is the missing piece [fifteen slots and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients) and [rating](#rating) are both waiting on.
+- **The store keys by server**, because a public key needs no room to be filed under. The two bugs above stop being bugs rather than being fixed.
+
+What it costs is a signature scheme in a crate that builds for wasm32 — ed25519 is the obvious one and does — plus a decision about what happens when somebody loses their key, which is that they are somebody new. That is the honest answer and it should be said out loud on screen rather than discovered.
+
+### Multi-homing the client
+
+`BattleApp` holds one `Link`. Knowing several servers does not mean holding several sockets — you are in one world at a time, so one socket is right — it means the **store** holds a list of servers rather than the last one, and the Play screen lists rooms from more than one.
+
+Small, and mostly already there: `net::keep` is a string store that would gain a list, the room list is already a message rather than a guess, and `RoomId` is already distinct from a room's name, so a room from one server and a room from another never collide. What is genuinely new is that a `RoomInfo` in a merged listing has to carry **which server it is on**, and the client has to hold that beside it — which is one field and one column in the list.
+
+### Discovery, where the two answers actually differ
+
+**A tracker.** Servers announce themselves to a small service; clients read the list. This is the Minecraft server-list model, it is half a day's work, and it is centralised — but *replaceable* centralised: the address of the tracker is a setting, anybody may run one, and a client may read several. That last property is what makes it an acceptable first answer rather than a betrayal of the idea.
+
+**Gossip.** Each server holds a list of peers and exchanges room listings with them periodically, so a client connected to one server sees the mesh. Genuinely decentralised, and the interesting part is the failure modes rather than the protocol:
+
+- **Stale listings.** A room that has gone still appears for as long as it takes the news to travel, so a client must be able to find out on the join rather than only from the list — which it already can, because `Rooms::resolve` refuses a name that is not here and the refusal is already shown.
+- **A server advertising what it does not have**, honestly by lag or dishonestly on purpose. The join is the check either way, which is the same answer as above and is why it is worth having the refusal be good.
+- **Fan-out.** Every server carrying every room's listing is fine at a dozen servers and is not at a thousand. That is a real limit and the point at which this wants a proper answer rather than a periodic exchange.
+
+The order that makes sense is identity, then multi-homing, then a tracker, and gossip only if a tracker turns out to be the thing people object to. Doing discovery first gets you a list of servers you are a different person on every time you visit.
+
+### What this leaves alone
+
+**Rating stays server-side and per-server**, at least at first. A rating that travels between servers needs signed results, which needs servers to trust each other's arithmetic, which is a much larger thing than a keypair — and a per-server ladder is a perfectly good ladder. See [rating](#rating).
+
+**Anti-cheat does not get easier.** The server is authoritative over its own world and always was; nothing here weakens that, and nothing here helps with a server that lies about its own results. That is the wall a cross-server rating runs into and is why it is not in this entry.
 
 ## The session comes out of the battle view
 
@@ -141,7 +186,7 @@ Two things it is not. It is not a rewrite of the gesture machine, which is alrea
 
 What is left is lifetime — [auto-sleep](#making-rooms-from-the-client), above — and one gap in the store:
 
-**The token is keyed by room but not by server.** Two servers both holding a room whose id is `main` share one secret, and visiting the second costs you your player on the first. The address is remembered now, which is half of what that key would need.
+**The token is keyed by room but not by server.** Two servers both holding a room whose id is `main` share one secret, and visiting the second costs you your player on the first. `client::record` has the same hole from the other end: a game is filed under a room's display name, so two servers' `arena` are one line of history. Both stop being bugs rather than being fixed if the token becomes a key the client owns — see [many servers](#many-servers-and-what-must-not-be-decentralised).
 
 ## Auto-mining
 
