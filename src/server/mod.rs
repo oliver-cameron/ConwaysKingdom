@@ -178,13 +178,13 @@ impl Server {
     /// let anybody do by accident.
     pub fn take_side(&mut self, player: PlayerId, team: crate::net::TeamId) -> Result<(), String> {
         if self.teams == 0 {
-            return Err("this match has no sides".into());
+            return Err("this match has no teams".into());
         }
         if !matches!(self.phase, Phase::Gathering) {
-            return Err("sides are settled once a match starts".into());
+            return Err("teams are settled once a match starts".into());
         }
         if team.0 > self.teams {
-            return Err(format!("this match has {} sides", self.teams));
+            return Err(format!("this match has {} teams", self.teams));
         }
         self.sides.put(player, team);
         self.lobby_changed = true;
@@ -194,10 +194,10 @@ impl Server {
     /// Call a side something.
     pub fn name_side(&mut self, team: crate::net::TeamId, name: &str) -> Result<(), String> {
         if team.is_none() || team.0 > self.teams {
-            return Err("no such side".into());
+            return Err("no such team".into());
         }
         if !matches!(self.phase, Phase::Gathering) {
-            return Err("sides are settled once a match starts".into());
+            return Err("teams are settled once a match starts".into());
         }
         let name = crate::net::team_name(name)?;
         self.team_names.resize(self.teams as usize, String::new());
@@ -223,7 +223,7 @@ impl Server {
             self.players.values().filter(|p| p.online).map(|p| p.id).collect();
         if let Some(stray) = here.iter().find(|&&p| self.sides.team_of(p).is_none()) {
             let who = self.players.get(stray).map(|p| p.name.as_str()).unwrap_or("somebody");
-            return Err(format!("{who} has not picked a side"));
+            return Err(format!("{who} has not picked a team"));
         }
         if let Some(empty) = (1..=self.teams)
             .map(crate::net::TeamId)
@@ -237,11 +237,11 @@ impl Server {
     /// Give this match sides. Only before it starts, and only on a match.
     pub fn make_teams(&mut self, n: u8) -> Result<(), String> {
         if !matches!(self.phase, Phase::Gathering) {
-            return Err("only a match has sides".into());
+            return Err("only a match has teams".into());
         }
         if !(crate::net::MIN_TEAMS..=crate::net::MAX_TEAMS).contains(&n) {
             return Err(format!(
-                "a match has between {} and {} sides",
+                "a match has between {} and {} teams",
                 crate::net::MIN_TEAMS,
                 crate::net::MAX_TEAMS
             ));
@@ -352,10 +352,11 @@ impl Server {
             sides: self.sides,
             teams: self.teams(),
             started_by: self.started_by,
-            // Filled in by `Rooms`, which is the only thing that knows who
-            // made a room. A `Server` is one room and has no idea how it came
-            // to exist, which is the same reason it does not know its own id.
+            // Both filled in by `Rooms` on the way out — see `rooms::stamp`.
+            // A `Server` is one room and knows neither who asked for it nor
+            // what code reaches it, the same way it does not know its own id.
             owner: None,
+            code: None,
             phase: self.phase.clone(),
             victory: self.victory,
             players,
@@ -1745,7 +1746,7 @@ mod tests {
         s.take_side(a, TeamId(1)).unwrap();
         s.take_side(b, TeamId(1)).unwrap();
         let why = s.start_match(Some(a)).unwrap_err();
-        assert!(why.contains("Side 2"), "{why}");
+        assert!(why.contains("Team 2"), "{why}");
 
         // Three against one is *not* refused: people arrange that on purpose,
         // and a server that forbids it is one they work around.

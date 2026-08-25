@@ -30,6 +30,11 @@ struct Camera {
     chunk_n:  f32,         // cells per chunk edge
     encode:   f32,         // non-zero when this shader must encode sRGB itself
     _pad:     f32,
+    // A hue per player, as a turn, worked out on the client -- see
+    // client::views::hue. Packed four to a vec4 because a uniform array of
+    // scalars has a 16-byte stride in WGSL, so `array<f32, 16>` would be 256
+    // bytes to carry 64.
+    hues:     array<vec4<f32>, 4>,
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
@@ -110,8 +115,20 @@ fn shade(lightness: f32, saturation: f32, hue: f32) -> vec3<f32> {
     return clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+/// A player's hue, looked up rather than worked out.
+///
+/// It used to be `fract(player * HUE_STEP)`, which is right for a free-for-all
+/// and cannot be right for teams: allies need a **family** of hue, and where a
+/// member sits in their family depends on who else is on their team — which is
+/// not a thing one player's number can answer. So the client works out the
+/// whole table and hands it over, and the shader does the one thing a shader
+/// should do with it.
+///
+/// Nothing else about a cell changes with the player. The sprite, its
+/// lightness and its coverage all come from the sheet; the player contributes
+/// a hue and a saturation tier and nothing more.
 fn player_hue(player: u32) -> f32 {
-    return fract(f32(player) * HUE_STEP) * TAU;
+    return cam.hues[player / 4u][player % 4u] * TAU;
 }
 
 /// Saturation is a second axis for telling players apart, because five bits of

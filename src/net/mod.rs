@@ -229,11 +229,11 @@ impl Sides {
     }
 }
 
-/// What a side is called before anybody names it. Numbered rather than given
+/// What a team is called before anybody names it. Numbered rather than given
 /// colours as names, because the colour is already on screen beside it and a
-/// side called "Blue" that is drawn green is worse than one called "Side 2".
+/// team called "Blue" that is drawn green is worse than one called "Team 2".
 pub fn default_team_name(team: TeamId) -> String {
-    format!("Side {}", team.0)
+    format!("Team {}", team.0)
 }
 
 /// Normalise a side's name, or say why it is not one.
@@ -846,6 +846,13 @@ pub enum ServerMessage {
         /// `None` for a match the console made, which is the operator's and
         /// starts at the console.
         owner: Option<PlayerId>,
+        /// The code that reaches this room, if it is private.
+        ///
+        /// Here rather than only in the `Made` reply, because the reply is
+        /// seen once by the person who made it and the code is the thing they
+        /// have to hand to somebody — which they do from the lobby, while
+        /// waiting, which is the moment they need to be able to read it.
+        code: Option<String>,
         phase: MatchPhase,
         victory: Option<Victory>,
         players: Vec<(PlayerId, String)>,

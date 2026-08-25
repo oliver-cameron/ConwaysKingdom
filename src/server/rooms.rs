@@ -514,15 +514,13 @@ impl Rooms {
                         }
                     }
                     let owner = self.owner.get(&name).copied();
+                    let code = self.codes.get(&name).cloned();
                     for reply in &mut out {
-                        match reply {
-                            ServerMessage::Welcome { room, name: called, .. } => {
-                                *room = name.clone();
-                                *called = room_name.clone();
-                            }
-                            ServerMessage::Match { owner: whose, .. } => *whose = owner,
-                            _ => {}
+                        if let ServerMessage::Welcome { room, name: called, .. } = reply {
+                            *room = name.clone();
+                            *called = room_name.clone();
                         }
+                        stamp(reply, owner, code.clone());
                     }
                     out
                 }
@@ -560,9 +558,19 @@ impl Rooms {
     /// world, so the room travels with it as far as the connection that
     /// decides whether to send it on.
     pub fn step(&mut self) -> Vec<(RoomId, ServerMessage)> {
+        // Cloned so the stamp below can read them while the rooms are borrowed
+        // mutably. Sixteen bytes and a short string per room, once a tick.
+        let owners = self.owner.clone();
+        let codes = self.codes.clone();
         self.rooms
             .iter_mut()
-            .flat_map(|(name, server)| server.step().into_iter().map(move |m| (name.clone(), m)))
+            .flat_map(|(id, server)| {
+                let (owner, code) = (owners.get(id).copied(), codes.get(id).cloned());
+                server.step().into_iter().map(move |mut m| {
+                    stamp(&mut m, owner, code.clone());
+                    (id.clone(), m)
+                })
+            })
             .collect()
     }
 
@@ -723,7 +731,7 @@ impl Rooms {
                 server.make_teams(n)?;
             }
         } else if teams.is_some() {
-            return Err("only a match has sides".into());
+            return Err("only a match has teams".into());
         }
         let path = save_path(&self.dir, &id);
         if victory.is_none() && !self.dir.as_os_str().is_empty() {
@@ -960,6 +968,21 @@ impl Rooms {
     /// How many players are connected right now, across every room.
     pub fn online(&self) -> usize {
         self.rooms.values().map(|s| s.players().filter(|p| p.online).count()).sum()
+    }
+}
+
+/// Put what only this map knows onto a message on its way out.
+///
+/// **One place**, called from both paths, and that is the point rather than
+/// tidiness: it was two, the broadcast one was lost in an unrelated edit, and
+/// the symptom was that whoever made a match was never told it was theirs to
+/// start — so the button never appeared and the match could not be started at
+/// all. A `Server` is one room and knows neither who asked for it nor what
+/// code reaches it; those are facts about the map it sits in.
+fn stamp(msg: &mut ServerMessage, owner: Option<PlayerId>, code: Option<Code>) {
+    if let ServerMessage::Match { owner: whose, code: reachable, .. } = msg {
+        *whose = owner;
+        *reachable = code;
     }
 }
 
@@ -1534,6 +1557,67 @@ mod tests {
             Some(owner),
             "and it remembers who blew it"
         );
+    }
+
+    /// The whole flow a client actually walks: make a match, join it, and be
+    /// told — by the broadcast every client in the room gets — that it is
+    /// yours to start. The owner check has a unit test; this is about whether
+    /// the answer ever *reaches* the person who has to press the button.
+    #[test]
+    fn the_maker_of_a_match_is_told_it_is_theirs_to_start() {
+        let mut rooms =
+            Rooms::open(temp_dir("told"), &["hall".into()], WorldKind::Infinite, true).unwrap();
+        let me = Caller::new(12);
+
+        let made = rooms
+            .handle(
+                &me,
+                ClientMessage::Create {
+                    name: "cup".into(),
+                    shape: WorldKind::Infinite,
+                    victory: Some(Victory::Timer { generations: 200 }),
+                    teams: None,
+                    private: false,
+                },
+            )
+            .into_iter()
+            .find_map(|m| match m {
+                ServerMessage::Made(Ok(made)) => Some(made),
+                _ => None,
+            })
+            .expect("a room");
+
+        let welcomed = rooms.handle(
+            &me,
+            ClientMessage::Join { name: "maker".into(), token: None, room: Some(made.id.clone()) },
+        );
+        let you = welcomed
+            .iter()
+            .find_map(|m| match m {
+                ServerMessage::Welcome { you, .. } => Some(*you),
+                _ => None,
+            })
+            .expect("a welcome");
+
+        // The lobby reaches everybody by broadcast rather than in the reply,
+        // because a lobby full of people all changing sides needs one message
+        // to all of them. A gathering match does not advance its world, and it
+        // still has to produce this — which is the thing most likely to have
+        // been got wrong.
+        let broadcast = rooms.step();
+        let owner = broadcast
+            .iter()
+            .find_map(|(_, m)| match m {
+                ServerMessage::Match { owner, .. } => Some(*owner),
+                _ => None,
+            })
+            .expect("a gathering match still broadcasts its lobby");
+        assert_eq!(owner, Some(you), "the maker was not told the match is theirs");
+
+        // And pressing it works from the seat that broadcast named.
+        let out = rooms.handle(&Caller::sitting(12, (made.id.clone(), you)), ClientMessage::Start);
+        assert!(out.is_empty(), "the whistle answers by broadcast, got {out:?}");
+        assert!(matches!(rooms.get(&made.id).unwrap().phase(), Phase::Running { .. }));
     }
 
     /// A room the console made is the operator's, and starts at the console.

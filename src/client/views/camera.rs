@@ -212,8 +212,13 @@ impl Camera {
     /// camera is arithmetic and has never known there is a GPU — so it is a
     /// parameter rather than a field. It rides here because the camera
     /// uniform is the only thing bound to the fragment stage that has room
-    /// for it.
-    pub fn uniform(&self, encode_srgb: bool) -> CameraUniform {
+    /// for it. `hues` rides here for the same reason and is nobody's business
+    /// either: it is who is on whose team, which is the client's.
+    pub fn uniform(
+        &self,
+        encode_srgb: bool,
+        hues: &[f32; crate::sim::PlayerId::COUNT],
+    ) -> CameraUniform {
         let (ox, oy) = self.origin();
         CameraUniform {
             origin: [ox, oy],
@@ -222,6 +227,9 @@ impl Camera {
             chunk_n: CHUNK_N as f32,
             encode_srgb: if encode_srgb { 1.0 } else { 0.0 },
             _pad: 0.0,
+            // Four to a row, which is what the shader indexes and what a
+            // uniform array's stride costs if it is not.
+            hues: std::array::from_fn(|row| std::array::from_fn(|col| hues[row * 4 + col])),
         }
     }
 }

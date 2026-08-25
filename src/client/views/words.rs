@@ -160,11 +160,11 @@ pub mod menu {
         pub const SIZE_NOTE: &str = "in chunks, each 16 cells square";
         pub const TOGETHER: &str = "Played";
         pub const SOLO: &str = "Every player for themselves";
-        pub const TEAMS: &str = "In sides";
-        pub const SIDES: &str = "Sides";
-        /// Sides are picked in the lobby, not here — said out loud, because a
+        pub const TEAMS: &str = "In teams";
+        pub const SIDES: &str = "Teams";
+        /// Teams are picked in the lobby, not here — said out loud, because a
         /// form that asks how many and never asks who reads as unfinished.
-        pub const SIDES_NOTE: &str = "Who is on which side is settled in the lobby.";
+        pub const SIDES_NOTE: &str = "Who is on which team is settled in the lobby.";
         pub const PRIVATE: &str = "Who can find it";
         pub const LISTED: &str = "Anyone";
         pub const UNLISTED: &str = "By code";
@@ -294,8 +294,11 @@ pub fn phase(phase: &crate::net::MatchPhase) -> &'static str {
 
 /// The screen before a match starts.
 pub mod lobby {
-    pub const TAKE_SIDE: &str = "Join this side";
-    pub const LEAVE_SIDE: &str = "Leave this side";
+    /// **"Team", not "side".** They were the same word doing one job, and the
+    /// game says team everywhere a player reads it.
+    pub const TAKE_SIDE: &str = "Join this team";
+    pub const LEAVE_SIDE: &str = "Leave this team";
+    pub const CODE: &str = "Code to share";
     pub const RENAME: &str = "rename";
     pub const KEEP_NAME: &str = "ok";
     pub const NOBODY_ON_IT: &str = "nobody yet";
@@ -304,7 +307,7 @@ pub mod lobby {
     /// somebody is unplaced, and a lobby that does not say who is the wrong
     /// place to find that out.
     pub fn not_picked(who: &str) -> String {
-        format!("{who} has not picked a side")
+        format!("{who} has not picked a team")
     }
 
     pub const WAITING: &str = "Waiting to start";

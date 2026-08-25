@@ -116,6 +116,7 @@ mod tests {
                 teams: Vec::new(),
                 started_by: None,
                 owner: None,
+                code: None,
                 phase: crate::net::MatchPhase::Over {
                     winner: Some(PlayerId(4)),
                     held: 812,
@@ -129,6 +130,7 @@ mod tests {
                 teams: Vec::new(),
                 started_by: None,
                 owner: None,
+                code: None,
                 phase: crate::net::MatchPhase::Gathering,
                 victory: Some(crate::net::Victory::Territory { squares: 500 }),
                 players: vec![],

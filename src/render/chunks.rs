@@ -140,12 +140,22 @@ pub struct CameraUniform {
     /// is compiling the shader twice to change its last line.
     pub encode_srgb: f32,
     pub _pad: f32,
+    /// A hue per player, as a turn in `0..1`, indexed by `PlayerId`.
+    ///
+    /// Worked out on the client — see `client::views::hue` — because where a
+    /// player sits in their team's family of hue depends on who else is on
+    /// that team, which no function of one player's number can answer. The
+    /// shader looks it up and does nothing else with it.
+    ///
+    /// Four to a `vec4` because a uniform array of scalars has a 16-byte
+    /// stride in WGSL: `array<f32, 16>` would spend 256 bytes carrying 64.
+    pub hues: [[f32; 4]; 4],
 }
 
 const _: () = {
     // Must match `Camera` and the instance attributes in shaders/grid.wgsl.
     // WGSL requires a uniform struct's size to be a multiple of 16.
-    assert!(size_of::<CameraUniform>() == 32);
+    assert!(size_of::<CameraUniform>() == 96);
     assert!(size_of::<Instance>() == 32);
 };
 

@@ -300,15 +300,21 @@ The address field is **never blank**: it opens on what was used last, or on an e
 
 "Ends: Never" is what makes a world rather than a match, which is the honest way round: a room with no end is the ordinary case and a match is the one with a condition on it, so the form never has to ask "world or match?" as a question of its own. Making one does not put you in it — the client joins the name that comes back, which is the same join a room in the list sends, so there is one way into a world rather than two. What a server will hold is capped and set by `--max-rooms`; see [server.md](server.md#made-by-a-client).
 
-### Sides
+### Teams
 
-A match is played **solo or in sides**, chosen when it is made, along with how many sides there are. Who is on which side, and what each side is called, is settled in the lobby: anybody may take any side, anybody may rename any side, and taking the side you are already on steps off it.
+A match is played **solo or in teams**, chosen when it is made, along with how many teams there are. Who is on which team, and what each is called, is settled in the lobby: anybody may join any team, anybody may rename one, and joining the team you are already on leaves it.
 
-What a side changes is **what counts as yours**. Allies build on each other's ground, clear each other's cells at the reclaim rate rather than a raid's, and are scored as one. Nothing else moves: territory is still contested per player, so two allies keep a border between their ground — they simply cannot be hurt by it — and the simulation knows nothing about teams at all, the same way it knows nothing about matches or money.
+**A team is a family of hue.** A player's colour used to come from their number alone, stepped around the wheel by the golden ratio; in a team match the *team* takes the step and its members are spread over a narrow arc around it. So two allies read as one colour across a screen of cells, and are still told apart when looked at. The arc is the same width however many are on the team, deliberately: widening it for a larger team would let two teams bleed into one another, and what has to survive is **which team**, not which teammate — mistaking your own two colours costs nothing, and mistaking an enemy for an ally costs the game.
 
-**Friendly fire is on.** A glider is a weapon whoever built it, and making allied life pass through allied life would be a rule the world has to honour rather than an arrangement of who is playing. Sides are about scoring and building.
+The shader does not work any of that out. A member's place in their family depends on who else is on their team, which no function of one player's number can answer, so the client computes the whole table and hands it over in the camera uniform. Nothing else about a cell changes with the player: the sprite, its lightness and its coverage all come from the sheet, and the player contributes a hue and a saturation tier.
 
-The **evenness is checked at the whistle**, not in the lobby: a match will not start while somebody has not picked a side or while a side is empty, and the lobby says who. Sizes beyond that are left alone, because three against two is something people arrange on purpose. Sides are settled once it starts — changing them mid-match would hand your ground to the people you were fighting.
+What a team changes is **what counts as yours**. Allies build on each other's ground, clear each other's cells at the reclaim rate rather than a raid's, and are scored as one. Nothing else moves: territory is still contested per player, so two allies keep a border between their ground — they simply cannot be hurt by it — and the simulation knows nothing about teams at all, the same way it knows nothing about matches or money.
+
+**Friendly fire is on.** A glider is a weapon whoever built it, and making allied life pass through allied life would be a rule the world has to honour rather than an arrangement of who is playing. Teams are about scoring and building.
+
+The **evenness is checked at the whistle**, not in the lobby: a match will not start while somebody has not picked a team or while a team is empty, and the lobby says who. Sizes beyond that are left alone, because three against two is something people arrange on purpose. Teams are settled once it starts — changing them mid-match would hand your ground to the people you were fighting.
+
+**A private match shows its code in the lobby**, where somebody waiting for their friends can read it off and send it. It appears once in the menu when the room is made and is gone the moment they leave that screen, which is a minute before they want it.
 
 **A match is started by whoever made it.** A gathering match has a Start on its lobby panel, and only for the player whose room it is — anybody may join a gathering match, and if anybody could also start it the person who set it up could not wait for their friends. Everybody else is told what it is waiting for. Ownership is a `PlayerId` and not the connection that asked, so it survives a refresh: a rejoin token brings you back to the same number, which is exactly when losing your own match would be most annoying. A match the server made stays the server's and starts at the console. Who blew the whistle is remembered and shown with the result.
 

@@ -100,13 +100,15 @@ Three decisions worth keeping:
 
 ### What is left
 
-**The colour**, which is the hard part and is untouched. A player's hue comes from their number, and allies have to read as allies at a glance across a whole screen of cells — which means a family of hue per side, a much tighter constraint than sixteen distinct hues and one that may not survive the shader. `MAX_TEAMS` is eight on the assumption that it will; that number should be revisited against the real sheet in `tools/cnvt.rs` before anybody plays eight-a-side. Until then a team match is readable only because players remember who is on their side.
+**The colour is in** — see [game.md](game.md#teams). A team takes a golden-ratio step and its members spread over a narrow arc around it, so allies read as one colour across a screen. The client works out the whole table, because where a member sits in their family depends on who else is on their team, and hands it to the shader in the camera uniform; the shader looks a hue up rather than computing one, and nothing else about a cell changes with the player.
+
+What is left of it is a **measurement**. The arc is a twelfth of the circle and the families provably do not overlap at `MAX_TEAMS`, which is a test; whether two allies a twelfth apart are actually distinguishable at four pixels a cell, and whether two *teams* are, has not been looked at on a screen. That is the number to revisit before anybody plays eight-a-side.
 
 **Friendly fire is on**, and that is the honest first answer rather than a decision. A glider is a weapon whoever built it, and a rule making allied life pass through allied life would be a rule in `sim` — which is what this design exists to avoid. Teams are about scoring and building, not immunity.
 
-**Nothing in a world.** Sides are a match feature because a team is a way of deciding a result and a world has none. A persistent world with standing alliances is a different feature wearing the same word.
+**Nothing in a world.** Teams are a match feature because a team is a way of deciding a result and a world has none. A persistent world with standing alliances is a different feature wearing the same word.
 
-**The lobby cannot lock a side**, so anybody may join any side including one that is already full. That is deliberate — see the balance check above — and it does mean a five-player match can end up four against one if people are careless. The whistle allows it; whether it should is a playtest question.
+**The lobby cannot lock a team**, so anybody may join any team including one that is already full. That is deliberate — see the balance check above — and it does mean a five-player match can end up four against one if people are careless. The whistle allows it; whether it should is a playtest question.
 
 ## Rating
 

@@ -319,10 +319,21 @@ struct Lobby {
     owner: Option<PlayerId>,
     /// Who blew the whistle, once somebody has.
     started_by: Option<PlayerId>,
+    /// The code that reaches this room, if it is private. Shown in the lobby,
+    /// which is where somebody waiting for their friends actually needs to
+    /// read it off and send it.
+    code: Option<String>,
 }
 
 impl Lobby {
-    fn look(&self, me: PlayerId) -> lobby_view::Look<'_> {
+    /// The hue table, worked out once when the lobby arrives rather than every
+    /// frame: a member's place in their team's family depends on who else is
+    /// on it, so it is a pass over the roster and not a lookup.
+    fn hues(&self) -> [f32; PlayerId::COUNT] {
+        crate::client::views::hue::table(&self.sides)
+    }
+
+    fn look<'a>(&'a self, me: PlayerId, hues: &'a [f32; PlayerId::COUNT]) -> lobby_view::Look<'a> {
         lobby_view::Look {
             me,
             phase: &self.phase,
@@ -332,6 +343,8 @@ impl Lobby {
             started_by: self.started_by,
             sides: self.sides,
             teams: &self.teams,
+            code: self.code.as_deref(),
+            hues,
         }
     }
 }
@@ -518,7 +531,12 @@ impl BattleApp {
     /// one field access, and a cached copy is one more thing to forget when
     /// the surface is reconfigured.
     fn write_camera(&self, gpu: &GpuState) {
-        let uniform = self.camera.uniform(!gpu.config.format.is_srgb());
+        // Recomputed here rather than cached, because `write_camera` runs
+        // only when the camera has moved -- not every frame -- and a pass over
+        // sixteen players is nothing beside the buffer write it rides on.
+        let uniform = self
+            .camera
+            .uniform(!gpu.config.format.is_srgb(), &crate::client::views::hue::table(&self.sides));
         gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
@@ -848,6 +866,7 @@ impl BattleApp {
                     teams,
                     started_by,
                     owner,
+                    code,
                     phase,
                     victory,
                     players,
@@ -864,9 +883,26 @@ impl BattleApp {
                     // Kept on the app as well as in the lobby, because every
                     // placement is priced against it -- the lobby is where it
                     // is *shown*, and prediction is where it is *used*.
+                    //
+                    // A change of teams is a change of colour for everybody on
+                    // the board, and the colours ride in the camera uniform,
+                    // so the camera is written again. `dirty` is how that is
+                    // asked for; it costs one buffer write on a frame where
+                    // somebody in the lobby pressed a button.
+                    if self.sides != sides {
+                        self.camera.dirty = true;
+                    }
                     self.sides = sides;
-                    self.lobby =
-                        Some(Lobby { sides, teams, phase, victory, players, owner, started_by });
+                    self.lobby = Some(Lobby {
+                        sides,
+                        teams,
+                        phase,
+                        victory,
+                        players,
+                        owner,
+                        started_by,
+                        code,
+                    });
                 }
                 ServerMessage::Standing { held, .. } => {
                     if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.me) {
@@ -2063,7 +2099,12 @@ impl App for BattleApp {
                         ) {
                             let (rect, did) =
                                 lobby.as_ref().map_or((None, lobby_view::Did::Nothing), |l| {
-                                    lobby_view::show(ctx, &theme, &l.look(me), &mut naming)
+                                    lobby_view::show(
+                                        ctx,
+                                        &theme,
+                                        &l.look(me, &l.hues()),
+                                        &mut naming,
+                                    )
                                 });
                             in_lobby = did;
                             return rect.into_iter().collect();
@@ -2087,7 +2128,7 @@ impl App for BattleApp {
                         // it, and covering that to say who won would hide the reason.
                         let waiting = lobby.as_ref().and_then(|l| {
                             let (rect, did) =
-                                lobby_view::show(ctx, &theme, &l.look(me), &mut naming);
+                                lobby_view::show(ctx, &theme, &l.look(me, &l.hues()), &mut naming);
                             if !matches!(did, lobby_view::Did::Nothing) {
                                 in_lobby = did;
                             }

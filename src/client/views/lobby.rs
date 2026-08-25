@@ -10,7 +10,7 @@
 //! what they came for, and covering it entirely to say "soon" tells them less
 //! than showing it does.
 
-use crate::client::views::hud::player_colour;
+use crate::client::views::hud::team_colour;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
@@ -47,8 +47,15 @@ pub struct Look<'a> {
     /// Who blew the whistle, once somebody has.
     pub started_by: Option<PlayerId>,
     pub sides: Sides,
-    /// The sides, their names and who is on them. Empty in a free-for-all.
+    /// The teams, their names and who is on them. Empty in a free-for-all.
     pub teams: &'a [Team],
+    /// The code that reaches this room, if it is private — the thing you hand
+    /// to whoever is playing, read off while you wait for them.
+    pub code: Option<&'a str>,
+    /// Every player's hue, so a swatch and the board agree about who is who.
+    /// In a team match this is a family per team; see
+    /// [`crate::client::views::hue`].
+    pub hues: &'a [f32; PlayerId::COUNT],
 }
 
 pub fn show(
@@ -85,6 +92,27 @@ pub fn show(
                     if let Some(victory) = look.victory {
                         ui.colored_label(p.text_dim, describe(victory));
                     }
+                    // The code, where somebody waiting for their friends can
+                    // read it off and send it. It appears once in the menu
+                    // when the room is made and is gone the moment they leave
+                    // that screen — which is a minute before they want it.
+                    if let Some(code) = look.code {
+                        ui.add_space(m.item_spacing);
+                        ui.colored_label(
+                            p.text_dim,
+                            egui::RichText::new(words::CODE).size(m.text_small),
+                        );
+                        // Monospace and larger than the prose around it: this
+                        // is a thing to be copied character by character, and
+                        // an l and a 1 have to be told apart. The alphabet
+                        // leaves those out, but the setting says so anyway.
+                        ui.label(
+                            egui::RichText::new(code)
+                                .monospace()
+                                .size(m.text_action)
+                                .color(p.accent),
+                        );
+                    }
                     ui.separator();
 
                     match look.phase {
@@ -96,7 +124,7 @@ pub fn show(
                                     .find(|(p, _)| p == id)
                                     .map(|(_, name)| name.clone())
                                     .unwrap_or_else(|| format!("player {}", id.0));
-                                swatch(ui, *id);
+                                swatch(ui, *id, look.hues);
                                 ui.heading(if *id == look.me {
                                     words::YOU_WON.to_string()
                                 } else {
@@ -129,7 +157,7 @@ pub fn show(
                             if look.teams.is_empty() {
                                 for (id, name) in look.players {
                                     ui.horizontal(|ui| {
-                                        swatch(ui, *id);
+                                        swatch(ui, *id, look.hues);
                                         if *id == look.me {
                                             ui.label(format!("{name}  ({})", words::YOU));
                                         } else {
@@ -268,7 +296,7 @@ fn side_picker(
                 }
                 for &id in &team.players {
                     ui.horizontal(|ui| {
-                        swatch(ui, id);
+                        swatch(ui, id, look.hues);
                         let who = name_of(id);
                         ui.colored_label(
                             if id == me { p.text } else { p.text_dim },
@@ -318,8 +346,8 @@ fn side_picker(
 
 /// The same colour the shader gives this player's cells, so the lobby and the
 /// board cannot disagree about who is who.
-fn swatch(ui: &mut egui::Ui, player: PlayerId) {
-    let (r, g, b) = player_colour(player);
+fn swatch(ui: &mut egui::Ui, player: PlayerId, hues: &[f32; PlayerId::COUNT]) {
+    let (r, g, b) = team_colour(player, hues);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
 }

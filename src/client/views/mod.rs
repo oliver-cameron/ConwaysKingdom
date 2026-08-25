@@ -23,6 +23,7 @@ pub mod clock;
 pub mod help;
 pub mod hotbar;
 pub mod hud;
+pub mod hue;
 pub mod icons;
 pub mod lobby;
 pub mod menu;

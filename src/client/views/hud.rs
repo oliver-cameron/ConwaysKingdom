@@ -256,11 +256,22 @@ const SHOWN: usize = 6;
 /// `grid.wgsl`, which is the one that has to be right — this only has to agree
 /// with it.
 pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) {
-    const HUE_STEP: f32 = 0.618_034;
+    shade_at(
+        lightness,
+        saturation,
+        player,
+        (player.0 as f32 * crate::client::views::hue::STEP).fract(),
+    )
+}
+
+/// The same, at a hue somebody else worked out — which is how a team's colour
+/// reaches a swatch. See [`crate::client::views::hue`], which is the one place
+/// a hue is decided and is handed to the shader as a whole table.
+pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) -> (u8, u8, u8) {
     const TAU: f32 = std::f32::consts::TAU;
     const MAX_CHROMA: f32 = 0.13;
 
-    let hue = (player.0 as f32 * HUE_STEP).fract() * TAU;
+    let hue = turn * TAU;
     // Player zero is nobody, and nobody's ground is grey.
     let tier = if player.0 == 0 {
         0.0
@@ -294,4 +305,9 @@ pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) 
 /// The colour of a player's cells, for a swatch beside their name.
 pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
     shade(0.62, 1.0, player)
+}
+
+/// The same, for a player whose team decides their hue.
+pub fn team_colour(player: PlayerId, hues: &[f32; PlayerId::COUNT]) -> (u8, u8, u8) {
+    shade_at(0.62, 1.0, player, hues[player.0 as usize])
 }
