@@ -45,6 +45,23 @@ pub struct Metrics {
     pub margin: f32,
     /// A hotbar slot is square, this wide.
     pub slot: f32,
+    /// How wide a panel that is the whole screen's business is — the menu,
+    /// and every form on it. Fixed rather than sized by its contents: a panel
+    /// that grows and shrinks as a list changes length moves the buttons out
+    /// from under the hand reaching for them.
+    pub panel_width: f32,
+    /// The one control per screen you are meant to press next. Taller than
+    /// the rest, and the only one that gets the accent.
+    pub action_height: f32,
+    /// Everything else that can be pressed.
+    pub button_height: f32,
+    /// One room in a list: two lines of text and room to point at.
+    pub row_height: f32,
+    /// Type, in points. Three sizes and no more — a fourth is always somebody
+    /// nudging one of these rather than a decision.
+    pub text_action: f32,
+    pub text_body: f32,
+    pub text_small: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -74,6 +91,13 @@ impl Default for Theme {
                 item_spacing: 6.0,
                 margin: 14.0,
                 slot: 44.0,
+                panel_width: 420.0,
+                action_height: 40.0,
+                button_height: 36.0,
+                row_height: 54.0,
+                text_action: 15.0,
+                text_body: 14.0,
+                text_small: 12.0,
             },
         }
     }

@@ -353,6 +353,12 @@ pub enum Victory {
     Territory { squares: usize },
 }
 
+/// A timer match's length in generations, when whoever made it named none.
+/// At four generations a second, about eight minutes.
+pub const DEFAULT_TIMER: u64 = 2000;
+/// A territory match's target in squares, when whoever made it named none.
+pub const DEFAULT_TERRITORY: usize = 500;
+
 impl Victory {
     pub fn describe(&self) -> String {
         match self {

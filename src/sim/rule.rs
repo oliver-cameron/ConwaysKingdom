@@ -73,6 +73,11 @@ pub const TURRET_PUSH: u8 = bits::MAX_LEVEL;
 /// A dead turret becomes ordinary ground.
 pub const TURRET_DECAY: Chance = 4;
 
+// --- what a new world defaults to ---------------------------------------------
+
+/// A wrapping world's size in chunks, when whoever made it named none.
+pub const DEFAULT_TORUS: (i32, i32) = (12, 12);
+
 // --- what things cost ---------------------------------------------------------
 
 /// What a player joins with. Zero in a match; see `server::matches`.

@@ -731,6 +731,28 @@ impl BattleApp {
                         self.value = value;
                     }
                 }
+                // The answer to `Create`, into the form it was sent from.
+                // A refusal has to land beside the fields that produced it:
+                // "there is already a room called that" is a thing to correct,
+                // not a thing to be told once and then hunt for.
+                ServerMessage::Made(made) => match made {
+                    Ok(room) => {
+                        log::info!("made room \"{room}\"; joining it");
+                        // Straight in. Making a world and then being handed
+                        // back to the list to find it is a step that exists
+                        // only because the messages are two.
+                        self.chose(menu::Chose::Join(room));
+                    }
+                    Err(why) => {
+                        log::info!("the server would not make that room: {why}");
+                        if let Screen::Menu(menu::Menu { draft: Some(draft), .. }) =
+                            &mut self.screen
+                        {
+                            draft.asking = false;
+                            draft.note = Some(why);
+                        }
+                    }
+                },
                 ServerMessage::Rooms { rooms } => {
                     log::debug!("the server has {} room(s)", rooms.len());
                     self.asked_at = None;
@@ -1371,6 +1393,26 @@ impl BattleApp {
                         .show_menu(menu::Stage::Failed(words::menu::not_an_address(&address))),
                 }
             }
+            // The form shuts and nothing was made. Dropping the draft rather
+            // than keeping it hidden: a form that comes back holding what you
+            // typed and abandoned is a form remembering a decision you took
+            // back.
+            menu::Chose::Cancel => {
+                if let Screen::Menu(m) = &mut self.screen {
+                    m.draft = None;
+                }
+            }
+            // Made, then joined -- in two steps, because `Made` only names the
+            // room. Joining is the same message the room list sends, so there
+            // is one way into a world rather than two.
+            menu::Chose::Create { name, shape, victory } => {
+                let Some(link) = &self.link else {
+                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
+                    return;
+                };
+                log::info!("asking for a room called \"{name}\"");
+                link.send(ClientMessage::Create { name, shape, victory });
+            }
             menu::Chose::Join(room) => {
                 let Some(link) = &self.link else {
                     self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
@@ -1873,12 +1915,28 @@ impl App for BattleApp {
     }
 
     fn on_key(&mut self, code: winit::keyboard::KeyCode, pressed: bool) {
+        use winit::keyboard::KeyCode as K;
+        // **Every screen has a key that leaves it**, which is the habit taken
+        // from chess-tui — `b` for the menu there, escape here because that is
+        // what escape means everywhere else. Handled before the guard below,
+        // since the whole point is that it works on the screen the guard is
+        // there to protect from everything else.
+        //
+        // One step at a time, innermost first: a form shuts before a world
+        // does. Escape that skipped a level would take somebody out of a game
+        // because they wanted to close a panel.
+        if pressed && code == K::Escape && !self.playing() {
+            if let Screen::Menu(m) = &mut self.screen {
+                if m.draft.take().is_some() {
+                    return;
+                }
+            }
+        }
         // The menu is over the world, and the world is still there. A click
         // that lands beside the panel must not draw on it.
         if !self.playing() {
             return;
         }
-        use winit::keyboard::KeyCode as K;
         if let Some(d) = digit(code) {
             if pressed {
                 // Shift reaches the tools, which never change and never grow,

@@ -50,6 +50,62 @@ pub mod menu {
     }
 
     pub const LOST_CONNECTION: &str = "the connection went away";
+
+    /// Making a room. One label per decision, and a label appears only when
+    /// the decision it belongs to is live — see [planned.md].
+    ///
+    /// [planned.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#the-screen-and-where-it-is-borrowed-from
+    pub mod make {
+        /// Opens the form. Says "world" rather than "room" because that is
+        /// what you get and what the game calls it everywhere else; "room" is
+        /// the machinery's word.
+        pub const OPEN: &str = "New world";
+        pub const TITLE: &str = "A new world";
+        pub const NAME: &str = "Name";
+        pub const NAME_HINT: &str = "arena";
+        pub const SHAPE: &str = "Shape";
+        pub const BOUNDLESS: &str = "Boundless";
+        pub const WRAPPING: &str = "Wrapping";
+        pub const SIZE: &str = "Size";
+        pub const SIZE_HINT: &str = "12x12";
+        /// Chunks, not cells. Said out loud because the number is small and
+        /// would otherwise read as a tiny world.
+        pub const SIZE_NOTE: &str = "in chunks, each 16 cells square";
+        pub const ENDS: &str = "Ends";
+        pub const NEVER: &str = "Never";
+        pub const TIMER: &str = "Timer";
+        pub const TERRITORY: &str = "Territory";
+        /// A world is the ordinary case and a match is the one with a
+        /// condition on it, so "never" is a legal answer rather than a
+        /// separate question about which of the two this is.
+        pub const NEVER_NOTE: &str = "A world with no end. Anybody may join at any time.";
+        pub const TIMER_NOTE: &str = "Most ground when the generations run out.";
+        pub const TERRITORY_NOTE: &str = "First to hold this many squares wins.";
+        pub const GENERATIONS: &str = "Generations";
+        pub const SQUARES: &str = "Squares";
+        pub const MAKE: &str = "Make it";
+        pub const CANCEL: &str = "Cancel";
+        pub const MAKING: &str = "making it…";
+        /// A match does not start on its own, so somebody about to make one
+        /// should know that before they make it rather than after.
+        pub const MATCH_WAITS: &str = "A match gathers until the server starts it.";
+
+        pub fn not_a_size(text: &str) -> String {
+            format!("\"{text}\" is not a size; try 12x12")
+        }
+
+        pub fn not_a_number(text: &str) -> String {
+            format!("\"{text}\" is not a number")
+        }
+    }
+
+    /// The count under the room list, so the list says how much is behind it
+    /// before anybody reads the names.
+    pub fn rooms_here(rooms: usize, players: u32) -> String {
+        let w = if rooms == 1 { "world" } else { "worlds" };
+        let p = if players == 1 { "player" } else { "players" };
+        format!("{rooms} {w}, {players} {p} online")
+    }
 }
 
 /// The bar along the bottom.
