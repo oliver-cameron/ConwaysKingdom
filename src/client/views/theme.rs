@@ -61,6 +61,13 @@ pub struct Metrics {
     pub panel_share: f32,
     pub panel_min: f32,
     pub panel_max: f32,
+    /// Below this, a two-column layout becomes one column stacked.
+    ///
+    /// Two columns of form on a phone is two columns of nothing: the fields
+    /// end up narrower than the words in them. The number is where a column
+    /// stops being able to hold a labelled text field at a readable size,
+    /// which is about twice `panel_min`.
+    pub two_column_min: f32,
     /// The one control per screen you are meant to press next. Taller than
     /// the rest, and the only one that gets the accent.
     pub action_height: f32,
@@ -105,6 +112,7 @@ impl Default for Theme {
                 panel_share: 0.42,
                 panel_min: 360.0,
                 panel_max: 760.0,
+                two_column_min: 660.0,
                 action_height: 40.0,
                 button_height: 36.0,
                 row_height: 54.0,

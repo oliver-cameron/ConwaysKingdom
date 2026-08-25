@@ -1615,13 +1615,11 @@ impl BattleApp {
             menu::Chose::Resume => {
                 self.screen = Screen::Playing;
             }
-            // The form shuts and nothing was made. Dropping the draft rather
-            // than keeping it hidden: a form that comes back holding what you
-            // typed and abandoned is a form remembering a decision you took
-            // back.
-            menu::Chose::Cancel => {
+            // The form is a column now rather than something opened, so there
+            // is nothing to shut: a press here puts it back to its defaults.
+            menu::Chose::Clear => {
                 if let Screen::Menu(m) = &mut self.screen {
-                    m.draft = None;
+                    m.draft = Some(menu::Draft::default());
                 }
             }
             // Made, then joined -- in two steps, because `Made` only names the
@@ -2015,6 +2013,7 @@ impl App for BattleApp {
         let generation = self.world.generation;
         // What the client already is, which the menu cannot see for itself.
         let at = menu::Where {
+            now: self.elapsed,
             on_web: cfg!(target_arch = "wasm32"),
             waiting_in_a_match: self.link.is_some()
                 && matches!(
@@ -2211,9 +2210,10 @@ impl App for BattleApp {
         // because they wanted to close a panel.
         if pressed && code == K::Escape && !self.playing() {
             if let Screen::Menu(m) = &mut self.screen {
-                if m.draft.take().is_some() {
-                    return;
-                }
+                // The form is a column rather than something opened, so there
+                // is no rung for it: a field lets go of the keyboard (handled
+                // in `menu::show`, before the app sees the key at all), then
+                // the page goes back.
                 if m.page == menu::Page::Play {
                     m.page = menu::Page::Home;
                     return;
@@ -2566,6 +2566,19 @@ fn startup() -> Start {
 /// this repository tells you to run, on the port it tells you to run it on.
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_ADDRESS: &str = "ws://127.0.0.1:8080/ws";
+
+/// An address that works, for a field that would otherwise be blank.
+///
+/// A hint is a shape; this is a thing you can press enter on. Somebody who has
+/// never seen the game should be editing a number rather than inventing a URL.
+///
+/// Native only, because a browser has no field to fill: its socket comes from
+/// the page's own origin, and an address typed there would be a promise the
+/// client cannot keep.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_address() -> &'static str {
+    DEFAULT_ADDRESS
+}
 
 /// The `room` parameter out of a query string, given the string.
 ///

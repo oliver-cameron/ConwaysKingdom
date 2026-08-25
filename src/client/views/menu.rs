@@ -23,6 +23,15 @@ use crate::client::views::words::menu as words;
 use crate::net::{RoomId, RoomInfo, RoomName, Victory};
 use crate::sim::WorldKind;
 
+/// How long the typing has to stop before the address is taken as finished.
+///
+/// Long enough that `ws://127.0.0.1:8080/ws` is one address and not twenty on
+/// the way to one, and short enough that somebody who has stopped typing does
+/// not wonder whether anything is going to happen. Enter and leaving the field
+/// both beat it, so this is only the answer for somebody who typed an address
+/// and then looked at it.
+const SETTLE: f64 = 0.7;
+
 /// What the menu is doing, which is mostly what it is waiting for.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Stage {
@@ -67,6 +76,12 @@ pub struct Menu {
     pub stage: Stage,
     /// Which screen is showing.
     pub page: Page,
+    /// When the address was last typed into, so the reaching can wait for the
+    /// typing to stop. `None` once it has been acted on.
+    pub typed_at: Option<f64>,
+    /// The address already asked about, so a settled field is reached for
+    /// once rather than every frame after it settles.
+    pub attempted: Option<String>,
     /// Which room in the list is picked out, so its actions can live inside it
     /// rather than beside every row.
     ///
@@ -267,8 +282,10 @@ pub enum Chose {
     /// Join this room on the server already reached. An **id**, not a name:
     /// what the listing sent back, or what was typed into the code field.
     Join(RoomId),
-    /// Shut the form without making anything.
-    Cancel,
+    /// Put the form back to its defaults. It is a column now rather than
+    /// something opened, so there is nothing to shut — what a press here means
+    /// is "start this description again".
+    Clear,
     /// Back into the world already behind this menu, without joining anything.
     Resume,
     /// Make this world on the server already reached, then join it. Parsed
@@ -303,6 +320,8 @@ impl Menu {
             address,
             stage: Stage::Idle,
             page: Page::Home,
+            typed_at: None,
+            attempted: None,
             selected: None,
             code: String::new(),
             record: crate::client::record::Summary::of(&crate::client::record::games()),
@@ -321,6 +340,9 @@ impl Menu {
 /// keeps this module able to read and not to act.
 #[derive(Clone, Copy, Default)]
 pub struct Where {
+    /// Seconds since the client started, which is what the address field
+    /// measures a pause in typing against.
+    pub now: f64,
     /// The socket is derived from the page's origin, so the address is shown
     /// rather than typed.
     pub on_web: bool,
@@ -420,6 +442,11 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
         .clicked()
     {
         menu.page = Page::Play;
+        // Ask straight away rather than waiting for somebody to touch a field
+        // they have no reason to touch: the address is remembered, or it is an
+        // example, and either way the question is the same one.
+        menu.typed_at = Some(0.0);
+        menu.attempted = None;
     }
 
     // Offline sits here because it is a way to play, and because a player with
@@ -490,6 +517,22 @@ fn record(ui: &mut egui::Ui, theme: &Theme, summary: &crate::client::record::Sum
 }
 
 /// A server, its rooms, a code, and the form that makes one.
+/// A server, what is on it, and a form for what is not.
+///
+/// **Two columns, and the split says something true**: on the left is what
+/// already exists — a list the server owns, which changes every few seconds
+/// whether or not you touch it — and on the right is what does not exist yet,
+/// which is a form, and yours, and stays exactly where you left it. They are
+/// not two panels of the same kind, so they are not drawn as two panels of the
+/// same kind: the list sits on the panel's own ground and the form is a card.
+///
+/// One accent per **column**, not per screen. Each column has exactly one
+/// thing you would do next in it — join the world you picked, or make the one
+/// you described — and they are in different places, so neither is competing
+/// to be the one thing.
+///
+/// Stacked below [`Metrics::two_column_min`], because two columns of form on a
+/// phone is two columns of nothing.
 fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let p = theme.palette;
     let m = theme.metrics;
@@ -504,174 +547,246 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     });
     ui.add_space(m.item_spacing);
 
-    if at.on_web {
-        // Not a field. The socket is derived from the page's origin, so a
-        // typed address here would be a promise the client cannot keep.
-        ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
-        ui.colored_label(p.text_dim, &menu.address);
-    } else {
-        ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
-        ui.add(
-            egui::TextEdit::singleline(&mut menu.address)
-                .desired_width(f32::INFINITY)
-                .hint_text(words::SERVER_HINT),
-        );
+    if let Some(reach) = server_field(ui, theme, menu, at) {
+        chose = reach;
     }
 
+    let Stage::Choosing { rooms, note } = &menu.stage else {
+        return chose;
+    };
+    let (rooms, note) = (rooms.clone(), note.clone());
+
     ui.add_space(m.item_spacing * 2.0);
-    match &menu.stage {
-        Stage::Idle | Stage::Failed(_) => {
-            if let Stage::Failed(why) = &menu.stage {
-                ui.colored_label(p.bad, why);
-                ui.add_space(m.item_spacing);
+    if let Some(note) = note {
+        ui.colored_label(p.bad, note);
+        ui.add_space(m.item_spacing);
+    }
+
+    // Two columns where there is room for two, one where there is not.
+    if ui.available_width() >= m.two_column_min {
+        ui.columns(2, |cols| {
+            if let Some(what) = rooms_column(&mut cols[0], theme, menu, &rooms) {
+                chose = what;
             }
-            if ui
-                .add_sized(
-                    [ui.available_width(), m.action_height],
-                    egui::Button::new(
-                        egui::RichText::new(words::LOOK).size(m.text_action).color(p.ground),
-                    )
-                    .fill(p.accent),
-                )
-                .clicked()
-            {
-                chose = Chose::Connect(menu.address.clone());
+            if let Some(what) = make_column(&mut cols[1], theme, menu) {
+                chose = what;
             }
+        });
+    } else {
+        if let Some(what) = rooms_column(ui, theme, menu, &rooms) {
+            chose = what;
         }
-        Stage::Asking => {
-            ui.colored_label(p.text_dim, words::ASKING);
-        }
-        Stage::Choosing { rooms, note } => {
-            if let Some(note) = note {
-                ui.colored_label(p.bad, note);
-                ui.add_space(m.item_spacing);
-            }
-            if rooms.is_empty() {
-                ui.colored_label(p.warn, words::NO_ROOMS);
-            } else {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(words::ROOMS).size(m.text_small));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(words::REFRESH).clicked() {
-                            chose = Chose::Refresh;
-                        }
-                    });
-                });
-                // Arrow keys walk the list, and enter takes the selection.
-                // A list you can only reach with a pointer is a list a
-                // keyboard cannot use and a phone can, which is the wrong way
-                // round for the client that has a keyboard.
-                //
-                // Read before the rows are drawn so a press moves the
-                // selection in the same frame it happens, rather than a frame
-                // behind what the eye expects.
-                if !ui.memory(|mem| mem.focused().is_some()) {
-                    let step = ui.input(|i| {
-                        i.key_pressed(egui::Key::ArrowDown) as i32
-                            - i.key_pressed(egui::Key::ArrowUp) as i32
-                    });
-                    if step != 0 {
-                        let at = menu
-                            .selected
-                            .as_ref()
-                            .and_then(|id| rooms.iter().position(|r| r.id == *id));
-                        let next = match at {
-                            // Nothing picked yet: down takes the first, up the
-                            // last, which is what every list does.
-                            None if step > 0 => 0,
-                            None => rooms.len() - 1,
-                            Some(i) => (i as i32 + step).rem_euclid(rooms.len() as i32) as usize,
-                        };
-                        menu.selected = Some(rooms[next].id.clone());
-                    }
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        if let Some(id) = menu.selected.clone() {
-                            chose = Chose::Join(id);
-                        }
-                    }
-                }
-
-                for room in rooms {
-                    let selected = menu.selected.as_ref() == Some(&room.id);
-                    match room_row(ui, theme, room, selected) {
-                        Picked::Nothing => {}
-                        // Selecting the one already selected puts it away,
-                        // so a press has somewhere to go back to.
-                        Picked::Select => {
-                            menu.selected = if selected { None } else { Some(room.id.clone()) }
-                        }
-                        // The **id**, not the name on the row: two rooms may
-                        // read alike and only one of them was pressed.
-                        Picked::Join => chose = Chose::Join(room.id.clone()),
-                        Picked::Watch => chose = Chose::Watch(room.id.clone()),
-                    }
-                }
-                // What is behind the list, before anybody reads the names --
-                // generals.io puts the count on the way in for the same
-                // reason.
-                ui.colored_label(
-                    p.text_dim,
-                    egui::RichText::new(words::rooms_here(
-                        rooms.len(),
-                        rooms.iter().map(|r| r.players).sum(),
-                    ))
-                    .size(m.text_small),
-                );
-            }
-
-            // A code, beside the list rather than instead of it: the list is
-            // how you find a public world and a code is how you reach
-            // somebody's private one. Two ways in, not two versions of one.
-            ui.add_space(m.item_spacing * 2.0);
-            ui.label(egui::RichText::new(words::code::LABEL).size(m.text_small));
-            ui.horizontal(|ui| {
-                let go = ui.add_sized(
-                    [m.action_height * 1.4, m.button_height],
-                    egui::Button::new(egui::RichText::new(words::code::GO).size(m.text_small)),
-                );
-                let field = ui.add_sized(
-                    [ui.available_width(), m.button_height],
-                    egui::TextEdit::singleline(&mut menu.code).hint_text(words::code::HINT),
-                );
-                // Return submits, because a six-character field is one you
-                // type and press enter on without looking for a button.
-                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (go.clicked() || entered) && !menu.code.trim().is_empty() {
-                    // A code reaches a room the same way an id does -- the
-                    // server resolves an id, then a name, then a code -- so
-                    // the client does not need a second message for it.
-                    chose = Chose::Join(RoomId(menu.code.trim().to_string()));
-                }
-            });
-
-            ui.add_space(m.item_spacing);
-            match &mut menu.draft {
-                // Opening it is one press and no screen change: the form
-                // appears where the button was. Depth is what a menu spends
-                // first.
-                None => {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), m.button_height],
-                            egui::Button::new(
-                                egui::RichText::new(words::make::OPEN).size(m.text_body),
-                            ),
-                        )
-                        .clicked()
-                    {
-                        menu.draft = Some(Draft::default());
-                    }
-                }
-                Some(draft) => {
-                    if let Some(made) = make_form(ui, theme, draft) {
-                        chose = made;
-                    }
-                }
-            }
+        ui.add_space(m.item_spacing * 2.0);
+        if let Some(what) = make_column(ui, theme, menu) {
+            chose = what;
         }
     }
 
     chose
+}
+
+/// Where to connect, and the reaching itself.
+///
+/// **There is no button.** Asking a server what it has is not a decision worth
+/// a press — it is what the address is *for*, and a field followed by a button
+/// that only ever means "yes, that address" is one control too many. So this
+/// reaches when the typing settles: on enter, on leaving the field, or after
+/// [`SETTLE`] of nothing being typed, whichever comes first.
+///
+/// Debounced rather than fired per keystroke, because `ws://127.0.0.1:8080/ws`
+/// passes through twenty addresses on its way to being one, and every one of
+/// them would open a socket.
+fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Option<Chose> {
+    let p = theme.palette;
+    let m = theme.metrics;
+
+    ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
+    if at.on_web {
+        // Not a field. The socket is derived from the page's origin, so a
+        // typed address here would be a promise the client cannot keep.
+        ui.colored_label(p.text_dim, &menu.address);
+        return None;
+    }
+
+    // Never blank. An empty field with a hint in it asks somebody who has
+    // never seen this game to invent a URL; an example they can edit asks them
+    // to change a number.
+    #[cfg(not(target_arch = "wasm32"))]
+    if menu.address.trim().is_empty() {
+        menu.address = crate::client::views::battle::default_address().to_string();
+    }
+
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut menu.address)
+            .desired_width(f32::INFINITY)
+            .hint_text(words::SERVER_HINT),
+    );
+    if field.changed() {
+        menu.typed_at = Some(at.now);
+        // What is on screen is about an address that is no longer in the
+        // field, so it goes rather than sitting there contradicting it.
+        if !matches!(menu.stage, Stage::Asking) {
+            menu.stage = Stage::Idle;
+        }
+    }
+
+    match &menu.stage {
+        Stage::Asking => {
+            ui.colored_label(p.text_dim, egui::RichText::new(words::ASKING).size(m.text_small));
+        }
+        Stage::Choosing { .. } => {
+            ui.colored_label(p.good, egui::RichText::new(words::REACHED).size(m.text_small));
+        }
+        Stage::Failed(why) => {
+            ui.colored_label(p.bad, egui::RichText::new(why).size(m.text_small));
+            // A failure has to be retryable without editing the address,
+            // because the usual reason is a server that was not running yet.
+            if ui.small_button(words::RETRY).clicked() {
+                menu.attempted = None;
+                menu.typed_at = Some(at.now - SETTLE);
+            }
+        }
+        // Nothing said. The field has just been typed into and the answer is
+        // a fraction of a second away; a line that appeared and vanished
+        // between two keystrokes would be noise.
+        Stage::Idle => {}
+    }
+
+    // Settled: enter, leaving the field, or a pause with nothing typed.
+    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let left = field.lost_focus() && !entered;
+    let paused = menu.typed_at.is_some_and(|t| at.now - t >= SETTLE);
+    if !(entered || left || paused) {
+        return None;
+    }
+    menu.typed_at = None;
+
+    // Once per address. Without this the pause fires every frame after it, and
+    // leaving the field fires again on an address already being asked about.
+    let address = menu.address.trim().to_string();
+    if address.is_empty() || menu.attempted.as_deref() == Some(address.as_str()) {
+        return None;
+    }
+    menu.attempted = Some(address.clone());
+    Some(Chose::Connect(address))
+}
+
+/// What is already here: a list the server owns.
+fn rooms_column(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    menu: &mut Menu,
+    rooms: &[RoomInfo],
+) -> Option<Chose> {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let mut chose = None;
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(words::ROOMS).size(m.text_small));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button(words::REFRESH).clicked() {
+                chose = Some(Chose::Refresh);
+            }
+        });
+    });
+
+    if rooms.is_empty() {
+        // An invitation rather than a complaint: there is a form in the next
+        // column and this is the moment to point at it.
+        ui.colored_label(p.text_dim, egui::RichText::new(words::NO_ROOMS).size(m.text_body));
+    } else {
+        // Arrow keys walk the list, and enter takes the selection. A list you
+        // can only reach with a pointer is a list a keyboard cannot use.
+        //
+        // Read before the rows are drawn so a press moves the selection in the
+        // same frame it happens, rather than a frame behind the eye.
+        if !ui.memory(|mem| mem.focused().is_some()) {
+            let step = ui.input(|i| {
+                i.key_pressed(egui::Key::ArrowDown) as i32
+                    - i.key_pressed(egui::Key::ArrowUp) as i32
+            });
+            if step != 0 {
+                let at =
+                    menu.selected.as_ref().and_then(|id| rooms.iter().position(|r| r.id == *id));
+                let next = match at {
+                    // Nothing picked yet: down takes the first, up the last,
+                    // which is what every list does.
+                    None if step > 0 => 0,
+                    None => rooms.len() - 1,
+                    Some(i) => (i as i32 + step).rem_euclid(rooms.len() as i32) as usize,
+                };
+                menu.selected = Some(rooms[next].id.clone());
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if let Some(id) = menu.selected.clone() {
+                    chose = Some(Chose::Join(id));
+                }
+            }
+        }
+
+        for room in rooms {
+            let selected = menu.selected.as_ref() == Some(&room.id);
+            match room_row(ui, theme, room, selected) {
+                Picked::Nothing => {}
+                // Selecting the one already selected puts it away, so a press
+                // has somewhere to go back to.
+                Picked::Select => {
+                    menu.selected = if selected { None } else { Some(room.id.clone()) }
+                }
+                // The **id**, not the name on the row: two rooms may read
+                // alike and only one of them was pressed.
+                Picked::Join => chose = Some(Chose::Join(room.id.clone())),
+                Picked::Watch => chose = Some(Chose::Watch(room.id.clone())),
+            }
+        }
+        ui.colored_label(
+            p.text_dim,
+            egui::RichText::new(words::rooms_here(
+                rooms.len(),
+                rooms.iter().map(|r| r.players).sum(),
+            ))
+            .size(m.text_small),
+        );
+    }
+
+    // A code, under the list rather than instead of it: the list is how you
+    // find a public world and a code is how you reach somebody's private one.
+    // Two ways into what already exists, which is what this column is.
+    ui.add_space(m.item_spacing * 2.0);
+    ui.label(egui::RichText::new(words::code::LABEL).size(m.text_small));
+    ui.horizontal(|ui| {
+        let go = ui.add_sized(
+            [m.action_height * 1.4, m.button_height],
+            egui::Button::new(egui::RichText::new(words::code::GO).size(m.text_small)),
+        );
+        let field = ui.add_sized(
+            [ui.available_width(), m.button_height],
+            egui::TextEdit::singleline(&mut menu.code).hint_text(words::code::HINT),
+        );
+        // Return submits, because a six-character field is one you type and
+        // press enter on without looking for a button.
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (go.clicked() || entered) && !menu.code.trim().is_empty() {
+            // A code reaches a room the same way an id does — the server
+            // resolves an id, then a name, then a code — so the client needs
+            // no second message for it.
+            chose = Some(Chose::Join(RoomId(menu.code.trim().to_string())));
+        }
+    });
+
+    chose
+}
+
+/// What does not exist yet: a form, and yours.
+///
+/// Always here rather than behind a press. It had to be opened when it lived
+/// under the list, because a form there pushed the list off the screen; in a
+/// column of its own there is nothing to push, and a button whose only job is
+/// to reveal what would fit anyway is a press that buys nothing.
+fn make_column(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Option<Chose> {
+    let draft = menu.draft.get_or_insert_with(Draft::default);
+    make_form(ui, theme, draft)
 }
 
 /// What a room row was clicked for. Two things can be done with a room, so a
@@ -869,11 +984,11 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
             if ui
                 .add_sized(
                     [ui.available_width(), m.button_height],
-                    egui::Button::new(egui::RichText::new(words::make::CANCEL).size(m.text_small)),
+                    egui::Button::new(egui::RichText::new(words::make::CLEAR).size(m.text_small)),
                 )
                 .clicked()
             {
-                chose = Some(Chose::Cancel);
+                chose = Some(Chose::Clear);
             }
         });
 
@@ -1267,6 +1382,62 @@ mod tests {
         draft.target = "42".into();
         draft.retarget(Ends::Territory);
         assert_eq!(draft.target, "42", "only a change of condition changes it");
+    }
+
+    /// The reaching has no button, so the thing that must not go wrong is
+    /// asking more than once for one address. `ws://127.0.0.1:8080/ws` passes
+    /// through twenty addresses on its way to being one, and a pause fires
+    /// every frame after it settles until something says otherwise.
+    #[test]
+    fn one_address_is_asked_about_once() {
+        // What `server_field` does with `attempted`, in the one place it is
+        // worth pinning: the guard, not the drawing.
+        fn settle(attempted: &mut Option<String>, asks: &mut u32, address: &str) {
+            if !address.is_empty() && attempted.as_deref() != Some(address) {
+                *attempted = Some(address.to_string());
+                *asks += 1;
+            }
+        }
+        let mut attempted: Option<String> = None;
+        let mut asks = 0;
+
+        // Typing settles, then the pause keeps firing while nothing changes.
+        settle(&mut attempted, &mut asks, "ws://host:8080/ws");
+        settle(&mut attempted, &mut asks, "ws://host:8080/ws");
+        settle(&mut attempted, &mut asks, "ws://host:8080/ws");
+        assert_eq!(asks, 1, "one address, one socket");
+
+        // A different address is a different question.
+        settle(&mut attempted, &mut asks, "ws://elsewhere:9000/ws");
+        assert_eq!(asks, 2);
+
+        // And back again is too — somebody who mistyped and corrected it is
+        // asking about the first address for the first time since.
+        settle(&mut attempted, &mut asks, "ws://host:8080/ws");
+        assert_eq!(asks, 3);
+
+        // An empty field asks nothing rather than asking about "".
+        settle(&mut attempted, &mut asks, "");
+        assert_eq!(asks, 3);
+    }
+
+    /// A field that is never blank, because a hint is a shape and this is a
+    /// thing you can press enter on.
+    #[test]
+    fn the_address_field_offers_an_example_rather_than_a_hint() {
+        #[cfg(target_arch = "wasm32")]
+        let example = "ws://127.0.0.1:8080/ws";
+        #[cfg(not(target_arch = "wasm32"))]
+        let example = crate::client::views::battle::default_address();
+        assert!(example.starts_with("ws://"), "{example}");
+        assert!(example.contains(':'), "an example needs a port to edit: {example}");
+
+        // What `server_field` does when somebody clears it.
+        let mut address = "   ".to_string();
+        if address.trim().is_empty() {
+            address = example.to_string();
+        }
+        assert_eq!(address, example);
     }
 
     /// Arrow keys walk the list and wrap at both ends, which is what every

@@ -17,6 +17,8 @@ Nothing here is about looking like the thing borrowed from. The palette, the fla
 | [generals.io](https://generals.io/) | The lobby creator **owns** the lobby | `Rooms::made` records the connection that asked for a room |
 | [generals.io](https://generals.io/) | The count of open games is on the way in, before the list | The room and player count under the listing |
 
+Two things are ours rather than borrowed, and are worth saying because they are the load-bearing layout decisions. **The two columns encode existing versus proposed** — a list the server owns beside a form that is yours — rather than being a way to use up width; that is why they are drawn differently rather than as two matching panels. And **the accent is one per column, not one per screen**, which is a widening of Clash Royale's rule that the two-column layout forced: each column has exactly one thing you would do next in it, and they are in different places.
+
 What is deliberately **not** taken is the drop-down. Every choice on the form is two or three wide, so a row of toggles shows the whole of it where a list shows one of it — and a drop-down wants a popup layer, which is one more thing to keep off the world behind the menu.
 
 ## The dashboard, and a rating

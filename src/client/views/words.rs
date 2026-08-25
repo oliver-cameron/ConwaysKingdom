@@ -20,11 +20,19 @@ pub mod menu {
     pub const NAME_HINT: &str = "player";
     pub const SERVER: &str = "Server";
     pub const SERVER_HINT: &str = "ws://host:8080/ws";
-    pub const LOOK: &str = "See what rooms are there";
     pub const ASKING: &str = "asking the server…";
+    /// A server that answered, said once and quietly. The room list below it
+    /// is the real answer; this is only here so that the moment of connecting
+    /// is not silent.
+    pub const REACHED: &str = "connected";
+    pub const RETRY: &str = "try again";
     pub const REFRESH: &str = "refresh";
-    pub const ROOMS: &str = "Rooms";
-    pub const NO_ROOMS: &str = "this server has no rooms";
+    /// The column of what is already here. "Worlds" rather than "Rooms",
+    /// which is the machinery's word — a player joins a world.
+    pub const ROOMS: &str = "Worlds here";
+    /// An empty list is an invitation, not a failure: there is a form in the
+    /// next column and this is the moment to point at it.
+    pub const NO_ROOMS: &str = "None yet. Make the first one.";
     pub const ALONE: &str = "Play alone";
     /// Out of a screen, by pointer. Escape does the same, and both exist
     /// because a phone has no escape key and a keyboard user should not have
@@ -183,7 +191,7 @@ pub mod menu {
         pub const GENERATIONS: &str = "Generations";
         pub const SQUARES: &str = "Squares";
         pub const MAKE: &str = "Make it";
-        pub const CANCEL: &str = "Cancel";
+        pub const CLEAR: &str = "Start again";
         pub const MAKING: &str = "making it…";
         /// A match does not start on its own, so somebody about to make one
         /// should know that before they make it rather than after.
