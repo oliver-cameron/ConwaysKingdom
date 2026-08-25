@@ -552,7 +552,26 @@ pub const SPAWN_N: i32 = 12;
 /// hopeful one: a client cannot know what it does not hold, and guessing yes
 /// there would let it predict a cheaper price than the server charges.
 pub fn own_ground(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
-    world.cell_at(row, col).is_some_and(|c| c.player() == player)
+    influence(world, player, row, col) > 0
+}
+
+/// How much of `player`'s influence reaches this square, nought to
+/// [`crate::sim::bits::MAX_LEVEL`].
+///
+/// Nought where the square is somebody else's or nobody's — a square carries
+/// one owner, so two players' influence never sits on the same one. Which is
+/// also why this is a lookup rather than a sum: the contest was settled by the
+/// rule when the square was last worked out.
+///
+/// Unheld ground reads as nought, which is the honest answer rather than a
+/// hopeful one: a client cannot know what it does not hold, and guessing would
+/// let it predict a cheaper price than the server charges.
+pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
+    world
+        .cell_at(row, col)
+        .filter(|c| c.player() == player)
+        .map(|c| c.influence())
+        .unwrap_or(0)
 }
 
 /// What one cell of a placement costs here: the placement's own price inside
@@ -563,8 +582,26 @@ pub fn own_ground(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
 /// ordinary case, and charging the whole of it at either rate would be wrong
 /// in one direction or the other.
 pub fn cell_cost(world: &World, player: PlayerId, row: i32, col: i32, placement: Placement) -> i32 {
-    let rate = if own_ground(world, player, row, col) { 1 } else { OUTSIDE_MULTIPLIER };
-    placement.cost() * rate
+    let reach = influence(world, player, row, col);
+    // Full influence is the placement's own price, and every level short of it
+    // adds one multiple — so the edge of your reach costs seven times and the
+    // middle of your ground costs one. Where nothing of yours reaches, there
+    // is no price: `may_place` refuses it before this is asked.
+    let short = (crate::sim::bits::MAX_LEVEL.saturating_sub(reach)) as i32;
+    placement.cost() * (1 + short * THIN_MULTIPLIER)
+}
+
+/// Whether `player` may put something down here at all.
+///
+/// Where nothing of theirs reaches, no. A price with no ceiling would be a
+/// wall with extra arithmetic, and a slope that reached zero influence would
+/// let somebody buy a foothold on the far side of the map for a number.
+///
+/// Safe in a way the old wall was not: granted ground is a **source**, so a
+/// player whose life has gone out still has a patch with a live gradient
+/// around it, and can always build somewhere.
+pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
+    influence(world, player, row, col) > 0
 }
 
 /// How many grants sit along one edge of a **torus's** grid. Six covers all 31
@@ -871,8 +908,7 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, OUTSIDE_MULTIPLIER, RECLAIM,
-    TURRET_COST,
+    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM, THIN_MULTIPLIER, TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
@@ -1022,7 +1058,11 @@ mod tests {
     fn hold(world: &mut World, cells: &[(i32, i32)], player: PlayerId) {
         for &(row, col) in cells {
             let cell = world.cell_at(row, col).unwrap_or(Cell::DEAD);
-            world.set_cell_at(row, col, cell.with_player(player));
+            world.set_cell_at(
+                row,
+                col,
+                cell.with_player(player).with_level(crate::sim::bits::MAX_LEVEL),
+            );
         }
     }
 
@@ -1164,12 +1204,9 @@ mod tests {
             action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         apply(&mut world, &theirs);
-        // Their pane, so their ground: laying over it is a change, and it is
-        // one bought at the outside rate.
-        assert_eq!(
-            value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)),
-            -Placement::Ice.cost() * OUTSIDE_MULTIPLIER
-        );
+        // Their pane, so their ground: laying over it is a change, and one
+        // nobody else may make, since no influence of theirs reaches it.
+        assert!(!may_place(&world, PlayerId(1), 0, 0), "not yours to build on");
     }
 
     /// The reason `Erase` carries a placement at all. Life and ice are
@@ -1274,39 +1311,46 @@ mod tests {
         assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
     }
 
-    /// Placing outside your own ground costs [`OUTSIDE_MULTIPLIER`] times as
-    /// much — a price rather than a wall, so a player whose life went out can
-    /// still act, and reaching a neighbour is something you can buy instead of
-    /// having to grow all the way there.
-    ///
-    /// Somebody else's ground and ground nobody has reached are the same
-    /// answer, because what is being paid for is the same thing.
+    /// **Priced by how thin your influence is**, and refused where none of it
+    /// reaches. Ten times flat was too weak and was flat because territory was
+    /// a flag with nothing to grade it by; a level grades it.
     #[test]
-    fn placing_outside_your_own_ground_costs_ten_times() {
+    fn placing_is_priced_by_how_far_your_influence_reaches() {
+        use crate::sim::bits::MAX_LEVEL;
         let mut world = World::infinite_empty();
-        let (me, them) = (PlayerId(1), PlayerId(2));
-        hold(&mut world, &[(0, 0)], me);
-        hold(&mut world, &[(0, 1)], them);
+        let me = PlayerId(1);
 
+        // Full influence is the placement's own price.
+        hold(&mut world, &[(0, 0)], me);
+        assert_eq!(influence(&world, me, 0, 0), MAX_LEVEL);
         assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), -LIFE_COST);
+
+        // Every level short of full adds a multiple, so the edge of your reach
+        // costs seven times what the middle does.
+        let thin = Cell::DEAD.with_player(me).with_level(1);
+        world.set_cell_at(0, 1, thin);
         assert_eq!(
             value_delta(&world, &paint(vec![(0, 1)], Placement::Life)),
-            -LIFE_COST * OUTSIDE_MULTIPLIER,
-            "somebody else's ground"
-        );
-        assert_eq!(
-            value_delta(&world, &paint(vec![(0, 2)], Placement::Life)),
-            -LIFE_COST * OUTSIDE_MULTIPLIER,
-            "and ground nobody has reached, at the same rate"
+            -LIFE_COST * (1 + (MAX_LEVEL as i32 - 1) * THIN_MULTIPLIER),
+            "one level of reach is the dearest place you may still build"
         );
 
-        // Per cell, not per action: a stroke that runs off your own ground is
-        // the ordinary case, and charging the whole of it at either rate would
-        // be wrong in one direction or the other.
-        assert_eq!(
-            value_delta(&world, &paint(vec![(0, 0), (0, 1), (0, 2)], Placement::Life)),
-            -LIFE_COST * (1 + 2 * OUTSIDE_MULTIPLIER)
-        );
+        // And where nothing of yours reaches, there is no price at all.
+        assert!(!may_place(&world, me, 0, 5));
+        assert!(may_place(&world, me, 0, 1), "but the thin edge is still yours");
+    }
+
+    /// Somebody else's ground is not yours however strong their claim is:
+    /// a square carries one owner, so two players' influence never sits on
+    /// the same one.
+    #[test]
+    fn somebody_elses_influence_is_not_yours() {
+        let mut world = World::infinite_empty();
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        hold(&mut world, &[(0, 0)], them);
+        assert_eq!(influence(&world, them, 0, 0), crate::sim::bits::MAX_LEVEL);
+        assert_eq!(influence(&world, me, 0, 0), 0);
+        assert!(!may_place(&world, me, 0, 0));
     }
 
     /// Taking is not what changed. Erasing is priced on whose it is, at the
@@ -1682,13 +1726,10 @@ mod tests {
         let world = World::infinite_empty();
         let far = vec![(100_000, 100_000)];
         assert!(world.cell_at(far[0].0, far[0].1).is_none());
-        // Empty, so the cell is a change and is charged for; and outside, so
-        // it is charged at the outside rate. A client cannot know what it does
-        // not hold, and reading unheld ground as its own would predict a
-        // cheaper price than the server charges.
-        assert_eq!(
-            value_delta(&world, &paint(far, Placement::Life)),
-            -Placement::Life.cost() * OUTSIDE_MULTIPLIER
-        );
+        // Nothing of anybody's reaches it, so nobody may build there. A
+        // client cannot know what it does not hold, and reading unheld ground
+        // as its own would predict a placement the server refuses.
+        assert!(!may_place(&world, PlayerId(1), far[0].0, far[0].1));
+        assert_eq!(influence(&world, PlayerId(1), far[0].0, far[0].1), 0);
     }
 }

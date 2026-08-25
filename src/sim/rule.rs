@@ -32,13 +32,31 @@ pub const BORN_ON: [usize; 1] = [3];
 
 // --- territory ---------------------------------------------------------------
 
-/// A dead cell takes the owner of a living neighbour.
-pub const SPREAD: Chance = 40;
-/// A dead cell takes the owner of any neighbour, including nobody.
-pub const CREEP: Chance = 8;
-/// A dead cell nothing lives beside loses its owner. [`super::bits::HOME`] is
-/// exempt.
-pub const DECAY: Chance = 2;
+/// How much influence is lost crossing one square.
+///
+/// The whole feel of the map hangs on this. A source is
+/// [`super::bits::MAX_LEVEL`], so at one it reaches seven squares and a lone
+/// blinker holds a disc of about a hundred and fifty; at two it reaches three
+/// and holds about thirty. Two, because a blinker should spread its influence
+/// a little and not gain territory everywhere.
+///
+/// It is also the *only* thing bounding a halo. There is no rule about radius
+/// anywhere — the fall is the rule, and the field is a pure function of where
+/// the sources are, so it cannot drift or ratchet outward the way the old one
+/// did.
+pub const LEVEL_FALL: u8 = 2;
+
+/// How often a dead square works out what reaches it, out of
+/// [`super::seed::OUT_OF`].
+///
+/// **The roll decides the rate, not the outcome.** That is the change from the
+/// old rule, where a coin flip chose which owner a square took. Recomputed
+/// every generation for every square, this field would be an exact distance
+/// transform that snaps the instant anything moves, and a glider would drag a
+/// geometrically perfect halo behind it. Updating a fraction per generation
+/// makes it lag and smear, which is the difference between a country and a
+/// Voronoi diagram — and a square that is not updating costs one roll.
+pub const LEVEL_ADJUST: Chance = 24;
 
 // --- mines -------------------------------------------------------------------
 
@@ -88,6 +106,27 @@ pub const TURRET_REACH: i32 = 6;
 /// holds however this is set.
 pub const TURRET_POWER: usize = 1;
 
+/// What influence a turret plants on a square it takes.
+///
+/// Planted rather than added, because [`super::rule`]'s territory rule
+/// **assigns** a square the strongest claim reaching it rather than
+/// accumulating — so a turret that nudged a level up by a little would have it
+/// wiped the next time that square worked itself out, and would achieve
+/// nothing whatever the number was.
+///
+/// What planting buys is a brake the old boolean turret needed a separate
+/// constant for. A flag planted where nothing of its owner's is near enough to
+/// feed it falls back on its own, at the rate the rule re-evaluates, so what a
+/// turret holds is however much it can plant against however fast the ground
+/// argues back — and a turret planting **deep** in somebody else's country
+/// loses it again almost at once, where one planting just past its own edge
+/// keeps it.
+///
+/// Full, because anything less is planted inside its own falloff: a flag at
+/// three beside ground of its owner's already reaching four is not a push at
+/// all.
+pub const TURRET_PUSH: u8 = super::cell::bits::MAX_LEVEL;
+
 /// A dead turret becomes ordinary ground.
 ///
 /// Slower than [`MINE_UPKEEP`], because the two are punishing different
@@ -110,18 +149,22 @@ pub const MINE_COST: i32 = 10;
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
 pub const RECLAIM: i32 = 1;
-/// What placing outside your own territory multiplies the cost by.
+/// What placing where your influence is thin multiplies the cost by, per level
+/// short of full.
 ///
-/// Ground somebody else holds and ground nobody has ever reached read the same
-/// here, because what is being paid for is the same thing: putting something
-/// where your own life has not got to. It used to be refused outright, which
-/// made territory a wall rather than a price and left a player whose life died
-/// out with nothing they could do about it.
+/// Ten times flat was too weak — playtesting said so — and it was flat because
+/// territory was a flag and there was nothing to grade it by. There is now: at
+/// full influence a placement costs its own price, and every level thinner
+/// adds one multiple, so the edge of your reach costs seven times. Refused
+/// where nothing of yours reaches at all.
 ///
-/// Ten, so a cell of life outside costs what a mine costs inside — dear enough
-/// that reaching is a decision and cheap enough that a hundred is ten cells of
-/// somewhere new.
-pub const OUTSIDE_MULTIPLIER: i32 = 10;
+/// The wall is back, in other words, but with a slope in front of it — and it
+/// is safe this time in a way it was not before, because granted ground is a
+/// source, so a player whose life has gone out still has a patch with a live
+/// gradient to build on.
+pub const THIN_MULTIPLIER: i32 = 1;
+
+
 /// One turret.
 ///
 /// Dearer than a mine, and the number to read per **emplacement** rather than
@@ -173,46 +216,82 @@ fn ice(cell: Cell, _: &Neighbours, _: Roll) -> Then {
     }
 }
 
+/// What reaches this square, and from whom.
+///
+/// One rule where there were three. `SPREAD`, `CREEP` and `DECAY` were a
+/// constant and a branch each, and the names lied — spread did not spread,
+/// creep did. A square takes the **strongest claim** reaching it, and a claim
+/// that has fallen to nothing leaves it to nobody, which is the whole of
+/// winning, losing and forgetting ground.
+///
+/// Sources are left alone: a living cell's square is fed by the cell, and
+/// granted ground is a spring. Neither is worked out from its neighbours, so
+/// neither can be argued away by them.
 fn territory(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
-    if cell.is_alive() {
+    if cell.is_alive() || cell.is_home() {
+        return Then::Next(cell);
+    }
+    // The rate, not the outcome. See `LEVEL_ADJUST`.
+    if !roll.chance(stream::LEVEL, LEVEL_ADJUST) {
         return Then::Next(cell);
     }
 
-    let (living, alive) = living_owners(neighbours);
-    if alive > 0 {
-        if roll.chance(stream::SPREAD, SPREAD) {
-            return Then::Next(cell.with_player(living[roll.pick(stream::SPREAD, alive)]));
-        }
-        return Then::Next(cell);
+    let (player, level) = strongest(neighbours, cell.player());
+    if level == 0 {
+        return Then::Next(cell.with_player(PlayerId::UNOWNED).with_level(0));
     }
-
-    if cell.is_home() {
-        return Then::Next(cell);
-    }
-
-    if neighbours.iter().any(|n| n.player() != cell.player())
-        && roll.chance(stream::CREEP, CREEP)
-    {
-        return Then::Next(cell.with_player(neighbours[roll.pick(stream::CREEP, 8)].player()));
-    }
-    if cell.player().is_owned() && roll.chance(stream::DECAY, DECAY) {
-        return Then::Next(cell.with_player(PlayerId::UNOWNED));
-    }
-    Then::Next(cell)
+    Then::Next(cell.with_player(player).with_level(level))
 }
 
-/// The owners of the living neighbours, and how many.
+/// The best claim reaching a square, and whose it is.
+///
+/// **Strongest claim rather than a sum of all eight**, and the difference
+/// matters. A sum makes a diagonal neighbour count as much as an orthogonal
+/// one, so the field grows as a square rather than a disc and the number stops
+/// being a distance — and a number that is not a distance is one nobody can
+/// read off the screen. The best-of is Minecraft's water, and it is what makes
+/// a front between two players settle at the line equidistant between them
+/// without anything having to work out where that is.
+///
+/// Mass still gets a say, at the one place it can without bending the
+/// geometry: **ties go to the player pushing hardest**, by the total of
+/// everything they have reaching this square. Where that ties too, the square
+/// keeps whoever holds it, and failing that the lower number — so two peers
+/// always agree and a border does not flicker between two owners who are
+/// exactly matched.
 #[inline]
-fn living_owners(neighbours: &Neighbours) -> ([PlayerId; 8], usize) {
-    let mut out = [PlayerId::UNOWNED; 8];
-    let mut found = 0;
+fn strongest(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
+    let mut best = [0u8; PlayerId::COUNT];
+    let mut total = [0u16; PlayerId::COUNT];
     for n in neighbours {
-        if n.is_alive() {
-            out[found] = n.player();
-            found += 1;
+        let who = n.player();
+        if !who.is_owned() {
+            continue;
+        }
+        let claim = n.influence().saturating_sub(LEVEL_FALL);
+        if claim == 0 {
+            continue;
+        }
+        let i = who.0 as usize;
+        best[i] = best[i].max(claim);
+        total[i] += claim as u16;
+    }
+
+    let mut won = (PlayerId::UNOWNED, 0u8, 0u16);
+    for (i, &claim) in best.iter().enumerate().skip(1) {
+        if claim == 0 {
+            continue;
+        }
+        let who = PlayerId(i as u8);
+        let mass = total[i];
+        let better = claim > won.1
+            || (claim == won.1
+                && (mass > won.2 || (mass == won.2 && who == holder)));
+        if better {
+            won = (who, claim, mass);
         }
     }
-    (out, found)
+    (won.0, won.1)
 }
 
 fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
@@ -245,11 +324,10 @@ pub fn next_cell(cell: Cell, neighbours: &Neighbours, seed: u64) -> Cell {
 
 /// One stream each, so no two rolls agree by accident. See [`super::seed`].
 mod stream {
-    pub const SPREAD: u64 = 1;
-    pub const DECAY: u64 = 2;
+    /// Whether a square works out what reaches it this generation.
+    pub const LEVEL: u64 = 1;
     pub const PARENT: u64 = 3;
     pub const UPKEEP: u64 = 4;
-    pub const CREEP: u64 = 5;
     /// Which of the squares that tie for nearest a turret acts on.
     pub const TURRET: u64 = 6;
     /// Whether a dead turret has become ordinary ground.

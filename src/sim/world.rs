@@ -532,15 +532,30 @@ impl World {
                 shots.push((
                     target,
                     if live {
-                        cell.with_player(owner)
+                        // **Planted at full**, not nudged. The rule assigns a
+                        // square the strongest claim reaching it rather than
+                        // adding to what is there, so a push of three would be
+                        // wiped the next time that square worked itself out --
+                        // a turret that nudged would achieve nothing at all.
+                        //
+                        // Planting a flag instead is what a turret always did,
+                        // and the level field gives it the brake the old one
+                        // needed a constant for: a planted square with nothing
+                        // of its owner's near enough to feed it falls back on
+                        // its own, so what a turret holds is however much it
+                        // can plant against however fast the rule takes it
+                        // back.
+                        cell.with_player(owner).with_level(rule::TURRET_PUSH)
                     } else {
-                        // A live cell must have an owner -- `Cell::alive`
-                        // asserts it, because unowned life would have nobody
-                        // to attribute a birth to. So taking a square away
-                        // from its owner kills whatever was standing on it,
-                        // and a dead turret killing things is that invariant
-                        // rather than a rule of its own.
-                        cell.with_alive(false).with_player(PlayerId::UNOWNED)
+                        // The mirror, and it takes the square to nothing in one
+                        // go for the same reason: half-draining it would be
+                        // undone before it mattered. A live cell must have an
+                        // owner -- `Cell::alive` asserts it, because unowned
+                        // life would have nobody to attribute a birth to -- so
+                        // taking a square away from its owner kills whatever
+                        // stood on it, which is why a dead turret kills
+                        // without a rule about killing.
+                        cell.with_alive(false).with_player(PlayerId::UNOWNED).with_level(0)
                     },
                 ));
             }
@@ -677,6 +692,16 @@ impl World {
             return false;
         }
         if live {
+            // **The nearest square that is not this player's**, which from the
+            // middle of their own ground is the frontier — and reaching the
+            // frontier from anywhere inside your own country is most of what a
+            // turret is for.
+            //
+            // Not "the nearest square I do not hold at full", which was tried
+            // when levels arrived and quietly ruined it: influence falls off,
+            // so from the middle of a country the nearest thin square is a few
+            // steps away and a turret would spend its life topping up ground
+            // it already held instead of pushing on anybody.
             !cell.is_alive() && cell.player() != owner
         } else {
             cell.player() == owner && !cell.is_home()

@@ -20,8 +20,8 @@ Two bytes, uploaded as `Rg8Uint`. The second of them is a sprite.
 
 ```
  byte 0 (R)                byte 1 (G)
-| player  | spare |       |    kind     |I |A |
- 7 6 5 4 3  2 1 0          7 6 5 4 3 2   1  0
+| player |level|H|       |    kind     |I |A |
+ 7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
 ```
 
 | field | where | meaning |
@@ -29,9 +29,9 @@ Two bytes, uploaded as `Rg8Uint`. The second of them is a sprite.
 | alive | G bit 0 | living or not |
 | ice | G bit 1 | a pane covers it; independent of alive |
 | kind | G bits 2..8 | what it is — see `kinds!` |
-| home | R bit 0 | granted ground, which never decays |
-| spare | R bits 1..3 | nothing yet |
-| player | R bits 3..8 | owner, 0 = unowned, so 31 players |
+| home | R bit 0 | granted ground, which is a source |
+| level | R bits 1..4 | how much of the owner's influence reaches here, 0..7 |
+| player | R bits 4..8 | owner, 0 = unowned, so 15 players |
 
 **Byte 1 is the tile this cell draws**, whole and unshifted: low nibble across the sheet, high nibble down it. Alive and ice sit in its bottom bits and the kind in the rest, so a kind's four states are four consecutive tiles and finding a cell's picture is arithmetic rather than a lookup. There is no layer to choose and no UV to carry — what a cell looks like is one number.
 
@@ -130,29 +130,45 @@ Life alone was the test, and it made territory unable to cross a chunk boundary 
 
 ## Territory
 
-A dead cell next to living ones takes the owner of one of them, chosen by the seed, most generations. It stays dead: the rule sets the owner and nothing else. Ice is checked first, so a pane's cover is not claimed while it stands.
+Ownership on a dead square is a **level**, not a flag: how much of its owner's influence reaches it, nought to seven. `sim::rule::territory` is one rule where there were three.
 
-**`SPREAD` does not spread territory — `CREEP` does**, and the names are the wrong way round for what people expect of them. Spread only ever acts on a square something is **alive** beside, and the two branches are disjoint: a square with a living neighbour takes that rule and returns, so creep and decay never see it. Turn creep off and territory stops expanding altogether, however high spread goes, because nothing can then put your number on a square nothing of yours is alive next to. What you are left with is the **footprint of life**: the union of every square something of yours has ever been alive beside, growing exactly as fast as your patterns reach new ground and not at all if they sit still. Measured with creep and decay at zero, a block holds 169 squares at generation 0 and 169 at generation 400, while a glider goes from 169 to 902 — a diagonal stripe, one cell of halo either side of where it flew.
+**Living cells are sources**, and so is granted ground. A source reads as full whatever is stored on it — `Cell::influence` is where that lives — and every step away costs `rule::LEVEL_FALL`. A dead square takes the **strongest claim** reaching it: the best of its neighbours' influence less the fall, and the player that came from. A claim that has fallen to nothing leaves the square to nobody. Winning ground, losing it and forgetting it are all that one sentence.
 
-Spread is also a **transfer** rather than only a gain: the owners it picks between are those of every living neighbour whoever they belong to, so a dead square of yours touching somebody else's life becomes theirs at the same rate. With creep and decay at zero that is the only way the rule moves ground at all.
+### Why a flag could not work
 
-**And it creeps, and it fades.** Where nothing alive is touching a dead cell, it takes the owner of a neighbouring cell — **whoever that is, including nobody**. That one rule does both jobs, which is why there is no threshold anywhere trying to work out what a shape is:
+The measurement that killed every threshold rule is still in the history and is the reason for all of this: **a corner of a solid region and a square just outside a straight edge both have exactly three owned neighbours.** No count can tell them apart, so every rule built on one either ate blobs from their corners or grew edges outward for ever. That was never a tuning failure. A boolean field has no gradient, so a square genuinely cannot tell inside from outside, and no arithmetic on eight booleans invents the information.
 
-- Deep inside a region every neighbour agrees, so nothing moves.
-- At an edge, a cell with five owned neighbours and three empty ones has five-in-eight odds of staying and three-in-eight of going, and the square just outside it has the same odds the other way. The border is an unbiased walk: it neither runs away nor rots.
-- A thin trail is nearly all empty neighbours, so it goes quickly.
+A level field has one, and those two squares stop looking alike: the corner is surrounded by high numbers, the outside square by low ones. Measured, with a block standing still: a bounded halo of sixty-four squares reading 5, 3, 1 outward from the life, unchanged from generation eighty to four hundred. Ground nobody stands on goes to **nothing** rather than settling into a shape. A glider's halo travels with it and leaves no trail.
 
-Every threshold tried failed, and for a reason worth writing down: **a corner of a solid region and a cell just outside a straight edge both have exactly three owned neighbours.** No count of neighbours can tell them apart, so any rule built on one either erodes every blob from its corners or grows every edge outward forever. Measured: at four of eight a glider's trail reached 454 squares and climbing; at three of eight an abandoned patch grew from 169 to 807.
+### The fall is the only bound
 
-On top of that, a slow **decay** — `rule::DECAY`, two in sixty-four — so ground nothing lives on eventually goes rather than settling into a shape and staying. Without it, a patch nobody has touched for four hundred generations is still two hundred squares; with it, none.
+There is no rule about radius anywhere. A source is seven, the fall is two, so influence reaches three squares and a lone blinker holds about thirty. At a fall of one it would reach seven and hold about a hundred and fifty. That one number is the whole feel of the map, and because the field is a pure function of where the sources are, it cannot drift or ratchet outward the way the old one did.
 
-Territory used to only ever spread, which meant a glider left a permanent trail and an infinite world grew for as long as anything moved. A glider crossing four hundred generations used to hold twenty-five chunks and climbing, for five live cells.
+The halo is a **square** rather than a disc, because a cell's neighbourhood is the eight around it and the distance that falls out of that is Chebyshev's. Making it round would mean charging more for a diagonal step, which is a real option and not currently taken.
 
-Life holds the ground around it, because a square touching something alive is claimed by the rule above before creep or decay ever see it. So territory is a halo around your life that fluctuates at its edge — `cargo run --no-default-features --example territory` draws it.
+### Strongest claim, not a sum
 
-The exception is **granted ground**, marked by `bits::HOME` and exempt. Without a floor, a player whose life died out would lose every square they had, and with it the only ground they can build on at the base rate — placing outside costs `rule::OUTSIDE_MULTIPLIER` times as much, so they would not be locked out, but a hundred of value would buy them ten cells. The mark is on the *square*, not the lineage, which is why a birth keeps the dead cell's copy of it while taking everything else from its parent. It travels with the ground when the ground changes hands.
+Summing all eight neighbours was considered and is wrong in a way worth recording: it makes a diagonal count as much as an orthogonal, so the field grows as a square in a *worse* sense — the number stops being a distance at all, and a number that is not a distance is one nobody can read off the screen.
 
-This makes ownership meaningful on dead ground, which changes what an empty chunk is. `Chunk::is_empty` now asks about ownership as well as life and ice — without that, `prune` would drop a chunk on the very step its ground was claimed, and territory outside a chunk that also held life could never last a generation. The cost is that an infinite world grows with territory as well as with life, and there is no die-off yet, so it only grows.
+Mass gets its say at the one place it can without bending the geometry: **a tie goes to whoever is pushing hardest**, by the total of everything they have reaching the square. A tie in that too keeps the square where it is, so a border between two exactly matched players does not flicker, and two peers reach the same answer.
+
+### The roll decides the rate, not the outcome
+
+`rule::LEVEL_ADJUST` is how often a square works out what reaches it. This is the other half of the change: the old roll decided *which owner a square took*, and this one decides *when it looks*.
+
+Recomputed every generation for every square, the field would be an exact distance transform that snaps the instant anything moves, and a glider would drag a geometrically perfect halo behind it. Updating a fraction per generation makes it lag and smear, which is the difference between a country and a Voronoi diagram — and a square that is not updating costs one roll and nothing else. Whenever a square does settle it settles to the same thing, so the roll cannot change the answer, only the moment.
+
+### Granted ground is a spring
+
+`bits::HOME` used to be a carve-out: the one square the decay rule skipped. It is a **source that is not alive** now, said in the same vocabulary as everything else, so a granted patch projects a live gradient whether or not anything survives on it and the rule never works it out from its neighbours.
+
+That is what makes the placing rule safe. Placing is priced by how thin your influence is and refused where none of it reaches — a wall with a slope in front of it — and the reason a wall was abandoned before was that a player whose life went out could never place again. A spring at home means everybody always has somewhere.
+
+### Fifteen players
+
+Four bits, so 1..=15 are real players and zero goes on meaning unowned — a zeroed cell has to stay a valid empty world, and `Cell::alive` asserts a live cell has an owner. Thirty-one was comfortable as "players a world has ever seen"; fifteen is not, and seat reclamation is [not built yet](planned.md#fifteen-slots-and-more-than-fifteen-clients).
+
+The save format is version 5. Chunk bytes are a raw cast, so a version 4 file read as version 5 is not a corrupt world but a plausible one, wrong in every square — which is what the version byte is for. There is no migration: a flag carries no level.
 
 ## Turrets
 

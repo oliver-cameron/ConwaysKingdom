@@ -15,12 +15,13 @@ pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 ///
 /// ```text
 ///  byte 0 (R)                byte 1 (G)
-/// | player  | spare |       |    kind     |I |A |
-///  7 6 5 4 3  2 1 0          7 6 5 4 3 2   1  0
+/// | player |level|H|       |    kind     |I |A |
+///  7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
 /// ```
 ///
 /// Byte 0 holds the player at the top, so the number extracts with a shift and
-/// no mask, and three spare flag bits below it.
+/// no mask, then how much of that player's influence reaches this square, then
+/// whether the square was granted.
 ///
 /// Byte 1 is **the tile this cell draws**. Alive and iced are its bottom two
 /// bits and the kind is the rest, so a kind's four states are four consecutive
@@ -63,11 +64,36 @@ pub mod bits {
     pub const KIND_WIDTH: u8 = 6;
     pub const KIND_MASK: u8 = (1 << KIND_WIDTH) - 1;
 
-    /// Byte 0, bits 3..8: the player number, at the top so it extracts with a
+    /// Byte 0, bits 4..8: the player number, at the top so it extracts with a
     /// shift alone.
-    pub const PLAYER_SHIFT: u8 = 3;
-    pub const PLAYER_WIDTH: u8 = 5;
+    ///
+    /// Four bits, so **fifteen** players rather than sixteen: zero has to go
+    /// on meaning unowned, because a zeroed cell must stay a valid empty one
+    /// and [`super::Cell::alive`] asserts that live cells have an owner.
+    pub const PLAYER_SHIFT: u8 = 4;
+    pub const PLAYER_WIDTH: u8 = 4;
     pub const PLAYER_MASK: u8 = (1 << PLAYER_WIDTH) - 1;
+
+    /// Byte 0, bits 1..4: **how much of that player's influence reaches this
+    /// square**, nought to seven.
+    ///
+    /// Ownership used to be a flag, and a flag has no gradient — which is why
+    /// no rule built on counting owned neighbours ever worked. A corner of a
+    /// solid region and a square just outside a straight edge both have
+    /// exactly three, so no count can tell them apart, and every threshold
+    /// either ate blobs from their corners or grew edges outward for ever.
+    /// With a level the two stop looking alike: the corner is surrounded by
+    /// high numbers and the outside square by low ones.
+    ///
+    /// Only meaningful on a **dead** square. A living cell is a source and
+    /// reads as full whatever is stored here, which is what
+    /// [`super::Cell::influence`] is for.
+    pub const LEVEL_SHIFT: u8 = 1;
+    pub const LEVEL_WIDTH: u8 = 3;
+    pub const LEVEL_MASK: u8 = (1 << LEVEL_WIDTH) - 1;
+
+    /// The most influence a square can carry, which is what a source has.
+    pub const MAX_LEVEL: u8 = LEVEL_MASK;
 
     /// Byte 0, bit 0: **granted ground**, which never decays.
     ///
@@ -81,14 +107,13 @@ pub mod bits {
     /// a newborn comes from the parent.
     pub const HOME: u8 = 1;
 
-    /// Byte 0, bits 0..3: flags that are about *whose* a cell is rather than
-    /// what it looks like — anything that changes the picture belongs in the
-    /// kind byte, where the sheet can see it. [`HOME`] is the first of them,
-    /// and two are still free.
+    /// Byte 0, bit 0 on its own: what a change of owner leaves alone.
     ///
-    /// Preserved across a change of owner, which is what keeps `HOME` on a
-    /// square when the ground changes hands.
-    pub const SPARE_MASK: u8 = (1 << PLAYER_SHIFT) - 1;
+    /// The byte is full now — player, level, home — so this is `HOME` and
+    /// nothing else. Kept as a name because what it means is "the part of the
+    /// owner byte that is about the *square* rather than about who holds it",
+    /// and that is the reason a grant survives the ground changing hands.
+    pub const SPARE_MASK: u8 = HOME;
 }
 
 const _: () = {
@@ -99,9 +124,11 @@ const _: () = {
     assert!(bits::ICE == 2);
     assert!(bits::KIND_SHIFT == 2);
     assert!(bits::KIND_SHIFT as u32 + bits::KIND_WIDTH as u32 == 8);
-    // And so must the player byte.
+    // And so must the owner byte: player, level, home, with nothing spare.
     assert!(bits::PLAYER_SHIFT as u32 + bits::PLAYER_WIDTH as u32 == 8);
-    assert!(bits::SPARE_MASK == 0b111);
+    assert!(bits::LEVEL_SHIFT as u32 + bits::LEVEL_WIDTH as u32 == bits::PLAYER_SHIFT as u32);
+    assert!(bits::HOME == 1);
+    assert!(bits::SPARE_MASK == 1);
     // A tile index is a byte, and the sheet is sixteen tiles each way.
     assert!(u8::MAX as usize + 1 == 16 * 16);
 };
@@ -177,8 +204,44 @@ impl Cell {
 
     #[inline]
     pub const fn with_player(self, player: PlayerId) -> Self {
-        let spare = self.owner_byte() & bits::SPARE_MASK;
-        Self([spare | ((player.0 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT), self.0[1]])
+        let kept = self.owner_byte() & (bits::SPARE_MASK | (bits::LEVEL_MASK << bits::LEVEL_SHIFT));
+        Self([kept | ((player.0 & bits::PLAYER_MASK) << bits::PLAYER_SHIFT), self.0[1]])
+    }
+
+    /// How much of its owner's influence is stored on this square.
+    ///
+    /// The raw field. What a neighbour actually feels is [`Self::influence`],
+    /// which is not the same thing on a source.
+    #[inline]
+    pub const fn level(self) -> u8 {
+        (self.owner_byte() >> bits::LEVEL_SHIFT) & bits::LEVEL_MASK
+    }
+
+    #[inline]
+    pub const fn with_level(self, level: u8) -> Self {
+        let rest = self.owner_byte() & !(bits::LEVEL_MASK << bits::LEVEL_SHIFT);
+        Self([rest | ((level & bits::LEVEL_MASK) << bits::LEVEL_SHIFT), self.0[1]])
+    }
+
+    /// What this square pushes on the ones around it.
+    ///
+    /// **A living cell is a source**, and so is granted ground, so both read
+    /// as full whatever their stored level happens to be. That is the whole of
+    /// how the field is fed: everything else is that number falling off with
+    /// distance, so where the sources are decides the entire map and nothing
+    /// can drift or ratchet away from them.
+    ///
+    /// Granted ground being a source is what replaces the old carve-out that
+    /// `HOME` never decays. It is a **spring** rather than an exception: a
+    /// player whose life has gone out still has a patch with a live gradient
+    /// on it, said in the same vocabulary as everything else.
+    #[inline]
+    pub const fn influence(self) -> u8 {
+        if self.is_alive() || self.is_home() {
+            bits::MAX_LEVEL
+        } else {
+            self.level()
+        }
     }
 
     #[inline]

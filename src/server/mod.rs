@@ -924,7 +924,14 @@ mod tests {
     fn stake(s: &mut Server, id: PlayerId, at: (i32, i32), n: i32) {
         for r in at.0..at.0 + n {
             for c in at.1..at.1 + n {
-                s.world.set_cell_at(r, c, Cell::DEAD.with_player(id));
+                // At full influence, or the rule would let it go on the first
+                // generation: ground is a level now, and a square holding
+                // nothing is a square nobody is holding.
+                s.world.set_cell_at(
+                    r,
+                    c,
+                    Cell::DEAD.with_player(id).with_level(crate::sim::bits::MAX_LEVEL),
+                );
             }
         }
     }

@@ -18,7 +18,11 @@ const MAGIC: &[u8; 4] = b"CKW\0";
 /// And to 4 when a player record gained its token. Without it a restart
 /// would hand every returning player a new number and leave their ground
 /// standing there, theirs and unreachable.
-const VERSION: u8 = 4;
+/// Bumped to 5 when ownership on a dead cell went from a flag to a level: the
+/// owner byte's split moved, so a version 4 file read as version 5 is a
+/// plausible world with every square owned by the wrong player at the wrong
+/// strength. There is no honest migration -- a flag carries no level.
+const VERSION: u8 = 5;
 
 const KIND_INFINITE: u8 = 0;
 const KIND_TOROIDAL: u8 = 1;

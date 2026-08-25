@@ -6,7 +6,7 @@
 //! underneath it.
 
 use super::*;
-use crate::sim::{Kind, PlayerId};
+use crate::sim::{bits, Kind, PlayerId};
 fn neighbours(live: &[usize], player: u8) -> Neighbours {
     let mut n = [Cell::DEAD; 8];
     for &i in live {
@@ -100,44 +100,6 @@ fn not_inheriting_does_not_move_the_roll() {
             next_cell(Cell::DEAD, &turrets, seed).player(),
             "seed {seed} picked a different parent once the kind changed"
         );
-    }
-}
-
-/// **Spread is a transfer, not only a gain.** `living_owners` collects the
-/// owner of every living neighbour whoever it belongs to, and the roll picks
-/// one of them — so a dead square of yours touching somebody else's life
-/// becomes theirs most generations.
-///
-/// Worth pinning because it is the only way the rule takes ground away with
-/// creep and decay at zero, and because reading `SPREAD` as "my ground
-/// spreads" is the natural mistake: it is creep that moves ownership across
-/// dead ground, and spread only ever acts on a square something is alive
-/// beside.
-#[test]
-fn ground_beside_somebody_elses_life_changes_hands() {
-    let (me, them) = (PlayerId(1), PlayerId(2));
-    let mine = Cell::DEAD.with_player(me);
-
-    let mut theirs = [Cell::DEAD; 8];
-    theirs[0] = Cell::alive(them);
-    let taken = (0..640u64)
-        .filter(|&seed| next_cell(mine, &theirs, seed).player() == them)
-        .count();
-    // Out of sixty-four, so most generations but not all of them. A band
-    // rather than a figure: what is being pinned is that it happens and that
-    // the rate is the constant, not the exact output of the hash.
-    let expected = 640 * SPREAD as usize / crate::sim::seed::OUT_OF as usize;
-    assert!(
-        taken.abs_diff(expected) < 90,
-        "{taken} of 640 went to their owner, expected about {expected}"
-    );
-
-    // And a living neighbour of your own leaves it alone, which is why ground
-    // under your own life is held rather than churned.
-    let mut ours = [Cell::DEAD; 8];
-    ours[0] = Cell::alive(me);
-    for seed in 0..640 {
-        assert_eq!(next_cell(mine, &ours, seed).player(), me, "seed {seed}");
     }
 }
 
@@ -268,90 +230,147 @@ fn a_kind_spreads_through_a_mixed_neighbourhood() {
     );
 }
 
-/// **Liveness is what chooses the branch**, and that is the whole answer to
-/// "does spread on its own make territory grow?"
-///
-/// The same neighbour, owned by the same player, moves a square at the spread
-/// rate when it is alive and at the creep rate when it is not. So with creep
-/// at zero a square nothing is alive beside never changes hands at all, and
-/// territory is the **footprint of life** rather than something that diffuses:
-/// it grows exactly as fast as life reaches squares it has not reached before,
-/// and a still life grows it not at all.
+// --- territory, which is a level now rather than a flag ---------------------
+
+/// A living cell is a **source**: it reads as full whatever is stored on its
+/// square, and every step away costs [`LEVEL_FALL`].
 #[test]
-fn spread_needs_a_living_neighbour_where_creep_does_not() {
+fn influence_falls_off_with_distance_from_a_source() {
+    let me = PlayerId(1);
+    let source = Cell::alive(me);
+    assert_eq!(source.influence(), bits::MAX_LEVEL, "a living cell is a source");
+
+    // Beside it: full, less one step.
+    let mut beside = [Cell::DEAD; 8];
+    beside[0] = source;
+    let first = settled(Cell::DEAD, &beside);
+    assert_eq!(first.player(), me);
+    assert_eq!(first.level(), bits::MAX_LEVEL - LEVEL_FALL);
+
+    // And a step further out, from that square rather than from the cell.
+    let mut further = [Cell::DEAD; 8];
+    further[0] = first;
+    let second = settled(Cell::DEAD, &further);
+    assert_eq!(second.level(), first.level() - LEVEL_FALL);
+
+    // Until it runs out, and then the square belongs to nobody -- which is
+    // what bounds a halo, with no rule about radius anywhere. Started from a
+    // square that *is* held, so the letting go is something that happens
+    // rather than something that was already true.
+    let mut edge = [Cell::DEAD; 8];
+    edge[0] = Cell::DEAD.with_player(me).with_level(LEVEL_FALL - 1);
+    let held = Cell::DEAD.with_player(me).with_level(4);
+    let past = settled(held, &edge);
+    assert_eq!(past.player(), PlayerId::UNOWNED, "a claim that reaches nothing holds nothing");
+    assert_eq!(past.level(), 0);
+}
+
+/// **The strongest claim wins**, which is what makes a front between two
+/// players settle at the line equidistant between them without anything
+/// working out where that is.
+#[test]
+fn the_strongest_claim_takes_the_square() {
     let (me, them) = (PlayerId(1), PlayerId(2));
-    let mine = Cell::DEAD.with_player(me);
-    let took = |around: &Neighbours| {
-        (0..2000u64).filter(|&s| next_cell(mine, around, s).player() == them).count()
-    };
+    let mut n = [Cell::DEAD; 8];
+    n[0] = Cell::DEAD.with_player(me).with_level(6);
+    n[4] = Cell::DEAD.with_player(them).with_level(3);
 
-    let mut living = [Cell::DEAD; 8];
-    living[0] = Cell::alive(them);
-    let mut ground = [Cell::DEAD; 8];
-    ground[0] = Cell::DEAD.with_player(them);
+    let out = settled(Cell::DEAD, &n);
+    assert_eq!(out.player(), me, "nearer wins");
+    assert_eq!(out.level(), 6 - LEVEL_FALL);
 
-    // Alive: the spread branch, at its own rate and straight to that owner.
-    let by_spread = took(&living);
-    let expected = 2000 * SPREAD as usize / crate::sim::seed::OUT_OF as usize;
-    assert!(by_spread.abs_diff(expected) < 200, "spread took {by_spread}, want ~{expected}");
+    // Mass does not beat distance: three weak claims lose to one strong one,
+    // which is what keeps the number a distance and the map readable.
+    let mut crowd = [Cell::DEAD; 8];
+    crowd[0] = Cell::DEAD.with_player(me).with_level(6);
+    for i in [2, 4, 6] {
+        crowd[i] = Cell::DEAD.with_player(them).with_level(5);
+    }
+    assert_eq!(settled(Cell::DEAD, &crowd).player(), me);
+}
 
-    // Dead: the spread branch is not even reached, so it is creep — which
-    // fires more rarely and then picks one of eight neighbours, only one of
-    // which is theirs.
-    let by_creep = took(&ground);
+/// Mass gets its say where distance cannot separate them: **a tie goes to
+/// whoever is pushing hardest**, and a tie in that keeps the square where it
+/// is, so a border between two exactly matched players does not flicker.
+#[test]
+fn a_tie_goes_to_the_heavier_push_and_then_stays_put() {
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    let mut n = [Cell::DEAD; 8];
+    n[0] = Cell::DEAD.with_player(me).with_level(5);
+    n[2] = Cell::DEAD.with_player(me).with_level(5);
+    n[4] = Cell::DEAD.with_player(them).with_level(5);
+    assert_eq!(settled(Cell::DEAD, &n).player(), me, "two pushes beat one");
+
+    // Dead level: whoever holds it keeps it, and both peers agree.
+    let mut even = [Cell::DEAD; 8];
+    even[0] = Cell::DEAD.with_player(me).with_level(5);
+    even[4] = Cell::DEAD.with_player(them).with_level(5);
+    let held_by_them = Cell::DEAD.with_player(them).with_level(1);
+    assert_eq!(settled(held_by_them, &even).player(), them, "the holder keeps it");
+    let held_by_me = Cell::DEAD.with_player(me).with_level(1);
+    assert_eq!(settled(held_by_me, &even).player(), me);
+}
+
+/// **Granted ground is a spring**, not a carve-out. It reads as full whatever
+/// is stored on it and the rule never works it out from its neighbours, so a
+/// player whose life has gone out still has a patch with a live gradient on
+/// it — which is the floor said in the same vocabulary as everything else.
+#[test]
+fn granted_ground_is_a_source_and_is_never_argued_away() {
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    let home = Cell::DEAD.with_player(me).with_home(true).with_level(0);
+    assert_eq!(home.influence(), bits::MAX_LEVEL, "stored level says nothing on a source");
+
+    // Surrounded by somebody else at full strength, for as long as you like.
+    let theirs = [Cell::alive(them); 8];
+    let mut cell = home;
+    for seed in 0..200 {
+        cell = next_cell(cell, &theirs, seed);
+        assert_eq!(cell.player(), me, "seed {seed}");
+        assert!(cell.is_home());
+    }
+
+    // And it feeds the ground around it with nothing alive anywhere.
+    let mut beside = [Cell::DEAD; 8];
+    beside[0] = home;
+    assert_eq!(settled(Cell::DEAD, &beside).player(), me);
+}
+
+/// The roll decides **when** a square works itself out, not what it decides.
+/// Recomputed every generation the field would be an exact distance transform
+/// that snaps the instant anything moves; this is what makes it lag and smear.
+#[test]
+fn the_roll_decides_the_rate_and_not_the_outcome() {
+    let me = PlayerId(1);
+    let mut n = [Cell::DEAD; 8];
+    n[0] = Cell::alive(me);
+
+    let mut moved = 0usize;
+    for seed in 0..640 {
+        let out = next_cell(Cell::DEAD, &n, seed);
+        // Whenever it does update, it updates to the same thing. There is no
+        // seed that gives a different owner or a different level.
+        if out.player().is_owned() {
+            assert_eq!(out.player(), me, "seed {seed}");
+            assert_eq!(out.level(), bits::MAX_LEVEL - LEVEL_FALL, "seed {seed}");
+            moved += 1;
+        }
+    }
+    let expected = 640 * LEVEL_ADJUST as usize / crate::sim::seed::OUT_OF as usize;
     assert!(
-        by_creep * 4 < by_spread,
-        "dead ground moved {by_creep} of 2000 against {by_spread} for living, \
-         which is not the difference between two rules"
+        moved.abs_diff(expected) < 90,
+        "{moved} of 640 settled, expected about {expected}"
     );
 }
 
-/// Creep cuts both ways, which is the whole of why a border settles rather than
-/// running away or rotting: a dead cell takes a neighbour's owner, and one of
-/// those neighbours may be nobody.
-#[test]
-fn creep_takes_whoever_is_beside_it_including_nobody() {
-    let mine = Cell::DEAD.with_player(PlayerId(1));
-    let nobody = Cell::DEAD;
-    let outcomes = |cell: Cell, around: &Neighbours| {
-        (0..2000u64).filter(|&s| next_cell(cell, around, s).player() == PlayerId(1)).count()
-    };
-
-    // Deep inside my ground there is nothing else to take, so unclaimed ground
-    // there only ever becomes mine -- at the creep rate, not at once.
-    let inside = [mine; 8];
-    let claimed = outcomes(nobody, &inside);
-    assert!((180..340).contains(&claimed), "claimed {claimed} of 2000, want about 250");
-    for seed in 0..2000 {
-        let next = next_cell(nobody, &inside, seed).player();
-        assert!(next == PlayerId(1) || next == PlayerId::UNOWNED, "seed {seed}: {next:?}");
+/// Run a square until it has taken whatever reaches it, so a test can say what
+/// the field does without saying when.
+fn settled(cell: Cell, neighbours: &Neighbours) -> Cell {
+    for seed in 0..640 {
+        let out = next_cell(cell, neighbours, seed);
+        if out != cell {
+            return out;
+        }
     }
-
-    // Out where nothing is claimed, my ground only ever becomes nobody's --
-    // and that is the erosion, with no rule of its own.
-    let outside = [nobody; 8];
-    let kept = outcomes(mine, &outside);
-    assert!(kept < 2000, "ground surrounded by nothing should sometimes go, kept {kept}");
-    assert!(kept > 1500, "and should not go all at once, kept {kept}");
-
-    // On a border it goes both ways, which is what makes the edge a walk.
-    let mut edge = [nobody; 8];
-    for n in edge.iter_mut().take(5) {
-        *n = mine;
-    }
-    let held = outcomes(mine, &edge);
-    assert!((1500..2000).contains(&held), "a border should move both ways, held {held} of 2000");
-}
-
-/// Granted ground answers to life alone: it neither creeps nor fades, or a
-/// player whose life went out would lose the only ground they may build on.
-#[test]
-fn granted_ground_is_not_taken_by_the_ground_around_it() {
-    let home = Cell::DEAD.with_player(PlayerId(1)).with_home(true);
-    let nothing = [Cell::DEAD; 8];
-    for seed in 0..2000 {
-        let next = next_cell(home, &nothing, seed);
-        assert_eq!(next.player(), PlayerId(1), "seed {seed}");
-        assert!(next.is_home());
-    }
+    panic!("nothing reached it in six hundred and forty tries")
 }

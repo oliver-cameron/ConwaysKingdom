@@ -7,13 +7,16 @@
 // changing both.
 //
 //  byte 0 (R)                byte 1 (G)
-// | player  | spare |       |    kind     |I |A |
-//  7 6 5 4 3  2 1 0          7 6 5 4 3 2   1  0
+// | player |level|H|       |    kind     |I |A |
+//  7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
 //
-// Only the player is read here. Alive, ice and kind are read as one number --
-// byte 1 is the tile index into the sheet, so this shader never takes them
-// apart, and that is the point of the layout.
-const PLAYER_SHIFT: u32 = 3u;   // top of its byte, so no mask is needed
+// The player and the level are read here. Alive, ice and kind are read as one
+// number -- byte 1 is the tile index into the sheet, so this shader never
+// takes them apart, and that is the point of the layout.
+const PLAYER_SHIFT: u32 = 4u;   // top of its byte, so no mask is needed
+const LEVEL_SHIFT: u32 = 1u;
+const LEVEL_MASK: u32 = 7u;
+const MAX_LEVEL: f32 = 7.0;
 
 // See render::atlas. One sheet; a cell's tile byte is the index into it.
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
@@ -221,9 +224,32 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var colour = grid_tint(vec2<f32>(cell_coord), n);
 
     let player = texel.r >> PLAYER_SHIFT;
+
+    // How much of that player's influence is on this square, and it is drawn.
+    //
+    // A gradient nobody can see is a gradient nobody can play against: the
+    // whole reason ownership stopped being a flag is that a border is a
+    // pressure rather than a line, and the map has to show where the pressure
+    // is rather than only where the border ended up.
+    //
+    // Saturation rather than lightness, because lightness is what the sprite
+    // sheet uses to say what a cell *is* -- alive, dead, iced -- and bending
+    // it would make thin ground look like a different kind of cell. Draining
+    // the colour instead reads as a claim fading out, which is what it is.
+    //
+    // A living cell is a source and always full: its stored level says nothing,
+    // and a cell that faded as it was placed would be a lie about the rule.
+    let level = (texel.r >> LEVEL_SHIFT) & LEVEL_MASK;
+    let alive = (texel.g & 1u) != 0u;
+    let reach = select(f32(level) / MAX_LEVEL, 1.0, alive);
+    // Never quite to nothing, so the faintest claim is still a claim rather
+    // than unowned ground -- the difference between "nobody has reached here"
+    // and "somebody barely has" is the one a player is reading the map for.
+    let felt = select(0.25 + 0.75 * reach, 0.0, player == 0u);
+
     colour = mix(
         colour,
-        shade(sprite.g, sprite.r * player_saturation(player), player_hue(player)),
+        shade(sprite.g, sprite.r * player_saturation(player) * felt, player_hue(player)),
         sprite.a,
     );
 

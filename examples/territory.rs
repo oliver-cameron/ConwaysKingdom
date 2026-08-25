@@ -7,11 +7,11 @@
 //! alive — and whether the result is a country or a smear is not a thing
 //! anybody can read off the constants. So this draws it.
 //!
-//! What the shapes should say: **a patch with life on it holds and pulls
-//! itself smooth, a patch nobody is standing on fades, and a glider does not
-//! stake a claim across the world behind it.** If the abandoned patch is still
-//! there after a few hundred generations the creep is beating the decay, and
-//! ground only ever grows again.
+//! What the shapes should say: **a patch with life on it holds a bounded halo
+//! that falls off with distance, a patch nobody is standing on goes entirely,
+//! and a glider does not stake a claim across the world behind it.** The
+//! digits are the level, so a halo should read as a gradient from the life
+//! outwards rather than as a flat blob with an edge.
 
 use conwayskingdom::sim::{Cell, PlayerId, World, CHUNK_N};
 
@@ -50,9 +50,11 @@ fn draw(world: &World, me: PlayerId, half: i32) {
         let mut line = String::from("      ");
         for c in -half..=half {
             let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+            // The level, not just whether it is held: a gradient drawn as a
+            // flag is exactly the picture that hid the old rule's problem.
             line.push(match (cell.is_alive(), cell.player() == me) {
                 (true, _) => '#',
-                (false, true) => '+',
+                (false, true) => char::from_digit(cell.level() as u32, 10).unwrap_or('+'),
                 (false, false) => '.',
             });
         }
@@ -92,11 +94,10 @@ fn run(name: &str, life: &[(i32, i32)], generations: u32, picture: bool) {
 
 fn main() {
     println!(
-        "  out of {}:  spread {}  creep {}  decay {}",
+        "  fall {} per square, settling {} times in {}",
+        conwayskingdom::sim::LEVEL_FALL,
+        conwayskingdom::sim::LEVEL_ADJUST,
         conwayskingdom::sim::OUT_OF,
-        conwayskingdom::sim::SPREAD,
-        conwayskingdom::sim::CREEP,
-        conwayskingdom::sim::DECAY,
     );
     run("held      a block stands on it", &[(0, 0), (0, 1), (1, 0), (1, 1)], 400, true);
     run("abandoned nothing alive at all", &[], 400, true);
