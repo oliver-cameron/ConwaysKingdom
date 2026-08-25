@@ -21,7 +21,7 @@
 //!
 //! The version is not ceremony. A record written by a build that knew about
 //! teams, read by one that does not, is exactly the case this has to survive,
-//! and the same worry is already written down for stamps in [roadmap.md]. A
+//! and the same worry is already written down for stamps in [planned.md]. A
 //! line this build cannot read is **skipped**, not fatal: losing one game out
 //! of a history is a nuisance, and refusing to show any of them because one is
 //! from the future is not.
@@ -30,7 +30,7 @@
 //! [`crate::net::room_name`] — so no field can contain the separator and there
 //! is nothing to escape.
 //!
-//! [roadmap.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/roadmap.md#stamps-that-outlive-the-tab
+//! [planned.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#stamps
 
 use crate::sim::WorldKind;
 

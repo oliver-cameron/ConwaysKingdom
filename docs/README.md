@@ -8,7 +8,8 @@
 | [game.md](game.md) | Value, placement, ice, and the controls |
 | [networking.md](networking.md) | The protocol, prediction, and desync detection |
 | [server.md](server.md) | Running it, and the save format |
-| [planned.md](planned.md) | What is not built yet: the rest of rooms, making one from the client, auto-mining as a cell kind, stamps, and what each runs into |
+| [planned.md](planned.md) | What is not built yet, and what is left of what is — a status per entry |
+| [inspiration.md](inspiration.md) | Where the design is borrowed from, and which problem each source solved |
 | [gotchas.md](gotchas.md) | Things that cost a day, so they only cost one |
 
 ## Running it
@@ -93,4 +94,4 @@ cargo run --no-default-features --example balance      # what mining pays, per p
 cargo run --no-default-features --example territory    # what ground does, in numbers and shapes
 ```
 
-[roadmap.md](roadmap.md) holds directions decided on and not yet thought through; [planned.md](planned.md) holds designs not yet built.
+[planned.md](planned.md) holds everything not built yet, with a status on each entry — built, being built, designed, or decided and not costed. [inspiration.md](inspiration.md) says where a design was borrowed from and for what.

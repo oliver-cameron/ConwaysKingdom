@@ -140,7 +140,7 @@ const CODE_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 /// wire: an operator declaring forty on the command line has made a decision,
 /// and this is not the place to second-guess it.
 ///
-/// [auto-sleep]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#the-policy-which-is-the-actual-blocker
+/// [auto-sleep]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#making-rooms-from-the-client
 pub const MAX_MADE_ROOMS: usize = 32;
 
 pub struct Rooms {
@@ -1387,6 +1387,56 @@ mod tests {
             assert!(!c.contains(['0', 'o', '1', 'i', 'l']), "confusable character in {c}");
             assert!(crate::net::room_name(&c).is_ok(), "a code must be a legal room name: {c}");
         }
+    }
+
+    /// Late to a match, and what happens now: the join is **refused** and the
+    /// client is told why. It is not turned into a watch.
+    ///
+    /// Deliberate rather than missing. A `Join` that quietly became a `Watch`
+    /// would put a player into a world they cannot act in without their having
+    /// asked for that, and the two are answered by different messages —
+    /// `Welcome` carries a player number, a purse and a spawn, and `Watching`
+    /// carries none of them. A client that asked to play and got a `Watching`
+    /// back would have to discover it had no seat by trying to use one.
+    ///
+    /// So the server refuses and says so, and the **client** offers the watch:
+    /// the room list has a Watch button on every room, and the refusal names
+    /// the reason beside it. That keeps "you cannot play in this" and "would
+    /// you like to watch it" two separate answers, which is what they are.
+    #[test]
+    fn joining_a_running_match_is_refused_and_watching_it_is_not() {
+        let mut rooms = Rooms::just(Server::named("cup", World::infinite_empty()));
+        {
+            let server = rooms.get_mut(&RoomId::from("cup")).unwrap();
+            server.make_match(Victory::Timer { generations: 100 });
+            server.join("early").unwrap();
+            server.start_match().unwrap();
+        }
+        for _ in 0..40 {
+            rooms.step();
+        }
+
+        let late = Caller::new(11);
+        let replies = rooms.handle(
+            &late,
+            ClientMessage::Join {
+                name: "late".into(),
+                token: None,
+                room: Some(RoomId::from("cup")),
+            },
+        );
+        let [ServerMessage::Rejected { reason }] = &replies[..] else {
+            panic!("expected a refusal, got {replies:?}");
+        };
+        assert!(reason.contains("cup"), "the refusal names the room: {reason}");
+
+        // And the same connection may watch it, at the same generation, which
+        // is the whole distinction: no late joining is a rule about players.
+        let replies = rooms.handle(&late, ClientMessage::Watch { room: RoomId::from("cup") });
+        let [ServerMessage::Watching { tick, .. }] = &replies[..] else {
+            panic!("a late connection may still watch, got {replies:?}");
+        };
+        assert_eq!(*tick, 40, "and sees the world where it actually is");
     }
 
     /// The whole reason a spectator is not "a player with the actions taken

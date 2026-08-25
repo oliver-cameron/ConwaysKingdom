@@ -1,100 +1,141 @@
 # Not built yet
 
-Designs, not directions. [roadmap.md](roadmap.md) holds the things decided on and not yet thought through; something moves from there to here when somebody works out what it costs.
+**One file.** There used to be two — a roadmap for directions decided on and not costed, and this for designs costed and not built — and the split did not survive contact. Entries only ever moved one way, nothing moved back, and both files went stale in the same way: by describing things that had since been built as though they had not. Status is a label on an entry now, not a file it lives in.
 
-What has been decided, what has not, and what each one runs into. Everything here is an intention rather than a description — [the rest of docs/](README.md) is the system as it actually stands.
+| status | means |
+|---|---|
+| **Built** | in, and kept here only for what is *left* — the design itself is in [the rest of docs/](README.md) |
+| **Being built** | on a branch now |
+| **Designed** | worked out, including what it costs; not started |
+| **Decided** | a direction agreed and not costed. What used to be the roadmap |
 
-## A menu
+The system as it actually stands is [the rest of docs/](README.md). Everything here is an intention. Where an idea was borrowed from somebody, [inspiration.md](inspiration.md) says whom and for what.
 
-**Built** — see [game.md](game.md#the-menu). One screen with a different answer rather than two, because a local game and a joined game differ only in whether there is a socket. The address and the name are remembered in the same store as the rejoin token, which is what that section said they should be.
+## Contents
 
-What it does not do yet is **reconnect**. A link that closes mid-game drops the client to offline with a line in the log, and there is no way back but restarting — the menu is only reachable before a world, not from inside one. It should be reachable from inside one: the machinery is all there, since a second `Join` on a live connection is already a room change, and `Screen::Menu` is a state the app can be put back into from anywhere.
-
-## Rooms per server
-
-**Started.** Several worlds behind one address, joined by name — see [server.md](server.md#rooms). A room is a whole `Server`: one world, one player table, one tick, one file. `Join` carries the room, `Welcome` names it back and says what shape that room's world is, player numbers and value and territory are per room, and the rejoin token is filed under the room so that coming back returns you to the world you left.
-
-Rooms are listed too: `ClientMessage::Rooms` is answerable without a seat, and the menu shows what comes back. What is left is movement and lifetime.
-
-**Nothing on the client can ask to change rooms.** The server side is done — a second `Join` on a live connection leaves the old seat and welcomes you into the new room, and `Welcome` carries everything a client needs to start over: room, tick, shape, spawn, value. The menu can send exactly that message; what is missing is a way to get back to the menu without restarting. Same gap as the reconnect above, and the same fix.
-
-**Every room steps every generation, whether or not anyone is in it.** An empty world is cheap, because `compute_active` finds nothing to do, but a room somebody built in and abandoned is not: it costs its full simulation four times a second for nobody. Sleeping a room with no players online is the obvious answer and is not free — a room that stops stepping stops at a tick, and the tick is what a returning client adopts, so waking it has to be indistinguishable from its never having slept. That is easier than it sounds, because the tick *is* the generation and nothing else moves while a world is not stepping. The thing to be careful of is the save, which records a tick that would then mean "when it went to sleep" rather than "now".
-
-**A room's shape is a server-wide flag.** `--torus` applies to every room created in a run, so a server cannot offer a wrapping world and a boundless one side by side, which is exactly the sort of thing rooms are for. The shape belongs per room, which means `--room` needs to carry it — `--room arena:18x18` — or rooms need a config file, which is a bigger thing than this deserves yet.
-
-**The token is keyed by room but not by server.** Two servers both running a room called `main` share one secret, and visiting the second costs you your player on the first. The address is not remembered anywhere yet; when the menu remembers it, that is the second half of this key.
+| | status | |
+|---|---|---|
+| [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
+| [Spectating](#spectating) | Built | a room with no seat in it |
+| [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
+| [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
+| [Teams](#teams) | Designed | more than one player to a side |
+| [Rating](#rating) | Decided | an Elo-shaped number, and what it would have to survive |
+| [The session comes out of the battle view](#the-session-comes-out-of-the-battle-view) | Designed | the one place the architecture does not hold |
+| [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
+| [Auto-mining](#auto-mining) | Built | |
+| [Turrets](#turrets) | Built | |
+| [Stamps](#stamps) | Built | including what would make them outlive the tab |
+| [Territory as a level, not a flag](#territory-as-a-level-not-a-flag) | Built | |
+| [Matches](#matches) | Built | |
+| [Type, and the numbers that jitter](#type-and-the-numbers-that-jitter) | Decided | |
+| [A minimap](#a-minimap) | Decided | |
+| [Mobile](#mobile) | Designed | |
+| [Known, and left alone](#known-and-left-alone) | — | |
 
 ## Making rooms from the client
 
-**Being built** — this is the branch. Rooms and matches are made at the server's own terminal, so making one means being the person running the server, which on a public server is one person and on a phone is nobody. The wire change is small; the policy and the screen are the work.
+**Built** — see [game.md](game.md#the-menu) for the form and [server.md](server.md#made-by-a-client) for the wire, the cap and the owner. A world, a match or a private game, from the menu, on a phone.
 
-### The wire
+What is left:
 
-`ClientMessage::Create { name, shape, victory }` — the same three things `world new` and `match new` take, with `victory: Option<Victory>` being the whole of the difference between them. Answerable **without a seat**, which makes it the third such message after `Join` and `Rooms`, and for the same reason: it names a room that does not exist yet, so there is nowhere to be standing when you send it.
+**No way to close a room from the client.** The owner is recorded in `Rooms::made` and nothing reads it. `Rooms::delete` exists and is at the console; putting it on the wire wants the owner check to be real, and wants an answer for a room somebody is standing in.
 
-The answer is `ServerMessage::Made(Result<RoomName, String>)`. A `Result` rather than two variants because it is one question with two answers, and because every `Rooms` method that could refuse already returns exactly this — `create`, `new_match` and `delete` all hand back `Result<RoomName, String>`, so the wire carries what the server already says.
+**Nothing starts a match but `match dispatch`.** A client can make a match and cannot blow the whistle on it, so a client-made match still needs the operator for its one remaining verb. `ClientMessage::Start` is the same shape as `Create` and wants the same owner check.
 
-**Making a room does not put you in it.** The client sends `Join` with the name that came back, which is the same `Join` the room list sends, so the whole of joining — resolving the name, leaving an old seat, the token, the grant, `Welcome` — is reached by one path rather than two. One extra round trip on a menu click costs nothing, and the alternative is a second way to enter a world that has to be kept in step with the first.
+**Auto-sleep is the fix the cap only backstops.** Every room steps four times a second for as long as the process lives, whether or not anybody is in it. Half the answer is already built and unused: `Server::set_asleep` exists, `Server::step` returns nothing for a sleeping room, and `world sleep` / `world wake` are at the console. What is missing is the trigger — a room whose last player leaves sleeps after a grace period, and the `Join` that resolves to it wakes it.
 
-### The screen, and where it is borrowed from
+Waking is indistinguishable from never having slept, for a reason worth stating rather than assuming: the tick **is** the generation, and nothing else advances while a world is not stepping. There is no second clock to drift. The one thing to watch is the save, which records that tick — a room saved asleep records the generation it stopped at, which is the right number under the only meaning the field has ever had. A match must not sleep and does not: `set_asleep` refuses on anything but `Phase::Open`.
 
-Three games, each for one thing.
+## Spectating
 
-[Infinite Chess](https://www.infinitechess.org/) for the **shape of the form**: one labelled row per decision, and a control that appears only when the decision it belongs to is live. Its play screen never shows a difficulty until the opponent is a computer, and never shows a board size for a variant that has none. Ours has exactly two such dependencies — a size that means something only on a wrapping world, and a target that means something only in a match — so the same rule covers both, and the form is three rows for a world and five for a match rather than five rows with two of them greyed out. The other half worth taking is that a game you make appears in the same list everybody else is looking at; there is no separate "your games" pane. Ours needs nothing for this, because `ClientMessage::Rooms` is the only listing there is.
+**Built** — see [server.md](server.md#watching). `ClientMessage::Watch` takes a room and no seat; `ServerMessage::Watching` answers with the world and its clock and no player, purse or spawn. A watcher reads and cannot act, which is enforced by an action now belonging to the **connection that sent it** rather than to the `PlayerId` it names.
 
-[Clash Royale](https://interfaceingame.com/games/clash-royale/) for **depth and hierarchy**. Its interface almost never goes more than one level down, and where it does it is disguised as one — which is the argument for opening the form *in place* under the room list rather than as a second screen, and it is the same argument that put the menu and the game in one `App` rather than two. Its colour rule is the sharper borrowing: one accent on the single thing you are meant to do next, a second colour on everything secondary, and no third. Our palette already has `accent`, `good` and `text_dim` in those three roles and the menu does not yet use them that way — "See what rooms are there", every room row and "Play alone" are currently the same weight, so the screen has no primary action at all. The form makes that worse unless it is fixed: with a `Make it` button on screen there are two things competing to be the obvious one. The rule to hold is **one accent-coloured control per state of the menu**, and it is a rule about the whole menu rather than about the form.
+Admitted at any generation, and that is the point rather than an oversight: **no late joining is a rule about players.** A `Join` to a running match is still refused, and the refusal is what the client turns into an offer to watch — keeping "you cannot play in this" and "would you like to watch it" two separate answers, which is what they are.
 
-The third Clash Royale point is reach. Everything important sits where a thumb lands on a phone held in one hand, which for a centred panel means the primary action goes at the **bottom** of the form and the fields above it. That is the opposite of the usual desktop instinct and it is right for the client that has no keyboard.
+What is left: a watcher cannot follow a particular player's ground, which is what a spectator actually wants once a world is larger than a screen. That wants the camera to take a target, which is `views::camera`'s business and not the protocol's.
 
-[generals.io](https://generals.io/) for **ownership and for the count**. Its lobby creator owns the lobby and keeps owning it between games, which is the precedent for the owner recorded below — somebody made this room, and that is worth knowing before any question about who may close it. And its play menu shows the *number* of open custom lobbies before you drill into the list, so the button says what is behind it. `RoomInfo` already carries `players`, so a count of rooms and of people in them is arithmetic on a list the client already has.
+## Games and matches by code
 
-[chess-tui](https://github.com/thomas-mauran/chess-tui) for **the way back and the way in**. It is a terminal chess client, so nothing about its look transfers, but two of its habits do. Every screen has a key that leaves it — `b` for the menu, `q` to quit — which our client half has: `back_to_menu` exists and is reachable only by a button on the HUD, so a player who has lost the pointer has no way out. And `?` opens help in place. We have none at all: the hotbar shows what the digits put down, and nothing on screen says that space pans, that a middle drag pans, that shift hurries it or that a drag lays a run. All of that is in [game.md](game.md#the-controls), which is the one document a player in a browser will never read.
+**Built** — see [server.md](server.md#made-by-a-client). A private room is kept out of the listing and reached by a six-character code. The code is a **credential and not an identity**: separate from the room's id, which never changes, and separate from its name, so a private game can still be called something its owner chose and a code could be rotated later.
 
-Its structure is worth a sentence too, because it is the same argument as [architecture.md](architecture.md) made at the crate boundary rather than the module one: chess-tui draws with `ratatui` and knows the rules through `shakmaty`, two crates that cannot see each other. Ours is `sim` and `render`, kept apart by feature gates that the build checks.
+The alphabet leaves out `0`, `o`, `1`, `i` and `l` — 31⁶ is 887 million codes, or 29.7 bits, against 36⁶ and 31.0 bits for the full alphanumeric set. That trade is deliberate: those five characters are the whole of why a code gets mistyped when it is read off one screen and typed into another, and the keyspace is not what protects a private room anyway. With the room cap where it is a random guess finds one in about twenty-eight million, so the defence is that guessing is not worth anybody's time — and if it ever became worth somebody's time the answer is a limit on how fast a connection may guess, not a longer code.
 
-What is deliberately **not** taken is the dropdown. Every choice here is two or three wide, and a row of toggle buttons shows the whole choice at once where a combo box shows one of it; egui's `ComboBox` also wants a popup layer, which is one more thing to keep off the world behind it. And the private invite code is a different feature — see [roadmap.md](roadmap.md#games-and-matches-by-code) — which wants a code-to-room map on the server before it wants a field on this form.
+What is left: **`?code=` in a URL**, which is the whole point of a code being short. `?room=` already skips the menu and `resolve` already takes a code wherever it takes a name, so this is a query-string parameter and nothing else.
 
-So, under the room list and above "play alone", a single **New world** button that opens this in place:
+## The mercy rule
 
-| row | control | when |
+**Designed.** A player can reach a state where nothing they do has any effect, and the game does not notice.
+
+Two ways in. **No money and nothing alive** — value floors at zero, so a player who spent everything and then lost their pattern has nothing to place and no way to earn, because income comes from mine births and they have no mines. And **no territory**, which sounds impossible because a granted patch never decays, but is not: an opponent who grows over your home keeps it as theirs, mark and all. Either way the player is sitting in front of a world they cannot touch, clicking, with the client saying only that the placement was refused.
+
+What should happen is that they become a **spectator** — which is now a state that exists, so this is a rule rather than a feature. They keep watching the room they were in, they are told why, and their seat goes back into the pool. That last part is the reason to do it rather than a nicety: a seat is one of fifteen, and one held by somebody who cannot play is a seat a player who could is being refused.
+
+Three things it needs.
+
+**A per-player message.** `Step` and `Standing` are broadcast to a whole room, and this is addressed to one player. The cheapest shape that fits the existing model is to broadcast it and let the client it names act on it — `Ousted { player, reason }` beside `Standing` — since every client already drops what is not about it.
+
+**A `Player` that can be out.** The condition has to be *remembered*, or a player who is ousted and then has ground spread back onto them flickers in and out of their seat. That is a field on `Player`, which is in the save, so it wants a thought about what an older save means when it comes back without one. Absent should read as "not out", which is the reading that costs nothing.
+
+**A cadence.** Both halves of the condition need a pass over the world, which `Server::territory` already does for `Standing` — so this belongs on `STANDING_EVERY` rather than every generation, and can read the count that pass already produced.
+
+The one thing to be careful of: **do not oust somebody who has just arrived.** A player is granted their patch on joining, so they always have territory from their first generation — but a match that has not started grants nothing until the whistle, so during `Gathering` every player would qualify. Gate it on `phase.stepping()`.
+
+## Teams
+
+**Designed, and it is smaller than it looks.** A team is a set of players who win together and do not fight each other.
+
+The reason it is small is that the cell already carries an owner and the rules already read it. What a team changes is not what a cell is, it is **what counts as "yours"** — which is three functions, all in `net`:
+
+| function | today | with teams |
 |---|---|---|
-| Name | text field | always |
-| Shape | Boundless / Wrapping | always |
-| Size | `ROWSxCOLS`, chunks | wrapping only |
-| Ends | Never / Timer / Territory | always |
-| Target | generations, or squares | timer or territory |
-| — | **Make it**, then Cancel | always, at the foot |
+| `may_place` | your influence reaches here | your **team's** influence reaches here |
+| `value_delta` | reclaiming your own earns, taking somebody else's costs | your team's is yours; the price only changes across a team boundary |
+| `Server::territory` | squares per player | summed per team for the score, still per player for the bars |
 
-"Ends: Never" is what makes a world rather than a match, which is the honest way round: a room with no end is the ordinary case and a match is the one with a condition on it. That also means the form never has to ask "world or match?" as a question of its own — the win condition **is** the question, and the answer "never" is a legal one.
+Nothing in `sim` learns about teams, which is the same result matches got and for the same reason: a team is an arrangement of who is playing, not a rule the world honours. The `territory` rule keeps contesting per player, so two allies still have a border between their ground — they simply cannot be hurt by it.
 
-### Every number and every word has a home
+**The colour is the hard part.** A player's hue is derived from their number, and two allies must read as allies at a glance across a whole screen of cells. Sixteen distinct hues already crowd the wheel; four teams of four means four *families* of hue, which is a much tighter constraint than sixteen distinct ones and may not survive contact with the shader. Worth prototyping in `tools/cnvt.rs` against the real sheet before any of the above is written.
 
-The form is where a screen full of magic numbers usually arrives — a width, five heights, three text sizes, two defaults for a torus, a cap. None of them belong inline.
+**Where a team is decided** is the lobby, and that is the other half of the work. `ServerMessage::Match` carries who is in the room; it would carry which side each is on, and the lobby screen would let somebody move between sides before the whistle. A match that starts with four on one side and one on the other is a match nobody wants, so this wants a balance check at `start_match` — refuse, or even out, rather than start.
 
-- **What the player reads** goes in `client::views::words`, which already holds every string the client puts on screen and would otherwise be bypassed the moment a form has five labels.
-- **How it looks** goes in `client::views::theme::Metrics`, which is the file that exists so that no view names a size directly. The menu is currently the worst offender in the crate for this and is fixed on the way past: `420.0`, `40.0`, `36.0`, `54.0` and three font sizes are all inline in `views::menu` today.
-- **What the game turns on** goes in `sim::rule`, by the rule that file already states — every tunable number in the game, labelled not explained.
-- **What the server will allow** is the one that has no home yet. A room cap is neither a rule of the game nor a thing on screen, so it goes beside the other server policy in `server::rooms` as a named constant, and is overridable by `--max-rooms` the way every other server figure is a flag.
+**Friendly fire is the open question.** A glider is a weapon whoever built it, and a rule that made allied life pass through allied life would be a rule in `sim`, which is exactly what this design is trying to avoid. The honest first answer is that friendly fire is on and teams are about *scoring and building*, not about immunity.
 
-### The policy, which is the actual blocker
+## Rating
 
-**A server that lets any client make worlds is a server anybody can fill with worlds**, and every room steps four times a second for as long as the process lives whether or not anybody is in it. Three things hold the line, in ascending order of how well they work.
+**Decided, not costed.** A number that says how good somebody is, updated by results, in the shape of Elo.
 
-**A cap.** The cheapest and the least satisfying: past it, `Create` is refused with a reason that says so. It applies to rooms made over the wire and not to rooms declared on the command line or typed at the console, because an operator asking for forty rooms has made a decision and this is not the place to second-guess it.
+Most of what it needs exists. A match already has a winner, `Victory` already says how it was decided, and `client::record` already keeps what this client has played — so the *client* half of showing a rating is nearly free. Elo itself is a dozen lines: expected score from the rating difference, and a K-factor times the surprise.
 
-**An owner.** The connection that made a room is recorded against it, which is what generals.io does and for the same reason. Nothing enforces anything yet; what it buys is that "close what you opened" and "you have three open already" are both answerable later without a migration, and that the log line for a room that appeared says who asked for it.
+What it runs into is that **a rating is a fact about a person, and this game has no people.** It has `PlayerId`, which is a seat in one room and is reused; and a rejoin token, which is a secret filed per room and is the closest thing to an identity there is. So a rating cannot be stored until there is something to store it against, and that is the same missing piece as [fifteen slots and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients): a person becomes a UUID, and a seat becomes a thing that person holds.
 
-**Auto-sleep, which is the one that fixes the cost rather than rationing it.** Half of this is already built and unused: `Server::set_asleep` exists, `Server::step` returns nothing for a sleeping room, and `world sleep` / `world wake` are at the console. What is missing is the trigger — a room whose last player leaves sleeps after a grace period, and the `Join` that resolves to it wakes it. A room nobody is in then costs nothing, which turns the cap from a budget into a backstop.
+Two more, both real:
 
-Waking has to be indistinguishable from never having slept, and it is, for a reason worth stating rather than assuming: the tick **is** the generation, `World::generation`, and nothing else advances while a world is not stepping. There is no second clock to drift. The one thing to watch is the save, which records that tick — a room saved asleep records the generation it stopped at, which is the right number under the only meaning the field has ever had.
+**It cannot live on the client.** `client::record` is a browser's `localStorage` — a player who wants a better number can edit it, and one who clears their cache loses it. A rating that anybody can set is a rating nobody reads. So this is a **server** table keyed by that identity, which is the first persistent thing the server would keep that is not a world.
 
-A match must not sleep, and does not: `set_asleep` already refuses on anything but `Phase::Open`, because a deadline measured in generations in a race where some runners are asleep is not a deadline.
+**Elo is for two players.** A match here is up to fifteen, and multiplayer Elo is a genuine choice rather than a formula: treat the result as every pairwise outcome (everybody you beat, everybody who beat you), or score against the field average, or rate only the winner. The pairwise reading is the usual answer and is what a free-for-all wants, and it falls out naturally once [teams](#teams) exist, because a team result is one pairwise outcome per opposing pair.
 
-### What this leaves
+The order that makes sense is identity, then teams, then this. Doing it before identity means building a rating on a number that gets handed to somebody else next week.
 
-**No way to close a room from the client.** The owner is recorded and nothing reads it. `Rooms::delete` exists and is at the console; putting it on the wire wants the owner check to be real, and wants an answer for a room somebody is standing in.
+## The session comes out of the battle view
 
-**Nothing starts a match but `match dispatch`.** A client can make a match and cannot blow the whistle on it, so a client-made match still needs the operator for its one remaining verb. `ClientMessage::Start` is the same shape as `Create` and wants the same owner check, so it belongs with the paragraph above rather than with this one.
+**Designed.** `client::views::battle` is the one place the architecture in [architecture.md](architecture.md) does not hold, and the largest file in the crate by a factor of two.
+
+It is a *view* by where it lives, and it is not one by what it does. It holds the world, the link and the GPU pipeline, and it executes logic: `pump_link` folds server messages into the world, `lay` and `click` price and send actions, `advance_to` steps the simulation. Data, logic and interface in one struct with forty fields — which is exactly the arrangement the [Data / Logic / Interface](inspiration.md#the-architecture) rule names, and which every other view already avoids through the `Chose`/`Picked` return-value convention.
+
+The symptom is visible in the code rather than inferred: `update` takes its own fields out with `mem::replace` and `mem::take` and clones two more every frame, because `self.views.borrow_mut()` holds a borrow of `self` across the whole interface closure. Each of those has a comment explaining the borrow it is dodging, which is the tell — the code documents a design problem rather than fixing it.
+
+What comes out is a **`client::session`**: the link, the subscription set, the room id and name, `me`, the purse, the lobby, the standing, and the `pump_link` / `advance_to` / `send_checkpoint` / `subscribe_to_view` machinery. It takes messages in and produces world mutations and outbound messages, and it needs no GPU and no egui — so it is testable, which none of it is today. `client::desync` and `client::record` are the first two pieces of that already living outside, and they are the shape the rest should take.
+
+Two things it is not. It is not a rewrite of the gesture machine, which is already pure arithmetic tested without a window at the bottom of the same file. And it is not the camera, which came out for this exact reason and is the precedent.
+
+## Rooms per server
+
+**Built** — see [server.md](server.md#rooms). A room is a whole `Server`: one world, one player table, one tick, one file. Rooms are listed, joined, made and left from the client, and a room is identified by an **id** rather than by its name, so renaming one keeps every seat and every rejoin token valid.
+
+What is left is lifetime — [auto-sleep](#making-rooms-from-the-client), above — and one gap in the store:
+
+**The token is keyed by room but not by server.** Two servers both holding a room whose id is `main` share one secret, and visiting the second costs you your player on the first. The address is remembered now, which is half of what that key would need.
 
 ## Auto-mining
 
@@ -157,6 +198,8 @@ What is left:
 **Rotation and mirroring**, and what to do when a stamp will not fit inside your territory: refuse it whole, as it does now, or place the part that fits.
 
 **Naming.** A stamp is called `3x4` because nothing has asked what it is. The library is where a name would be typed, and the shape beside it already does most of the work a name would.
+
+**Outliving the tab.** A stamp lives as long as the client does — capture a glider gun, close the tab, and it is gone, which makes the library a scratchpad rather than a collection. `net::keep` is already where a client keeps what it has, and `client::record` is now a worked example of putting a versioned, line-per-item format there. What makes it more than a `serde` derive is that a stamp is **cells and their kinds**, so the stored shape has to survive a change to `Placement` or to `Kind`: a library written before turrets existed should not come back as a library of nothing. A version on the file, and a bad line skipped rather than fatal, which is what `record` does.
 
 ## Territory as a level, not a flag
 
@@ -298,6 +341,30 @@ Reconnecting matters more here than in a sandbox — a refresh in the middle of 
 
 And a player who cannot afford anything is a player watching. A build phase puts the spending before the clock rather than after it, which is the point: what a zero start must not mean is a minute of nothing while the money arrives.
 
+## Type, and the numbers that jitter
+
+**The defect is real and the pairing is not decided.** The generation counter, chunk counts, zoom, value, the desync rate and the match clock all redraw every frame, and egui's bundled Ubuntu-Light has proportional digits — so those columns shuffle sideways as the numbers change. A readout that moves while you read it is harder to trust than one that does not.
+
+What fixes it is **tabular figures**, which is not the same thing as a monospace font. Monospace gives every glyph one advance width; tabular figures give it only to the digits, and plenty of proportional faces have them. The reason the two get conflated here is egui: it exposes no OpenType feature toggle, so `tnum` cannot be switched on at runtime. That leaves three routes — send numbers to the `Monospace` family, which works today and costs nothing; ship a proportional face with `tnum` frozen in by fonttools so its default figures are tabular, which is invisible and costs a build step; or allocate each digit column by hand, which is exact and costs work at every readout.
+
+The split is the part worth deciding first, and it is not "mono or not". **A number that is compared against itself over time belongs in mono; a number read once inside a sentence does not.** The generation counter and the chunk counts are a readout sitting in a column, and mono's register is correct there rather than a compromise — that is what an instrument looks like. "3 players", "12×12 chunks, wrapping" and "first to 500 squares" are prose, and mono makes them look like a mistake and makes them wider, in a HUD already competing for the screen.
+
+Which leaves only the proportional face as an open question, and it is a preference rather than a defect. Inter is the most legible at the sizes the HUD uses and the most neutral, which is what [theme.rs] asks for — an instrument beside the simulation rather than a frame around it. IBM Plex Sans is the same argument with a voice, drawn for technical documentation. Space Grotesk is the one with character, and is styled enough to risk becoming the frame. All three are OFL and about 180–250 KB subset to Latin, against a wasm bundle already 7.5 MB after `wasm-opt`.
+
+Worth doing after the level shading lands rather than before, because that changes what the HUD is competing with.
+
+[theme.rs]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/src/client/views/theme.rs
+
+## A minimap
+
+**Not yet**, and the reason is not effort. A client holds the chunks it subscribed to, which is its own screen and a margin — so a minimap drawn from what the client has is a picture of where you already are, which is the one place you do not need a map for.
+
+A real one needs a **coarse summary from the server**: something like a byte per chunk, saying which player holds most of it and how strongly, broadcast on a cadence the way `Standing` is. That is a small message and a straightforward pass over the world.
+
+What it runs into is the boundless world. "The whole map" has no edge, so a minimap of one is either a window around the action or the bounding box of everything anybody holds, and both change size as people play. On a **torus** there is no such question: the world is a fixed rectangle and a minimap is exactly that rectangle.
+
+Which suggests the order. Do it for wrapping worlds first, where it is nearly free, and let matches be where it lands — a match wants a fixed arena anyway, and a match is where knowing who holds what without panning across the world actually decides something.
+
 ## Mobile
 
 The page lays out at device width now and the canvas no longer asks for three device pixels a point, which were the two things making it unusable. What is left is the interface rather than the plumbing.
@@ -310,3 +377,4 @@ The HUD is a desktop panel: it covers a third of a phone screen and its hint lin
 - **Territory creeps and decays now**, so ground is traded and lost as well as won, with granted ground exempt as the floor. What is unsettled is the floor: "your home patch is permanent" is a strong promise, and it also means an opponent who grows over it keeps a square that will never decay for them either.
 - **Building large structures** is still done by freezing ground with ice, which works but is not what ice is for. Deferred deliberately — schematics, a blueprint region, or players simply learning to work within the rules.
 - **`client::views::battle` is 1900 lines doing five jobs.** The camera came out of it because it was pure arithmetic that could not be tested without a window; the same argument now applies twice over. The gesture machine — `Gesture`, `Drag`, `Pending`, the stroke and rectangle arithmetic — is already tested without a GPU at the bottom of that file. The session — `pump_link`, `advance_to`, `send_checkpoint`, `subscribe_to_view`, `chose`, `to_menu`, and the `me`, `room`, `value`, `screen` and `subscribed` fields — is everything about talking to a server and nothing about drawing. The menu made that worse rather than better: the screen the client is on and the connection it is holding are the same state machine, and it now lives in the same struct as the sprite atlas.
+

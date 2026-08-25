@@ -106,9 +106,9 @@ pub mod menu {
     }
 
     /// Making a room. One label per decision, and a label appears only when
-    /// the decision it belongs to is live — see [planned.md].
+    /// the decision it belongs to is live — see [inspiration.md].
     ///
-    /// [planned.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#the-screen-and-where-it-is-borrowed-from
+    /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
     pub mod make {
         /// Opens the form. Says "world" rather than "room" because that is
         /// what you get and what the game calls it everywhere else; "room" is

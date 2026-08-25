@@ -1845,6 +1845,94 @@ mod tests {
         assert_eq!(spawn_for(me, &sparse), spot, "two cells should not move anybody");
     }
 
+    /// **Crowded means held, not inhabited.**
+    ///
+    /// Territory *is* the owner field on dead squares, so a seat can be
+    /// entirely somebody's country with not one living cell in it — which is
+    /// what most of a country looks like most of the time, since life is
+    /// sparse and the ground it claimed is not. A crowding check that counted
+    /// life would call that seat empty and drop a latecomer into the middle of
+    /// somebody's territory, where every square is owned and they can build
+    /// nothing.
+    #[test]
+    fn a_seat_is_crowded_by_ground_even_with_nothing_alive_on_it() {
+        let mut world = World::infinite_empty();
+        let (me, them) = (PlayerId(2), PlayerId(1));
+        let at = spawn_for(me, &world);
+
+        // Their ground, at full influence, and **nothing alive anywhere**.
+        for r in at.0..at.0 + SPAWN_N {
+            for c in at.1..at.1 + SPAWN_N {
+                world.set_cell_at(
+                    r,
+                    c,
+                    Cell::DEAD.with_player(them).with_level(crate::sim::bits::MAX_LEVEL),
+                );
+            }
+        }
+        assert!(world.live_cells().is_empty(), "the test is about ground, not life");
+
+        assert!(
+            crowding(&world, at, me) > SPAWN_CROWDED,
+            "a seat full of somebody's territory read as empty because nothing stood on it"
+        );
+        assert_ne!(spawn_for(me, &world), at, "and so nobody was moved off it");
+
+        // The converse, so this is a test about the owner field rather than
+        // about any ground at all: the player's *own* territory does not
+        // crowd them out of their own seat.
+        let mut mine = World::infinite_empty();
+        let seat = spawn_for(me, &mine);
+        for r in seat.0..seat.0 + SPAWN_N {
+            for c in seat.1..seat.1 + SPAWN_N {
+                mine.set_cell_at(
+                    r,
+                    c,
+                    Cell::DEAD.with_player(me).with_level(crate::sim::bits::MAX_LEVEL),
+                );
+            }
+        }
+        assert_eq!(crowding(&mine, seat, me), 0, "your own ground is not a crowd");
+        assert_eq!(spawn_for(me, &mine), seat);
+    }
+
+    /// The other half of giving a crowded seat up: the cure must not be worse.
+    ///
+    /// An infinite plane has unlimited emptiness, so a search that simply
+    /// walked until it found quiet would put a latecomer so far from everybody
+    /// that they are alone in a multiplayer game. The seats are a **bounded**
+    /// spiral — `SPAWN_SEARCH` of them, `SPAWN_PITCH` apart — so however
+    /// crowded the world is, the furthest anybody lands is a distance that can
+    /// be written down.
+    #[test]
+    fn a_crowded_world_does_not_fling_anybody_into_nowhere() {
+        let mut world = World::infinite_empty();
+        let me = PlayerId(2);
+        let them = PlayerId(1);
+
+        // Everything the search can reach, owned by somebody else. There is
+        // no uncrowded seat at all, which is the worst case: it has to settle
+        // for the emptiest rather than return one.
+        let reach = SPAWN_PITCH * 8;
+        for r in -reach..reach {
+            for c in -reach..reach {
+                world.set_cell_at(r, c, Cell::DEAD.with_player(them));
+            }
+        }
+
+        let at = spawn_for(me, &world);
+        let bound = SPAWN_PITCH * SPAWN_SEARCH;
+        assert!(
+            at.0.abs() <= bound && at.1.abs() <= bound,
+            "spawned at {at:?}, beyond the {bound} the spiral can reach"
+        );
+        // And it is still a seat somebody could be granted: `grant` claims
+        // dead ground whoever held it, so a crowded patch is buildable even
+        // though it was not empty.
+        grant(&mut world, me);
+        assert!(may_place(&world, me, at.0, at.1), "granted ground nobody can build on");
+    }
+
     /// A granted patch keeps its `HOME` marks and they never decay, so a
     /// spawn stays put however the world around it changes — `grant` runs
     /// again on every rejoin, and a seat that wandered would hand a returning

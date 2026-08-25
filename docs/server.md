@@ -28,6 +28,16 @@ The menu asks `ClientMessage::Rooms` and shows what comes back, so a name is nor
 
 A room name is lowercase letters, digits, `-` and `_`, at most 24 characters, and is folded to lowercase. Narrow because the name is also the save file's name: a path separator in it would escape the rooms directory, and on a case-insensitive filesystem `Lobby` and `lobby` would be two rooms on one machine and one on another. `net::room_name` is the whole rule, and the client checks `--room` against it before connecting so a bad name is a message about the argument rather than a connection that opens and is turned away.
 
+### Watching
+
+`ClientMessage::Watch` takes a room and no seat. `ServerMessage::Watching` answers with the room, its name, its tick and its shape — a `Welcome` without a player, because a spectator has no number, no token, no purse and no spawn, and sending zeroes would have the client draw a purse belonging to nobody.
+
+A spectator is **not a player with the actions taken away**, and that is forced rather than chosen. A seat is one of fifteen — `PlayerId::MAX`, four bits of cell — so spending one on somebody who is only watching costs a real player their place. And **no late joining is a rule about players**: somebody arriving at generation four hundred is exactly who watching is for, so `Watch` is admitted at any generation while `Join` to a running match is still refused.
+
+`rooms::Caller` carries the connection, the seat if there is one, and the room being watched if there is one. A watcher is routed to its room like a player with no number: `Server::handle` already takes `Option<PlayerId>` and already answers a `Subscribe` from nobody with the chunks it asked for, so reading works out of the box and everything that *acts* is refused for want of an id.
+
+That last part had to be made true. **An action belongs to the connection that sent it**, checked against `stamped.player` — without which the `player` field was a claim rather than an identity, any connection in a room could act as anybody in it, and a connection with no seat could act as everybody.
+
 ### Made by a client
 
 `ClientMessage::Create { name, shape, victory }` makes one over the wire — the three things `world new` and `match new` take at the console, with `victory: Option<Victory>` being the whole of the difference between them. The answer is `ServerMessage::Made(Result<RoomName, String>)`: the name the room actually got, or the refusal in the wording the console would have printed.
@@ -40,7 +50,7 @@ Two things hold the line on a server anybody can ask for worlds. **A cap**, `roo
 
 A connection id is not a player. A room is made before anybody has joined it, so there is no `PlayerId` to record — `rooms::Caller` carries the connection, which exists from the moment the socket opens, alongside the seat, which appears only with a `Welcome`. Ids are never reused, so a room's owner cannot become somebody else by a counter filling a gap.
 
-The cap is the backstop rather than the fix. The fix is sleeping a room nobody is in, which is half built already and is written up in [planned.md](planned.md#the-policy-which-is-the-actual-blocker).
+The cap is the backstop rather than the fix. The fix is sleeping a room nobody is in, which is half built already and is written up in [planned.md](planned.md#making-rooms-from-the-client).
 
 Every room runs on **one clock**. Separate worlds, but one generation span: a room with its own rate would be a second thing for a client to be told and a second way for the two to disagree about what a tick is.
 
