@@ -10,6 +10,16 @@ egui hands over a `TexturesDelta`, and dropping one that still holds deltas pani
 
 *Also:* apply textures when they are **produced**, not when they are drawn. A frame is not always drawn.
 
+## A control drawn inside a platform branch is a control one platform does not have
+
+The refresh that reaches a server was drawn inside the `else` that makes the address a **field**. A browser has a label there instead — its socket comes from the page it was served by, so a typed address would be a promise the client cannot keep — and the button went with the field. The web client then had no way to ask any server anything, and looked exactly like a client that could not connect.
+
+The rule that falls out: **branch on the smallest thing that actually differs.** What differs between the two clients is whether the address can be typed. Asking does not differ, so asking belongs outside the branch.
+
+It is worth a test rather than care, because reading the drawing code does not reliably catch it. egui runs headless — `Context::begin_pass`, call the view, `end_pass` — so a view can simply be asked what it decided, once per platform. `client::views::menu::tests::the_web_client_can_ask_its_server_and_so_can_a_native_one` is that test, and it fails on the bug above.
+
+*Also:* clear the `TexturesDelta` that `end_pass` returns, or the test panics on drop for the reason below.
+
 ## `egui-winit` does not build for wasm32
 
 At 0.36.1, `egui::DroppedFile` declares `bytes_async` under `cfg(wasm32)` and egui-winit's impl provides only the native `bytes`, so the trait is unimplemented on that target. Upstream bug, not a wiring mistake.

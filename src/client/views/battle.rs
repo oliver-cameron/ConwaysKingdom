@@ -1552,6 +1552,12 @@ impl BattleApp {
     fn show_menu(&mut self, stage: menu::Stage) {
         match &mut self.screen {
             Screen::Menu(m) => {
+                // A fresh attempt starts a fresh retry cadence. Left standing,
+                // a `failed_at` from the last refusal would make the next one
+                // read as already overdue and retry at once.
+                if !matches!(stage, menu::Stage::Failed(_)) {
+                    m.failed_at = None;
+                }
                 m.stage = stage;
                 // Re-read, because a game may have just been filed on the way
                 // here and a home screen showing the count from before it

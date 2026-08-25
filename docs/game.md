@@ -286,7 +286,9 @@ A **gathering match** gets a screen of its own for a plainer reason — its worl
 
 One accent per **column** rather than per screen. Each column has exactly one thing you would do next in it — join the world you picked, or make the one you described — and they are in different places, so neither is competing to be the one thing.
 
-**One refresh, beside the address.** Reaching a server for the first time and asking it again are the same act from where a player stands — tell me what is on there, now — so they are one control whose meaning follows the state rather than two that have to be told apart. The rooms column used to carry its own; that was the same button in a second place.
+**One refresh, beside the address, on both clients.** It briefly lived inside the branch that draws the address as a *field* — and a browser has a label there, because its socket comes from the page it was served by — so the web client had no button, nothing else able to ask, and no way to reach anything at all. The address is what differs between the two; asking is not.
+
+Reaching a server for the first time and asking it again are the same act from where a player stands — tell me what is on there, now — so they are one control whose meaning follows the state rather than two that have to be told apart. The rooms column used to carry its own; that was the same button in a second place.
 
 The client also reaches on its own when the typing settles: on enter, on leaving the field, or after a pause. Debounced rather than fired per keystroke, because `ws://127.0.0.1:8080/ws` passes through twenty addresses on its way to being one. That was briefly the *only* way in, and it was wrong: an address that had already been asked about was never asked again, so a server that refused once left a screen with nothing to press and retyping the same address did nothing at all. Pressing the button and pressing enter are **deliberate**, so they always ask; only the settle is guarded, and only against asking twice about one address with nobody having done anything. A refusal is retried on a slow cadence besides, because the usual reason is a server that is not running yet.
 

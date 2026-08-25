@@ -618,59 +618,59 @@ fn server_field(
     let m = theme.metrics;
     let mut ask = false;
     let mut refresh = false;
+    let mut typed = false;
 
     ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
-    if at.on_web {
-        // Not a field. The socket is derived from the page's origin, so a
-        // typed address here would be a promise the client cannot keep.
-        ui.colored_label(p.text_dim, &menu.address);
-        return None;
-    }
 
     ui.horizontal(|ui| {
-        // **The button is back, and it is the point of control.** Reaching
-        // when the typing settles is a convenience and it was made the only
-        // way in, which was a mistake: a server that refused once left nothing
-        // on screen to press, and retyping the same address did nothing at all
-        // because it had already been asked about. A menu with no visible way
-        // to act is a menu that looks broken, and it looked broken because for
-        // that address it *was*.
-        // **One control, and it is a refresh.** Reaching a server for the
-        // first time and asking it again are the same act from where the
-        // player stands — "tell me what is on there, now" — so they are one
-        // button whose meaning follows the state rather than two that have to
-        // be told apart. The rooms column had its own; that was the same
-        // button in a second place.
+        // **The button comes first and belongs to both clients.** It used to
+        // be drawn after the address, inside the branch that makes the address
+        // a field — so a browser, whose socket comes from the page it was
+        // served by and which therefore has a label rather than a field, got
+        // no button at all and had no way to reach anything. The address is
+        // what differs between the two; asking is not.
+        //
+        // One control rather than two: reaching a server for the first time
+        // and asking it again are the same act from where a player stands —
+        // tell me what is on there, now — so the meaning follows the state and
+        // the hover text says which it is.
         let go = ui
             .add_sized(
                 [m.button_height, m.button_height],
                 egui::Button::new(egui::RichText::new(words::REFRESH).size(m.text_action)),
             )
             .on_hover_text(if reached { words::REFRESH_AGAIN } else { words::REFRESH_ASK });
-        let field = ui.add_sized(
-            [ui.available_width(), m.button_height],
-            egui::TextEdit::singleline(&mut menu.address).hint_text(words::SERVER_HINT),
-        );
-        if field.changed() {
-            menu.typed_at = Some(at.now);
-            // What is on screen is about an address that is no longer in the
-            // field, so it goes rather than sitting there contradicting it.
-            if !matches!(menu.stage, Stage::Asking) {
-                menu.stage = Stage::Idle;
-            }
-        }
 
-        // Enter and the button are **deliberate**, so they ask whatever the
-        // address is and whatever was asked before. Only the settle is
-        // guarded, and only against asking twice about one address without
-        // anybody having done anything.
-        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if go.clicked() || entered {
-            // Already connected: this is "say that again", which is one small
-            // message rather than a new socket.
-            if reached && !field.changed() {
-                refresh = true;
+        let entered = if at.on_web {
+            // Not a field. The socket is derived from the page's origin, so a
+            // typed address here would be a promise the client cannot keep.
+            ui.colored_label(p.text_dim, &menu.address);
+            false
+        } else {
+            let field = ui.add_sized(
+                [ui.available_width(), m.button_height],
+                egui::TextEdit::singleline(&mut menu.address).hint_text(words::SERVER_HINT),
+            );
+            if field.changed() {
+                typed = true;
+                menu.typed_at = Some(at.now);
+                // What is on screen is about an address that is no longer in
+                // the field, so it goes rather than contradicting it.
+                if !matches!(menu.stage, Stage::Asking) {
+                    menu.stage = Stage::Idle;
+                }
             }
+            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        };
+
+        // The button and enter are **deliberate**, so they ask whatever the
+        // address is and whatever was asked before. Only the settle is
+        // guarded, and only against asking twice about one address with
+        // nobody having done anything.
+        if go.clicked() || entered {
+            // Already connected, and the address has not moved: this is "say
+            // that again", which is one small message rather than a new socket.
+            refresh = reached && !typed;
             menu.attempted = None;
             ask = true;
         } else if menu.typed_at.is_some_and(|t| at.now - t >= SETTLE) {
@@ -687,24 +687,23 @@ fn server_field(
         }
         Stage::Failed(why) => {
             ui.colored_label(p.bad, egui::RichText::new(why).size(m.text_small));
-            // **Asked again on its own.** The usual reason a server does not
-            // answer is that it is not running *yet* — somebody is starting it
-            // in the other window — so the address is retried on a slow
-            // cadence rather than giving up after one refusal.
+            // Asked again on its own, on a slow cadence: the usual reason a
+            // server does not answer is that it is not running *yet*, and a
+            // menu that gives up after one refusal makes that something you
+            // have to notice.
             //
-            // `failed_at` is stamped when the refusal *arrives* and not here,
-            // which is the bug this replaces: set only inside this branch, it
-            // was `None` for as long as nothing had retried, so nothing ever
-            // did and the cadence never started.
+            // `failed_at` is stamped when the refusal is on screen and not
+            // inside a retry: set only there, it stayed `None` until something
+            // had retried, so nothing ever did.
             if menu.failed_at.is_none_or(|t| at.now - t >= RETRY_EVERY) {
                 menu.failed_at = Some(at.now);
                 menu.attempted = None;
                 ask = true;
             }
         }
-        // Nothing said. The field has just been typed into and the answer is
-        // a fraction of a second away; a line that appeared and vanished
-        // between two keystrokes would be noise.
+        // Nothing said. The field has just been typed into and the answer is a
+        // fraction of a second away; a line that appeared and vanished between
+        // two keystrokes would be noise.
         Stage::Idle => {}
     }
 
@@ -716,8 +715,8 @@ fn server_field(
     }
     menu.typed_at = None;
 
-    // Once per address, for the settle only — the button and enter cleared
-    // this above, because a press is somebody asking again on purpose.
+    // Once per address, for the settle only — a press cleared this above,
+    // because a press is somebody asking again on purpose.
     let address = menu.address.trim().to_string();
     if address.is_empty() || menu.attempted.as_deref() == Some(address.as_str()) {
         return None;
@@ -1335,6 +1334,7 @@ fn players(n: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::views::theme::Theme;
 
     #[test]
     fn a_room_reads_as_something_to_choose_between() {
@@ -1491,6 +1491,82 @@ mod tests {
         // An empty field asks nothing rather than asking about "".
         settle(&mut attempted, &mut asks, "");
         assert_eq!(asks, 3);
+    }
+
+    /// Run the menu for one frame in a headless egui and say what it chose.
+    ///
+    /// The class of bug this exists for has now bitten twice: a control that
+    /// is unreachable on one platform, or in one state, which no amount of
+    /// reading the drawing code reliably catches. egui runs perfectly well
+    /// with no window, so the menu can simply be *asked*.
+    fn one_frame(menu: &mut Menu, at: Where) -> Chose {
+        let ctx = egui::Context::default();
+        let theme = Theme::default();
+        // One pass, because one pass is one frame and the menu changes its own
+        // state as it decides — a second would run against a menu that had
+        // already acted, and report that it did nothing.
+        ctx.begin_pass(egui::RawInput::default());
+        let (chose, _) = show(&ctx, &theme, menu, at);
+        // Cleared, not dropped. A `TexturesDelta` that still holds deltas
+        // panics on drop, and the font atlas arrives on the first pass — see
+        // docs/gotchas.md, which is where this cost a day once already.
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        chose
+    }
+
+    fn at(now: f64, on_web: bool) -> Where {
+        Where { now, on_web, waiting_in_a_match: false }
+    }
+
+    /// **A browser must be able to reach its own server.** The refresh button
+    /// lived inside the branch that draws the address as a *field*, and the
+    /// web client has a label there instead — so it had no button, and with
+    /// nothing else able to ask, the whole client was a dead end. The address
+    /// is what differs between the two; asking is not.
+    #[test]
+    fn the_web_client_can_ask_its_server_and_so_can_a_native_one() {
+        for on_web in [true, false] {
+            let mut menu = Menu::new("ws://origin:8080/ws".into(), on_web);
+            menu.page = Page::Play;
+            // What pressing Play arms: ask straight away rather than waiting
+            // for somebody to touch a field they have no reason to touch.
+            menu.typed_at = Some(0.0);
+
+            let chose = one_frame(&mut menu, at(10.0, on_web));
+            assert!(
+                matches!(&chose, Chose::Connect(a) if a == "ws://origin:8080/ws"),
+                "on_web={on_web} could not reach its server"
+            );
+        }
+    }
+
+    /// A refusal is asked about again on its own, so a server started a moment
+    /// later is found without anybody having to notice a button.
+    #[test]
+    fn a_refused_address_is_asked_about_again() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Play;
+        menu.stage = Stage::Failed("no answer".into());
+        menu.attempted = Some("ws://host:8080/ws".into());
+
+        // The refusal has just arrived: `failed_at` is unset, and the retry
+        // starts from here rather than never — which is the bug this replaces.
+        let chose = one_frame(&mut menu, at(100.0, false));
+        assert!(matches!(chose, Chose::Connect(_)), "a refusal was never retried");
+        assert_eq!(menu.failed_at, Some(100.0), "and the cadence started");
+
+        // Not again immediately: a client hammering a port nothing is
+        // listening on is a log full of nothing.
+        menu.stage = Stage::Failed("no answer".into());
+        menu.attempted = Some("ws://host:8080/ws".into());
+        assert!(matches!(one_frame(&mut menu, at(101.0, false)), Chose::Nothing));
+
+        // And again once the interval has passed.
+        menu.stage = Stage::Failed("no answer".into());
+        menu.attempted = Some("ws://host:8080/ws".into());
+        let chose = one_frame(&mut menu, at(100.0 + RETRY_EVERY + 0.1, false));
+        assert!(matches!(chose, Chose::Connect(_)), "the cadence stopped");
     }
 
     /// The example fills a blank field **once, on the way in**. Doing it while
