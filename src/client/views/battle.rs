@@ -6,7 +6,9 @@
 use std::cell::RefCell;
 
 use super::words;
-use super::{camera, clock, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views};
+use super::{
+    camera, clock, help, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views,
+};
 use crate::render::app::App;
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
@@ -465,6 +467,12 @@ pub struct BattleApp {
     /// From the server because a client holds only the chunks it subscribed
     /// to: counting locally would score its own screen rather than the world.
     standing: Vec<(crate::sim::PlayerId, u32)>,
+    /// Whether the key list is on screen.
+    ///
+    /// Above every screen rather than on one, because the keys it lists work
+    /// on more than one and a player who wants them does not know which screen
+    /// they are supposed to ask from.
+    helping: bool,
     /// Which side is having its name typed, and what has been typed so far.
     ///
     /// Here rather than in the lobby panel because that panel is rebuilt every
@@ -1871,6 +1879,7 @@ impl App for BattleApp {
             picking_stamp: false,
             standing: Vec::new(),
             sides: crate::net::Sides::SOLO,
+            helping: false,
             naming_side: None,
             in_play: None,
             geiger: Default::default(),
@@ -2022,69 +2031,87 @@ impl App for BattleApp {
                 ),
         };
         let me = self.player();
-        let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| match &mut screen {
-            // The world is still drawn behind it, and still running if this
-            // client is offline. A menu over a dead grey rectangle says the
-            // game has not started; a menu over a world says it is waiting for
-            // you.
-            Screen::Menu(m) => {
-                let (picked_menu, rect) = menu::show(ctx, &theme, m, at);
-                chose = picked_menu;
-                rect.into_iter().collect()
-            }
-            Screen::Playing => {
-                // A gathering match is a screen of its own: its world is
-                // empty until the whistle, so there is nothing to draw the
-                // lobby over and nothing for a HUD or a hotbar to act on.
-                if matches!(
-                    lobby.as_ref().map(|l| &l.phase),
-                    Some(crate::net::MatchPhase::Gathering)
-                ) {
-                    let (rect, did) =
-                        lobby.as_ref().map_or((None, lobby_view::Did::Nothing), |l| {
-                            lobby_view::show(ctx, &theme, &l.look(me), &mut naming)
-                        });
-                    in_lobby = did;
-                    return rect.into_iter().collect();
-                }
-
-                overlay::show(ctx, &theme, &marks);
-                let (hud_rect, back) = hud::show(ctx, &theme, &status);
-                leaving = back;
-                // How much of the match is left, which is the one thing on
-                // screen that is about the room rather than about a player.
-                let clock_rect = lobby.as_ref().and_then(|l| {
-                    clock::show(ctx, &theme, generation, &l.phase, l.victory, &standing)
-                });
-                let look = hotbar::Look { theme: &theme, sheet, player: me, typed: &typed };
-                let bar = hotbar::show(ctx, &look, held, &self.stamps);
-                picked = bar.picked;
-                // Over the world rather than instead of it: a match that has
-                // not started looks exactly like a game that is broken, since
-                // nothing moves and nothing a player does appears.
-                // A decided match keeps its board: the result is what is on
-                // it, and covering that to say who won would hide the reason.
-                let waiting = lobby.as_ref().and_then(|l| {
-                    let (rect, did) = lobby_view::show(ctx, &theme, &l.look(me), &mut naming);
-                    if !matches!(did, lobby_view::Did::Nothing) {
-                        in_lobby = did;
+        let helping = self.helping;
+        let mut help_closed = false;
+        let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {
+            // The screen, in its own closure so that an arm may still return
+            // early -- one of them draws a lobby and nothing else.
+            let mut rects: Vec<egui::Rect> = (|| -> Vec<egui::Rect> {
+                match &mut screen {
+                    // The world is still drawn behind it, and still running if this
+                    // client is offline. A menu over a dead grey rectangle says the
+                    // game has not started; a menu over a world says it is waiting for
+                    // you.
+                    Screen::Menu(m) => {
+                        let (picked_menu, rect) = menu::show(ctx, &theme, m, at);
+                        chose = picked_menu;
+                        rect.into_iter().collect()
                     }
-                    rect
-                });
-                if picking {
-                    let (chose, rect) =
-                        stamp::show(ctx, &theme, &self.stamps, &mut sketch, me, sheet);
-                    from_library = chose;
-                    return [hud_rect, bar.rect, rect, waiting, clock_rect]
-                        .into_iter()
-                        .flatten()
-                        .collect();
+                    Screen::Playing => {
+                        // A gathering match is a screen of its own: its world is
+                        // empty until the whistle, so there is nothing to draw the
+                        // lobby over and nothing for a HUD or a hotbar to act on.
+                        if matches!(
+                            lobby.as_ref().map(|l| &l.phase),
+                            Some(crate::net::MatchPhase::Gathering)
+                        ) {
+                            let (rect, did) =
+                                lobby.as_ref().map_or((None, lobby_view::Did::Nothing), |l| {
+                                    lobby_view::show(ctx, &theme, &l.look(me), &mut naming)
+                                });
+                            in_lobby = did;
+                            return rect.into_iter().collect();
+                        }
+
+                        overlay::show(ctx, &theme, &marks);
+                        let (hud_rect, back) = hud::show(ctx, &theme, &status);
+                        leaving = back;
+                        // How much of the match is left, which is the one thing on
+                        // screen that is about the room rather than about a player.
+                        let clock_rect = lobby.as_ref().and_then(|l| {
+                            clock::show(ctx, &theme, generation, &l.phase, l.victory, &standing)
+                        });
+                        let look = hotbar::Look { theme: &theme, sheet, player: me, typed: &typed };
+                        let bar = hotbar::show(ctx, &look, held, &self.stamps);
+                        picked = bar.picked;
+                        // Over the world rather than instead of it: a match that has
+                        // not started looks exactly like a game that is broken, since
+                        // nothing moves and nothing a player does appears.
+                        // A decided match keeps its board: the result is what is on
+                        // it, and covering that to say who won would hide the reason.
+                        let waiting = lobby.as_ref().and_then(|l| {
+                            let (rect, did) =
+                                lobby_view::show(ctx, &theme, &l.look(me), &mut naming);
+                            if !matches!(did, lobby_view::Did::Nothing) {
+                                in_lobby = did;
+                            }
+                            rect
+                        });
+                        if picking {
+                            let (chose, rect) =
+                                stamp::show(ctx, &theme, &self.stamps, &mut sketch, me, sheet);
+                            from_library = chose;
+                            return [hud_rect, bar.rect, rect, waiting, clock_rect]
+                                .into_iter()
+                                .flatten()
+                                .collect();
+                        }
+                        // Each panel on its own. Folding them together first would
+                        // claim everything between them, and they sit in opposite
+                        // corners.
+                        [hud_rect, bar.rect, waiting, clock_rect].into_iter().flatten().collect()
+                    }
                 }
-                // Each panel on its own. Folding them together first would
-                // claim everything between them, and they sit in opposite
-                // corners.
-                [hud_rect, bar.rect, waiting, clock_rect].into_iter().flatten().collect()
+            })();
+            // Over everything, and drawn last so it sits on top of whatever
+            // screen asked for it. Its rectangle joins the list the client
+            // uses to keep a press off the world behind.
+            if helping {
+                let (rect, closed) = help::show(ctx, &theme);
+                help_closed = closed;
+                rects.extend(rect);
             }
+            rects
         });
         self.screen = screen;
         self.naming_side = naming;
@@ -2143,6 +2170,9 @@ impl App for BattleApp {
                     link.send(ClientMessage::NameSide { team, name });
                 }
             }
+        }
+        if help_closed {
+            self.helping = false;
         }
         if leaving {
             self.back_to_menu();
@@ -2208,6 +2238,19 @@ impl App for BattleApp {
         // One step at a time, innermost first: a form shuts before a world
         // does. Escape that skipped a level would take somebody out of a game
         // because they wanted to close a panel.
+        // `?` is shift and the slash key, which is the one keycap winit will
+        // not name for us: it reports the physical key, and what that key
+        // prints depends on the layout. Slash-with-shift is right on every
+        // layout this has been tried on and wrong on some it has not, which is
+        // why the pointer has a way to this too.
+        if pressed && code == K::Slash && self.shift {
+            self.helping = !self.helping;
+            return;
+        }
+        if pressed && code == K::Escape && self.helping {
+            self.helping = false;
+            return;
+        }
         if pressed && code == K::Escape && !self.playing() {
             if let Screen::Menu(m) = &mut self.screen {
                 // The form is a column rather than something opened, so there

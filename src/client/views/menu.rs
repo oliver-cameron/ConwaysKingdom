@@ -32,6 +32,15 @@ use crate::sim::WorldKind;
 /// and then looked at it.
 const SETTLE: f64 = 0.7;
 
+/// How often a refused address is tried again.
+///
+/// Slow, because the thing being waited for is a person starting a server in
+/// another window, and a client hammering a port that is not listening is a
+/// log full of nothing. Slower than the room list refreshes, for the same
+/// reason: that one is a question the server answers, and this one is a
+/// question about whether there is a server.
+const RETRY_EVERY: f64 = 4.0;
+
 /// What the menu is doing, which is mostly what it is waiting for.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Stage {
@@ -79,6 +88,9 @@ pub struct Menu {
     /// When the address was last typed into, so the reaching can wait for the
     /// typing to stop. `None` once it has been acted on.
     pub typed_at: Option<f64>,
+    /// When the last refusal was shown, so it can be tried again without
+    /// anybody having to notice and click.
+    pub failed_at: Option<f64>,
     /// The address already asked about, so a settled field is reached for
     /// once rather than every frame after it settles.
     pub attempted: Option<String>,
@@ -97,9 +109,12 @@ pub struct Menu {
     pub code: String,
     /// What this client has played before, read once when the menu opens.
     ///
-    /// Read once rather than every frame, because it comes out of
-    /// `localStorage` or a file and neither wants touching sixty times a
-    /// second for a number that changes when a game ends.
+    /// The games rather than only their totals, because the home screen draws
+    /// the shape of them and not just the count. Read once rather than every
+    /// frame: it comes out of `localStorage` or a file, and neither wants
+    /// touching sixty times a second for something that changes when a game
+    /// ends.
+    pub games: Vec<crate::client::record::Game>,
     pub record: crate::client::record::Summary,
     /// The world being described, if the form is open.
     ///
@@ -321,9 +336,11 @@ impl Menu {
             stage: Stage::Idle,
             page: Page::Home,
             typed_at: None,
+            failed_at: None,
             attempted: None,
             selected: None,
             code: String::new(),
+            games: crate::client::record::games(),
             record: crate::client::record::Summary::of(&crate::client::record::games()),
             draft: None,
         }
@@ -366,9 +383,19 @@ pub fn show(
     // selection you cannot clear, in a field you cannot leave, is the whole of
     // the complaint. Handled here, before anything is drawn, so it is the
     // innermost rung: a field lets go before a form shuts.
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && ctx.memory(|mem| mem.focused().is_some())
-    {
-        ctx.memory_mut(|mem| mem.stop_text_input());
+    if let Some(id) = ctx.memory(|mem| mem.focused()) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // **The selection goes too.** Surrendering focus on its own leaves
+            // the highlight painted where it was, so the field looks as though
+            // it still has the keyboard and there is nothing left to press to
+            // make it let go. Collapsing the cursor range is what actually
+            // clears it.
+            if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+                state.cursor.set_char_range(None);
+                egui::TextEdit::store_state(ctx, id, state);
+            }
+            ctx.memory_mut(|mem| mem.stop_text_input());
+        }
     }
 
     // The window, in points, which is what `Views` handed egui — not physical
@@ -428,7 +455,7 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
 
     ui.add_space(m.item_spacing * 2.0);
     ui.label(egui::RichText::new(words::home::RECORD).size(m.text_small));
-    record(ui, theme, &menu.record);
+    super::record::show(ui, theme, &menu.games, &menu.record);
 
     ui.add_space(m.item_spacing * 2.0);
     if ui
@@ -442,6 +469,15 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
         .clicked()
     {
         menu.page = Page::Play;
+        // Never blank, and filled in **here** rather than while the field is
+        // drawn. Refilling an empty field every frame is a field that cannot
+        // be cleared: select all, press delete, and the example is back before
+        // the next keystroke. Once, on the way in, is the whole of what was
+        // wanted.
+        #[cfg(not(target_arch = "wasm32"))]
+        if menu.address.trim().is_empty() {
+            menu.address = crate::client::views::battle::default_address().to_string();
+        }
         // Ask straight away rather than waiting for somebody to touch a field
         // they have no reason to touch: the address is remembered, or it is an
         // example, and either way the question is the same one.
@@ -459,9 +495,11 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     // meant. It becomes the way back in.
     ui.add_space(m.item_spacing);
     let (label, note) = if at.waiting_in_a_match {
-        (words::BACK_TO_MATCH, words::BACK_TO_MATCH_NOTE)
+        (words::BACK_TO_MATCH, Some(words::BACK_TO_MATCH_NOTE))
     } else {
-        (words::ALONE, words::ALONE_NOTE)
+        // No note. "The rules are the same offline" was answering a question
+        // nobody asks standing in front of a button that says Play alone.
+        (words::ALONE, None)
     };
     if ui
         .add_sized(
@@ -472,51 +510,13 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     {
         chose = if at.waiting_in_a_match { Chose::Resume } else { Chose::Offline };
     }
-    ui.small(note);
+    if let Some(note) = note {
+        ui.small(note);
+    }
 
     chose
 }
 
-/// What this client has played, in four lines it can read at a glance.
-fn record(ui: &mut egui::Ui, theme: &Theme, summary: &crate::client::record::Summary) {
-    let p = theme.palette;
-    let m = theme.metrics;
-    if !summary.any() {
-        ui.colored_label(
-            p.text_dim,
-            egui::RichText::new(words::home::NOTHING_YET).size(m.text_small),
-        );
-        return;
-    }
-    egui::Frame::new()
-        .fill(p.surface_lift)
-        .corner_radius(m.rounding)
-        .inner_margin(m.panel_padding)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(words::home::games(summary.games)).size(m.text_body));
-            // Only if there has been one. "0 of 0 matches won" is a line about
-            // nothing, and a home screen is not a form to be filled in.
-            if summary.matches > 0 {
-                ui.colored_label(
-                    p.text_dim,
-                    egui::RichText::new(words::home::matches(summary.won, summary.matches))
-                        .size(m.text_small),
-                );
-            }
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(words::home::best(summary.best)).size(m.text_small),
-            );
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(words::home::generations(summary.generations))
-                    .size(m.text_small),
-            );
-        });
-}
-
-/// A server, its rooms, a code, and the form that makes one.
 /// A server, what is on it, and a form for what is not.
 ///
 /// **Two columns, and the split says something true**: on the left is what
@@ -608,14 +608,6 @@ fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) ->
         return None;
     }
 
-    // Never blank. An empty field with a hint in it asks somebody who has
-    // never seen this game to invent a URL; an example they can edit asks them
-    // to change a number.
-    #[cfg(not(target_arch = "wasm32"))]
-    if menu.address.trim().is_empty() {
-        menu.address = crate::client::views::battle::default_address().to_string();
-    }
-
     let field = ui.add(
         egui::TextEdit::singleline(&mut menu.address)
             .desired_width(f32::INFINITY)
@@ -639,10 +631,16 @@ fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) ->
         }
         Stage::Failed(why) => {
             ui.colored_label(p.bad, egui::RichText::new(why).size(m.text_small));
-            // A failure has to be retryable without editing the address,
-            // because the usual reason is a server that was not running yet.
-            if ui.small_button(words::RETRY).clicked() {
+            // **Asked again on its own.** The usual reason a server does not
+            // answer is that it is not running *yet* — somebody is starting it
+            // in the other window — and a menu that gives up after one refusal
+            // makes that a thing you have to notice and click. So the address
+            // is retried on a slow cadence, and the button is for somebody who
+            // does not want to wait out the interval.
+            let due = menu.failed_at.is_some_and(|t| at.now - t >= RETRY_EVERY);
+            if ui.small_button(words::RETRY).clicked() || due {
                 menu.attempted = None;
+                menu.failed_at = Some(at.now);
                 menu.typed_at = Some(at.now - SETTLE);
             }
         }
@@ -1419,6 +1417,29 @@ mod tests {
         // An empty field asks nothing rather than asking about "".
         settle(&mut attempted, &mut asks, "");
         assert_eq!(asks, 3);
+    }
+
+    /// The example fills a blank field **once, on the way in**. Doing it while
+    /// the field is drawn made the field impossible to clear: select all,
+    /// press delete, and the example was back before the next keystroke.
+    #[test]
+    fn an_emptied_address_field_stays_empty_while_it_is_being_edited() {
+        let mut menu = Menu::new("ws://origin:8080/ws".into(), true);
+
+        // What entering the Play page does.
+        let enter = |menu: &mut Menu| {
+            if menu.address.trim().is_empty() {
+                menu.address = "ws://127.0.0.1:8080/ws".to_string();
+            }
+        };
+        menu.address.clear();
+        enter(&mut menu);
+        assert_eq!(menu.address, "ws://127.0.0.1:8080/ws", "a blank field is filled on the way in");
+
+        // And then somebody clears it to type their own. Nothing on the draw
+        // path may put it back.
+        menu.address.clear();
+        assert!(menu.address.is_empty(), "the field refilled itself under the cursor");
     }
 
     /// A field that is never blank, because a hint is a shape and this is a

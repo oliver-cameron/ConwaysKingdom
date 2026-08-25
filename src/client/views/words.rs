@@ -38,7 +38,6 @@ pub mod menu {
     /// because a phone has no escape key and a keyboard user should not have
     /// to reach for the mouse.
     pub const BACK: &str = "‹ back";
-    pub const ALONE_NOTE: &str = "The rules are the same offline. Nobody else is.";
     /// What the same button says when you are already enrolled in a match.
     /// Starting a solitary game is never what pressing the only other button
     /// meant, so the press means the opposite instead.
@@ -369,6 +368,73 @@ pub mod desync {
     /// has ever been put right.
     pub fn reading(rate: f64, total: u64) -> String {
         format!("desync {rate:.1}/12s, {total} chunks corrected")
+    }
+}
+
+/// Every key, on one screen, behind `?`.
+pub mod help {
+    pub const TITLE: &str = "Keys";
+    pub const CLOSE: &str = "close";
+    pub const DISMISS: &str = "Escape or ? closes this.";
+
+    pub const LOOKING: &str = "Looking about";
+    pub const BUILDING: &str = "Building";
+    pub const GETTING_ABOUT: &str = "Getting about";
+
+    pub const PAN: &str = "Move the view";
+    pub const PAN_FASTER: &str = "Move it faster";
+    pub const PAN_BY_HAND: &str = "Drag the world";
+    pub const ZOOM: &str = "Zoom in and out";
+    pub const TOOLS: &str = "Pick a tool: life, mine, turret, ice";
+    pub const STAMPS: &str = "Pick a stamp you have kept";
+    pub const DRAG: &str = "Lay a run of cells, or a rectangle";
+
+    pub const WALK: &str = "Walk a list";
+    pub const CHOOSE: &str = "Take what is picked";
+    pub const MOVE_ON: &str = "Move between controls";
+    /// One key, one meaning: back out of the innermost thing. It was listed
+    /// twice — once for abandoning a drawing and once for leaving a screen —
+    /// which is two answers to one question. It is a ladder, and saying so is
+    /// shorter than saying it twice.
+    pub const BACK: &str = "Back out: what you are drawing, then the screen";
+    pub const HELP: &str = "This";
+
+    /// The keycaps themselves. Spelled the way a keyboard is read rather than
+    /// the way winit names them — nobody has a key called `ArrowLeft`.
+    pub mod keys {
+        pub const PAN_KEYS: &str = "WASD / arrows";
+        pub const PAN_FAST: &str = "shift";
+        pub const PAN_DRAG: &str = "space or middle drag";
+        pub const ZOOM: &str = "wheel / pinch";
+        pub const TOOLS: &str = "shift + 1-4";
+        pub const STAMPS: &str = "1-9";
+        pub const DRAG: &str = "drag";
+        pub const WALK: &str = "up / down";
+        pub const CHOOSE: &str = "enter";
+        pub const MOVE_ON: &str = "tab";
+        pub const BACK: &str = "escape";
+        pub const HELP: &str = "?";
+    }
+}
+
+/// The record on the home screen.
+pub mod record {
+    pub const NOTHING_YET: &str = "Nothing played yet. That is what Play is for.";
+    pub const LARGEST: &str = "Largest territory, by game";
+    pub const FORM: &str = "Recent";
+    pub const WORLDS: &str = "worlds";
+    pub const MATCHES_WON: &str = "matches won";
+    pub const LARGEST_EVER: &str = "largest ever";
+    pub const GENERATIONS: &str = "generations";
+    pub const WON: &str = "won";
+    pub const LOST: &str = "lost";
+    pub const NO_RESULT: &str = "no result";
+
+    /// One game, as a tooltip reads it. Named parts rather than a template,
+    /// because the order of them is a decision: what it was, then how big you
+    /// got, then how long it took.
+    pub fn a_game(room: &str, squares: u32, generations: u64, outcome: &str) -> String {
+        format!("{room} · {squares} squares · {generations} generations · {outcome}")
     }
 }
 

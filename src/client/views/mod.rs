@@ -20,12 +20,14 @@
 pub mod battle;
 pub mod camera;
 pub mod clock;
+pub mod help;
 pub mod hotbar;
 pub mod hud;
 pub mod icons;
 pub mod lobby;
 pub mod menu;
 pub mod overlay;
+pub mod record;
 pub mod stamp;
 pub mod theme;
 pub mod words;
