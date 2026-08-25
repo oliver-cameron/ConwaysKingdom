@@ -4,16 +4,18 @@
 //! happens if it moves, is in [docs/simulation.md] and [docs/game.md]** — every
 //! constant and function here is named there.
 //!
-//! So the constants are **labelled, not explained**, and the rules stay here
-//! beside them. A reason belongs in the docs where it can be read against the
-//! reasons next to it; written here it buries the list somebody opened this
-//! file to see, and there is no telling from a wall of prose which line is the
-//! one they came for. A line each, a section heading, and the argument
-//! wherever the argument lives.
+//! So: **labelled, not explained.** A line per constant, a heading per group,
+//! and the argument wherever the argument lives. What that protects is that
+//! this file is editable — every number the game turns on in one screen, and
+//! changing one is finding a line rather than reading an essay to be sure it
+//! is the right line.
 //!
-//! What that is protecting is that this file is **editable**: every number the
-//! game turns on is in one screen, and changing one is finding a line rather
-//! than reading an essay to make sure it is the right line.
+//! The rules stay here beside the numbers they use, in the order they run:
+//!
+//! 1. the types the rules are written in
+//! 2. the numbers, by what they govern
+//! 3. the rule list, and the rules
+//! 4. the dice, and what a birth copies
 //!
 //! [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md
 //! [docs/game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
@@ -43,18 +45,14 @@ pub const BORN_ON: [usize; 1] = [3];
 
 // --- territory: a level, not a flag ------------------------------------------
 //
-// [docs/simulation.md#territory] explains the whole of it -- why a flag could
-// not work, why the claim is a strongest-of rather than a sum, and what the
-// roll is deciding.
+// A dead square goes to whoever pushes hardest, at what that push buys.
+// [docs/simulation.md#territory] is why, and why a sum needs a cap.
 
-/// Summed influence one level of claim costs. What makes reach come from
-/// **mass**: a lone cell buys one level, a crowd buys several.
+/// Summed influence one level of claim costs. Reach comes from mass.
 pub const LEVEL_SPREAD: u8 = 6;
-/// The least a step away from what feeds you costs, whatever the sum says.
-/// What bounds a halo, and what stops a broad claim sustaining itself.
+/// The least a step from what feeds you costs. What bounds a halo.
 pub const LEVEL_FALL: u8 = 2;
-/// Levels given up per update where less reaches a square than it holds.
-/// Claims rise at once and ebb a step at a time; this is the wake.
+/// Levels shed per update when less reaches a square than it holds. The wake.
 pub const LEVEL_EBB: u8 = 2;
 /// How often a square works out what reaches it. The rate, not the outcome.
 pub const LEVEL_ADJUST: Chance = 16;
@@ -66,14 +64,12 @@ pub const MINE_UPKEEP: Chance = 16;
 
 // --- turrets -----------------------------------------------------------------
 
-/// How far a turret acts, in cells. At or under [`super::CHUNK_N`], or one
-/// could write two chunks away, past what `compute_active` knows about.
+/// How far a turret acts, in cells. At or under [`super::CHUNK_N`].
 pub const TURRET_REACH: i32 = 6;
 /// How many squares it flips a generation.
 pub const TURRET_POWER: usize = 1;
-/// What it plants on a square it takes. Planted, not added: the territory rule
-/// assigns rather than accumulates, so a nudge would be wiped.
-pub const TURRET_PUSH: u8 = super::cell::bits::MAX_LEVEL;
+/// What it plants on a square it takes. Planted, not added.
+pub const TURRET_PUSH: u8 = bits::MAX_LEVEL;
 /// A dead turret becomes ordinary ground.
 pub const TURRET_DECAY: Chance = 4;
 
@@ -85,7 +81,7 @@ pub const STARTING_VALUE: i32 = 100;
 pub const LIFE_COST: i32 = 1;
 /// One mine.
 pub const MINE_COST: i32 = 10;
-/// One turret. Read per **emplacement**: the smallest one that works is four.
+/// One turret. Read per emplacement: the smallest that works is four.
 pub const TURRET_COST: i32 = 15;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
@@ -97,6 +93,11 @@ pub const MINE_YIELD: i32 = 1;
 pub const MINE_DRAIN: i32 = 2;
 
 // --- the rules, in order -----------------------------------------------------
+//
+// Each takes the cell as the one before left it and says whether the rest run.
+// The order is a decision: ice first, so a pane freezes anything without every
+// later rule having to honour it; territory before life, so ground changes
+// hands on what was alive at the start of the generation.
 
 /// What a rule left, and whether the rules after it still run.
 pub enum Then {
@@ -128,67 +129,38 @@ fn ice(cell: Cell, _: &Neighbours, _: Roll) -> Then {
     }
 }
 
-/// What reaches this square, and from whom.
-///
-/// One rule where there were three. `SPREAD`, `CREEP` and `DECAY` were a
-/// constant and a branch each, and the names lied — spread did not spread,
-/// creep did. A square takes the **strongest claim** reaching it, and a claim
-/// that has fallen to nothing leaves it to nobody, which is the whole of
-/// winning, losing and forgetting ground.
-///
-/// Sources are left alone: a living cell's square is fed by the cell, and
-/// granted ground is a spring. Neither is worked out from its neighbours, so
-/// neither can be argued away by them.
+/// What reaches this square, and from whom. See [docs/simulation.md#territory].
 fn territory(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
+    // Sources are fed by what stands on them, not by their neighbours.
     if cell.is_alive() || cell.is_home() {
         return Then::Next(cell);
     }
-    // The rate, not the outcome. See `LEVEL_ADJUST`.
     if !roll.chance(stream::LEVEL, LEVEL_ADJUST) {
         return Then::Next(cell);
     }
 
     let (player, level) = contested(neighbours, cell.player());
-
-    // Claims **rise at once and ebb a step at a time**. Assigning outright in
-    // both directions is the tidier rule and gives a glider no trail at all:
-    // the square behind it goes from held to nobody's the moment it looks.
-    // Ground that drains rather than switching off leaves a short, thinning
-    // wake, which is what something passing through ought to leave.
-    //
-    // Only downwards. A claim that has arrived is felt immediately, or a
-    // frontier would lag behind the life pushing it.
-    let holder = cell.player();
-    if player != holder || level >= cell.level() {
-        if level == 0 {
-            return Then::Next(cell.with_player(PlayerId::UNOWNED).with_level(0));
+    let taken = |c: Cell, who, n| {
+        if n == 0 {
+            c.with_player(PlayerId::UNOWNED).with_level(0)
+        } else {
+            c.with_player(who).with_level(n)
         }
-        return Then::Next(cell.with_player(player).with_level(level));
+    };
+
+    // Rises at once, ebbs a step at a time. The ebb is the wake.
+    if player != cell.player() || level >= cell.level() {
+        return Then::Next(taken(cell, player, level));
     }
-    let ebbed = cell.level().saturating_sub(LEVEL_EBB).max(level);
-    if ebbed == 0 {
-        return Then::Next(cell.with_player(PlayerId::UNOWNED).with_level(0));
-    }
-    Then::Next(cell.with_level(ebbed))
+    Then::Next(taken(cell, player, cell.level().saturating_sub(LEVEL_EBB).max(level)))
 }
 
-/// Who is pushing hardest on a square, and how hard.
+/// Who is pushing hardest, and how hard: every neighbour's influence summed
+/// per player, each player's total less everybody else's, and the best net
+/// capped [`LEVEL_FALL`] under the strongest thing feeding it.
 ///
-/// **A sum, with everybody else counted against you.** Each neighbour adds its
-/// influence to its own player's total; a player's net is their total less
-/// everybody else's, and the highest net takes the square at a level that net
-/// buys, [`LEVEL_SPREAD`] a level.
-///
-/// A sum rather than the best single neighbour, and the difference is what the
-/// map is about. Best-of is a distance field: ground goes to whoever's life is
-/// *nearest*, so a lone cell projects exactly as far as a colony and a small
-/// player holds their half of the line against a large one. A sum is a
-/// pressure field: reach comes from **mass**, so a blob pushes further than a
-/// blinker and a border between two players sits where the weight balances
-/// rather than where the distance does.
-///
-/// Ties go to whoever holds the square, and then to the lower number, so two
-/// peers agree and a border between matched players does not flicker.
+/// The cap is not decoration. A sum alone feeds itself and saturates the map;
+/// [docs/simulation.md#a-sum-and-why-it-needs-a-cap] has the measurement.
 #[inline]
 fn contested(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
     let mut total = [0i32; PlayerId::COUNT];
@@ -205,47 +177,24 @@ fn contested(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
         all += push as i32;
     }
 
+    // Ties to the holder, then to the lower number, so two peers agree and a
+    // matched border does not flicker.
     let mut won = (PlayerId::UNOWNED, 0i32);
     for (i, &mine) in total.iter().enumerate().skip(1) {
-        if mine == 0 {
-            continue;
-        }
-        // Theirs is `all - mine`, so the net is mine less theirs.
         let net = mine - (all - mine);
         let who = PlayerId(i as u8);
-        if net > won.1 || (net == won.1 && net > 0 && who == holder) {
+        if mine > 0 && (net > won.1 || (net == won.1 && net > 0 && who == holder)) {
             won = (who, net);
         }
     }
     if won.1 <= 0 {
         return (PlayerId::UNOWNED, 0);
     }
-    // **Never as strong as what feeds it**, and this is what bounds the map.
-    //
-    // A sum on its own runs away: a square with four neighbours at its own
-    // level already sums to more than that level, so the field feeds itself
-    // and saturates the plane -- measured, a block filling a 21x21 window at
-    // full strength and still growing after four hundred generations. Best-of
-    // never had the problem because it was strictly decreasing away from a
-    // source; a sum has to be told.
-    //
-    // So the sum decides **who** and **how strongly**, and this decides how
-    // far: [`LEVEL_FALL`] less than the strongest thing pushing, so a step
-    // away from a source costs at least that however many neighbours agree.
-    // Mass still buys reach, by keeping the sum above the cap for longer.
-    //
-    // The fall has to be more than one, because a sum sustains a **plateau**:
-    // in a broad patch every neighbour is at the same level, so a cap one
-    // below lets the patch decay a single level per ring and a glider drew a
-    // sixteen-square plume that widened as it went back.
-    let ceiling = best[won.0 .0 as usize].saturating_sub(LEVEL_FALL);
+
     let level = (won.1 / LEVEL_SPREAD as i32)
         .min(bits::MAX_LEVEL as i32)
-        .min(ceiling as i32) as u8;
-    if level == 0 {
-        return (PlayerId::UNOWNED, 0);
-    }
-    (won.0, level)
+        .min(best[won.0 .0 as usize].saturating_sub(LEVEL_FALL) as i32) as u8;
+    if level == 0 { (PlayerId::UNOWNED, 0) } else { (won.0, level) }
 }
 
 fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
@@ -291,7 +240,10 @@ mod stream {
 pub use stream::UPKEEP as UPKEEP_STREAM;
 pub use stream::{TURRET as TURRET_STREAM, TURRET_ROT as TURRET_ROT_STREAM};
 
-/// Which parent a birth copies.
+/// Which parent a birth copies, and whether its kind travels.
+///
+/// The carve-out is after the roll, so which parent is chosen never depends on
+/// what kind it turned out to be. See [`super::Kind::inherits`].
 #[inline]
 fn parent(neighbours: &Neighbours, roll: Roll) -> Cell {
     let mut parents = [Cell::DEAD; 8];
@@ -304,18 +256,10 @@ fn parent(neighbours: &Neighbours, roll: Roll) -> Cell {
     }
     let chosen = parents[roll.pick(stream::PARENT, found)];
     debug_assert!(chosen.player().is_owned(), "every parent is a live cell, so owned");
-
-    // A birth otherwise takes everything from its parent, which is how a kind
-    // travels. A kind that does not inherit passes over ownership alone: the
-    // ground still changes hands, and the machine does not copy itself. See
-    // `Kind::inherits` for why the two want different answers.
-    //
-    // After the roll rather than before it, so which parent was chosen does
-    // not depend on what kind it turned out to be -- every peer must roll the
-    // same number and reach the same parent whatever is standing there.
     if chosen.kind().inherits() {
         chosen
     } else {
+        // Ownership alone: the ground changes hands, the machine does not copy.
         Cell::alive(chosen.player())
     }
 }
