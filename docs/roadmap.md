@@ -26,6 +26,20 @@ A stamp lives as long as the client does. Capture a glider gun, close the tab, a
 
 The other half, from [planned.md](planned.md#stamps): a library is the natural thing to **share as one file**, which is a different feature wearing the same clothes and wants the format to be worth handing to somebody else.
 
+## Type, and the numbers that jitter
+
+**The defect is real and the pairing is not decided.** The generation counter, chunk counts, zoom, value, the desync rate and the match clock all redraw every frame, and egui's bundled Ubuntu-Light has proportional digits — so those columns shuffle sideways as the numbers change. A readout that moves while you read it is harder to trust than one that does not.
+
+What fixes it is **tabular figures**, which is not the same thing as a monospace font. Monospace gives every glyph one advance width; tabular figures give it only to the digits, and plenty of proportional faces have them. The reason the two get conflated here is egui: it exposes no OpenType feature toggle, so `tnum` cannot be switched on at runtime. That leaves three routes — send numbers to the `Monospace` family, which works today and costs nothing; ship a proportional face with `tnum` frozen in by fonttools so its default figures are tabular, which is invisible and costs a build step; or allocate each digit column by hand, which is exact and costs work at every readout.
+
+The split is the part worth deciding first, and it is not "mono or not". **A number that is compared against itself over time belongs in mono; a number read once inside a sentence does not.** The generation counter and the chunk counts are a readout sitting in a column, and mono's register is correct there rather than a compromise — that is what an instrument looks like. "3 players", "12×12 chunks, wrapping" and "first to 500 squares" are prose, and mono makes them look like a mistake and makes them wider, in a HUD already competing for the screen.
+
+Which leaves only the proportional face as an open question, and it is a preference rather than a defect. Inter is the most legible at the sizes the HUD uses and the most neutral, which is what [theme.rs] asks for — an instrument beside the simulation rather than a frame around it. IBM Plex Sans is the same argument with a voice, drawn for technical documentation. Space Grotesk is the one with character, and is styled enough to risk becoming the frame. All three are OFL and about 180–250 KB subset to Latin, against a wasm bundle already 7.5 MB after `wasm-opt`.
+
+Worth doing after the level shading lands rather than before, because that changes what the HUD is competing with.
+
+[theme.rs]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/src/client/views/theme.rs
+
 ## A minimap
 
 **Not yet**, and the reason is not effort. A client holds the chunks it subscribed to, which is its own screen and a margin — so a minimap drawn from what the client has is a picture of where you already are, which is the one place you do not need a map for.
