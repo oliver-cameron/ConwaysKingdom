@@ -1,5 +1,7 @@
 # Not built yet
 
+Designs, not directions. [roadmap.md](roadmap.md) holds the things decided on and not yet thought through; something moves from there to here when somebody works out what it costs.
+
 What has been decided, what has not, and what each one runs into. Everything here is an intention rather than a description — [the rest of docs/](README.md) is the system as it actually stands.
 
 ## A menu

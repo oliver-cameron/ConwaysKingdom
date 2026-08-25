@@ -77,3 +77,5 @@ cargo run --example headless -- 400 infinite           # the simulation, no GPU
 cargo run --no-default-features --example balance      # what mining pays, per pattern
 cargo run --no-default-features --example territory    # what ground does, in numbers and shapes
 ```
+
+[roadmap.md](roadmap.md) holds directions decided on and not yet thought through; [planned.md](planned.md) holds designs not yet built.

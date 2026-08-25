@@ -169,6 +169,7 @@ fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<Strin
 
     let history = history_path();
     if let Some(path) = &history {
+        // Absent the first time, which is not a failure.
         let _ = editor.load_history(path);
     }
     loop {
@@ -178,6 +179,14 @@ fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<Strin
                 // of them is a history you cannot page through.
                 if !line.trim().is_empty() {
                     let _ = editor.add_history_entry(line.as_str());
+                    // Written as it is typed, not on the way out. `stop` ends
+                    // the process while this thread is parked in `readline`,
+                    // so a save at the end of the loop never ran -- which is
+                    // every session that ended the way sessions end, and the
+                    // file only ever caught the ones that died some other way.
+                    if let Some(path) = &history {
+                        let _ = editor.append_history(path);
+                    }
                 }
                 if tx.send(line).is_err() {
                     break;
@@ -202,9 +211,6 @@ fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<Strin
                 break;
             }
         }
-    }
-    if let Some(path) = &history {
-        let _ = editor.save_history(path);
     }
     // There is no prompt to write above any more, and a printer for a dead
     // editor is a line that goes nowhere.
