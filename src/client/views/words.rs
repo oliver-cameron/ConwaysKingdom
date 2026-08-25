@@ -179,7 +179,9 @@ pub mod hud {
     ];
 }
 
-/// How a drag says part of it is being paid for at the outside rate.
+/// Unused while placing is a wall rather than a price. Kept because the two
+/// have swapped places twice now.
+#[allow(dead_code)]
 ///
 /// Empty when none of it is, so it appends to a label without a branch at
 /// every call site. Placing outside your own ground is a price rather than a
@@ -198,6 +200,14 @@ pub mod refused {
     /// A match that has not started, or one that is decided. Said rather than
     /// silently ignored: a click that does nothing looks exactly like a click
     /// that never arrived.
+    pub fn not_your_territory(row: i32, col: i32) -> String {
+        format!("nothing of yours reaches ({row}, {col})")
+    }
+
+    pub fn cells_not_yours(n: usize) -> String {
+        format!("{n} of those cells are out of your reach")
+    }
+
     pub fn not_started() -> &'static str {
         "nothing can be placed until the match starts"
     }

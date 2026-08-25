@@ -584,25 +584,34 @@ pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
 /// the time — a stroke that starts on your ground and runs off it is the
 /// ordinary case, and charging the whole of it at either rate would be wrong
 /// in one direction or the other.
-pub fn cell_cost(world: &World, player: PlayerId, row: i32, col: i32, placement: Placement) -> i32 {
-    let reach = influence(world, player, row, col);
-    // Full influence is the placement's own price, and every level short of it
-    // adds one multiple — so the edge of your reach costs seven times and the
-    // middle of your ground costs one. Where nothing of yours reaches, there
-    // is no price: `may_place` refuses it before this is asked.
-    let short = (crate::sim::bits::MAX_LEVEL.saturating_sub(reach)) as i32;
-    placement.cost() * (1 + short * THIN_MULTIPLIER)
+pub fn cell_cost(
+    _world: &World,
+    _player: PlayerId,
+    _row: i32,
+    _col: i32,
+    placement: Placement,
+) -> i32 {
+    // Flat, wherever it is. A price that rose as influence thinned went out
+    // with the shading that made it visible: a cost the player cannot see is a
+    // cost they cannot play around, and one that varies across ground which
+    // all looks the same is worse than one that does not vary at all.
+    //
+    // The world and the square are still taken, because whether a placement is
+    // *allowed* depends on both -- `may_place` is that question, and it is
+    // asked before this one.
+    placement.cost()
 }
 
 /// Whether `player` may put something down here at all.
 ///
-/// Where nothing of theirs reaches, no. A price with no ceiling would be a
-/// wall with extra arithmetic, and a slope that reached zero influence would
-/// let somebody buy a foothold on the far side of the map for a number.
+/// **Only where their own influence reaches.** Placing anywhere for a multiple
+/// was tried and is out: it made the map somewhere you bought your way into
+/// rather than somewhere you grew into, and ten times a cell is no obstacle at
+/// all to anybody with a mine running.
 ///
-/// Safe in a way the old wall was not: granted ground is a **source**, so a
-/// player whose life has gone out still has a patch with a live gradient
-/// around it, and can always build somewhere.
+/// Safe in a way the same wall was not before levels: granted ground is a
+/// **source**, so a player whose life has gone out still has a patch with a
+/// live gradient around it and can always build somewhere.
 pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     influence(world, player, row, col) > 0
 }
@@ -911,7 +920,7 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM, THIN_MULTIPLIER, TURRET_COST,
+    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM, TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
@@ -1314,33 +1323,27 @@ mod tests {
         assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
     }
 
-    /// **Priced by how thin your influence is**, and refused where none of it
-    /// reaches. Ten times flat was too weak and was flat because territory was
-    /// a flag with nothing to grade it by; a level grades it.
+    /// **Placing is confined to ground your own influence reaches**, at the
+    /// placement's own price wherever that is. Both halves of the other
+    /// arrangement went together: a price that rose as influence thinned, and
+    /// permission to place anywhere for a multiple. Ten times a cell was no
+    /// obstacle to anybody with a mine running, and a cost that varied across
+    /// ground which all looks the same was one nobody could play around.
     #[test]
-    fn placing_is_priced_by_how_far_your_influence_reaches() {
-        use crate::sim::bits::MAX_LEVEL;
+    fn placing_is_confined_to_ground_you_reach_and_costs_the_same_throughout() {
         let mut world = World::infinite_empty();
         let me = PlayerId(1);
-
-        // Full influence is the placement's own price.
         hold(&mut world, &[(0, 0)], me);
-        assert_eq!(influence(&world, me, 0, 0), MAX_LEVEL);
+
+        // The middle of your ground and the thinnest edge of it: one price.
+        world.set_cell_at(0, 1, Cell::DEAD.with_player(me).with_level(1));
         assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), -LIFE_COST);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 1)], Placement::Life)), -LIFE_COST);
+        assert!(may_place(&world, me, 0, 0) && may_place(&world, me, 0, 1));
 
-        // Every level short of full adds a multiple, so the edge of your reach
-        // costs seven times what the middle does.
-        let thin = Cell::DEAD.with_player(me).with_level(1);
-        world.set_cell_at(0, 1, thin);
-        assert_eq!(
-            value_delta(&world, &paint(vec![(0, 1)], Placement::Life)),
-            -LIFE_COST * (1 + (MAX_LEVEL as i32 - 1) * THIN_MULTIPLIER),
-            "one level of reach is the dearest place you may still build"
-        );
-
-        // And where nothing of yours reaches, there is no price at all.
+        // And a square nothing of yours reaches is not for sale at any price.
         assert!(!may_place(&world, me, 0, 5));
-        assert!(may_place(&world, me, 0, 1), "but the thin edge is still yours");
+        assert_eq!(influence(&world, me, 0, 5), 0);
     }
 
     /// Somebody else's ground is not yours however strong their claim is:

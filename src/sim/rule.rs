@@ -87,9 +87,6 @@ pub const TURRET_COST: i32 = 15;
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
 pub const RECLAIM: i32 = 1;
-/// Added multiples per level short of full influence. Refused where none
-/// reaches: a wall with a slope in front of it.
-pub const THIN_MULTIPLIER: i32 = 1;
 /// One birth of [`super::Kind::MINE`].
 pub const MINE_YIELD: i32 = 1;
 /// One upkeep charge on a dead mine.

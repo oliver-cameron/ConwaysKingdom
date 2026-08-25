@@ -170,7 +170,7 @@ Recomputed every generation for every square, the field would be an exact distan
 
 `bits::HOME` used to be a carve-out: the one square the decay rule skipped. It is a **source that is not alive** now, said in the same vocabulary as everything else, so a granted patch projects a live gradient whether or not anything survives on it and the rule never works it out from its neighbours.
 
-That is what makes the placing rule safe. Placing is priced by how thin your influence is and refused where none of it reaches — a wall with a slope in front of it — and the reason a wall was abandoned before was that a player whose life went out could never place again. A spring at home means everybody always has somewhere.
+That is what makes the placing rule safe. Placing is confined to ground your own influence reaches, and the reason a wall was abandoned before was that a player whose life went out could never place again. A spring at home means everybody always has somewhere.
 
 ### Fifteen players
 

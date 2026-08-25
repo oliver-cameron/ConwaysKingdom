@@ -879,23 +879,24 @@ impl BattleApp {
     /// cannot draw one thing and the release lay another.
     fn drag_cells(&self, drag: &Drag, to: (i32, i32)) -> Result<(Vec<(i32, i32)>, String), String> {
         let name = self.holding().to_string();
-        // Not a refusal any more: outside your own ground is ten times the
-        // price, so what this counts is what makes the number in the label
-        // bigger than the player expects. Said in the label rather than left
-        // to be worked out from the total.
+        // A refusal again: a stroke is all or nothing, so one cell nothing of
+        // yours reaches refuses the whole of it, before the button comes up.
         let outside = |cells: &[(i32, i32)]| {
             cells
                 .iter()
-                .filter(|&&(r, c)| !crate::net::own_ground(&self.world, self.player(), r, c))
+                .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
                 .count()
         };
         match drag.stroke {
             hotbar::Stroke::Pencil => {
+                let stray = outside(&drag.path);
+                if stray > 0 {
+                    return Err(words::refused::cells_not_yours(stray));
+                }
                 let full = if drag.full() { ", full" } else { "" };
-                let beyond = words::outside(outside(&drag.path));
                 Ok((
                     drag.path.clone(),
-                    format!("{} cells of {name}{full}{beyond}", drag.path.len()),
+                    format!("{} cells of {name}{full}", drag.path.len()),
                 ))
             }
             hotbar::Stroke::Rectangle => {
@@ -909,8 +910,11 @@ impl BattleApp {
                 let cells: Vec<(i32, i32)> = (r0..=r1)
                     .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
                     .collect();
-                let beyond = words::outside(outside(&cells));
-                Ok((cells, format!("{name} {rows}x{cols}{beyond}")))
+                let stray = outside(&cells);
+                if stray > 0 {
+                    return Err(words::refused::cells_not_yours(stray));
+                }
+                Ok((cells, format!("{name} {rows}x{cols}")))
             }
         }
     }
@@ -1138,6 +1142,16 @@ impl BattleApp {
         let Some(placement) = self.held.placement() else { return };
         let already_there = self.already_there(row, col);
 
+        // Confined to ground your own influence reaches, and refused here on
+        // the same terms the server refuses it, so the answer is instant
+        // rather than a round trip away. Taking back what is already there is
+        // not placing and is not confined.
+        if !already_there && !crate::net::may_place(&self.world, player, row, col) {
+            self.notice = Some(words::refused::not_your_territory(row, col));
+            self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
+            return;
+        }
+
         // Ice is not liftable. A pane stops time over whatever it covers, and
         // being able to take one back at will would make it cheap to undo as
         // well as strong to place -- what removes ice is life reaching it.
@@ -1159,13 +1173,8 @@ impl BattleApp {
             return;
         }
         self.notice = None;
-        let beyond = if already_there || crate::net::own_ground(&self.world, player, row, col) {
-            ""
-        } else {
-            " outside your ground"
-        };
         self.last_action = Some(match (already_there, existing.player()) {
-            (false, _) => format!("placed {name} at ({row}, {col}){beyond}, {delta:+}"),
+            (false, _) => format!("placed {name} at ({row}, {col}), {delta:+}"),
             (true, owner) if owner == player => {
                 format!("took your {name} at ({row}, {col}), {delta:+}")
             }
@@ -1220,6 +1229,15 @@ impl BattleApp {
             .collect();
 
         let cells: usize = stamp.cells.len();
+        let stray = stamp
+            .at(corner)
+            .iter()
+            .filter(|&&((r, c), _)| !crate::net::may_place(&self.world, self.player(), r, c))
+            .count();
+        if stray > 0 {
+            self.notice = Some(words::refused::cells_not_yours(stray));
+            return;
+        }
 
         let delta: i32 = quotes.iter().map(|(_, d)| d).sum();
         if self.value + delta < 0 {

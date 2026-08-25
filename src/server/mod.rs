@@ -559,10 +559,24 @@ impl Server {
                         return Vec::new();
                     }
                 }
-                // Placing outside a player's own territory is no longer
-                // refused, it is charged ten times over -- so there is nothing
-                // to check here and `net::value_delta` below does the whole of
-                // it, cell by cell, on the same terms the client priced it on.
+                // Placing is confined to ground the player's own influence
+                // reaches. Judged here as well as refused in the client,
+                // because a client that sends whatever it likes is the case
+                // this exists for -- and all or nothing, matching how the
+                // client prices and previews it: a paint half applied is a
+                // shape nobody drew.
+                if let crate::net::Action::Paint { cells, .. } = &stamped.action {
+                    if let Some(&(row, col)) = cells
+                        .iter()
+                        .find(|&&(r, c)| !crate::net::may_place(&self.world, stamped.player, r, c))
+                    {
+                        log::info!(
+                            "refused {:?}: nothing of theirs reaches ({row}, {col})",
+                            stamped.player
+                        );
+                        return Vec::new();
+                    }
+                }
                 // Cost is charged now, against the world as it stands, rather
                 // than when the action is applied at the tick boundary -- the
                 // client priced it against the same state, so pricing it later
