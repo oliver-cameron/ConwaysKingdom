@@ -234,6 +234,24 @@ pub mod hud {
     ];
 }
 
+/// The disagreement counter, which is quiet almost all of the time.
+pub mod desync {
+    /// The connection has slipped before and is settled now. Worth saying,
+    /// because a rate back at nought and a link that has never slipped look
+    /// identical and are not the same thing.
+    pub const SETTLED: &str = "in step";
+    /// Ticking over. Prediction costs this and always has.
+    pub const BACKGROUND: &str = "in step, correcting";
+    pub const NOTICEABLE: &str = "correcting often";
+    pub const ALARMING: &str = "struggling to stay in step";
+
+    /// The reading itself, for the developer panel: the rate, and how much
+    /// has ever been put right.
+    pub fn reading(rate: f64, total: u64) -> String {
+        format!("desync {rate:.1}/12s, {total} chunks corrected")
+    }
+}
+
 /// What the world says back when it refuses something.
 pub mod refused {
     /// A match that has not started, or one that is decided. Said rather than

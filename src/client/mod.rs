@@ -4,6 +4,7 @@
 //! is the rules. This is where policy lives — tick rate, which world to open,
 //! where the camera points, what a click means.
 
+pub mod desync;
 pub mod views;
 
 pub use views::battle::{BattleApp, GENERATION_SPAN};

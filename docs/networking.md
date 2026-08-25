@@ -100,6 +100,18 @@ The server compares against its own chunks and answers `Resync` with the ones th
 
 Measured with `examples/two.rs`, which runs two peers over the real protocol and compares digests every shared generation. Plain, they agree on all of about four hundred. With `LIE=1` one peer invents a block nobody sent it — a still life, since a lone cell dies of loneliness and heals the lie before anyone notices — and the disagreement is found and put right within a checkpoint interval, nine to eleven generations.
 
+## The reading, not the bang
+
+A `Resync` is an event: a log line, a refetch, silence. That says nothing about whether the last one was an isolated hiccup or the fourth this minute, and the difference is the whole diagnosis — prediction makes a generation of disagreement normal *by design*, so "did we disagree" has never been the useful question. "How often, and is it settling" is.
+
+So the client keeps a **geiger counter**, `client::desync::Geiger`. Every chunk a `Resync` names is one click, clicks decay with a half-life of twelve seconds, and what the HUD shows is the rate. Per chunk rather than per message, because a resync naming forty chunks is a world being rebuilt and one naming a single chunk is one prediction that missed, and counting messages would make those the same event.
+
+Twelve seconds is about three checkpoint intervals at four generations a second: a burst that stops is visibly falling by the next checkpoint and gone by the third, which is fast enough to read as "settled" and slow enough that two hiccups a few seconds apart still add up. Decay is a function of **elapsed time and not of how often it is looked at**, which matters more than it sounds — a client in trouble is usually a client dropping frames, and a rate that fell per frame would read lowest exactly when it should read highest. There is a test for that.
+
+It decays every frame rather than only when something arrives, or it would sit at its peak until the next resync. It is cleared on `Welcome`, because a different room is a different world and a different argument about it.
+
+What reaches the screen is one word beside "connected", which is the claim it qualifies: a link that is open and a link that is keeping up are two facts, and only the first was ever on screen. Silence until there has been something to be silent about — a link that has never slipped says nothing at all, and one that has slipped and settled says so, because a rate back at nought and a link that was never in trouble look identical and are not the same thing.
+
 ## Coming back
 
 `Welcome` carries the player's **value** as well as their number and ground. A returning player has a value already and the client cannot know it; assuming the starting figure left the two disagreeing from the first frame, with the client offering to spend money the server knew was gone and the server refusing the difference silently.

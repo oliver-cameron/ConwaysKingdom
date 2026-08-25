@@ -414,6 +414,9 @@ pub struct BattleApp {
     /// From the server because a client holds only the chunks it subscribed
     /// to: counting locally would score its own screen rather than the world.
     standing: Vec<(crate::sim::PlayerId, u32)>,
+    /// How badly this client and the server are disagreeing, as a decaying
+    /// rate rather than a log line — see [`crate::client::desync`].
+    geiger: crate::client::desync::Geiger,
     /// The pattern being drawn by hand in the library, if any.
     ///
     /// Lives here rather than in the library window because the window is
@@ -690,6 +693,10 @@ impl BattleApp {
                     // different choices from identical cells.
                     self.world.set_generation(tick);
                     self.subscribed.clear();
+                    // A different room is a different world and a different
+                    // argument about it, so the counter starts over rather
+                    // than showing the last room's trouble against this one.
+                    self.geiger.reset();
                     // Look at our own ground, which is the only place we may
                     // build. Derived rather than sent: `spawn_for` is the same
                     // function on both sides, so the client can work out where
@@ -826,7 +833,16 @@ impl BattleApp {
                     }
                 }
                 ServerMessage::Resync { tick, chunks } => {
-                    log::warn!("desynced at tick {tick}; refetching {} chunks", chunks.len());
+                    // One click per chunk, not per message: a resync naming
+                    // forty chunks is a world being rebuilt, and one naming a
+                    // single chunk is one prediction that missed. The log line
+                    // says it happened; the counter says how often.
+                    self.geiger.clicks(chunks.len(), self.elapsed);
+                    log::warn!(
+                        "desynced at tick {tick}; refetching {} chunks (rate {:.1})",
+                        chunks.len(),
+                        self.geiger.rate()
+                    );
                     // Asked for again at once rather than left to the viewport
                     // to notice: a wrong chunk off screen is still wrong, and
                     // it will be back on screen eventually.
@@ -1634,6 +1650,7 @@ impl App for BattleApp {
             icons: icons::Icons::default(),
             picking_stamp: false,
             standing: Vec::new(),
+            geiger: Default::default(),
             sketch: stamp::Sketch::default(),
             link,
         };
@@ -1698,6 +1715,10 @@ impl App for BattleApp {
             self.world.dirty = false;
         }
         self.elapsed += dt as f64;
+        // Decayed every frame rather than only when something arrives: the
+        // whole point of a rate is that it falls on its own, and one that only
+        // moved on a resync would sit at its peak until the next one.
+        self.geiger.decay(self.elapsed);
         let holding = self.holding().to_string();
         let status = hud::Status {
             player: self.player(),
@@ -1718,6 +1739,7 @@ impl App for BattleApp {
             last_action: self.last_action.as_deref(),
             holding: &holding,
             standing: &self.standing,
+            geiger: self.geiger,
         };
         let (held, theme, shifted) = {
             let views = self.views.borrow();

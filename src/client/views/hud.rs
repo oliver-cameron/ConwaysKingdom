@@ -4,6 +4,7 @@
 //! it needs arrives as arguments, so it has no opinion about where the numbers
 //! came from and cannot change them.
 
+use crate::client::desync::{Geiger, Level};
 use crate::client::views::words::hud as words;
 use crate::sim::{PlayerId, WorldKind};
 
@@ -42,6 +43,11 @@ pub struct Status<'a> {
     pub holding: &'a str,
     /// Who holds how much ground, most first. Empty until the server has said.
     pub standing: &'a [(PlayerId, u32)],
+    /// How badly this client and the server are disagreeing, as a decaying
+    /// rate. Shown beside "connected" because that is the claim it qualifies:
+    /// a link that is open and a link that is keeping up are two facts, and
+    /// only the first of them was on screen.
+    pub geiger: Geiger,
 }
 
 /// Whether the panel shows what it shows for a developer rather than a player.
@@ -107,7 +113,23 @@ pub fn show(
             ui.separator();
             ui.horizontal(|ui| {
                 if status.connected {
-                    ui.colored_label(theme.palette.good, words::CONNECTED);
+                    // Connected, and then how well. Silent until there has
+                    // been something to be silent about: a link that has
+                    // never slipped says nothing, because a reassurance
+                    // nobody asked for is one more thing to read every frame.
+                    let p = theme.palette;
+                    let (word, colour) = match status.geiger.level() {
+                        Level::Quiet if !status.geiger.ever() => (words::CONNECTED, p.good),
+                        Level::Quiet => (crate::client::views::words::desync::SETTLED, p.good),
+                        Level::Background => {
+                            (crate::client::views::words::desync::BACKGROUND, p.good)
+                        }
+                        Level::Noticeable => {
+                            (crate::client::views::words::desync::NOTICEABLE, p.warn)
+                        }
+                        Level::Alarming => (crate::client::views::words::desync::ALARMING, p.bad),
+                    };
+                    ui.colored_label(colour, word);
                 } else {
                     ui.colored_label(theme.palette.warn, words::OFFLINE);
                 }
@@ -127,6 +149,10 @@ pub fn show(
 
             if DEBUG {
                 ui.separator();
+                ui.small(crate::client::views::words::desync::reading(
+                    status.geiger.rate(),
+                    status.geiger.total(),
+                ));
                 ui.small(format!(
                     "cursor  ({}, {})   {}",
                     status.cursor_cell.0,
