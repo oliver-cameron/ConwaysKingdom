@@ -418,8 +418,33 @@ pub enum ClientMessage {
     /// has to see the worlds before picking one, and a room is a world, so
     /// there is no way to look first and choose after without asking from
     /// outside every room. It names no world itself, which is why it is one of
-    /// the two messages a connection with no seat may send.
+    /// the messages a connection with no seat may send.
     Rooms,
+    /// Make a room that is not here yet.
+    ///
+    /// Answerable without a seat, like `Rooms` and `Join` and for a sharper
+    /// version of the same reason: it names a room that does not exist, so
+    /// there is nowhere to be standing when it is sent.
+    ///
+    /// The fields are what `world new` and `match new` take at the console,
+    /// and `victory` is the whole of the difference between them. One message
+    /// rather than two, because a world and a match differ by whether there is
+    /// a way to win and by nothing else, and two messages would be two
+    /// vocabularies for one act.
+    ///
+    /// **Making a room does not put you in it.** The answer is a name; the
+    /// client sends `Join` with it, which is the same `Join` the room list
+    /// sends. That keeps one path into a world rather than two.
+    Create {
+        /// Validated by [`room_name`] on both sides — here so the menu can
+        /// refuse a name without a round trip, and again on the server
+        /// because nothing a client says about a filename is trusted.
+        name: RoomName,
+        shape: WorldKind,
+        /// How it is won. `None` makes a world, which is a match with no way
+        /// to end.
+        victory: Option<Victory>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,6 +488,19 @@ pub enum ServerMessage {
         world: WorldKind,
     },
     Rejected { reason: String },
+    /// The answer to [`ClientMessage::Create`]: what the room ended up being
+    /// called, or why there is not one.
+    ///
+    /// A `Result` rather than two variants, because it is one question with
+    /// two answers and because `Rooms::create` and `Rooms::new_match` already
+    /// return exactly this — the wire carries what the server already says,
+    /// refusal wording included.
+    ///
+    /// The name is sent back rather than assumed for the reason `Welcome`
+    /// sends one: [`room_name`] lowercases and trims, so what was typed and
+    /// what the room is called are not always the same string, and joining the
+    /// second is the only thing that works.
+    Made(Result<RoomName, String>),
     /// One generation happened. `tick` is the generation the world is on
     /// **after** it, and `actions` is what was applied on the way there.
     ///

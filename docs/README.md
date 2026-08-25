@@ -27,6 +27,7 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--serve DIR` | static files at `/` | none, so `/` 404s |
 | `--span MS` | milliseconds per generation | 250 |
 | `--fresh` | ignore every existing save | off |
+| `--max-rooms N` | how many rooms players may make | 32 |
 | `--torus RxC` | a world that wraps, sized in chunks | infinite |
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.

@@ -9,6 +9,7 @@
 //!     --serve DIR    static files at /           (default: none)
 //!     --span  MS     milliseconds per generation (default 250)
 //!     --fresh        ignore every existing save and start new worlds
+//!     --max-rooms N  how many rooms players may make (default 32)
 //!
 //! With `--serve .` the browser client and the socket come from one origin, so
 //! no separate static-file server is needed.
@@ -51,6 +52,7 @@ fn main() -> std::io::Result<()> {
     let mut span = Duration::from_millis(250);
     let mut fresh = false;
     let mut shape = conwayskingdom::sim::WorldKind::Infinite;
+    let mut max_rooms = conwayskingdom::server::rooms::MAX_MADE_ROOMS;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -64,6 +66,16 @@ fn main() -> std::io::Result<()> {
                 span = Duration::from_millis(ms);
             }
             "--fresh" => fresh = true,
+            // Rooms made by clients only. A `--room` on this line, or a name
+            // typed at the console, is a decision somebody made and is not
+            // counted against it.
+            "--max-rooms" => {
+                max_rooms = args
+                    .next()
+                    .expect("--max-rooms needs a number")
+                    .parse()
+                    .expect("--max-rooms takes a number");
+            }
             // Skipped rather than refused. The `cargo serve` alias already
             // ends in `--`, so typing a second one -- which is the habit --
             // would otherwise hand the binary a bare `--` and panic on it.
@@ -102,7 +114,7 @@ fn main() -> std::io::Result<()> {
     // .. }` on the way out tells a person nothing about what to do -- which
     // reads as saving being broken rather than as a file needing to be moved
     // out of the way.
-    let rooms = match Rooms::open(&rooms_dir, &declared, shape, fresh) {
+    let mut rooms = match Rooms::open(&rooms_dir, &declared, shape, fresh) {
         Ok(r) => r,
         Err(e) => {
             log::error!("cannot open rooms in {}: {e}", rooms_dir.display());
@@ -113,6 +125,8 @@ fn main() -> std::io::Result<()> {
             std::process::exit(1);
         }
     };
+
+    rooms.cap_made(max_rooms);
 
     log::info!(
         "{} room(s) in {}: {} -- a client naming none gets \"{}\"",

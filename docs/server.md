@@ -28,6 +28,20 @@ The menu asks `ClientMessage::Rooms` and shows what comes back, so a name is nor
 
 A room name is lowercase letters, digits, `-` and `_`, at most 24 characters, and is folded to lowercase. Narrow because the name is also the save file's name: a path separator in it would escape the rooms directory, and on a case-insensitive filesystem `Lobby` and `lobby` would be two rooms on one machine and one on another. `net::room_name` is the whole rule, and the client checks `--room` against it before connecting so a bad name is a message about the argument rather than a connection that opens and is turned away.
 
+### Made by a client
+
+`ClientMessage::Create { name, shape, victory }` makes one over the wire — the three things `world new` and `match new` take at the console, with `victory: Option<Victory>` being the whole of the difference between them. The answer is `ServerMessage::Made(Result<RoomName, String>)`: the name the room actually got, or the refusal in the wording the console would have printed.
+
+Answerable **without a seat**, which makes it the third such message after `Join` and `Rooms` and for a sharper version of the same reason — it names a room that does not exist, so there is nowhere to have been standing when it was sent.
+
+**Making a room does not put you in it.** The client sends `Join` with the name that came back, which is the same `Join` the room list sends, so there is one path into a world rather than two. The name has to come back rather than be assumed because `net::room_name` trims and lowercases: what was typed and what the room is called are not always the same string, and only the second one joins.
+
+Two things hold the line on a server anybody can ask for worlds. **A cap**, `rooms::MAX_MADE_ROOMS` and `--max-rooms`, counted over rooms made this way and not over rooms an operator declared — thirty-two by default. And **an owner**: the connection that asked is recorded in `Rooms::made`, readable with `made_by`. Nothing enforces the owner yet; what recording it buys is that "close what you opened" and "you have three open already" are answerable later without a migration, and that the log line for a room that appeared says who asked for it.
+
+A connection id is not a player. A room is made before anybody has joined it, so there is no `PlayerId` to record — `rooms::Caller` carries the connection, which exists from the moment the socket opens, alongside the seat, which appears only with a `Welcome`. Ids are never reused, so a room's owner cannot become somebody else by a counter filling a gap.
+
+The cap is the backstop rather than the fix. The fix is sleeping a room nobody is in, which is half built already and is written up in [planned.md](planned.md#the-policy-which-is-the-actual-blocker).
+
 Every room runs on **one clock**. Separate worlds, but one generation span: a room with its own rate would be a second thing for a client to be told and a second way for the two to disagree about what a tick is.
 
 There is one broadcast channel, and every message on it carries the room it came from; each connection drops what is not its own. One channel per room would save that comparison and cost a shared map of senders that connections and the simulation task would both have to lock — a lock, to avoid a string compare, on the one path that must not have one.

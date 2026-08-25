@@ -32,19 +32,33 @@ use tower_http::services::ServeDir;
 use crate::net::codec::{decode_client, encode_server};
 use crate::net::{ClientMessage, RoomName, ServerMessage};
 use crate::server::console;
-use crate::server::rooms::{Rooms, Seat};
+use crate::server::rooms::{Caller, ConnectionId, Rooms, Seat};
 use crate::sim::WorldKind;
 
 /// What a connection sends to the simulation task.
 enum ToSim {
     Message {
-        /// Where the sender is sitting, once they have joined. A `Join`
-        /// carries its own room and so needs none.
-        from: Option<Seat>,
+        /// Which socket, and where it is sitting once it has joined. A `Join`
+        /// carries its own room and so needs no seat; `Create` needs the
+        /// connection, because a room is made before there is a seat to make
+        /// it from.
+        from: Caller,
         msg: ClientMessage,
         reply: mpsc::UnboundedSender<ServerMessage>,
     },
     Left(Seat),
+}
+
+/// Hands out one id per socket, never reusing one.
+///
+/// Never reused so that a room's owner cannot silently become a different
+/// person: a counter that wrapped, or that filled gaps left by connections
+/// that had gone, would let a new socket inherit what an old one opened. At
+/// one connection a nanosecond this wraps in about six hundred years.
+static NEXT_CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_connection() -> ConnectionId {
+    NEXT_CONNECTION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A message meant for everyone in one room. The room travels with it because
@@ -412,7 +426,7 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                         None => break,
                         Some(ToSim::Left(seat)) => rooms.leave(&seat),
                         Some(ToSim::Message { from, msg, reply }) => {
-                            for out in rooms.handle(from.as_ref(), msg) {
+                            for out in rooms.handle(&from, msg) {
                                 let _ = reply.send(out);
                             }
                         }
@@ -537,7 +551,8 @@ async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl In
 }
 
 async fn connection(socket: WebSocket, state: AppState) {
-    log::info!("connection opened");
+    let id = next_connection();
+    log::info!("connection {id} opened");
     let (mut sink, mut stream) = socket.split();
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut subscribed = state.broadcast.subscribe();
@@ -583,7 +598,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
                             let _ = state.to_sim.send(ToSim::Message {
-                                from: me.clone(),
+                                from: Caller { connection: id, seat: me.clone() },
                                 msg,
                                 reply: reply_tx.clone(),
                             });
@@ -604,7 +619,7 @@ async fn connection(socket: WebSocket, state: AppState) {
         Some(seat) => {
             let _ = state.to_sim.send(ToSim::Left(seat));
         }
-        None => log::info!("connection closed before joining"),
+        None => log::info!("connection {id} closed before joining"),
     }
 }
 

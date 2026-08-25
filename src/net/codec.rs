@@ -84,7 +84,18 @@ mod tests {
                 player: PlayerId(4),
                 action: Action::Paint { cells: vec![(2, 2)], placement: Placement::Mine },
             }),
-        ];
+                    // A world and a match, which differ on the wire by one field.
+            ClientMessage::Create {
+                name: "arena".into(),
+                shape: crate::sim::WorldKind::Toroidal { rows: 6, cols: 8 },
+                victory: None,
+            },
+            ClientMessage::Create {
+                name: "cup".into(),
+                shape: crate::sim::WorldKind::Infinite,
+                victory: Some(crate::net::Victory::Timer { generations: 2000 }),
+            },
+];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
             assert_eq!(decode_client(&bytes).unwrap(), msg, "{msg:?}");
@@ -145,6 +156,10 @@ mod tests {
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },
             ServerMessage::Purse { value: -3 },
             ServerMessage::Rooms { rooms: vec![] },
+            // Both arms of the answer to `Create`, since a refusal is the
+            // common one and carries the only text a player will read.
+            ServerMessage::Made(Ok("arena".into())),
+            ServerMessage::Made(Err("there is already a room called \"arena\"".into())),
             ServerMessage::Rooms {
                 rooms: vec![
                     // A match, so the list can say so before anybody clicks.

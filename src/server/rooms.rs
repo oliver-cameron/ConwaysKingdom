@@ -43,6 +43,52 @@ pub type Seat = (RoomName, PlayerId);
 /// The extension a room's world is saved under.
 const SAVE_EXT: &str = "ckw";
 
+/// Which socket a message came in on. Unique for as long as the process lives
+/// and never reused, so a room's owner cannot become somebody else by a
+/// counter wrapping onto a number a departed connection had.
+pub type ConnectionId = u64;
+
+/// Who is speaking.
+///
+/// Two things rather than one, because they answer different questions and
+/// exist from different moments: the seat says which world a message belongs
+/// to and appears only after a `Welcome`, while the connection exists from the
+/// moment the socket opens — which is when a room can first be made, since
+/// making one is what you do before there is a world to sit in.
+pub struct Caller {
+    pub connection: ConnectionId,
+    /// Which world, and who in it. `None` until this connection has joined.
+    pub seat: Option<Seat>,
+}
+
+impl Caller {
+    /// A connection that has not joined anything.
+    pub fn new(connection: ConnectionId) -> Self {
+        Self { connection, seat: None }
+    }
+
+    /// For tests, and for the console, which is nobody's socket.
+    pub fn nobody() -> Self {
+        Self::new(0)
+    }
+
+    pub fn sitting(connection: ConnectionId, seat: Seat) -> Self {
+        Self { connection, seat: Some(seat) }
+    }
+}
+
+/// How many rooms a server will hold once clients are the ones making them.
+///
+/// A room costs a full simulation four times a second for as long as the
+/// process lives, whether or not anybody is in it, so a server that makes one
+/// for whoever asks is a server anybody can fill. This is the backstop rather
+/// than the fix — see [auto-sleep] — and it counts only rooms made over the
+/// wire: an operator declaring forty on the command line has made a decision,
+/// and this is not the place to second-guess it.
+///
+/// [auto-sleep]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#the-policy-which-is-the-actual-blocker
+pub const MAX_MADE_ROOMS: usize = 32;
+
 pub struct Rooms {
     /// Sorted, so every listing — a log line, a rejection, a save sweep — is
     /// in the same order however the map was filled.
@@ -50,6 +96,21 @@ pub struct Rooms {
     dir: PathBuf,
     /// Where a client that names no room is put.
     default_room: RoomName,
+    /// Rooms made over the wire, and which connection asked for each.
+    ///
+    /// Separate from `rooms` rather than a field on [`Server`], because it is
+    /// a fact about how a room came to exist and not about the world in it —
+    /// nothing in a save should change because a client rather than an
+    /// operator typed the name, and nothing here survives a restart for the
+    /// same reason a connection does not.
+    ///
+    /// Nothing reads the owner yet. What recording it buys is that "close what
+    /// you opened" and "you have three open already" are both answerable later
+    /// without a migration, and that the log line for a room that appeared
+    /// says who asked for it.
+    made: BTreeMap<RoomName, ConnectionId>,
+    /// The cap on `made`. [`MAX_MADE_ROOMS`] unless a flag says otherwise.
+    max_made: usize,
 }
 
 impl Rooms {
@@ -104,7 +165,7 @@ impl Rooms {
                 .or_insert_with(|| Server::named(name, shape.build()));
         }
 
-        Ok(Self { rooms, dir, default_room })
+        Ok(Self { rooms, dir, default_room, made: BTreeMap::new(), max_made: MAX_MADE_ROOMS })
     }
 
     /// A single room, with nothing on disk behind it. What the tests want.
@@ -114,6 +175,8 @@ impl Rooms {
             rooms: BTreeMap::from([(name.clone(), server)]),
             dir: PathBuf::new(),
             default_room: name,
+            made: BTreeMap::new(),
+            max_made: MAX_MADE_ROOMS,
         }
     }
 
@@ -180,7 +243,7 @@ impl Rooms {
     /// request that was then refused, and their client, which learns where it
     /// is from the `Welcome` it never got, would go on believing it was still
     /// there.
-    pub fn handle(&mut self, seat: Option<&Seat>, msg: ClientMessage) -> Vec<ServerMessage> {
+    pub fn handle(&mut self, caller: &Caller, msg: ClientMessage) -> Vec<ServerMessage> {
         // Answered without a seat, like `Join` and for the same reason: it
         // names no world. A player has to see the rooms before picking one,
         // and a room *is* a world, so asking from inside one is asking too
@@ -188,6 +251,13 @@ impl Rooms {
         if let ClientMessage::Rooms = msg {
             return vec![ServerMessage::Rooms { rooms: self.listing() }];
         }
+        // Answered without a seat for a sharper version of the same reason: it
+        // names a room that does not exist, so there is nowhere to have been
+        // standing when it was sent.
+        if let ClientMessage::Create { name, shape, victory } = msg {
+            return vec![ServerMessage::Made(self.make(caller.connection, &name, shape, victory))];
+        }
+        let seat = caller.seat.as_ref();
         if let ClientMessage::Join { room, .. } = &msg {
             let asked = room.clone();
             return match self.resolve(asked.as_deref()) {
@@ -331,6 +401,59 @@ impl Rooms {
         Ok(name)
     }
 
+    /// Make a room because a client asked for one.
+    ///
+    /// The same two calls the console makes, behind the cap and the owner
+    /// record that the console does not need. `victory` is the whole of the
+    /// difference between a world and a match, which is why this is one
+    /// function where the console has two commands: the console is a
+    /// vocabulary people type and reads better split, and this is one message.
+    ///
+    /// Refusals are the wording [`Self::create`] and [`Self::new_match`]
+    /// already produce, so a client is told the same thing an operator would
+    /// be — including that a name is taken, which is the common case and the
+    /// one worth reading.
+    pub fn make(
+        &mut self,
+        by: ConnectionId,
+        name: &str,
+        shape: WorldKind,
+        victory: Option<Victory>,
+    ) -> Result<RoomName, String> {
+        // Checked before the name is, so a server that is full says so rather
+        // than arguing about a name it was never going to use. Counted over
+        // rooms made this way and not over every room: an operator who
+        // declared forty has made a decision.
+        if self.made.len() >= self.max_made {
+            return Err(format!(
+                "this server is holding {} rooms made by players, which is all it will",
+                self.made.len()
+            ));
+        }
+        let name = match victory {
+            Some(victory) => self.new_match(name, shape, victory)?,
+            None => self.create(name, shape)?,
+        };
+        self.made.insert(name.clone(), by);
+        log::info!("connection {by} made room \"{name}\"");
+        Ok(name)
+    }
+
+    /// Which connection asked for this room, if a client did.
+    pub fn made_by(&self, name: &str) -> Option<ConnectionId> {
+        self.made.get(name).copied()
+    }
+
+    /// How many rooms clients have made, and how many they may.
+    pub fn made_count(&self) -> (usize, usize) {
+        (self.made.len(), self.max_made)
+    }
+
+    /// Override the cap, from `--max-rooms`.
+    pub fn cap_made(&mut self, max: usize) {
+        self.max_made = max;
+    }
+
     /// Start a named match's clock.
     pub fn start_match(&mut self, name: &str) -> Result<RoomName, String> {
         let name = crate::net::room_name(name)?;
@@ -398,6 +521,9 @@ impl Rooms {
                 }
             }
         }
+        // Forgotten here too, or a server that made and deleted its cap's
+        // worth of rooms would refuse to make another while holding none.
+        self.made.remove(&name);
         log::info!("deleted room \"{name}\"");
         Ok(name)
     }
@@ -644,7 +770,7 @@ mod tests {
             Rooms::open(temp_dir("route"), &["hall".into()], WorldKind::Infinite, true).unwrap();
 
         let replies = rooms.handle(
-            None,
+            &Caller::nobody(),
             ClientMessage::Join {
                 name: "alice".into(),
                 token: None,
@@ -659,7 +785,7 @@ mod tests {
 
         assert!(
             rooms
-                .handle(None, ClientMessage::Subscribe { chunks: vec![(0, 0)] })
+                .handle(&Caller::nobody(), ClientMessage::Subscribe { chunks: vec![(0, 0)] })
                 .is_empty(),
             "an unjoined connection may not read a world"
         );
@@ -679,7 +805,7 @@ mod tests {
         .unwrap();
         rooms.get_mut("arena").unwrap().join("alice").unwrap();
 
-        let replies = rooms.handle(None, ClientMessage::Rooms);
+        let replies = rooms.handle(&Caller::nobody(), ClientMessage::Rooms);
         let [ServerMessage::Rooms { rooms: listed }] = &replies[..] else {
             panic!("expected a listing, got {replies:?}");
         };
@@ -694,7 +820,7 @@ mod tests {
 
         // A player who left is not a player who is there.
         rooms.get_mut("arena").unwrap().leave(PlayerId(1));
-        let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(None, ClientMessage::Rooms)[..]
+        let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(&Caller::nobody(), ClientMessage::Rooms)[..]
         else {
             panic!("expected a listing");
         };
@@ -716,13 +842,13 @@ mod tests {
             room: Some(room.into()),
         };
 
-        let replies = rooms.handle(None, join("a"));
+        let replies = rooms.handle(&Caller::nobody(), join("a"));
         let [ServerMessage::Welcome { you, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
         };
         let seat: Seat = ("a".into(), *you);
 
-        rooms.handle(Some(&seat), join("b"));
+        rooms.handle(&Caller::sitting(1, seat.clone()), join("b"));
         assert!(
             !rooms.get("a").unwrap().players().any(|p| p.online),
             "nobody is left standing in the room she left"
@@ -733,7 +859,7 @@ mod tests {
         // it is from the Welcome it will not get, so anything else would have
         // the two disagreeing about which world she is in.
         let seat: Seat = ("b".into(), PlayerId(1));
-        let replies = rooms.handle(Some(&seat), join("nowhere"));
+        let replies = rooms.handle(&Caller::sitting(1, seat.clone()), join("nowhere"));
         assert!(matches!(replies[..], [ServerMessage::Rejected { .. }]));
         assert!(
             rooms.get("b").unwrap().players().any(|p| p.online),
@@ -747,13 +873,125 @@ mod tests {
     fn a_welcome_from_a_wrapping_room_says_so() {
         let mut rooms = Rooms::just(Server::named("ring", World::toroidal_empty(4, 6)));
         let replies = rooms.handle(
-            None,
+            &Caller::nobody(),
             ClientMessage::Join { name: "alice".into(), token: None, room: None },
         );
         let [ServerMessage::Welcome { world, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
         };
         assert_eq!(*world, WorldKind::Toroidal { rows: 4, cols: 6 });
+    }
+
+    /// The whole of client-made rooms, in one exchange: ask, get a name back,
+    /// join that name. Making does not seat you, so the second half is the
+    /// same `Join` the room list sends.
+    #[test]
+    fn a_client_can_make_a_room_and_then_join_it() {
+        let mut rooms =
+            Rooms::open(temp_dir("made"), &["hall".into()], WorldKind::Infinite, true).unwrap();
+        let me = Caller::new(7);
+
+        let replies = rooms.handle(
+            &me,
+            ClientMessage::Create {
+                // Typed with a capital and a space around it, because that is
+                // what a text field hands you and the name that comes back is
+                // the one that has to be joined.
+                name: "  Arena  ".into(),
+                shape: WorldKind::Toroidal { rows: 4, cols: 6 },
+                victory: None,
+            },
+        );
+        let [ServerMessage::Made(Ok(name))] = &replies[..] else {
+            panic!("expected a name, got {replies:?}");
+        };
+        assert_eq!(name, "arena", "the server names the room it actually made");
+        assert_eq!(rooms.made_by("arena"), Some(7), "and remembers who asked");
+
+        let name = name.clone();
+        let replies = rooms.handle(
+            &me,
+            ClientMessage::Join { name: "alice".into(), token: None, room: Some(name) },
+        );
+        let [ServerMessage::Welcome { room, world, .. }] = &replies[..] else {
+            panic!("expected a welcome, got {replies:?}");
+        };
+        assert_eq!(room, "arena");
+        assert_eq!(*world, WorldKind::Toroidal { rows: 4, cols: 6 }, "the shape it asked for");
+    }
+
+    /// A win condition is the whole of the difference between a world and a
+    /// match, so one message makes either.
+    #[test]
+    fn a_victory_makes_a_match_and_no_victory_makes_a_world() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let me = Caller::new(1);
+
+        rooms.make(1, "plain", WorldKind::Infinite, None).unwrap();
+        rooms
+            .make(1, "cup", WorldKind::Infinite, Some(Victory::Territory { squares: 500 }))
+            .unwrap();
+
+        let [ServerMessage::Rooms { rooms: listed }] =
+            &rooms.handle(&me, ClientMessage::Rooms)[..]
+        else {
+            panic!("expected a listing");
+        };
+        let find = |name: &str| listed.iter().find(|r| r.name == name).expect(name).clone();
+        assert_eq!(find("plain").phase, Phase::Open, "a world is open and stays open");
+        assert_eq!(find("plain").victory, None);
+        assert_eq!(find("cup").phase, Phase::Gathering, "a match waits for a whistle");
+        assert_eq!(find("cup").victory, Some(Victory::Territory { squares: 500 }));
+    }
+
+    /// A name already taken is refused in the client's own words, because "there
+    /// is already a room called that" is the common failure and the one a player
+    /// can act on.
+    #[test]
+    fn a_name_that_is_taken_is_refused_and_nothing_is_made() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let before = rooms.len();
+
+        let replies = rooms.handle(
+            &Caller::new(2),
+            ClientMessage::Create { name: "hall".into(), shape: WorldKind::Infinite, victory: None },
+        );
+        let [ServerMessage::Made(Err(why))] = &replies[..] else {
+            panic!("expected a refusal, got {replies:?}");
+        };
+        assert!(why.contains("hall"), "the refusal names the room: {why}");
+        assert_eq!(rooms.len(), before, "and nothing was made");
+        assert_eq!(rooms.made_by("hall"), None, "an existing room gets no owner");
+    }
+
+    /// The backstop. A server anybody can fill is a server that steps a
+    /// simulation four times a second for nobody, once per room, forever.
+    #[test]
+    fn the_cap_is_on_rooms_players_made_and_not_on_the_operators() {
+        let mut rooms = Rooms::open(
+            temp_dir("cap"),
+            &["one".into(), "two".into(), "three".into()],
+            WorldKind::Infinite,
+            true,
+        )
+        .unwrap();
+        rooms.cap_made(2);
+        assert_eq!(rooms.len(), 3, "three declared, none of them counted");
+
+        assert!(rooms.make(1, "a", WorldKind::Infinite, None).is_ok());
+        assert!(rooms.make(1, "b", WorldKind::Infinite, None).is_ok());
+        let (made, cap) = rooms.made_count();
+        assert_eq!((made, cap), (2, 2));
+
+        let refused = rooms.make(1, "c", WorldKind::Infinite, None).unwrap_err();
+        assert!(refused.contains('2'), "the refusal says how many: {refused}");
+        assert!(rooms.get("c").is_none(), "and made none");
+
+        // Deleting one frees a slot, or a server that had made and deleted its
+        // cap's worth would refuse for ever while holding nothing.
+        rooms.delete("a").unwrap();
+        assert_eq!(rooms.made_count().0, 1);
+        assert!(rooms.make(1, "c", WorldKind::Infinite, None).is_ok());
     }
 
     /// A room made while the server runs is a room, on disk immediately, and
