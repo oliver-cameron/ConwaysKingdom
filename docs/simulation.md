@@ -132,7 +132,9 @@ Life alone was the test, and it made territory unable to cross a chunk boundary 
 
 Ownership on a dead square is a **level**, not a flag: how much of its owner's influence reaches it, nought to seven. `sim::rule::territory` is one rule where there were three.
 
-**Living cells are sources**, and so is granted ground. A source reads as full whatever is stored on it — `Cell::influence` is where that lives — and every step away costs `rule::LEVEL_FALL`. A dead square takes the **strongest claim** reaching it: the best of its neighbours' influence less the fall, and the player that came from. A claim that has fallen to nothing leaves the square to nobody. Winning ground, losing it and forgetting it are all that one sentence.
+**Living cells are sources**, and so is granted ground. A source reads as full whatever is stored on it — `Cell::influence` is where that lives.
+
+A dead square works out **who is pushing hardest**. Each neighbour adds its influence to its own player's total; a player's net is their total less everybody else's, and the highest net takes the square at whatever that net buys, `rule::LEVEL_SPREAD` a level. A net of nothing leaves the square to nobody. Winning ground, losing it and forgetting it are that one sentence.
 
 ### Why a flag could not work
 
@@ -146,11 +148,17 @@ There is no rule about radius anywhere. A source is seven, the fall is two, so i
 
 The halo is a **square** rather than a disc, because a cell's neighbourhood is the eight around it and the distance that falls out of that is Chebyshev's. Making it round would mean charging more for a diagonal step, which is a real option and not currently taken.
 
-### Strongest claim, not a sum
+### A sum, and why it needs a cap
 
-Summing all eight neighbours was considered and is wrong in a way worth recording: it makes a diagonal count as much as an orthogonal, so the field grows as a square in a *worse* sense — the number stops being a distance at all, and a number that is not a distance is one nobody can read off the screen.
+A sum makes reach come from **mass**. The best single neighbour would be a distance field — ground to whoever's life is nearest, a lone cell projecting exactly as far as a colony, a small player holding their half of the line against a large one. A sum is a pressure field: a blob pushes further than a blinker, and a border sits where the weight balances rather than where the distance does.
 
-Mass gets its say at the one place it can without bending the geometry: **a tie goes to whoever is pushing hardest**, by the total of everything they have reaching the square. A tie in that too keeps the square where it is, so a border between two exactly matched players does not flicker, and two peers reach the same answer.
+What a sum cannot do on its own is stop. A square with four neighbours at its own level already sums to more than that level, so the field feeds itself — measured, a block filling a 21×21 window at full strength and still growing after four hundred generations. So a claim is capped at `rule::LEVEL_FALL` below the strongest thing feeding it: the sum decides **who** and **how strongly**, the cap decides **how far**, and mass still buys reach by keeping the sum above the cap for longer.
+
+The fall has to be more than one, because a sum sustains a **plateau**. In a broad patch every neighbour sits at the same level, so a cap one below lets the patch shed a single level per ring — a glider drew a sixteen-square plume that widened as it went back.
+
+Measured, at a spread of six and a fall of two: a block holds thirty-two squares in a graded halo, unchanged from generation eighty to four hundred. Ground nobody stands on goes to **nothing**. A glider holds about ninety, with a wake reaching eight squares behind it and tapering.
+
+Ties go to whoever holds the square and then to the lower number, so two peers agree and a border between matched players does not flicker.
 
 ### Rising and ebbing
 

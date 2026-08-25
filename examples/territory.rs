@@ -94,8 +94,8 @@ fn run(name: &str, life: &[(i32, i32)], generations: u32, picture: bool) {
 
 fn main() {
     println!(
-        "  fall {} per square, settling {} times in {}",
-        conwayskingdom::sim::LEVEL_FALL,
+        "  spread {} per level, settling {} times in {}",
+        conwayskingdom::sim::LEVEL_SPREAD,
         conwayskingdom::sim::LEVEL_ADJUST,
         conwayskingdom::sim::OUT_OF,
     );

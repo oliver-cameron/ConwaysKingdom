@@ -18,7 +18,7 @@
 //! [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md
 //! [docs/game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 
-use super::cell::Cell;
+use super::cell::{bits, Cell};
 use super::player::PlayerId;
 use super::seed::Roll;
 
@@ -47,7 +47,11 @@ pub const BORN_ON: [usize; 1] = [3];
 // not work, why the claim is a strongest-of rather than a sum, and what the
 // roll is deciding.
 
-/// Influence lost crossing one square. The only thing bounding a halo.
+/// Summed influence one level of claim costs. What makes reach come from
+/// **mass**: a lone cell buys one level, a crowd buys several.
+pub const LEVEL_SPREAD: u8 = 6;
+/// The least a step away from what feeds you costs, whatever the sum says.
+/// What bounds a halo, and what stops a broad claim sustaining itself.
 pub const LEVEL_FALL: u8 = 2;
 /// Levels given up per update where less reaches a square than it holds.
 /// Claims rise at once and ebb a step at a time; this is the wake.
@@ -144,7 +148,7 @@ fn territory(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
         return Then::Next(cell);
     }
 
-    let (player, level) = strongest(neighbours, cell.player());
+    let (player, level) = contested(neighbours, cell.player());
 
     // Claims **rise at once and ebb a step at a time**. Assigning outright in
     // both directions is the tidier rule and gives a glider no trail at all:
@@ -168,55 +172,80 @@ fn territory(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
     Then::Next(cell.with_level(ebbed))
 }
 
-/// The best claim reaching a square, and whose it is.
+/// Who is pushing hardest on a square, and how hard.
 ///
-/// **Strongest claim rather than a sum of all eight**, and the difference
-/// matters. A sum makes a diagonal neighbour count as much as an orthogonal
-/// one, so the field grows as a square rather than a disc and the number stops
-/// being a distance — and a number that is not a distance is one nobody can
-/// read off the screen. The best-of is Minecraft's water, and it is what makes
-/// a front between two players settle at the line equidistant between them
-/// without anything having to work out where that is.
+/// **A sum, with everybody else counted against you.** Each neighbour adds its
+/// influence to its own player's total; a player's net is their total less
+/// everybody else's, and the highest net takes the square at a level that net
+/// buys, [`LEVEL_SPREAD`] a level.
 ///
-/// Mass still gets a say, at the one place it can without bending the
-/// geometry: **ties go to the player pushing hardest**, by the total of
-/// everything they have reaching this square. Where that ties too, the square
-/// keeps whoever holds it, and failing that the lower number — so two peers
-/// always agree and a border does not flicker between two owners who are
-/// exactly matched.
+/// A sum rather than the best single neighbour, and the difference is what the
+/// map is about. Best-of is a distance field: ground goes to whoever's life is
+/// *nearest*, so a lone cell projects exactly as far as a colony and a small
+/// player holds their half of the line against a large one. A sum is a
+/// pressure field: reach comes from **mass**, so a blob pushes further than a
+/// blinker and a border between two players sits where the weight balances
+/// rather than where the distance does.
+///
+/// Ties go to whoever holds the square, and then to the lower number, so two
+/// peers agree and a border between matched players does not flicker.
 #[inline]
-fn strongest(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
+fn contested(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
+    let mut total = [0i32; PlayerId::COUNT];
     let mut best = [0u8; PlayerId::COUNT];
-    let mut total = [0u16; PlayerId::COUNT];
+    let mut all = 0i32;
     for n in neighbours {
         let who = n.player();
         if !who.is_owned() {
             continue;
         }
-        let claim = n.influence().saturating_sub(LEVEL_FALL);
-        if claim == 0 {
-            continue;
-        }
-        let i = who.0 as usize;
-        best[i] = best[i].max(claim);
-        total[i] += claim as u16;
+        let push = n.influence();
+        total[who.0 as usize] += push as i32;
+        best[who.0 as usize] = best[who.0 as usize].max(push);
+        all += push as i32;
     }
 
-    let mut won = (PlayerId::UNOWNED, 0u8, 0u16);
-    for (i, &claim) in best.iter().enumerate().skip(1) {
-        if claim == 0 {
+    let mut won = (PlayerId::UNOWNED, 0i32);
+    for (i, &mine) in total.iter().enumerate().skip(1) {
+        if mine == 0 {
             continue;
         }
+        // Theirs is `all - mine`, so the net is mine less theirs.
+        let net = mine - (all - mine);
         let who = PlayerId(i as u8);
-        let mass = total[i];
-        let better = claim > won.1
-            || (claim == won.1
-                && (mass > won.2 || (mass == won.2 && who == holder)));
-        if better {
-            won = (who, claim, mass);
+        if net > won.1 || (net == won.1 && net > 0 && who == holder) {
+            won = (who, net);
         }
     }
-    (won.0, won.1)
+    if won.1 <= 0 {
+        return (PlayerId::UNOWNED, 0);
+    }
+    // **Never as strong as what feeds it**, and this is what bounds the map.
+    //
+    // A sum on its own runs away: a square with four neighbours at its own
+    // level already sums to more than that level, so the field feeds itself
+    // and saturates the plane -- measured, a block filling a 21x21 window at
+    // full strength and still growing after four hundred generations. Best-of
+    // never had the problem because it was strictly decreasing away from a
+    // source; a sum has to be told.
+    //
+    // So the sum decides **who** and **how strongly**, and this decides how
+    // far: [`LEVEL_FALL`] less than the strongest thing pushing, so a step
+    // away from a source costs at least that however many neighbours agree.
+    // Mass still buys reach, by keeping the sum above the cap for longer.
+    //
+    // The fall has to be more than one, because a sum sustains a **plateau**:
+    // in a broad patch every neighbour is at the same level, so a cap one
+    // below lets the patch decay a single level per ring and a glider drew a
+    // sixteen-square plume that widened as it went back.
+    let ceiling = best[won.0 .0 as usize].saturating_sub(LEVEL_FALL);
+    let level = (won.1 / LEVEL_SPREAD as i32)
+        .min(bits::MAX_LEVEL as i32)
+        .min(ceiling as i32) as u8;
+    if level == 0 {
+        return (PlayerId::UNOWNED, 0);
+    }
+    (won.0, level)
 }
 
 fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {

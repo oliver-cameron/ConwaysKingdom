@@ -233,82 +233,85 @@ fn a_kind_spreads_through_a_mixed_neighbourhood() {
 // --- territory, which is a level now rather than a flag ---------------------
 
 /// A living cell is a **source**: it reads as full whatever is stored on its
-/// square, and every step away costs [`LEVEL_FALL`].
+/// square, and what reaches out from it is the sum of what pushes, capped so a
+/// step always costs at least [`LEVEL_FALL`].
 #[test]
-fn influence_falls_off_with_distance_from_a_source() {
+fn influence_comes_from_the_sum_of_what_pushes() {
     let me = PlayerId(1);
     let source = Cell::alive(me);
     assert_eq!(source.influence(), bits::MAX_LEVEL, "a living cell is a source");
 
-    // Beside it: full, less one step.
-    let mut beside = [Cell::DEAD; 8];
-    beside[0] = source;
-    let first = settled(Cell::DEAD, &beside);
-    assert_eq!(first.player(), me);
-    assert_eq!(first.level(), bits::MAX_LEVEL - LEVEL_FALL);
+    // One neighbour is one push: seven of influence, which buys a single level
+    // at LEVEL_SPREAD apiece.
+    let mut one = [Cell::DEAD; 8];
+    one[0] = source;
+    let alone = settled(Cell::DEAD, &one);
+    assert_eq!(alone.player(), me);
+    assert_eq!(alone.level(), bits::MAX_LEVEL / LEVEL_SPREAD);
 
-    // And a step further out, from that square rather than from the cell.
-    let mut further = [Cell::DEAD; 8];
-    further[0] = first;
-    let second = settled(Cell::DEAD, &further);
-    assert_eq!(second.level(), first.level() - LEVEL_FALL);
+    // **Mass buys reach.** The same square with more of the same pushing on it
+    // takes a stronger claim, which is the whole of why this is a sum.
+    let mut crowd = [Cell::DEAD; 8];
+    for i in 0..5 {
+        crowd[i] = source;
+    }
+    let pressed = settled(Cell::DEAD, &crowd);
+    assert!(
+        pressed.level() > alone.level(),
+        "five pushes gave {} against one push's {}",
+        pressed.level(),
+        alone.level()
+    );
 
-    // Until it runs out, and then the square belongs to nobody -- which is
-    // what bounds a halo, with no rule about radius anywhere. Started from a
-    // square that *is* held, so the letting go is something that happens
-    // rather than something that was already true.
-    let mut edge = [Cell::DEAD; 8];
-    edge[0] = Cell::DEAD.with_player(me).with_level(LEVEL_FALL - 1);
+    // But never as much as what feeds it. Without that a square with four
+    // neighbours at its own level sums to more than that level, the field
+    // feeds itself, and the map saturates.
+    assert!(pressed.level() <= bits::MAX_LEVEL - LEVEL_FALL, "a step always costs");
+
+    // And a claim that buys nothing leaves the square to nobody, which is what
+    // bounds a halo with no rule about radius anywhere.
+    let mut faint = [Cell::DEAD; 8];
+    faint[0] = Cell::DEAD.with_player(me).with_level(1);
     let held = Cell::DEAD.with_player(me).with_level(4);
-    let past = settled(held, &edge);
-    assert_eq!(past.player(), PlayerId::UNOWNED, "a claim that reaches nothing holds nothing");
+    let past = settled(held, &faint);
+    assert_eq!(past.player(), PlayerId::UNOWNED);
     assert_eq!(past.level(), 0);
 }
 
-/// **The strongest claim wins**, which is what makes a front between two
-/// players settle at the line equidistant between them without anything
-/// working out where that is.
+/// **Everybody else counts against you.** A player's net is their own total
+/// less all the others', so a square with more pushing on it from elsewhere is
+/// not theirs however much they have on it.
 #[test]
-fn the_strongest_claim_takes_the_square() {
+fn the_heaviest_net_takes_the_square() {
     let (me, them) = (PlayerId(1), PlayerId(2));
+
+    // Outnumbered: three of theirs against two of mine, so it goes to them.
     let mut n = [Cell::DEAD; 8];
     n[0] = Cell::DEAD.with_player(me).with_level(6);
-    n[4] = Cell::DEAD.with_player(them).with_level(3);
-
-    let out = settled(Cell::DEAD, &n);
-    assert_eq!(out.player(), me, "nearer wins");
-    assert_eq!(out.level(), 6 - LEVEL_FALL);
-
-    // Mass does not beat distance: three weak claims lose to one strong one,
-    // which is what keeps the number a distance and the map readable.
-    let mut crowd = [Cell::DEAD; 8];
-    crowd[0] = Cell::DEAD.with_player(me).with_level(6);
-    for i in [2, 4, 6] {
-        crowd[i] = Cell::DEAD.with_player(them).with_level(5);
+    n[1] = Cell::DEAD.with_player(me).with_level(6);
+    for i in 3..6 {
+        n[i] = Cell::DEAD.with_player(them).with_level(6);
     }
-    assert_eq!(settled(Cell::DEAD, &crowd).player(), me);
-}
+    assert_eq!(settled(Cell::DEAD, &n).player(), them, "weight of numbers");
 
-/// Mass gets its say where distance cannot separate them: **a tie goes to
-/// whoever is pushing hardest**, and a tie in that keeps the square where it
-/// is, so a border between two exactly matched players does not flicker.
-#[test]
-fn a_tie_goes_to_the_heavier_push_and_then_stays_put() {
-    let (me, them) = (PlayerId(1), PlayerId(2));
-    let mut n = [Cell::DEAD; 8];
-    n[0] = Cell::DEAD.with_player(me).with_level(5);
-    n[2] = Cell::DEAD.with_player(me).with_level(5);
-    n[4] = Cell::DEAD.with_player(them).with_level(5);
-    assert_eq!(settled(Cell::DEAD, &n).player(), me, "two pushes beat one");
+    // And what they take is what is *left* after mine is counted against it,
+    // which is less than they would hold unopposed.
+    let contested = settled(Cell::DEAD, &n).level();
+    let mut alone = [Cell::DEAD; 8];
+    for i in 3..6 {
+        alone[i] = Cell::DEAD.with_player(them).with_level(6);
+    }
+    assert!(
+        settled(Cell::DEAD, &alone).level() > contested,
+        "being pushed back should cost them"
+    );
 
-    // Dead level: whoever holds it keeps it, and both peers agree.
+    // Evenly matched is nobody's: the nets cancel.
     let mut even = [Cell::DEAD; 8];
-    even[0] = Cell::DEAD.with_player(me).with_level(5);
-    even[4] = Cell::DEAD.with_player(them).with_level(5);
-    let held_by_them = Cell::DEAD.with_player(them).with_level(1);
-    assert_eq!(settled(held_by_them, &even).player(), them, "the holder keeps it");
-    let held_by_me = Cell::DEAD.with_player(me).with_level(1);
-    assert_eq!(settled(held_by_me, &even).player(), me);
+    even[0] = Cell::DEAD.with_player(me).with_level(7);
+    even[4] = Cell::DEAD.with_player(them).with_level(7);
+    let held = Cell::DEAD.with_player(me).with_level(3);
+    assert_eq!(settled(held, &even).player(), PlayerId::UNOWNED, "a dead heat holds nothing");
 }
 
 /// **Granted ground is a spring**, not a carve-out. It reads as full whatever
@@ -337,22 +340,26 @@ fn granted_ground_is_a_source_and_is_never_argued_away() {
 }
 
 /// The roll decides **when** a square works itself out, not what it decides.
-/// Recomputed every generation the field would be an exact distance transform
-/// that snaps the instant anything moves; this is what makes it lag and smear.
+/// Recomputed every generation the field would be an exact transform that
+/// snaps the instant anything moves; this is what makes it lag and smear.
 #[test]
 fn the_roll_decides_the_rate_and_not_the_outcome() {
     let me = PlayerId(1);
     let mut n = [Cell::DEAD; 8];
-    n[0] = Cell::alive(me);
+    for i in 0..4 {
+        n[i] = Cell::alive(me);
+    }
 
     let mut moved = 0usize;
+    let mut seen = None;
     for seed in 0..640 {
         let out = next_cell(Cell::DEAD, &n, seed);
-        // Whenever it does update, it updates to the same thing. There is no
+        // Whenever it does settle, it settles to the same thing. There is no
         // seed that gives a different owner or a different level.
         if out.player().is_owned() {
             assert_eq!(out.player(), me, "seed {seed}");
-            assert_eq!(out.level(), bits::MAX_LEVEL - LEVEL_FALL, "seed {seed}");
+            let level = *seen.get_or_insert(out.level());
+            assert_eq!(out.level(), level, "seed {seed}");
             moved += 1;
         }
     }
