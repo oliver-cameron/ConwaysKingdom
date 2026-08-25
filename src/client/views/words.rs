@@ -143,6 +143,13 @@ pub mod menu {
         /// Chunks, not cells. Said out loud because the number is small and
         /// would otherwise read as a tiny world.
         pub const SIZE_NOTE: &str = "in chunks, each 16 cells square";
+        pub const TOGETHER: &str = "Played";
+        pub const SOLO: &str = "Every player for themselves";
+        pub const TEAMS: &str = "In sides";
+        pub const SIDES: &str = "Sides";
+        /// Sides are picked in the lobby, not here — said out loud, because a
+        /// form that asks how many and never asks who reads as unfinished.
+        pub const SIDES_NOTE: &str = "Who is on which side is settled in the lobby.";
         pub const PRIVATE: &str = "Who can find it";
         pub const LISTED: &str = "Anyone";
         pub const UNLISTED: &str = "By code";
@@ -154,6 +161,10 @@ pub mod menu {
 
         pub fn not_a_number_for(which: &str, text: &str) -> String {
             format!("{which}: \"{text}\" is not a number")
+        }
+
+        pub fn sides_range(least: u8, most: u8) -> String {
+            format!("{SIDES}: between {least} and {most}")
         }
 
         pub fn out_of_range(which: &str, most: i32) -> String {
@@ -265,6 +276,19 @@ pub fn phase(phase: &crate::net::MatchPhase) -> &'static str {
 
 /// The screen before a match starts.
 pub mod lobby {
+    pub const TAKE_SIDE: &str = "Join this side";
+    pub const LEAVE_SIDE: &str = "Leave this side";
+    pub const RENAME: &str = "rename";
+    pub const KEEP_NAME: &str = "ok";
+    pub const NOBODY_ON_IT: &str = "nobody yet";
+
+    /// Said rather than left to be noticed: the match will not start while
+    /// somebody is unplaced, and a lobby that does not say who is the wrong
+    /// place to find that out.
+    pub fn not_picked(who: &str) -> String {
+        format!("{who} has not picked a side")
+    }
+
     pub const WAITING: &str = "Waiting to start";
     pub const FINISHED: &str = "Match over";
     pub const NOBODY: &str = "Nobody held any ground.";

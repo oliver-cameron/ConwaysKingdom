@@ -83,23 +83,29 @@ The one thing to be careful of: **do not oust somebody who has just arrived.** A
 
 ## Teams
 
-**Designed, and it is smaller than it looks.** A team is a set of players who win together and do not fight each other.
+**Built for matches** — see [game.md](game.md#sides) and [server.md](server.md#sides). Solo or sides is chosen on the creation form; how many sides is chosen there too; who is on which, and what each is called, is settled in the lobby.
 
-The reason it is small is that the cell already carries an owner and the rules already read it. What a team changes is not what a cell is, it is **what counts as "yours"** — which is three functions, all in `net`:
+It turned out as small as the design said, and for the reason it gave: the cell already carries an owner and the rules already read it, so what a side changes is not what a cell *is* but **what counts as yours**. That is `net::reach`, which is `influence` with one comparison widened from `==` to `Sides::allied`, and `net::value_delta`, where an ally's cell reclaims at your own rate rather than a raid's. `sim` learned nothing, exactly as matches did not: the `territory` rule still contests per player, so two allies keep a border between their ground and simply cannot be hurt by it.
 
-| function | today | with teams |
-|---|---|---|
-| `may_place` | your influence reaches here | your **team's** influence reaches here |
-| `value_delta` | reclaiming your own earns, taking somebody else's costs | your team's is yours; the price only changes across a team boundary |
-| `Server::territory` | squares per player | summed per team for the score, still per player for the bars |
+`Sides` is a fixed sixteen bytes indexed by `PlayerId` rather than a map from side to members, because the question every caller asks is "are these two allied" and the other direction is wanted once, in the lobby.
 
-Nothing in `sim` learns about teams, which is the same result matches got and for the same reason: a team is an arrangement of who is playing, not a rule the world honours. The `territory` rule keeps contesting per player, so two allies still have a border between their ground — they simply cannot be hurt by it.
+Three decisions worth keeping:
 
-**The colour is the hard part.** A player's hue is derived from their number, and two allies must read as allies at a glance across a whole screen of cells. Sixteen distinct hues already crowd the wheel; four teams of four means four *families* of hue, which is a much tighter constraint than sixteen distinct ones and may not survive contact with the shader. Worth prototyping in `tools/cnvt.rs` against the real sheet before any of the above is written.
+**Scoring sums at the one place a result is decided**, `matches::leader_of`, rather than by teaching the rule about teams. The winner it names is the winning side's highest-holding member, because everything downstream — `Phase::Over`, the result panel, the record — is written in terms of a player.
 
-**Where a team is decided** is the lobby, and that is the other half of the work. `ServerMessage::Match` carries who is in the room; it would carry which side each is on, and the lobby screen would let somebody move between sides before the whistle. A match that starts with four on one side and one on the other is a match nobody wants, so this wants a balance check at `start_match` — refuse, or even out, rather than start.
+**The balance check is at the whistle, not in the lobby.** A lobby that refuses to let you join your friend because the sides would be uneven makes people argue about the order they clicked in; one that refuses to *start* until everybody has picked and no side is empty is one where they sort it out and press it again. Sizes beyond that are not checked: three against two is a match people arrange on purpose.
 
-**Friendly fire is the open question.** A glider is a weapon whoever built it, and a rule that made allied life pass through allied life would be a rule in `sim`, which is exactly what this design is trying to avoid. The honest first answer is that friendly fire is on and teams are about *scoring and building*, not about immunity.
+**Sides are settled once it starts.** Changing them mid-match would hand your ground to the people you were fighting, which the scoring could not sensibly explain.
+
+### What is left
+
+**The colour**, which is the hard part and is untouched. A player's hue comes from their number, and allies have to read as allies at a glance across a whole screen of cells — which means a family of hue per side, a much tighter constraint than sixteen distinct hues and one that may not survive the shader. `MAX_TEAMS` is eight on the assumption that it will; that number should be revisited against the real sheet in `tools/cnvt.rs` before anybody plays eight-a-side. Until then a team match is readable only because players remember who is on their side.
+
+**Friendly fire is on**, and that is the honest first answer rather than a decision. A glider is a weapon whoever built it, and a rule making allied life pass through allied life would be a rule in `sim` — which is what this design exists to avoid. Teams are about scoring and building, not immunity.
+
+**Nothing in a world.** Sides are a match feature because a team is a way of deciding a result and a world has none. A persistent world with standing alliances is a different feature wearing the same word.
+
+**The lobby cannot lock a side**, so anybody may join any side including one that is already full. That is deliberate — see the balance check above — and it does mean a five-player match can end up four against one if people are careless. The whistle allows it; whether it should is a playtest question.
 
 ## Rating
 

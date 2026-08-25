@@ -19,6 +19,17 @@ Nothing here is about looking like the thing borrowed from. The palette, the fla
 
 What is deliberately **not** taken is the drop-down. Every choice on the form is two or three wide, so a row of toggles shows the whole of it where a list shows one of it — and a drop-down wants a popup layer, which is one more thing to keep off the world behind the menu.
 
+## The dashboard, and a rating
+
+| source | what is taken |
+|---|---|
+| [MCSR Ranked](https://wiki.mcsrranked.com/gameplay/elo_and_ranks) | **Named tiers over a bare number.** Six ranks at Elo thresholds — Coal through Netherite — so a rating is a thing to reach rather than a number to read. A raw Elo tells a player nothing about where they stand |
+| [MCSR Ranked](https://wiki.mcsrranked.com/gameplay/elo_and_ranks) | **Placement matches** before a rating is shown, so one bad first game does not define somebody |
+| [MCSR Ranked](https://wiki.mcsrranked.com/gameplay/elo_and_ranks) | **Decay only at the top**, and only on inactivity — the top 150 lose 5 a day after a week idle. It keeps a leaderboard honest without punishing anybody who plays occasionally |
+| MCSR Ranked trackers | **An expandable match history**: a row per game, opening to the detail of that game |
+
+The last of those is the only one buildable today, and it is worth doing before the rest: `client::record` already keeps fifty games and the home screen shows only a summary of them. A recent-matches list, each row opening, needs no server and no identity. The other three all wait on [rating](planned.md#rating), which waits on there being a person to rate.
+
 ## The architecture
 
 | source | what is taken |

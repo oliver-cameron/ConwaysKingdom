@@ -14,7 +14,7 @@ use crate::client::views::hud::player_colour;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
-use crate::net::{MatchPhase, Victory};
+use crate::net::{MatchPhase, Sides, Team, TeamId, Victory};
 use crate::sim::PlayerId;
 
 /// Draw it, if this room is a match with something to say. Returns the
@@ -26,22 +26,44 @@ pub enum Did {
     Leave,
     /// Blow the whistle. Only offered to whoever made the match.
     Start,
+    /// Take this side, or step off one by taking [`TeamId::NONE`].
+    TakeSide(TeamId),
+    /// Call this side something.
+    NameSide(TeamId, String),
+}
+
+/// Everything the lobby draws from.
+///
+/// A struct because the argument list reached eleven, which is the point at
+/// which the order of them is the thing most likely to be got wrong — and
+/// every one of these is read by name at the other end anyway.
+pub struct Look<'a> {
+    pub me: PlayerId,
+    pub phase: &'a MatchPhase,
+    pub victory: Option<Victory>,
+    pub players: &'a [(PlayerId, String)],
+    /// Whose match it is: the player who may start it.
+    pub owner: Option<PlayerId>,
+    /// Who blew the whistle, once somebody has.
+    pub started_by: Option<PlayerId>,
+    pub sides: Sides,
+    /// The sides, their names and who is on them. Empty in a free-for-all.
+    pub teams: &'a [Team],
 }
 
 pub fn show(
     ctx: &egui::Context,
     theme: &Theme,
-    me: PlayerId,
-    phase: &MatchPhase,
-    victory: Option<Victory>,
-    players: &[(PlayerId, String)],
-    owner: Option<PlayerId>,
-    started_by: Option<PlayerId>,
+    look: &Look<'_>,
+    // What is being typed into a side's name box, if anything. Held by the
+    // client rather than here, because this panel is rebuilt every frame and
+    // a name half-typed would vanish between two of them.
+    naming: &mut Option<(TeamId, String)>,
 ) -> (Option<egui::Rect>, Did) {
     let mut did = Did::Nothing;
     // An open room is not a match, and a running one is a game — neither wants
     // a panel in the middle of it. Only the two ends have anything to say.
-    let heading = match phase {
+    let heading = match look.phase {
         MatchPhase::Gathering => words::WAITING,
         MatchPhase::Over { .. } => words::FINISHED,
         _ => return (None, Did::Nothing),
@@ -60,21 +82,22 @@ pub fn show(
                 .show(ui, |ui| {
                     ui.set_width(theme.panel_width(ctx.content_rect().width()) * 0.7);
                     ui.heading(heading);
-                    if let Some(victory) = victory {
+                    if let Some(victory) = look.victory {
                         ui.colored_label(p.text_dim, describe(victory));
                     }
                     ui.separator();
 
-                    match phase {
+                    match look.phase {
                         MatchPhase::Over { winner, held, .. } => match winner {
                             Some(id) => {
-                                let who = players
+                                let who = look
+                                    .players
                                     .iter()
                                     .find(|(p, _)| p == id)
                                     .map(|(_, name)| name.clone())
                                     .unwrap_or_else(|| format!("player {}", id.0));
                                 swatch(ui, *id);
-                                ui.heading(if *id == me {
+                                ui.heading(if *id == look.me {
                                     words::YOU_WON.to_string()
                                 } else {
                                     who
@@ -83,8 +106,9 @@ pub fn show(
                                 // Whose match it was. A result with no idea
                                 // who called it is a result somebody has to
                                 // ask about.
-                                if let Some(who) = started_by {
-                                    let name = players
+                                if let Some(who) = look.started_by {
+                                    let name = look
+                                        .players
                                         .iter()
                                         .find(|(id, _)| *id == who)
                                         .map(|(_, n)| n.clone())
@@ -101,23 +125,27 @@ pub fn show(
                             }
                         },
                         _ => {
-                            ui.label(words::who(players.len()));
-                            for (id, name) in players {
-                                ui.horizontal(|ui| {
-                                    swatch(ui, *id);
-                                    if *id == me {
-                                        ui.label(format!("{name}  ({})", words::YOU));
-                                    } else {
-                                        ui.label(name);
-                                    }
-                                });
+                            ui.label(words::who(look.players.len()));
+                            if look.teams.is_empty() {
+                                for (id, name) in look.players {
+                                    ui.horizontal(|ui| {
+                                        swatch(ui, *id);
+                                        if *id == look.me {
+                                            ui.label(format!("{name}  ({})", words::YOU));
+                                        } else {
+                                            ui.label(name);
+                                        }
+                                    });
+                                }
+                            } else if let Some(what) = side_picker(ui, theme, look, naming) {
+                                did = what;
                             }
                             ui.add_space(m.item_spacing);
                             // **Whoever made it blows the whistle.** Anybody
                             // may join a gathering match, and if anybody could
                             // also start it the person who set it up could not
                             // wait for their friends to arrive.
-                            let mine = owner.is_some_and(|o| o == me);
+                            let mine = look.owner.is_some_and(|o| o == look.me);
                             if mine {
                                 if ui
                                     .add_sized(
@@ -138,7 +166,7 @@ pub fn show(
                                 // Said rather than left blank: a lobby that
                                 // does nothing and explains nothing is
                                 // indistinguishable from one that is broken.
-                                ui.small(match owner {
+                                ui.small(match look.owner {
                                     Some(_) => whistle::NOT_YOURS,
                                     None => whistle::AT_CONSOLE,
                                 });
@@ -162,6 +190,130 @@ pub fn show(
         });
 
     (Some(area.response.rect), did)
+}
+
+/// Who is on which side, and the two things a player may do about it: join one,
+/// and name one.
+///
+/// **Anybody may take any side and anybody may name any side.** A lobby that
+/// stopped you joining your friend because the sides would be uneven is a lobby
+/// that makes people argue about the order they clicked in; the evenness is
+/// checked when the match is *started*, where it can be fixed and tried again.
+/// Naming is the same decision the room name already is: this is a game played
+/// together, and a naming fight is a smaller problem than a permission system.
+fn side_picker(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    look: &Look<'_>,
+    naming: &mut Option<(TeamId, String)>,
+) -> Option<Did> {
+    let p = theme.palette;
+    let m = theme.metrics;
+    let mut did = None;
+    let (me, sides, teams, players) = (look.me, look.sides, look.teams, look.players);
+    let mine = sides.team_of(me);
+    let name_of = |id: PlayerId| {
+        players
+            .iter()
+            .find(|(who, _)| *who == id)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| format!("player {}", id.0))
+    };
+
+    for team in teams {
+        let ours = team.id == mine;
+        egui::Frame::new()
+            .fill(if ours { p.surface_lift } else { p.surface })
+            .stroke(egui::Stroke::new(1.0, if ours { p.accent } else { p.line }))
+            .corner_radius(m.rounding)
+            .inner_margin(m.panel_padding * 0.6)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    match naming {
+                        // Being renamed: the field replaces the label, so the
+                        // row does not change height and nothing below it
+                        // moves while somebody types.
+                        Some((editing, text)) if *editing == team.id => {
+                            let field = ui.add_sized(
+                                [ui.available_width() * 0.6, m.button_height],
+                                egui::TextEdit::singleline(text),
+                            );
+                            let done =
+                                field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if done || ui.small_button(words::KEEP_NAME).clicked() {
+                                did = Some(Did::NameSide(team.id, text.clone()));
+                                *naming = None;
+                            }
+                        }
+                        _ => {
+                            ui.label(egui::RichText::new(&team.name).size(m.text_body));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button(words::RENAME).clicked() {
+                                        *naming = Some((team.id, team.name.clone()));
+                                    }
+                                },
+                            );
+                        }
+                    }
+                });
+
+                if team.players.is_empty() {
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(words::NOBODY_ON_IT).size(m.text_small),
+                    );
+                }
+                for &id in &team.players {
+                    ui.horizontal(|ui| {
+                        swatch(ui, id);
+                        let who = name_of(id);
+                        ui.colored_label(
+                            if id == me { p.text } else { p.text_dim },
+                            egui::RichText::new(if id == me {
+                                format!("{who}  ({})", words::YOU)
+                            } else {
+                                who
+                            })
+                            .size(m.text_small),
+                        );
+                    });
+                }
+
+                // Taking the side you are already on steps off it, so there is
+                // a way back to undecided without a second control.
+                let label = if ours { words::LEAVE_SIDE } else { words::TAKE_SIDE };
+                if ui
+                    .add_sized(
+                        [ui.available_width(), m.button_height],
+                        egui::Button::new(egui::RichText::new(label).size(m.text_small)),
+                    )
+                    .clicked()
+                {
+                    did = Some(Did::TakeSide(if ours { TeamId::NONE } else { team.id }));
+                }
+            });
+        ui.add_space(m.item_spacing);
+    }
+
+    // Anybody who has not picked. Named rather than left off, because a match
+    // will not start while somebody is unplaced and a lobby that does not say
+    // who is the wrong place to find that out.
+    let stray: Vec<PlayerId> =
+        players.iter().map(|(id, _)| *id).filter(|&id| sides.team_of(id).is_none()).collect();
+    if !stray.is_empty() {
+        ui.colored_label(
+            p.warn,
+            egui::RichText::new(words::not_picked(
+                &stray.iter().map(|&id| name_of(id)).collect::<Vec<_>>().join(", "),
+            ))
+            .size(m.text_small),
+        );
+    }
+
+    did
 }
 
 /// The same colour the shader gives this player's cells, so the lobby and the

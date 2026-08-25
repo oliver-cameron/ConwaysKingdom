@@ -128,6 +128,135 @@ pub fn room_name(raw: &str) -> Result<RoomName, String> {
     Ok(name)
 }
 
+/// Which side a player is on.
+///
+/// **Nought is nobody's**, which is both a solo match and a player in a team
+/// match who has not picked a side yet. That one value doing both jobs is what
+/// keeps the rest simple: `Sides::allied` says two players build on each
+/// other's ground only if their team is the same *and* not nought, so a solo
+/// match and an unpicked player fall out of the same line without either being
+/// a special case.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub struct TeamId(pub u8);
+
+impl TeamId {
+    /// Nobody's side.
+    pub const NONE: Self = Self(0);
+
+    pub fn is_none(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// The most sides a match may have.
+///
+/// Eight, against fifteen seats — so the smallest interesting team match is
+/// eight of one, which is not a team match, and the cap is really about the
+/// **colour**: allies have to read as allies at a glance across a screen of
+/// cells, which means a family of hue per side, and eight families is already
+/// crowding a wheel that holds sixteen distinct hues with difficulty. See
+/// [planned.md].
+///
+/// [planned.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#teams
+pub const MAX_TEAMS: u8 = 8;
+
+/// The fewest. One side is a solo match with extra words.
+pub const MIN_TEAMS: u8 = 2;
+
+/// The longest a side may be called, for the same reason a room name is
+/// bounded: it has to fit in a lobby row and in a log line.
+pub const TEAM_NAME_MAX: usize = 16;
+
+/// Who is allied with whom.
+///
+/// Indexed by [`PlayerId`], so it is a fixed sixteen bytes and copies freely —
+/// which matters because both sides need it: the server judges an action
+/// against it, and the **client predicts against it**, so a client that did
+/// not have it would price and refuse differently from the server on every
+/// placement near a teammate.
+///
+/// Deliberately not a map from side to members. The question every caller asks
+/// is "are these two on the same side", which this answers with two array
+/// reads; the other direction is wanted once, in the lobby, and is a scan of
+/// sixteen entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sides([u8; PlayerId::COUNT]);
+
+impl Default for Sides {
+    fn default() -> Self {
+        Self::SOLO
+    }
+}
+
+impl Sides {
+    /// Nobody is on anybody's side, which is a free-for-all.
+    pub const SOLO: Self = Self([0; PlayerId::COUNT]);
+
+    pub fn team_of(&self, player: PlayerId) -> TeamId {
+        TeamId(self.0[player.0 as usize])
+    }
+
+    pub fn put(&mut self, player: PlayerId, team: TeamId) {
+        self.0[player.0 as usize] = team.0;
+    }
+
+    /// Whether these two build on each other's ground and score together.
+    ///
+    /// A player is always allied with themselves, which is what makes this a
+    /// drop-in for the `==` it replaces. Two players on **nobody's** side are
+    /// not allies: nought is not a team, it is the absence of one.
+    pub fn allied(&self, a: PlayerId, b: PlayerId) -> bool {
+        a == b || (!self.team_of(a).is_none() && self.team_of(a) == self.team_of(b))
+    }
+
+    /// Everybody on this side, in player order.
+    pub fn members(&self, team: TeamId) -> Vec<PlayerId> {
+        if team.is_none() {
+            return Vec::new();
+        }
+        (1..PlayerId::COUNT)
+            .map(|i| PlayerId(i as u8))
+            .filter(|&p| self.team_of(p) == team)
+            .collect()
+    }
+
+    /// Whether anybody is on a side at all. A team match nobody has picked in
+    /// is still a free-for-all until somebody does.
+    pub fn any(&self) -> bool {
+        self.0.iter().skip(1).any(|&t| t != 0)
+    }
+}
+
+/// What a side is called before anybody names it. Numbered rather than given
+/// colours as names, because the colour is already on screen beside it and a
+/// side called "Blue" that is drawn green is worse than one called "Side 2".
+pub fn default_team_name(team: TeamId) -> String {
+    format!("Side {}", team.0)
+}
+
+/// Normalise a side's name, or say why it is not one.
+///
+/// Looser than [`room_name`] on purpose: a side name is read and never used as
+/// a filename or an identifier, so it may have spaces and capitals in it. What
+/// it may not have is a length that breaks a lobby row, or control characters.
+pub fn team_name(raw: &str) -> Result<String, String> {
+    let name: String = raw.trim().chars().filter(|c| !c.is_control()).collect();
+    if name.chars().count() > TEAM_NAME_MAX {
+        return Err(format!("a side's name is at most {TEAM_NAME_MAX} characters"));
+    }
+    Ok(name)
+}
+
+/// What a side is called and who is on it, as a lobby needs to show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Team {
+    pub id: TeamId,
+    pub name: String,
+    pub players: Vec<PlayerId>,
+}
+
 /// What a player is putting down.
 ///
 /// Named rather than carried as raw cell bits: the server has to be able to
@@ -501,6 +630,24 @@ pub enum ClientMessage {
     /// Answerable without a seat, like `Join`, and it names its own room for
     /// the same reason.
     Watch { room: RoomId },
+    /// Take a side, or leave the one you are on.
+    ///
+    /// Only while a match is **gathering**. Changing sides mid-match would
+    /// hand your ground to the people you were fighting, which is not a
+    /// decision a lobby should let somebody make by accident and not one the
+    /// scoring could sensibly explain.
+    ///
+    /// Anybody may take any side, and there is no balance check on the way in
+    /// — see `Start`, which is where a lopsided match is refused. A lobby that
+    /// stops you joining your friend because the sides would be uneven is a
+    /// lobby that makes you argue about the order you clicked in.
+    TakeSide { team: TeamId },
+    /// Call a side something.
+    ///
+    /// Anybody in the match may name any side, which is the same decision the
+    /// room name is: this is a game people play together, and a naming fight
+    /// is a smaller problem than a permission system.
+    NameSide { team: TeamId, name: String },
     /// Blow the whistle on a match this connection made.
     ///
     /// Sent with no room, because it names one: the match you are **in**. A
@@ -540,6 +687,10 @@ pub enum ClientMessage {
         /// How it is won. `None` makes a world, which is a match with no way
         /// to end.
         victory: Option<Victory>,
+        /// How many sides. `None` is a free-for-all, which is what a world
+        /// always is — only a match can have teams, because a team is a way
+        /// of deciding a result and a world has none.
+        teams: Option<u8>,
         /// Kept out of the room listing, reachable only by the code the
         /// server generates — which becomes the room's name, because a
         /// generated name is already unique and already what `Join` carries.
@@ -674,6 +825,17 @@ pub enum ServerMessage {
         /// and for a match the console started — which is the operator rather
         /// than anybody in the room.
         started_by: Option<PlayerId>,
+        /// Who is on whose side. `Sides::SOLO` in a free-for-all.
+        ///
+        /// Sent to every client because the **client predicts against it**:
+        /// whether a placement is allowed and what it costs both turn on who
+        /// is allied with whom, so a client without this would price and
+        /// refuse differently from the server on every square near a
+        /// teammate.
+        sides: Sides,
+        /// The sides this match has, what they are called, and who is on them.
+        /// Empty in a free-for-all.
+        teams: Vec<Team>,
         /// Whose match this is: the player who may start it.
         ///
         /// A `PlayerId` rather than a "may you start it" flag, because this
@@ -747,7 +909,22 @@ pub const SPAWN_N: i32 = 12;
 /// hopeful one: a client cannot know what it does not hold, and guessing would
 /// let it predict a cheaper price than the server charges.
 pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
-    world.cell_at(row, col).filter(|c| c.player() == player).map(|c| c.influence()).unwrap_or(0)
+    reach(world, player, &Sides::SOLO, row, col)
+}
+
+/// The same question with allies counted: how much influence **this player's
+/// side** has on this square.
+///
+/// Territory is still contested per player — two allies keep a border between
+/// their ground, and the rule in `sim` knows nothing about teams — so this is
+/// a lookup plus one comparison rather than a sum. What a team changes is not
+/// what a square holds; it is who that counts for.
+pub fn reach(world: &World, player: PlayerId, sides: &Sides, row: i32, col: i32) -> u8 {
+    world
+        .cell_at(row, col)
+        .filter(|c| sides.allied(player, c.player()))
+        .map(|c| c.influence())
+        .unwrap_or(0)
 }
 
 /// Whether `player` may put something down here.
@@ -766,8 +943,8 @@ pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
 /// from living ones, so a player's ground grows where their life goes.
 ///
 /// [docs/game.md#where-you-may-build]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
-pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
-    influence(world, player, row, col) > 0
+pub fn may_place(world: &World, player: PlayerId, sides: &Sides, row: i32, col: i32) -> bool {
+    reach(world, player, sides, row, col) > 0
 }
 
 /// How many grants sit along one edge of a **torus's** grid. Six covers all 31
@@ -1111,7 +1288,7 @@ pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
 /// Reclaiming your own living cell earns one. Placing costs one, and so does
 /// destroying someone else's cell — taking ground is not free. Erasing empty
 /// space is neither earned nor spent.
-pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
+pub fn value_delta(world: &World, sides: &Sides, stamped: &Stamped) -> i32 {
     match &stamped.action {
         // Only the cells a placement actually changes are charged for.
         // Charging for the rest made extending a pane cost as much as laying
@@ -1145,7 +1322,10 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
             .iter()
             .map(|&(row, col)| match world.cell_at(row, col) {
                 Some(cell) if placement.remove_from(cell) == cell => 0,
-                Some(cell) if cell.player() == stamped.player => RECLAIM,
+                // An ally's cell is yours to clear at your own rate. Charging
+                // a raid's price to tidy up beside a teammate would make a
+                // team something you pay to co-operate with.
+                Some(cell) if sides.allied(stamped.player, cell.player()) => RECLAIM,
                 Some(_) => -RECLAIM,
                 None => 0,
             })
@@ -1264,14 +1444,14 @@ mod tests {
         let cells = vec![(0, 0), (0, 1), (0, 2)];
 
         let first = paint(cells.clone(), Placement::Ice);
-        assert_eq!(value_delta(&world, &first), -3 * Placement::Ice.cost());
+        assert_eq!(value_delta(&world, &Sides::SOLO, &first), -3 * Placement::Ice.cost());
         apply(&mut world, &first);
 
         // The same rectangle again, plus one cell it did not cover.
         let mut wider = cells.clone();
         wider.push((0, 3));
         assert_eq!(
-            value_delta(&world, &paint(wider, Placement::Ice)),
+            value_delta(&world, &Sides::SOLO, &paint(wider, Placement::Ice)),
             -Placement::Ice.cost(),
             "only the cell that changed should be charged for"
         );
@@ -1296,7 +1476,7 @@ mod tests {
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
         assert_eq!(
-            value_delta(&world, &paint(vec![(0, 0)], Placement::Mine)),
+            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Mine)),
             -Placement::Mine.cost(),
             "converting life to a mine costs what a mine costs"
         );
@@ -1317,7 +1497,7 @@ mod tests {
         let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
         hold(&mut world, &block, PlayerId(1));
         assert_eq!(
-            value_delta(&world, &paint(block.clone(), Placement::Turret)),
+            value_delta(&world, &Sides::SOLO, &paint(block.clone(), Placement::Turret)),
             -4 * TURRET_COST,
             "an emplacement is four of them"
         );
@@ -1376,10 +1556,10 @@ mod tests {
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
         assert_eq!(
-            value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)),
+            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Ice)),
             -Placement::Ice.cost()
         );
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), 0);
+        assert_eq!(value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Life)), 0);
     }
 
     /// A pane belongs to whoever laid it, and there is one owner field per
@@ -1396,7 +1576,7 @@ mod tests {
         apply(&mut world, &theirs);
         // Their pane, so their ground: laying over it is a change, and one
         // nobody else may make, since no influence of theirs reaches it.
-        assert!(!may_place(&world, PlayerId(1), 0, 0), "not yours to build on");
+        assert!(!may_place(&world, PlayerId(1), &Sides::SOLO, 0, 0), "not yours to build on");
     }
 
     /// The reason `Erase` carries a placement at all. Life and ice are
@@ -1414,7 +1594,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
-        assert_eq!(value_delta(&world, &take), 1, "reclaiming your own pays one");
+        assert_eq!(value_delta(&world, &Sides::SOLO, &take), 1, "reclaiming your own pays one");
         apply(&mut world, &take);
 
         let cell = world.cell_at(0, 0).unwrap();
@@ -1457,7 +1637,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
-        assert_eq!(value_delta(&world, &no_pane), 0);
+        assert_eq!(value_delta(&world, &Sides::SOLO, &no_pane), 0);
         apply(&mut world, &no_pane);
         assert_eq!(
             world.cell_at(0, 0).unwrap(),
@@ -1483,7 +1663,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
-        assert_eq!(value_delta(&world, &mine), -1);
+        assert_eq!(value_delta(&world, &Sides::SOLO, &mine), -1);
     }
 
     /// Life is drawn by the stroke and ice is placed as a wall, so they are
@@ -1497,8 +1677,8 @@ mod tests {
         let mut world = World::infinite_empty();
         let five: Vec<_> = (0..5).map(|c| (0, c)).collect();
         hold(&mut world, &five, PlayerId(1));
-        assert_eq!(value_delta(&world, &paint(five.clone(), Placement::Life)), -5);
-        assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
+        assert_eq!(value_delta(&world, &Sides::SOLO, &paint(five.clone(), Placement::Life)), -5);
+        assert_eq!(value_delta(&world, &Sides::SOLO, &paint(five, Placement::Ice)), -25);
     }
 
     /// **Placing is confined to ground your own influence reaches**, at the
@@ -1515,12 +1695,20 @@ mod tests {
 
         // The middle of your ground and the thinnest edge of it: one price.
         world.set_cell_at(0, 1, Cell::DEAD.with_player(me).with_level(1));
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), -LIFE_COST);
-        assert_eq!(value_delta(&world, &paint(vec![(0, 1)], Placement::Life)), -LIFE_COST);
-        assert!(may_place(&world, me, 0, 0) && may_place(&world, me, 0, 1));
+        assert_eq!(
+            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Life)),
+            -LIFE_COST
+        );
+        assert_eq!(
+            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 1)], Placement::Life)),
+            -LIFE_COST
+        );
+        assert!(
+            may_place(&world, me, &Sides::SOLO, 0, 0) && may_place(&world, me, &Sides::SOLO, 0, 1)
+        );
 
         // And a square nothing of yours reaches is not for sale at any price.
-        assert!(!may_place(&world, me, 0, 5));
+        assert!(!may_place(&world, me, &Sides::SOLO, 0, 5));
         assert_eq!(influence(&world, me, 0, 5), 0);
     }
 
@@ -1534,7 +1722,7 @@ mod tests {
         hold(&mut world, &[(0, 0)], them);
         assert_eq!(influence(&world, them, 0, 0), crate::sim::bits::MAX_LEVEL);
         assert_eq!(influence(&world, me, 0, 0), 0);
-        assert!(!may_place(&world, me, 0, 0));
+        assert!(!may_place(&world, me, &Sides::SOLO, 0, 0));
     }
 
     /// Taking is not what changed. Erasing is priced on whose it is, at the
@@ -1556,7 +1744,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
-        assert_eq!(value_delta(&world, &mine), -RECLAIM);
+        assert_eq!(value_delta(&world, &Sides::SOLO, &mine), -RECLAIM);
     }
 
     /// The grant is still what a player starts from — not because it is the
@@ -1568,10 +1756,10 @@ mod tests {
         let (me, them) = (PlayerId(1), PlayerId(2));
         let (row, col) = spawn_for(me, &world);
 
-        assert!(!may_place(&world, me, row, col), "nothing is owned yet");
+        assert!(!may_place(&world, me, &Sides::SOLO, row, col), "nothing is owned yet");
         grant(&mut world, me);
-        assert!(may_place(&world, me, row, col), "granted ground is buildable");
-        assert!(!may_place(&world, them, row, col), "and only by its owner");
+        assert!(may_place(&world, me, &Sides::SOLO, row, col), "granted ground is buildable");
+        assert!(!may_place(&world, them, &Sides::SOLO, row, col), "and only by its owner");
 
         // Ground at the edges, and a block standing in the middle of it.
         assert!(!world.cell_at(row, col).unwrap().is_alive(), "the corner is bare");
@@ -1583,8 +1771,8 @@ mod tests {
         assert!(block.iter().all(|c| c.is_alive() && c.player() == me), "a 2x2 block");
 
         // Beyond the patch is nobody's, and nobody's is closed to everyone.
-        assert!(!may_place(&world, me, row, col + SPAWN_N));
-        assert!(!may_place(&world, me, 10_000, 10_000));
+        assert!(!may_place(&world, me, &Sides::SOLO, row, col + SPAWN_N));
+        assert!(!may_place(&world, me, &Sides::SOLO, 10_000, 10_000));
     }
 
     /// Every player is within reach of several others. A line put the last
@@ -1667,7 +1855,7 @@ mod tests {
         );
 
         // And they can actually place, which is the whole point.
-        assert!(may_place(&world, second, row, col));
+        assert!(may_place(&world, second, &Sides::SOLO, row, col));
     }
 
     /// A grant takes ground and never anybody's life or panes -- those are
@@ -1964,7 +2152,10 @@ mod tests {
         // dead ground whoever held it, so a crowded patch is buildable even
         // though it was not empty.
         grant(&mut world, me);
-        assert!(may_place(&world, me, at.0, at.1), "granted ground nobody can build on");
+        assert!(
+            may_place(&world, me, &Sides::SOLO, at.0, at.1),
+            "granted ground nobody can build on"
+        );
     }
 
     /// A granted patch keeps its `HOME` marks and they never decay, so a
@@ -2002,7 +2193,7 @@ mod tests {
         // Nothing of anybody's reaches it, so nobody may build there. A
         // client cannot know what it does not hold, and reading unheld ground
         // as its own would predict a placement the server refuses.
-        assert!(!may_place(&world, PlayerId(1), far[0].0, far[0].1));
+        assert!(!may_place(&world, PlayerId(1), &Sides::SOLO, far[0].0, far[0].1));
         assert_eq!(influence(&world, PlayerId(1), far[0].0, far[0].1), 0);
     }
 }

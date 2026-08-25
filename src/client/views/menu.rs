@@ -105,6 +105,14 @@ pub enum Ends {
     Territory,
 }
 
+/// Whether a match is played in sides. Only a match can be: a team is a way of
+/// deciding a result, and a world has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Together {
+    Solo,
+    Teams,
+}
+
 /// Whether the ground stops. Two answers, so a row of buttons rather than a
 /// list to open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +147,11 @@ pub struct Draft {
     /// Sent, and waiting for an answer. The form stays on screen while it is
     /// true, because a refusal has to arrive back into something.
     pub asking: bool,
+    /// Free-for-all, or sides. Read only when the match ends somehow, because
+    /// a world has no result for a side to win.
+    pub together: Together,
+    /// How many sides, as typed. Read only in a team match.
+    pub team_count: String,
     /// Kept out of the listing and reached by a code the server generates.
     ///
     /// The name field is ignored when this is set, and the form says so — a
@@ -157,6 +170,8 @@ impl Default for Draft {
             cols: cols.to_string(),
             ends: Ends::Never,
             target: crate::net::DEFAULT_TIMER.to_string(),
+            together: Together::Solo,
+            team_count: crate::net::MIN_TEAMS.to_string(),
             note: None,
             asking: false,
             private: false,
@@ -177,7 +192,7 @@ impl Draft {
     /// is selected, or a target typed and then switched to "never", is
     /// somebody changing their mind — refusing on it would be refusing a
     /// number nobody is asking to use.
-    pub fn parse(&self) -> Result<(RoomName, WorldKind, Option<Victory>), String> {
+    pub fn parse(&self) -> Result<(RoomName, WorldKind, Option<Victory>, Option<u8>), String> {
         // A private room's name is the code the server generates, so there is
         // nothing here to check and nothing to refuse.
         let name = if self.private { String::new() } else { crate::net::room_name(&self.name)? };
@@ -193,7 +208,23 @@ impl Draft {
             Ends::Timer => Some(Victory::Timer { generations: self.number()? }),
             Ends::Territory => Some(Victory::Territory { squares: self.number()? as usize }),
         };
-        Ok((name, shape, victory))
+        // Sides only on a match, and only when asked for. A world with teams
+        // is a world with a field nobody could ever read.
+        let teams = match (victory, self.together) {
+            (Some(_), Together::Teams) => Some(self.sides()?),
+            _ => None,
+        };
+        Ok((name, shape, victory, teams))
+    }
+
+    /// How many sides, or what is wrong with the number.
+    fn sides(&self) -> Result<u8, String> {
+        let text = self.team_count.trim();
+        match text.parse::<u8>() {
+            Ok(n) if (crate::net::MIN_TEAMS..=crate::net::MAX_TEAMS).contains(&n) => Ok(n),
+            Ok(_) => Err(words::make::sides_range(crate::net::MIN_TEAMS, crate::net::MAX_TEAMS)),
+            Err(_) => Err(words::make::not_a_number_for(words::make::SIDES, text)),
+        }
     }
 
     fn number(&self) -> Result<u64, String> {
@@ -247,6 +278,8 @@ pub enum Chose {
         name: RoomName,
         shape: WorldKind,
         victory: Option<Victory>,
+        /// `None` is a free-for-all; `Some(n)` is a match played in n sides.
+        teams: Option<u8>,
         private: bool,
     },
     /// Watch this room without taking a seat in it.
@@ -695,6 +728,41 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
             // one that holds it.
             shape_row(ui, theme, draft);
 
+            // Sides, and only on a match: a team is a way of deciding a
+            // result and a world has none, so this row appears with the same
+            // rule every other conditional row here follows.
+            if draft.ends != Ends::Never {
+                ui.add_space(m.item_spacing);
+                ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
+                let mut together = draft.together;
+                toggles(
+                    ui,
+                    theme,
+                    &mut together,
+                    &[(Together::Solo, words::make::SOLO), (Together::Teams, words::make::TEAMS)],
+                );
+                draft.together = together;
+                if draft.together == Together::Teams {
+                    ui.add_space(m.item_spacing);
+                    ui.horizontal_top(|ui| {
+                        ui.set_min_height(m.button_height);
+                        ui.colored_label(
+                            p.text_dim,
+                            egui::RichText::new(words::make::SIDES).size(m.text_small),
+                        );
+                        ui.add_sized(
+                            [m.action_height * 1.6, m.button_height],
+                            egui::TextEdit::singleline(&mut draft.team_count)
+                                .horizontal_align(egui::Align::Center),
+                        );
+                    });
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(words::make::SIDES_NOTE).size(m.text_small),
+                    );
+                }
+            }
+
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
             let mut private = draft.private;
@@ -783,11 +851,16 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
                 // same form: a name that is too long and a name already taken
                 // are the same kind of answer to the player.
                 match draft.parse() {
-                    Ok((name, shape, victory)) => {
+                    Ok((name, shape, victory, teams)) => {
                         draft.note = None;
                         draft.asking = true;
-                        chose =
-                            Some(Chose::Create { name, shape, victory, private: draft.private });
+                        chose = Some(Chose::Create {
+                            name,
+                            shape,
+                            victory,
+                            teams,
+                            private: draft.private,
+                        });
                     }
                     Err(why) => draft.note = Some(why),
                 }
@@ -1093,7 +1166,7 @@ mod tests {
         let world = Draft { name: "  Arena ".into(), ..Draft::default() };
         assert_eq!(
             world.parse().unwrap(),
-            ("arena".into(), WorldKind::Infinite, None),
+            ("arena".into(), WorldKind::Infinite, None, None),
             "trimmed and lowercased, the way the server will name it"
         );
 
@@ -1116,6 +1189,32 @@ mod tests {
             ..Draft::default()
         };
         assert_eq!(cup.parse().unwrap().2, Some(Victory::Territory { squares: 500 }));
+        assert_eq!(cup.parse().unwrap().3, None, "a match is solo unless asked otherwise");
+
+        // Sides, and only on a match: a world has no result for a side to win.
+        let sided = Draft {
+            name: "cup".into(),
+            ends: Ends::Timer,
+            together: Together::Teams,
+            team_count: "3".into(),
+            ..Draft::default()
+        };
+        assert_eq!(sided.parse().unwrap().3, Some(3));
+        let world_with_sides =
+            Draft { name: "hall".into(), together: Together::Teams, ..Draft::default() };
+        assert_eq!(
+            world_with_sides.parse().unwrap().3,
+            None,
+            "a world that never ends has no sides, whatever the toggle says"
+        );
+        let too_many = Draft {
+            name: "cup".into(),
+            ends: Ends::Timer,
+            together: Together::Teams,
+            team_count: "99".into(),
+            ..Draft::default()
+        };
+        assert!(too_many.parse().is_err());
 
         let unnamed = Draft { name: "  ".into(), ..Draft::default() };
         assert!(unnamed.parse().is_err(), "a room needs a name");

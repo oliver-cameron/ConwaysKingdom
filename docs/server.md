@@ -28,6 +28,16 @@ The menu asks `ClientMessage::Rooms` and shows what comes back, so a name is nor
 
 A room name is lowercase letters, digits, `-` and `_`, at most 24 characters, and is folded to lowercase. Narrow because the name is also the save file's name: a path separator in it would escape the rooms directory, and on a case-insensitive filesystem `Lobby` and `lobby` would be two rooms on one machine and one on another. `net::room_name` is the whole rule, and the client checks `--room` against it before connecting so a bad name is a message about the argument rather than a connection that opens and is turned away.
 
+### Sides
+
+A match may be played in sides. `ClientMessage::Create` carries `teams: Option<u8>` — `None` is a free-for-all, `Some(n)` is n sides, and it is refused on a world, because a team is a way of deciding a result and a world has none. `TakeSide` and `NameSide` work only while a match is `Gathering`.
+
+`Sides` is a fixed array indexed by `PlayerId` and rides on every `Match` broadcast, because the **client predicts against it**: whether a placement is allowed and what it costs both turn on who is allied with whom, so a client without it would disagree with the server on every square near a teammate.
+
+Scoring sums at `matches::leader_of` rather than in the rule. `Server::territory` still counts per player; a side is the sum of its members, and the winner named is the side's highest-holding member, because `Phase::Over` and everything downstream is written in terms of a player.
+
+`start_match` refuses a match nobody would want to play: somebody unplaced, or a side with nobody on it. Sizes beyond that are not checked.
+
 ### Watching
 
 `ClientMessage::Watch` takes a room and no seat. `ServerMessage::Watching` answers with the room, its name, its tick and its shape — a `Welcome` without a player, because a spectator has no number, no token, no purse and no spawn, and sending zeroes would have the client draw a purse belonging to nobody.

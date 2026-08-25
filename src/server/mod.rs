@@ -41,6 +41,18 @@ pub struct Server {
     phase: Phase,
     /// How this match is won, once it is running. `None` on an open room.
     victory: Option<Victory>,
+    /// How many sides this match has. Nought is a free-for-all, which every
+    /// world is: a team is a way of deciding a result, and a world has none.
+    teams: u8,
+    /// What each side is called, indexed from one. Empty in a free-for-all.
+    team_names: Vec<String>,
+    /// Who is on whose side.
+    ///
+    /// Held here rather than as a field on `Player` because it is read as a
+    /// whole — every action asks "are these two allied", and the answer wants
+    /// one array rather than two map lookups — and because it goes on the wire
+    /// as a whole.
+    sides: crate::net::Sides,
     /// Stopped, and not stepping until somebody says otherwise.
     ///
     /// Every room steps four times a second for as long as the process lives,
@@ -102,6 +114,9 @@ impl Server {
             pending: Vec::new(),
             phase: Phase::Open,
             victory: None,
+            teams: 0,
+            team_names: Vec::new(),
+            sides: crate::net::Sides::SOLO,
             asleep: false,
             started_by: None,
             lobby_changed: false,
@@ -122,6 +137,125 @@ impl Server {
     }
 
     /// Make this room a match, gathering and not yet stepping.
+    /// How many sides, and what they are called.
+    pub fn sides(&self) -> crate::net::Sides {
+        self.sides
+    }
+
+    /// The sides, as a lobby needs them: each with its name and who is on it.
+    /// Empty in a free-for-all.
+    pub fn teams(&self) -> Vec<crate::net::Team> {
+        (1..=self.teams)
+            .map(|n| {
+                let id = crate::net::TeamId(n);
+                crate::net::Team {
+                    id,
+                    name: self.name_of_side(id),
+                    players: self
+                        .sides
+                        .members(id)
+                        .into_iter()
+                        .filter(|p| self.players.get(p).is_some_and(|p| p.online))
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    /// What side `team` is called: whatever it was named, or its number.
+    fn name_of_side(&self, team: crate::net::TeamId) -> String {
+        self.team_names
+            .get(team.0.saturating_sub(1) as usize)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_else(|| crate::net::default_team_name(team))
+    }
+
+    /// Put this player on a side, or take them off one.
+    ///
+    /// Only while gathering. Changing sides mid-match would hand your ground
+    /// to the people you were fighting, which is not something a lobby should
+    /// let anybody do by accident.
+    pub fn take_side(&mut self, player: PlayerId, team: crate::net::TeamId) -> Result<(), String> {
+        if self.teams == 0 {
+            return Err("this match has no sides".into());
+        }
+        if !matches!(self.phase, Phase::Gathering) {
+            return Err("sides are settled once a match starts".into());
+        }
+        if team.0 > self.teams {
+            return Err(format!("this match has {} sides", self.teams));
+        }
+        self.sides.put(player, team);
+        self.lobby_changed = true;
+        Ok(())
+    }
+
+    /// Call a side something.
+    pub fn name_side(&mut self, team: crate::net::TeamId, name: &str) -> Result<(), String> {
+        if team.is_none() || team.0 > self.teams {
+            return Err("no such side".into());
+        }
+        if !matches!(self.phase, Phase::Gathering) {
+            return Err("sides are settled once a match starts".into());
+        }
+        let name = crate::net::team_name(name)?;
+        self.team_names.resize(self.teams as usize, String::new());
+        self.team_names[team.0 as usize - 1] = name;
+        self.lobby_changed = true;
+        Ok(())
+    }
+
+    /// Whether the sides are even enough to start, or what is wrong with them.
+    ///
+    /// Two things, and both are about a match nobody would want to play rather
+    /// than about fairness in the abstract. **Everybody has to be on a side**,
+    /// because a player left on nobody's is a free agent in a team game and
+    /// the scoring has nowhere to put them. And **no side may be empty**, since
+    /// a three-way match with one side unoccupied is a two-way match that
+    /// scores as if it were not.
+    ///
+    /// Sizes are *not* checked beyond that. Three against two is a match
+    /// people may well have arranged on purpose, and a server that refuses it
+    /// is a server they work around by leaving somebody out.
+    fn sides_are_fair(&self) -> Result<(), String> {
+        let here: Vec<PlayerId> =
+            self.players.values().filter(|p| p.online).map(|p| p.id).collect();
+        if let Some(stray) = here.iter().find(|&&p| self.sides.team_of(p).is_none()) {
+            let who = self.players.get(stray).map(|p| p.name.as_str()).unwrap_or("somebody");
+            return Err(format!("{who} has not picked a side"));
+        }
+        if let Some(empty) = (1..=self.teams)
+            .map(crate::net::TeamId)
+            .find(|&t| !here.iter().any(|&p| self.sides.team_of(p) == t))
+        {
+            return Err(format!("nobody is on {}", self.name_of_side(empty)));
+        }
+        Ok(())
+    }
+
+    /// Give this match sides. Only before it starts, and only on a match.
+    pub fn make_teams(&mut self, n: u8) -> Result<(), String> {
+        if !matches!(self.phase, Phase::Gathering) {
+            return Err("only a match has sides".into());
+        }
+        if !(crate::net::MIN_TEAMS..=crate::net::MAX_TEAMS).contains(&n) {
+            return Err(format!(
+                "a match has between {} and {} sides",
+                crate::net::MIN_TEAMS,
+                crate::net::MAX_TEAMS
+            ));
+        }
+        self.teams = n;
+        self.team_names = vec![String::new(); n as usize];
+        Ok(())
+    }
+
+    /// How many sides this match has. Nought is a free-for-all.
+    pub fn team_count(&self) -> u8 {
+        self.teams
+    }
+
     pub fn make_match(&mut self, victory: Victory) {
         self.phase = Phase::Gathering;
         self.victory = Some(victory);
@@ -135,6 +269,17 @@ impl Server {
     pub fn start_match(&mut self, by: Option<PlayerId>) -> Result<(), String> {
         match self.phase {
             Phase::Gathering => {
+                // **The balance check is here and not in the lobby.** A lobby
+                // that refuses to let you join your friend because the sides
+                // would be uneven is a lobby that makes people argue about the
+                // order they clicked in; one that refuses to *start* until the
+                // sides are even is a lobby where they sort it out and press
+                // it again.
+                if self.teams > 0 {
+                    if let Err(why) = self.sides_are_fair() {
+                        return Err(why);
+                    }
+                }
                 self.phase = Phase::Running { from: self.tick() };
                 self.started_by = by;
                 self.lobby_changed = true;
@@ -204,6 +349,8 @@ impl Server {
         // reshuffle itself between two frames.
         players.sort_by_key(|&(id, _)| id);
         ServerMessage::Match {
+            sides: self.sides,
+            teams: self.teams(),
             started_by: self.started_by,
             // Filled in by `Rooms`, which is the only thing that knows who
             // made a room. A `Server` is one room and has no idea how it came
@@ -272,7 +419,11 @@ impl Server {
             return None;
         };
         let held = self.territory();
-        let (winner, count) = matches::leader(&held);
+        // **A side is scored as one.** Territory is still contested per player
+        // — two allies keep a border between their ground, they simply cannot
+        // be hurt by it — so the sum is taken here, at the one place a result
+        // is decided, rather than by teaching the rule about teams.
+        let (winner, count) = matches::leader_of(&held, &self.sides);
         let done = match victory {
             Victory::Timer { generations } => self.tick().saturating_sub(from) >= generations,
             Victory::Territory { squares } => count >= squares,
@@ -608,7 +759,9 @@ impl Server {
                 if let crate::net::Action::Paint { cells, .. } = &stamped.action {
                     if let Some(&(row, col)) = cells
                         .iter()
-                        .find(|&&(r, c)| !crate::net::may_place(&self.world, stamped.player, r, c))
+                        .find(|&&(r, c)| {
+                            !crate::net::may_place(&self.world, stamped.player, &self.sides, r, c)
+                        })
                     {
                         log::info!(
                             "refused {:?}: nothing of theirs reaches ({row}, {col})",
@@ -622,7 +775,7 @@ impl Server {
                 // client priced it against the same state, so pricing it later
                 // would let the two disagree.
                 if let Some(player) = self.players.get(&stamped.player) {
-                    let delta = crate::net::value_delta(&self.world, &stamped);
+                    let delta = crate::net::value_delta(&self.world, &self.sides, &stamped);
                     if player.value + delta < 0 {
                         log::info!(
                             "refused {:?}: costs {} with {} in hand",
@@ -671,6 +824,24 @@ impl Server {
             // Answered by `Rooms::handle`, which is the only thing that knows
             // who made a room and so the only thing that can judge this.
             ClientMessage::Start => Vec::new(),
+            // The lobby, which is a place rather than a world: both of these
+            // change who is on whose side and neither touches a cell.
+            ClientMessage::TakeSide { team } => {
+                let Some(id) = from else { return Vec::new() };
+                match self.take_side(id, team) {
+                    Ok(()) => {
+                        log::info!("{id:?} took side {}", team.0);
+                        Vec::new()
+                    }
+                    // Said rather than dropped: a press in a lobby that does
+                    // nothing and explains nothing looks like a broken lobby.
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
+            ClientMessage::NameSide { team, name } => match self.name_side(team, &name) {
+                Ok(()) => Vec::new(),
+                Err(reason) => vec![ServerMessage::NotStarted { reason }],
+            },
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.
@@ -780,6 +951,7 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::TeamId;
     // Only the tests take a chunk apart; the server passes them through whole.
     use crate::sim::{Cell, Chunk, CHUNK_N};
 
@@ -1500,6 +1672,89 @@ mod tests {
         s.step();
         assert!(s.world().cell_at(row, col).unwrap().is_ice(), "the pane should still be there");
         assert_eq!(s.value_of(me), spent, "and nothing should have been paid for it");
+    }
+
+    /// The whole of what a side buys: allies build on each other's ground and
+    /// score as one, and everything else stays exactly as it was.
+    #[test]
+    fn a_side_builds_together_and_scores_as_one() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Territory { squares: 1_000 });
+        s.make_teams(2).unwrap();
+        let a = s.join("a").unwrap();
+        let b = s.join("b").unwrap();
+        let c = s.join("c").unwrap();
+        s.take_side(a, TeamId(1)).unwrap();
+        s.take_side(b, TeamId(1)).unwrap();
+        s.take_side(c, TeamId(2)).unwrap();
+
+        // A patch of A's ground with nothing standing on it.
+        let at = (5_000, 5_000);
+        stake(&mut s, a, at, 4);
+
+        // Their ally may build on it; the other side may not.
+        assert!(crate::net::may_place(s.world(), b, &s.sides(), at.0, at.1), "an ally cannot");
+        assert!(!crate::net::may_place(s.world(), c, &s.sides(), at.0, at.1), "an enemy can");
+
+        // And it is scored as one side. A holds sixteen squares, B none, and
+        // the leader is their side with sixteen rather than A alone.
+        let held = s.territory();
+        let (face, total) = crate::server::matches::leader_of(&held, &s.sides());
+        assert_eq!(total, 16, "a side is the sum of what its members hold");
+        assert_eq!(face, Some(a), "and is named for whoever holds most of it");
+
+        // Solo scoring is untouched, which is the other half of the claim.
+        let (solo, count) = crate::server::matches::leader(&held);
+        assert_eq!((solo, count), (Some(a), 16));
+    }
+
+    /// Sides are settled once a match starts. Changing them mid-match would
+    /// hand your ground to the people you were fighting.
+    #[test]
+    fn sides_cannot_be_changed_once_the_whistle_has_gone() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        s.make_teams(2).unwrap();
+        let a = s.join("a").unwrap();
+        let b = s.join("b").unwrap();
+        s.take_side(a, TeamId(1)).unwrap();
+        s.take_side(b, TeamId(2)).unwrap();
+        s.name_side(TeamId(1), "Reds").unwrap();
+
+        s.start_match(Some(a)).unwrap();
+        assert!(s.take_side(a, TeamId(2)).is_err(), "changed sides mid-match");
+        assert!(s.name_side(TeamId(1), "Blues").is_err(), "renamed a side mid-match");
+    }
+
+    /// A match nobody would want to play is refused at the whistle rather than
+    /// in the lobby: a lobby that stops you joining your friend makes people
+    /// argue about the order they clicked in.
+    #[test]
+    fn a_lopsided_match_is_refused_at_the_whistle_and_not_before() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        s.make_teams(2).unwrap();
+        let a = s.join("a").unwrap();
+        let b = s.join("b").unwrap();
+
+        // Nobody has picked.
+        let why = s.start_match(Some(a)).unwrap_err();
+        assert!(why.contains("picked"), "{why}");
+
+        // Everybody on one side, so the other is empty.
+        s.take_side(a, TeamId(1)).unwrap();
+        s.take_side(b, TeamId(1)).unwrap();
+        let why = s.start_match(Some(a)).unwrap_err();
+        assert!(why.contains("Side 2"), "{why}");
+
+        // Three against one is *not* refused: people arrange that on purpose,
+        // and a server that forbids it is one they work around.
+        s.take_side(b, TeamId(2)).unwrap();
+        let c = s.join("c").unwrap();
+        let d = s.join("d").unwrap();
+        s.take_side(c, TeamId(1)).unwrap();
+        s.take_side(d, TeamId(1)).unwrap();
+        assert!(s.start_match(Some(a)).is_ok(), "three against one was refused");
     }
 
     /// An action belongs to the connection that sent it. Without this the

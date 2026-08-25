@@ -286,6 +286,16 @@ A **gathering match** gets a screen of its own for a plainer reason — its worl
 
 "Ends: Never" is what makes a world rather than a match, which is the honest way round: a room with no end is the ordinary case and a match is the one with a condition on it, so the form never has to ask "world or match?" as a question of its own. Making one does not put you in it — the client joins the name that comes back, which is the same join a room in the list sends, so there is one way into a world rather than two. What a server will hold is capped and set by `--max-rooms`; see [server.md](server.md#made-by-a-client).
 
+### Sides
+
+A match is played **solo or in sides**, chosen when it is made, along with how many sides there are. Who is on which side, and what each side is called, is settled in the lobby: anybody may take any side, anybody may rename any side, and taking the side you are already on steps off it.
+
+What a side changes is **what counts as yours**. Allies build on each other's ground, clear each other's cells at the reclaim rate rather than a raid's, and are scored as one. Nothing else moves: territory is still contested per player, so two allies keep a border between their ground — they simply cannot be hurt by it — and the simulation knows nothing about teams at all, the same way it knows nothing about matches or money.
+
+**Friendly fire is on.** A glider is a weapon whoever built it, and making allied life pass through allied life would be a rule the world has to honour rather than an arrangement of who is playing. Sides are about scoring and building.
+
+The **evenness is checked at the whistle**, not in the lobby: a match will not start while somebody has not picked a side or while a side is empty, and the lobby says who. Sizes beyond that are left alone, because three against two is something people arrange on purpose. Sides are settled once it starts — changing them mid-match would hand your ground to the people you were fighting.
+
 **A match is started by whoever made it.** A gathering match has a Start on its lobby panel, and only for the player whose room it is — anybody may join a gathering match, and if anybody could also start it the person who set it up could not wait for their friends. Everybody else is told what it is waiting for. Ownership is a `PlayerId` and not the connection that asked, so it survives a refresh: a rejoin token brings you back to the same number, which is exactly when losing your own match would be most annoying. A match the server made stays the server's and starts at the console. Who blew the whistle is remembered and shown with the result.
 
 **The room list is a selection.** Clicking a room picks it out and its actions appear inside it — Join, and Watch. Beside every row they made the list twice as tall and twice as busy to read, and most of those buttons belonged to rooms nobody was looking at. Arrow keys walk the list and wrap at both ends, enter joins what is picked, and tab moves between the controls on the screen; a focused control wears the accent, like a selected one.

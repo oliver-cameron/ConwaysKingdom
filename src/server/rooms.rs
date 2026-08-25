@@ -413,12 +413,13 @@ impl Rooms {
         // Answered without a seat for a sharper version of the same reason: it
         // names a room that does not exist, so there is nowhere to have been
         // standing when it was sent.
-        if let ClientMessage::Create { name, shape, victory, private } = msg {
+        if let ClientMessage::Create { name, shape, victory, teams, private } = msg {
             return vec![ServerMessage::Made(self.make(
                 caller.connection,
                 &name,
                 shape,
                 victory,
+                teams,
                 private,
             ))];
         }
@@ -683,6 +684,7 @@ impl Rooms {
         name: &str,
         shape: WorldKind,
         victory: Option<Victory>,
+        teams: Option<u8>,
         private: bool,
     ) -> Result<Made, String> {
         // Checked before the name is, so a server that is full says so rather
@@ -714,6 +716,14 @@ impl Rooms {
         let mut server = Server::named(name.clone(), shape.build());
         if let Some(victory) = victory {
             server.make_match(victory);
+            // Sides only on a match. A team is a way of deciding a result, and
+            // a world has none — so a world asked for teams is a world with a
+            // field nobody could ever read.
+            if let Some(n) = teams {
+                server.make_teams(n)?;
+            }
+        } else if teams.is_some() {
+            return Err("only a match has sides".into());
         }
         let path = save_path(&self.dir, &id);
         if victory.is_none() && !self.dir.as_os_str().is_empty() {
@@ -1285,6 +1295,7 @@ mod tests {
                 name: "  Arena  ".into(),
                 shape: WorldKind::Toroidal { rows: 4, cols: 6 },
                 victory: None,
+                teams: None,
                 private: false,
             },
         );
@@ -1315,9 +1326,16 @@ mod tests {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let me = Caller::new(1);
 
-        rooms.make(1, "plain", WorldKind::Infinite, None, false).unwrap();
+        rooms.make(1, "plain", WorldKind::Infinite, None, None, false).unwrap();
         rooms
-            .make(1, "cup", WorldKind::Infinite, Some(Victory::Territory { squares: 500 }), false)
+            .make(
+                1,
+                "cup",
+                WorldKind::Infinite,
+                Some(Victory::Territory { squares: 500 }),
+                None,
+                false,
+            )
             .unwrap();
 
         let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(&me, ClientMessage::Rooms)[..]
@@ -1345,6 +1363,7 @@ mod tests {
                 name: "hall".into(),
                 shape: WorldKind::Infinite,
                 victory: None,
+                teams: None,
                 private: false,
             },
         );
@@ -1370,12 +1389,12 @@ mod tests {
         rooms.cap_made(2);
         assert_eq!(rooms.len(), 3, "three declared, none of them counted");
 
-        assert!(rooms.make(1, "a", WorldKind::Infinite, None, false).is_ok());
-        assert!(rooms.make(1, "b", WorldKind::Infinite, None, false).is_ok());
+        assert!(rooms.make(1, "a", WorldKind::Infinite, None, None, false).is_ok());
+        assert!(rooms.make(1, "b", WorldKind::Infinite, None, None, false).is_ok());
         let (made, cap) = rooms.made_count();
         assert_eq!((made, cap), (2, 2));
 
-        let refused = rooms.make(1, "c", WorldKind::Infinite, None, false).unwrap_err();
+        let refused = rooms.make(1, "c", WorldKind::Infinite, None, None, false).unwrap_err();
         assert!(refused.contains('2'), "the refusal says how many: {refused}");
         assert!(rooms.get(&RoomId::from("c")).is_none(), "and made none");
 
@@ -1383,7 +1402,7 @@ mod tests {
         // cap's worth would refuse for ever while holding nothing.
         rooms.delete("a").unwrap();
         assert_eq!(rooms.made_count().0, 1);
-        assert!(rooms.make(1, "c", WorldKind::Infinite, None, false).is_ok());
+        assert!(rooms.make(1, "c", WorldKind::Infinite, None, None, false).is_ok());
     }
 
     /// A private room is reachable by its code and mentioned nowhere else —
@@ -1394,7 +1413,7 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("private"), &["hall".into()], WorldKind::Infinite, true).unwrap();
 
-        let made = rooms.make(3, "friends-only", WorldKind::Infinite, None, true).unwrap();
+        let made = rooms.make(3, "friends-only", WorldKind::Infinite, None, None, true).unwrap();
         let code = made.code.clone().expect("a private room gets a code");
         assert_eq!(code.len(), CODE_LEN);
         assert_ne!(code, made.id.as_str(), "a code is a credential, not an identity");
@@ -1424,7 +1443,7 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("console-sees"), &["hall".into()], WorldKind::Infinite, true)
                 .unwrap();
-        let made = rooms.make(3, "", WorldKind::Infinite, None, true).unwrap();
+        let made = rooms.make(3, "", WorldKind::Infinite, None, None, true).unwrap();
         assert!(made.code.is_some(), "a private room gets a code");
 
         let everything = rooms.everything();
@@ -1468,7 +1487,14 @@ mod tests {
         let theirs = Caller::new(6);
 
         let made = rooms
-            .make(5, "cup", WorldKind::Infinite, Some(Victory::Timer { generations: 50 }), false)
+            .make(
+                5,
+                "cup",
+                WorldKind::Infinite,
+                Some(Victory::Timer { generations: 50 }),
+                None,
+                false,
+            )
             .unwrap();
         let join = |name: &str| ClientMessage::Join {
             name: name.into(),

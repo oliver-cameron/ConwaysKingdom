@@ -89,12 +89,14 @@ mod tests {
                 name: "arena".into(),
                 shape: crate::sim::WorldKind::Toroidal { rows: 6, cols: 8 },
                 victory: None,
+                teams: None,
                 private: false,
             },
             ClientMessage::Create {
                 name: "cup".into(),
                 shape: crate::sim::WorldKind::Infinite,
                 victory: Some(crate::net::Victory::Timer { generations: 2000 }),
+                teams: Some(2),
                 private: true,
             },
         ];
@@ -110,6 +112,8 @@ mod tests {
             // Most first, and a player holding nothing is simply absent.
             // A decided match, which is the shape with the most in it.
             ServerMessage::Match {
+                sides: crate::net::Sides::SOLO,
+                teams: Vec::new(),
                 started_by: None,
                 owner: None,
                 phase: crate::net::MatchPhase::Over {
@@ -121,6 +125,8 @@ mod tests {
                 players: vec![(PlayerId(1), "alice".into()), (PlayerId(4), "bob".into())],
             },
             ServerMessage::Match {
+                sides: crate::net::Sides::SOLO,
+                teams: Vec::new(),
                 started_by: None,
                 owner: None,
                 phase: crate::net::MatchPhase::Gathering,

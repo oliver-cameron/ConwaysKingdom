@@ -308,11 +308,30 @@ struct Lobby {
     phase: crate::net::MatchPhase,
     victory: Option<crate::net::Victory>,
     players: Vec<(PlayerId, String)>,
+    /// Who is on whose side.
+    sides: crate::net::Sides,
+    /// The sides, their names and who is on them. Empty in a free-for-all.
+    teams: Vec<crate::net::Team>,
     /// Whose match it is: the player who may start it. `None` for one the
     /// console made, which starts at the console.
     owner: Option<PlayerId>,
     /// Who blew the whistle, once somebody has.
     started_by: Option<PlayerId>,
+}
+
+impl Lobby {
+    fn look(&self, me: PlayerId) -> lobby_view::Look<'_> {
+        lobby_view::Look {
+            me,
+            phase: &self.phase,
+            victory: self.victory,
+            players: &self.players,
+            owner: self.owner,
+            started_by: self.started_by,
+            sides: self.sides,
+            teams: &self.teams,
+        }
+    }
 }
 
 /// A finished gesture waiting to be resolved to cells. Input callbacks are not
@@ -446,6 +465,20 @@ pub struct BattleApp {
     /// From the server because a client holds only the chunks it subscribed
     /// to: counting locally would score its own screen rather than the world.
     standing: Vec<(crate::sim::PlayerId, u32)>,
+    /// Which side is having its name typed, and what has been typed so far.
+    ///
+    /// Here rather than in the lobby panel because that panel is rebuilt every
+    /// frame, and a name half-typed would vanish between two of them — the
+    /// same reason `sketch` lives here.
+    naming_side: Option<(crate::net::TeamId, String)>,
+    /// Who is on whose side, as the server last said.
+    ///
+    /// Every placement is priced and refused against this, so a client without
+    /// it would disagree with the server on every square near a teammate.
+    /// `Sides::SOLO` offline and in a free-for-all, where it says exactly what
+    /// it did before teams existed: you are allied with yourself and nobody
+    /// else.
+    sides: crate::net::Sides,
     /// The game being played, if there is one, waiting to be filed.
     ///
     /// Committed when the room ends for this client — a different `Welcome`, a
@@ -802,7 +835,15 @@ impl BattleApp {
                 // Who is winning. Kept whole rather than merged, because a
                 // player who has lost every square drops out of the list and a
                 // merge would leave their last bar standing forever.
-                ServerMessage::Match { started_by, owner, phase, victory, players } => {
+                ServerMessage::Match {
+                    sides,
+                    teams,
+                    started_by,
+                    owner,
+                    phase,
+                    victory,
+                    players,
+                } => {
                     // A decided match is a result, and the only moment this
                     // client is told one. Recorded when it arrives rather than
                     // when the room is left, because a player who watches the
@@ -812,7 +853,12 @@ impl BattleApp {
                     {
                         live.decided(*winner == self.me && self.me.is_some());
                     }
-                    self.lobby = Some(Lobby { phase, victory, players, owner, started_by });
+                    // Kept on the app as well as in the lobby, because every
+                    // placement is priced against it -- the lobby is where it
+                    // is *shown*, and prediction is where it is *used*.
+                    self.sides = sides;
+                    self.lobby =
+                        Some(Lobby { sides, teams, phase, victory, players, owner, started_by });
                 }
                 ServerMessage::Standing { held, .. } => {
                     if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.me) {
@@ -1040,7 +1086,9 @@ impl BattleApp {
         let outside = |cells: &[(i32, i32)]| {
             cells
                 .iter()
-                .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
+                .filter(|&&(r, c)| {
+                    !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
+                })
                 .count()
         };
         match drag.stroke {
@@ -1192,7 +1240,7 @@ impl BattleApp {
             Action::Paint { cells, placement }
         };
         let stamped = Stamped { tick: self.world.generation, player: self.player(), action };
-        let delta = crate::net::value_delta(&self.world, &stamped);
+        let delta = crate::net::value_delta(&self.world, &self.sides, &stamped);
         (stamped, delta)
     }
 
@@ -1306,7 +1354,7 @@ impl BattleApp {
         // the same terms the server refuses it, so the answer is instant
         // rather than a round trip away. Taking back what is already there is
         // not placing and is not confined.
-        if !already_there && !crate::net::may_place(&self.world, player, row, col) {
+        if !already_there && !crate::net::may_place(&self.world, player, &self.sides, row, col) {
             self.notice = Some(words::refused::not_your_territory(row, col));
             self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
             return;
@@ -1396,7 +1444,9 @@ impl BattleApp {
         let stray = stamp
             .at(corner)
             .iter()
-            .filter(|&&((r, c), _)| !crate::net::may_place(&self.world, self.player(), r, c))
+            .filter(|&&((r, c), _)| {
+                !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
+            })
             .count();
         if stray > 0 {
             self.notice = Some(words::refused::cells_not_yours(stray));
@@ -1577,13 +1627,13 @@ impl BattleApp {
             // Made, then joined -- in two steps, because `Made` only names the
             // room. Joining is the same message the room list sends, so there
             // is one way into a world rather than two.
-            menu::Chose::Create { name, shape, victory, private } => {
+            menu::Chose::Create { name, shape, victory, teams, private } => {
                 let Some(link) = &self.link else {
                     self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
                     return;
                 };
                 log::info!("asking for a room called \"{name}\"");
-                link.send(ClientMessage::Create { name, shape, victory, private });
+                link.send(ClientMessage::Create { name, shape, victory, teams, private });
             }
             // Watching takes no name and keeps no token: there is no player
             // to be remembered as.
@@ -1822,6 +1872,8 @@ impl App for BattleApp {
             icons: icons::Icons::default(),
             picking_stamp: false,
             standing: Vec::new(),
+            sides: crate::net::Sides::SOLO,
+            naming_side: None,
             in_play: None,
             geiger: Default::default(),
             sketch: stamp::Sketch::default(),
@@ -1948,6 +2000,11 @@ impl App for BattleApp {
         // What a press in the lobby meant, acted on after the frame is built
         // because both answers change the screen the frame was drawn from.
         let mut in_lobby = lobby_view::Did::Nothing;
+        // Taken out for the frame, for the reason the screen and the sketch
+        // are: the closure needs `&mut` on it while `self` is borrowed by
+        // `views`. A half-typed side name has to survive the frame it is being
+        // typed in, so it cannot live in the panel that is rebuilt each time.
+        let mut naming = std::mem::take(&mut self.naming_side);
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
         // Taken out for the frame for the same reason the screen is: the
         // closure needs `&mut` on it while `self` is already borrowed by
@@ -1986,16 +2043,7 @@ impl App for BattleApp {
                 ) {
                     let (rect, did) =
                         lobby.as_ref().map_or((None, lobby_view::Did::Nothing), |l| {
-                            lobby_view::show(
-                                ctx,
-                                &theme,
-                                me,
-                                &l.phase,
-                                l.victory,
-                                &l.players,
-                                l.owner,
-                                l.started_by,
-                            )
+                            lobby_view::show(ctx, &theme, &l.look(me), &mut naming)
                         });
                     in_lobby = did;
                     return rect.into_iter().collect();
@@ -2018,16 +2066,7 @@ impl App for BattleApp {
                 // A decided match keeps its board: the result is what is on
                 // it, and covering that to say who won would hide the reason.
                 let waiting = lobby.as_ref().and_then(|l| {
-                    let (rect, did) = lobby_view::show(
-                        ctx,
-                        &theme,
-                        me,
-                        &l.phase,
-                        l.victory,
-                        &l.players,
-                        l.owner,
-                        l.started_by,
-                    );
+                    let (rect, did) = lobby_view::show(ctx, &theme, &l.look(me), &mut naming);
                     if !matches!(did, lobby_view::Did::Nothing) {
                         in_lobby = did;
                     }
@@ -2049,6 +2088,7 @@ impl App for BattleApp {
             }
         });
         self.screen = screen;
+        self.naming_side = naming;
         self.chose(chose);
         if let Some(key) = picked {
             self.pick(key);
@@ -2089,6 +2129,19 @@ impl App for BattleApp {
                 if let Some(link) = &self.link {
                     log::info!("asking to start the match");
                     link.send(ClientMessage::Start);
+                }
+            }
+            // Both answer by broadcast: the server changes who is on what and
+            // the next lobby message says so, to everybody at once, which is
+            // what a lobby full of people all changing sides needs.
+            lobby_view::Did::TakeSide(team) => {
+                if let Some(link) = &self.link {
+                    link.send(ClientMessage::TakeSide { team });
+                }
+            }
+            lobby_view::Did::NameSide(team, name) => {
+                if let Some(link) = &self.link {
+                    link.send(ClientMessage::NameSide { team, name });
                 }
             }
         }
