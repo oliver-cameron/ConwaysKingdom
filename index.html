@@ -23,6 +23,12 @@
       height: 100%;
       background: #000;
       overflow: hidden;
+
+      /* The other half of stopping a sideways pan from going back a page.
+         The canvas cancels the wheel events it sees; this says the page has
+         nowhere to scroll to in the first place, which also covers the
+         gestures a browser decides on before anybody gets an event. */
+      overscroll-behavior: none;
     }
 
     canvas {
@@ -36,6 +42,7 @@
          the page instead of drawing. */
       user-select: none;
       -webkit-user-select: none;
+      overscroll-behavior: none;
 
       /* The browser decides what a gesture means from this, and it decides
          before it delivers an event anyone can cancel. Left at `auto` it takes

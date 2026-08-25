@@ -185,6 +185,18 @@ mod defaults {
     }
 
     pub fn guard(canvas: &web_sys::HtmlCanvasElement) {
+        // **Every wheel over the canvas belongs to the game.** It is a zoom,
+        // or it is a pan, and the browser's ideas about both are wrong here:
+        // ctrl and a wheel is a trackpad pinch, which the page would take as
+        // its own zoom, and a sideways wheel is a two-finger swipe, which
+        // Chrome takes as going back a page. Losing a world because a pan ran
+        // out of sideways is not a thing to leave to chance.
+        //
+        // On the canvas rather than on the window, and that is the whole
+        // reason this works: browsers make wheel listeners on `window`,
+        // `document` and `body` passive by default, and a passive listener
+        // cannot prevent anything. On any other element they are not.
+        on(canvas, "wheel", |e: web_sys::WheelEvent| e.prevent_default());
         on(canvas, "keydown", |e: web_sys::KeyboardEvent| {
             if e.ctrl_key() || e.meta_key() || e.alt_key() {
                 return;
