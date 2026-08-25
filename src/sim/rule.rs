@@ -4,6 +4,17 @@
 //! happens if it moves, is in [docs/simulation.md] and [docs/game.md]** — every
 //! constant and function here is named there.
 //!
+//! So the constants are **labelled, not explained**, and the rules stay here
+//! beside them. A reason belongs in the docs where it can be read against the
+//! reasons next to it; written here it buries the list somebody opened this
+//! file to see, and there is no telling from a wall of prose which line is the
+//! one they came for. A line each, a section heading, and the argument
+//! wherever the argument lives.
+//!
+//! What that is protecting is that this file is **editable**: every number the
+//! game turns on is in one screen, and changing one is finding a line rather
+//! than reading an essay to make sure it is the right line.
+//!
 //! [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md
 //! [docs/game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 
@@ -23,40 +34,26 @@ pub type RuleFn = fn(Cell, &Neighbours, u64) -> Cell;
 /// A chance out of [`super::seed::OUT_OF`], per cell, per generation.
 pub type Chance = u64;
 
-// --- Conway ------------------------------------------------------------------
+// --- Conway ----------------------------------------------------------------
 
 /// Live neighbours a living cell needs to survive.
 pub const SURVIVES_ON: [usize; 2] = [2, 3];
 /// Live neighbours a dead cell needs to be born.
 pub const BORN_ON: [usize; 1] = [3];
 
-// --- territory ---------------------------------------------------------------
+// --- territory: a level, not a flag ------------------------------------------
+//
+// [docs/simulation.md#territory] explains the whole of it -- why a flag could
+// not work, why the claim is a strongest-of rather than a sum, and what the
+// roll is deciding.
 
-/// How much influence is lost crossing one square.
-///
-/// The whole feel of the map hangs on this. A source is
-/// [`super::bits::MAX_LEVEL`], so at one it reaches seven squares and a lone
-/// blinker holds a disc of about a hundred and fifty; at two it reaches three
-/// and holds about thirty. Two, because a blinker should spread its influence
-/// a little and not gain territory everywhere.
-///
-/// It is also the *only* thing bounding a halo. There is no rule about radius
-/// anywhere — the fall is the rule, and the field is a pure function of where
-/// the sources are, so it cannot drift or ratchet outward the way the old one
-/// did.
+/// Influence lost crossing one square. The only thing bounding a halo.
 pub const LEVEL_FALL: u8 = 2;
-
-/// How often a dead square works out what reaches it, out of
-/// [`super::seed::OUT_OF`].
-///
-/// **The roll decides the rate, not the outcome.** That is the change from the
-/// old rule, where a coin flip chose which owner a square took. Recomputed
-/// every generation for every square, this field would be an exact distance
-/// transform that snaps the instant anything moves, and a glider would drag a
-/// geometrically perfect halo behind it. Updating a fraction per generation
-/// makes it lag and smear, which is the difference between a country and a
-/// Voronoi diagram — and a square that is not updating costs one roll.
-pub const LEVEL_ADJUST: Chance = 24;
+/// Levels given up per update where less reaches a square than it holds.
+/// Claims rise at once and ebb a step at a time; this is the wake.
+pub const LEVEL_EBB: u8 = 2;
+/// How often a square works out what reaches it. The rate, not the outcome.
+pub const LEVEL_ADJUST: Chance = 16;
 
 // --- mines -------------------------------------------------------------------
 
@@ -65,123 +62,37 @@ pub const MINE_UPKEEP: Chance = 16;
 
 // --- turrets -----------------------------------------------------------------
 
-/// How far a turret acts, in cells.
-///
-/// The whole cost model: a turret reads the `(2R+1)²` box around itself twice
-/// every generation — once to find the nearest square it will act on and once
-/// to pick between the ones that tie — so at six that is 338 reads a turret a
-/// generation and does not matter, and at twenty-four it is 4802 and a hundred
-/// turrets cost more than stepping the world does.
-///
-/// It also bounds how far a turret can wake the world. A turret writes into a
-/// chunk it reaches, and one reaching further than [`super::CHUNK_N`] could
-/// write two chunks away, past what `compute_active` has any way to know
-/// about. Keep this at or under a chunk.
+/// How far a turret acts, in cells. At or under [`super::CHUNK_N`], or one
+/// could write two chunks away, past what `compute_active` knows about.
 pub const TURRET_REACH: i32 = 6;
-
-/// How many squares a turret flips a generation.
-///
-/// The knob that decides whether a turret is a frontier tool or a weapon, and
-/// the arithmetic to set it by:
-///
-/// On **empty ground** each claim a generation holds about thirty squares
-/// against [`DECAY`], which eats N/32 of what is held — so a turret settles at
-/// roughly `30 × TURRET_POWER` squares, and the 2x2 block a turret is really
-/// bought as settles at four times that.
-///
-/// Against a **living** neighbour it is far weaker, and this is the number
-/// that matters. Their life takes a claimed square straight back through
-/// [`SPREAD`] at forty in sixty-four, so what a turret holds of contested
-/// ground is about `TURRET_POWER × 64 / SPREAD` — one and a half squares at
-/// one, six at four. Below about four a turret cannot press on a neighbour at
-/// all, which is why one reads as a way of reaching past your own frontier
-/// rather than a way of fighting over somebody's colony.
-///
-/// It is also the cost. A turret reads the `(2R+1)²` box around itself twice
-/// per square it flips — once to find the nearest and once to walk to the one
-/// the tie-break picked — so this multiplies [`TURRET_REACH`]'s bill directly:
-/// 338 reads a turret a generation at one, 1352 at four.
-///
-/// A dead turret gives back the same number it would have taken, so the mirror
-/// holds however this is set.
+/// How many squares it flips a generation.
 pub const TURRET_POWER: usize = 1;
-
-/// What influence a turret plants on a square it takes.
-///
-/// Planted rather than added, because [`super::rule`]'s territory rule
-/// **assigns** a square the strongest claim reaching it rather than
-/// accumulating — so a turret that nudged a level up by a little would have it
-/// wiped the next time that square worked itself out, and would achieve
-/// nothing whatever the number was.
-///
-/// What planting buys is a brake the old boolean turret needed a separate
-/// constant for. A flag planted where nothing of its owner's is near enough to
-/// feed it falls back on its own, at the rate the rule re-evaluates, so what a
-/// turret holds is however much it can plant against however fast the ground
-/// argues back — and a turret planting **deep** in somebody else's country
-/// loses it again almost at once, where one planting just past its own edge
-/// keeps it.
-///
-/// Full, because anything less is planted inside its own falloff: a flag at
-/// three beside ground of its owner's already reaching four is not a push at
-/// all.
+/// What it plants on a square it takes. Planted, not added: the territory rule
+/// assigns rather than accumulates, so a nudge would be wiped.
 pub const TURRET_PUSH: u8 = super::cell::bits::MAX_LEVEL;
-
 /// A dead turret becomes ordinary ground.
-///
-/// Slower than [`MINE_UPKEEP`], because the two are punishing different
-/// things. A dead mine is a bill to be paid off and wants a bottom to it; a
-/// dead turret is a machine firing backwards over the ground behind it, and
-/// four in sixty-four leaves it doing that for about sixteen generations —
-/// long enough that losing an emplacement is a thing you feel and short enough
-/// that it is not the end of the game.
 pub const TURRET_DECAY: Chance = 4;
 
 // --- what things cost ---------------------------------------------------------
 
-/// What a player joins with.
+/// What a player joins with. Zero in a match; see `server::matches`.
 pub const STARTING_VALUE: i32 = 100;
 /// One cell of life.
 pub const LIFE_COST: i32 = 1;
 /// One mine.
 pub const MINE_COST: i32 = 10;
+/// One turret. Read per **emplacement**: the smallest one that works is four.
+pub const TURRET_COST: i32 = 15;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
 pub const RECLAIM: i32 = 1;
-/// What placing where your influence is thin multiplies the cost by, per level
-/// short of full.
-///
-/// Ten times flat was too weak — playtesting said so — and it was flat because
-/// territory was a flag and there was nothing to grade it by. There is now: at
-/// full influence a placement costs its own price, and every level thinner
-/// adds one multiple, so the edge of your reach costs seven times. Refused
-/// where nothing of yours reaches at all.
-///
-/// The wall is back, in other words, but with a slope in front of it — and it
-/// is safe this time in a way it was not before, because granted ground is a
-/// source, so a player whose life has gone out still has a patch with a live
-/// gradient to build on.
+/// Added multiples per level short of full influence. Refused where none
+/// reaches: a wall with a slope in front of it.
 pub const THIN_MULTIPLIER: i32 = 1;
-
-
-/// One turret.
-///
-/// Dearer than a mine, and the number to read per **emplacement** rather than
-/// per cell: one turret is one live cell and dies of loneliness in a
-/// generation, so the smallest turret that works is the 2x2 block, and what a
-/// working turret costs is four of these. Sixty against a starting hundred —
-/// an opening a player can afford exactly one of, and not while doing anything
-/// else.
-///
-/// A turret does not inherit, so this is bought once per cell forever, where a
-/// mine is bought once per *lineage*. That is the whole of why it costs more
-/// than a mine while earning nothing.
-pub const TURRET_COST: i32 = 15;
 /// One birth of [`super::Kind::MINE`].
 pub const MINE_YIELD: i32 = 1;
-/// One upkeep charge on a dead mine. Dearer than a birth pays, which is
-/// what makes an abandoned corpse cost more than it ever earned.
+/// One upkeep charge on a dead mine.
 pub const MINE_DRAIN: i32 = 2;
 
 // --- the rules, in order -----------------------------------------------------
@@ -237,10 +148,27 @@ fn territory(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
     }
 
     let (player, level) = strongest(neighbours, cell.player());
-    if level == 0 {
+
+    // Claims **rise at once and ebb a step at a time**. Assigning outright in
+    // both directions is the tidier rule and gives a glider no trail at all:
+    // the square behind it goes from held to nobody's the moment it looks.
+    // Ground that drains rather than switching off leaves a short, thinning
+    // wake, which is what something passing through ought to leave.
+    //
+    // Only downwards. A claim that has arrived is felt immediately, or a
+    // frontier would lag behind the life pushing it.
+    let holder = cell.player();
+    if player != holder || level >= cell.level() {
+        if level == 0 {
+            return Then::Next(cell.with_player(PlayerId::UNOWNED).with_level(0));
+        }
+        return Then::Next(cell.with_player(player).with_level(level));
+    }
+    let ebbed = cell.level().saturating_sub(LEVEL_EBB).max(level);
+    if ebbed == 0 {
         return Then::Next(cell.with_player(PlayerId::UNOWNED).with_level(0));
     }
-    Then::Next(cell.with_player(player).with_level(level))
+    Then::Next(cell.with_level(ebbed))
 }
 
 /// The best claim reaching a square, and whose it is.

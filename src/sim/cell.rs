@@ -163,7 +163,18 @@ impl Cell {
     /// discovered later as a cell nobody can claim.
     pub const fn alive(player: PlayerId) -> Self {
         assert!(player.is_owned(), "a live cell must have a non-zero player");
-        Self::DEAD.with_tile(bits::ALIVE).with_player(player)
+        // Stored at full, so [`Self::level`] and [`Self::influence`] agree on
+        // a source rather than one of them being a special case. It is also
+        // what a cell leaves when it dies: death stops it being a source and
+        // the ground it was standing on is already at full strength, so it
+        // ebbs from there instead of blinking out. Without this a fresh corpse
+        // was owned at level nought, which is a state the rule says cannot
+        // exist -- true again a generation later, and wrong on the screen in
+        // between.
+        Self::DEAD
+            .with_tile(bits::ALIVE)
+            .with_player(player)
+            .with_level(bits::MAX_LEVEL)
     }
 
     #[inline]
@@ -702,7 +713,11 @@ mod tests {
     fn a_cell_is_two_bytes_owner_then_tile() {
         assert_eq!(size_of::<Cell>(), 2);
         let c = Cell::alive(PlayerId(5)).with_kind(Kind(3)).with_ice(true);
-        assert_eq!(c.0[0], 5 << bits::PLAYER_SHIFT, "the owner byte is the player");
+        assert_eq!(
+            c.0[0],
+            (5 << bits::PLAYER_SHIFT) | (bits::MAX_LEVEL << bits::LEVEL_SHIFT),
+            "the owner byte is the player and the level, and a live cell is a source"
+        );
         assert_eq!(
             c.0[1],
             (3 << bits::KIND_SHIFT) | bits::ICE | bits::ALIVE,

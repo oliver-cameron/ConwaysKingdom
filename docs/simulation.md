@@ -152,9 +152,17 @@ Summing all eight neighbours was considered and is wrong in a way worth recordin
 
 Mass gets its say at the one place it can without bending the geometry: **a tie goes to whoever is pushing hardest**, by the total of everything they have reaching the square. A tie in that too keeps the square where it is, so a border between two exactly matched players does not flicker, and two peers reach the same answer.
 
+### Rising and ebbing
+
+A claim **rises at once and ebbs a step at a time**, `rule::LEVEL_EBB` per update. Assigning outright in both directions is the tidier rule and gives a glider no wake at all: the square behind it goes from held to nobody's the moment it looks. Ground that drains instead leaves a short thinning trail, which is what something passing through ought to leave — measured, about eight squares behind a glider, tapering 7, 5, 3, 1, against a halo three squares deep for something standing still.
+
+Only downwards. A claim that has arrived is felt immediately, or a frontier would lag behind the life pushing it.
+
+A live cell **stores** full level as well as reading as full, so `level` and `influence` agree on a source rather than one of them being a special case — and so that death is only "stop being a source", with the ground already at full strength to ebb from. Without it a fresh corpse was owned at level nought, which is a state the rule says cannot exist: true again a generation later, and wrong on the screen in between.
+
 ### The roll decides the rate, not the outcome
 
-`rule::LEVEL_ADJUST` is how often a square works out what reaches it. This is the other half of the change: the old roll decided *which owner a square took*, and this one decides *when it looks*.
+`rule::LEVEL_ADJUST` is how often a dead square works out what reaches it — sixteen in sixty-four. This is the other half of the change: the old roll decided *which owner a square took*, and this one decides *when it looks*.
 
 Recomputed every generation for every square, the field would be an exact distance transform that snaps the instant anything moves, and a glider would drag a geometrically perfect halo behind it. Updating a fraction per generation makes it lag and smear, which is the difference between a country and a Voronoi diagram — and a square that is not updating costs one roll and nothing else. Whenever a square does settle it settles to the same thing, so the roll cannot change the answer, only the moment.
 

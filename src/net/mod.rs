@@ -128,6 +128,7 @@ impl Placement {
             Self::Life => existing
                 .with_alive(true)
                 .with_player(player)
+                .with_level(crate::sim::bits::MAX_LEVEL)
                 // Placed life is ordinary life. Without this, drawing over a
                 // mine's corpse would hand you a free mine -- the kind is on
                 // the cell and outlives the life that carried it.
@@ -135,10 +136,12 @@ impl Placement {
             Self::Mine => existing
                 .with_alive(true)
                 .with_player(player)
+                .with_level(crate::sim::bits::MAX_LEVEL)
                 .with_kind(Kind::MINE),
             Self::Turret => existing
                 .with_alive(true)
                 .with_player(player)
+                .with_level(crate::sim::bits::MAX_LEVEL)
                 .with_kind(Kind::TURRET),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
