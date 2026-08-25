@@ -547,14 +547,25 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     });
     ui.add_space(m.item_spacing);
 
-    if let Some(reach) = server_field(ui, theme, menu, at) {
+    // **Both columns, whatever the server has said.** Gating them on a room
+    // list having arrived meant that a server which refused once left no way
+    // to make a world either — which is not a consequence anybody would choose
+    // and is exactly what it looked like from the outside: a screen with
+    // nothing on it.
+    //
+    // The list is empty until there is one; the form is a form either way, and
+    // says what it is waiting for at the point of pressing rather than by
+    // being absent.
+    let (rooms, note) = match &menu.stage {
+        Stage::Choosing { rooms, note } => (rooms.clone(), note.clone()),
+        _ => (Vec::new(), None),
+    };
+    let reached = matches!(menu.stage, Stage::Choosing { .. });
+
+    if let Some(reach) = server_field(ui, theme, menu, at, reached) {
         chose = reach;
     }
-
-    let Stage::Choosing { rooms, note } = &menu.stage else {
-        return chose;
-    };
-    let (rooms, note) = (rooms.clone(), note.clone());
+    ui.add_space(m.item_spacing);
 
     ui.add_space(m.item_spacing * 2.0);
     if let Some(note) = note {
@@ -565,19 +576,19 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     // Two columns where there is room for two, one where there is not.
     if ui.available_width() >= m.two_column_min {
         ui.columns(2, |cols| {
-            if let Some(what) = rooms_column(&mut cols[0], theme, menu, &rooms) {
+            if let Some(what) = rooms_column(&mut cols[0], theme, menu, &rooms, reached) {
                 chose = what;
             }
-            if let Some(what) = make_column(&mut cols[1], theme, menu) {
+            if let Some(what) = make_column(&mut cols[1], theme, menu, reached) {
                 chose = what;
             }
         });
     } else {
-        if let Some(what) = rooms_column(ui, theme, menu, &rooms) {
+        if let Some(what) = rooms_column(ui, theme, menu, &rooms, reached) {
             chose = what;
         }
         ui.add_space(m.item_spacing * 2.0);
-        if let Some(what) = make_column(ui, theme, menu) {
+        if let Some(what) = make_column(ui, theme, menu, reached) {
             chose = what;
         }
     }
@@ -596,9 +607,17 @@ fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
 /// Debounced rather than fired per keystroke, because `ws://127.0.0.1:8080/ws`
 /// passes through twenty addresses on its way to being one, and every one of
 /// them would open a socket.
-fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Option<Chose> {
+fn server_field(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    menu: &mut Menu,
+    at: Where,
+    reached: bool,
+) -> Option<Chose> {
     let p = theme.palette;
     let m = theme.metrics;
+    let mut ask = false;
+    let mut refresh = false;
 
     ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
     if at.on_web {
@@ -608,19 +627,56 @@ fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) ->
         return None;
     }
 
-    let field = ui.add(
-        egui::TextEdit::singleline(&mut menu.address)
-            .desired_width(f32::INFINITY)
-            .hint_text(words::SERVER_HINT),
-    );
-    if field.changed() {
-        menu.typed_at = Some(at.now);
-        // What is on screen is about an address that is no longer in the
-        // field, so it goes rather than sitting there contradicting it.
-        if !matches!(menu.stage, Stage::Asking) {
-            menu.stage = Stage::Idle;
+    ui.horizontal(|ui| {
+        // **The button is back, and it is the point of control.** Reaching
+        // when the typing settles is a convenience and it was made the only
+        // way in, which was a mistake: a server that refused once left nothing
+        // on screen to press, and retyping the same address did nothing at all
+        // because it had already been asked about. A menu with no visible way
+        // to act is a menu that looks broken, and it looked broken because for
+        // that address it *was*.
+        // **One control, and it is a refresh.** Reaching a server for the
+        // first time and asking it again are the same act from where the
+        // player stands — "tell me what is on there, now" — so they are one
+        // button whose meaning follows the state rather than two that have to
+        // be told apart. The rooms column had its own; that was the same
+        // button in a second place.
+        let go = ui
+            .add_sized(
+                [m.button_height, m.button_height],
+                egui::Button::new(egui::RichText::new(words::REFRESH).size(m.text_action)),
+            )
+            .on_hover_text(if reached { words::REFRESH_AGAIN } else { words::REFRESH_ASK });
+        let field = ui.add_sized(
+            [ui.available_width(), m.button_height],
+            egui::TextEdit::singleline(&mut menu.address).hint_text(words::SERVER_HINT),
+        );
+        if field.changed() {
+            menu.typed_at = Some(at.now);
+            // What is on screen is about an address that is no longer in the
+            // field, so it goes rather than sitting there contradicting it.
+            if !matches!(menu.stage, Stage::Asking) {
+                menu.stage = Stage::Idle;
+            }
         }
-    }
+
+        // Enter and the button are **deliberate**, so they ask whatever the
+        // address is and whatever was asked before. Only the settle is
+        // guarded, and only against asking twice about one address without
+        // anybody having done anything.
+        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if go.clicked() || entered {
+            // Already connected: this is "say that again", which is one small
+            // message rather than a new socket.
+            if reached && !field.changed() {
+                refresh = true;
+            }
+            menu.attempted = None;
+            ask = true;
+        } else if menu.typed_at.is_some_and(|t| at.now - t >= SETTLE) {
+            ask = true;
+        }
+    });
 
     match &menu.stage {
         Stage::Asking => {
@@ -633,15 +689,17 @@ fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) ->
             ui.colored_label(p.bad, egui::RichText::new(why).size(m.text_small));
             // **Asked again on its own.** The usual reason a server does not
             // answer is that it is not running *yet* — somebody is starting it
-            // in the other window — and a menu that gives up after one refusal
-            // makes that a thing you have to notice and click. So the address
-            // is retried on a slow cadence, and the button is for somebody who
-            // does not want to wait out the interval.
-            let due = menu.failed_at.is_some_and(|t| at.now - t >= RETRY_EVERY);
-            if ui.small_button(words::RETRY).clicked() || due {
-                menu.attempted = None;
+            // in the other window — so the address is retried on a slow
+            // cadence rather than giving up after one refusal.
+            //
+            // `failed_at` is stamped when the refusal *arrives* and not here,
+            // which is the bug this replaces: set only inside this branch, it
+            // was `None` for as long as nothing had retried, so nothing ever
+            // did and the cadence never started.
+            if menu.failed_at.is_none_or(|t| at.now - t >= RETRY_EVERY) {
                 menu.failed_at = Some(at.now);
-                menu.typed_at = Some(at.now - SETTLE);
+                menu.attempted = None;
+                ask = true;
             }
         }
         // Nothing said. The field has just been typed into and the answer is
@@ -650,17 +708,16 @@ fn server_field(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) ->
         Stage::Idle => {}
     }
 
-    // Settled: enter, leaving the field, or a pause with nothing typed.
-    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    let left = field.lost_focus() && !entered;
-    let paused = menu.typed_at.is_some_and(|t| at.now - t >= SETTLE);
-    if !(entered || left || paused) {
+    if refresh {
+        return Some(Chose::Refresh);
+    }
+    if !ask {
         return None;
     }
     menu.typed_at = None;
 
-    // Once per address. Without this the pause fires every frame after it, and
-    // leaving the field fires again on an address already being asked about.
+    // Once per address, for the settle only — the button and enter cleared
+    // this above, because a press is somebody asking again on purpose.
     let address = menu.address.trim().to_string();
     if address.is_empty() || menu.attempted.as_deref() == Some(address.as_str()) {
         return None;
@@ -675,21 +732,24 @@ fn rooms_column(
     theme: &Theme,
     menu: &mut Menu,
     rooms: &[RoomInfo],
+    // Whether the server has answered, which is a different thing from having
+    // answered with nothing: one is a pause and the other is an invitation.
+    reached: bool,
 ) -> Option<Chose> {
     let p = theme.palette;
     let m = theme.metrics;
     let mut chose = None;
 
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(words::ROOMS).size(m.text_small));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button(words::REFRESH).clicked() {
-                chose = Some(Chose::Refresh);
-            }
-        });
-    });
+    // No refresh here. It is beside the address, which is the same act from
+    // where the player stands and was two buttons for one thing.
+    ui.label(egui::RichText::new(words::ROOMS).size(m.text_small));
 
-    if rooms.is_empty() {
+    if !reached {
+        // No answer yet, which is a different thing from a server with nothing
+        // on it and reads differently: one is waiting, the other is an
+        // invitation.
+        ui.colored_label(p.text_dim, egui::RichText::new(words::NOT_ASKED).size(m.text_body));
+    } else if rooms.is_empty() {
         // An invitation rather than a complaint: there is a form in the next
         // column and this is the moment to point at it.
         ui.colored_label(p.text_dim, egui::RichText::new(words::NO_ROOMS).size(m.text_body));
@@ -782,9 +842,18 @@ fn rooms_column(
 /// under the list, because a form there pushed the list off the screen; in a
 /// column of its own there is nothing to push, and a button whose only job is
 /// to reveal what would fit anyway is a press that buys nothing.
-fn make_column(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Option<Chose> {
+fn make_column(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, reached: bool) -> Option<Chose> {
     let draft = menu.draft.get_or_insert_with(Draft::default);
-    make_form(ui, theme, draft)
+    let made = make_form(ui, theme, draft, reached);
+    // Refused here rather than by the form being missing: somebody who has
+    // filled it in should be told what it is waiting for, not left wondering
+    // where it went.
+    if made.is_some() && !reached {
+        draft.asking = false;
+        draft.note = Some(words::make::NO_SERVER.into());
+        return None;
+    }
+    made
 }
 
 /// What a room row was clicked for. Two things can be done with a room, so a
@@ -803,7 +872,7 @@ impl Picked {
     }
 }
 
-fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chose> {
+fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool) -> Option<Chose> {
     let p = theme.palette;
     let m = theme.metrics;
     let mut chose = None;
@@ -954,9 +1023,14 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
                 .add_sized(
                     [ui.available_width(), m.action_height],
                     egui::Button::new(
-                        egui::RichText::new(words::make::MAKE).size(m.text_action).color(p.ground),
+                        egui::RichText::new(words::make::MAKE)
+                            .size(m.text_action)
+                            // The accent is for the thing you are meant to
+                            // press next, and until a server has answered that
+                            // is not this one.
+                            .color(if reached { p.ground } else { p.text }),
                     )
-                    .fill(p.accent),
+                    .fill(if reached { p.accent } else { p.surface }),
                 )
                 .clicked()
             {

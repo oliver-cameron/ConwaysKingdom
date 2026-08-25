@@ -26,13 +26,21 @@ pub mod menu {
     /// is not silent.
     pub const REACHED: &str = "connected";
     pub const RETRY: &str = "try again";
-    pub const REFRESH: &str = "refresh";
+    /// One glyph. Reaching a server and asking it again are the same act
+    /// from where the player stands, so they are one control whose meaning
+    /// follows the state — which the hover text says.
+    pub const REFRESH: &str = "\u{21bb}";
+    pub const REFRESH_ASK: &str = "See what is on that server";
+    pub const REFRESH_AGAIN: &str = "Ask that server again";
     /// The column of what is already here. "Worlds" rather than "Rooms",
     /// which is the machinery's word — a player joins a world.
     pub const ROOMS: &str = "Worlds here";
     /// An empty list is an invitation, not a failure: there is a form in the
     /// next column and this is the moment to point at it.
     pub const NO_ROOMS: &str = "None yet. Make the first one.";
+    /// Waiting is a different thing from a server with nothing on it, and
+    /// reads differently: one is a pause, the other is an invitation.
+    pub const NOT_ASKED: &str = "No answer from that server yet.";
     pub const ALONE: &str = "Play alone";
     /// Out of a screen, by pointer. Escape does the same, and both exist
     /// because a phone has no escape key and a keyboard user should not have
@@ -190,6 +198,9 @@ pub mod menu {
         pub const GENERATIONS: &str = "Generations";
         pub const SQUARES: &str = "Squares";
         pub const MAKE: &str = "Make it";
+        /// A world is made **on** a server, so there has to be one. Said at
+        /// the point of pressing rather than by the form being absent.
+        pub const NO_SERVER: &str = "Reach a server first — a world is made on one.";
         pub const CLEAR: &str = "Start again";
         pub const MAKING: &str = "making it…";
         /// A match does not start on its own, so somebody about to make one
