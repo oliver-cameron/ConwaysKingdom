@@ -418,6 +418,11 @@ impl Server {
     /// Granted again on a rejoin, deliberately: a player whose life was wiped
     /// out while they were away would otherwise come back with nowhere to
     /// stand, and re-marking ground they already hold costs nothing.
+    /// Give this player their opening patch, if they have not had it.
+    ///
+    /// Safe to call more than once — `net::grant` is idempotent — which is
+    /// what the rejoin path relies on: a player coming back is granted again
+    /// here, and used to get a fresh block on top of whatever they had built.
     fn grant_territory(&mut self, id: PlayerId) {
         crate::net::grant(&mut self.world, id);
         let (row, col) = crate::net::spawn_for(id, &self.world);
@@ -1478,6 +1483,39 @@ mod tests {
     /// Measured on the purse rather than on the world, because a single live
     /// cell dies of loneliness in the same step that applies it. The value is
     /// the honest witness: it moves exactly when an action was taken.
+    /// Coming back with a token used to hand you a fresh 12×12 patch and a
+    /// brand-new 2×2 block on top of whatever you had built — so disconnecting
+    /// and returning conjured a still life out of nothing, for free, as often
+    /// as you liked.
+    #[test]
+    fn coming_back_does_not_grant_a_second_platform() {
+        let mut s = Server::new(World::infinite_empty());
+        let (me, token) = s.join_with("alice", None).unwrap();
+        let at = crate::net::spawn_for(me, s.world());
+
+        // Clear the block they were given, which is what a player who has
+        // played for a while and lost it looks like.
+        let block = (at.0..at.0 + crate::net::SPAWN_N)
+            .flat_map(|r| (at.1..at.1 + crate::net::SPAWN_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| s.world().cell_at(r, c).is_some_and(|x| x.is_alive()))
+            .collect::<Vec<_>>();
+        assert_eq!(block.len(), 4, "the grant stands a block");
+        for (r, c) in block {
+            let was = s.world().cell_at(r, c).unwrap();
+            s.world_mut().set_cell_at(r, c, was.with_alive(false));
+        }
+        assert_eq!(s.world().live_cells().len(), 0, "nothing of theirs is alive");
+
+        s.leave(me);
+        let (back, _) = s.join_with("alice", Some(&token)).unwrap();
+        assert_eq!(back, me, "the token brought them back to themselves");
+        assert_eq!(
+            s.world().live_cells().len(),
+            0,
+            "coming back built a fresh block out of nothing"
+        );
+    }
+
     #[test]
     fn an_action_attributed_to_somebody_else_is_dropped() {
         let mut s = Server::new(World::infinite_empty());

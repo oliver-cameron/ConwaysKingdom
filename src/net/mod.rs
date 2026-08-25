@@ -954,6 +954,22 @@ pub fn too_cramped_for_grants(world: &World) -> bool {
 pub fn grant(world: &mut World, player: PlayerId) {
     let (row, col) = spawn_for(player, world);
 
+    // **Once each.** A player coming back with a token is granted again by
+    // `join_with`, and without this that hands them a fresh 12×12 patch and a
+    // brand-new 2×2 block on top of whatever they had built — so disconnecting
+    // and returning was a way to conjure a still life out of nothing, over and
+    // over, for free.
+    //
+    // Asked of the world rather than remembered on the player, because the
+    // mark is already there and is already the durable answer: `HOME` sits on
+    // the **square**, survives the ground changing hands, and is written into
+    // the save. A flag on the player would be a second copy of the same fact,
+    // and one that a save from an older build would not have.
+    if already_granted(world, (row, col), player) {
+        log::debug!("{player:?} is already granted at ({row}, {col}); not granting again");
+        return;
+    }
+
     // **Dead ground is claimed whoever it belonged to.** It used to be claimed
     // only where nobody held it, on the principle that territory is taken by
     // life reaching it rather than handed out over what is already held. That
