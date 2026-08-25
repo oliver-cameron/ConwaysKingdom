@@ -69,11 +69,7 @@ pub fn save(path: &Path, world: &World, players: &[Player], tick: u64) -> io::Re
     out.extend_from_slice(&tick.to_le_bytes());
 
     // Only chunks holding life are worth writing; the rest is implied.
-    let mut chunks: Vec<_> = world
-        .stored()
-        .into_iter()
-        .filter(|(_, c)| !c.is_empty())
-        .collect();
+    let mut chunks: Vec<_> = world.stored().into_iter().filter(|(_, c)| !c.is_empty()).collect();
     chunks.sort_unstable_by_key(|&(coord, _)| coord);
 
     out.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
@@ -223,8 +219,8 @@ mod tests {
     use crate::sim::{Cell, PlayerId};
 
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir()
-            .join(format!("ck-persist-{tag}-{}.ckw", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ck-persist-{tag}-{}.ckw", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
@@ -237,10 +233,9 @@ mod tests {
     /// every load invent five cells nobody had placed.
     #[test]
     fn a_loaded_world_holds_only_what_was_saved() {
-        for (tag, world) in [
-            ("infinite", World::infinite_empty()),
-            ("torus", World::toroidal_empty(4, 4)),
-        ] {
+        for (tag, world) in
+            [("infinite", World::infinite_empty()), ("torus", World::toroidal_empty(4, 4))]
+        {
             let path = scratch(tag);
             save(&path, &world, &[], 0).unwrap();
             let back = load(&path).unwrap();

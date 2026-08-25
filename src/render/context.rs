@@ -55,7 +55,8 @@ async fn webgpu_usable() -> bool {
     if gpu.is_undefined() || gpu.is_null() {
         return false;
     }
-    let Some(request) = get(&gpu, "requestAdapter").and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    let Some(request) =
+        get(&gpu, "requestAdapter").and_then(|f| f.dyn_into::<js_sys::Function>().ok())
     else {
         return false;
     };
@@ -100,9 +101,7 @@ impl GpuState {
             display: None,
         });
 
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("failed to create surface");
+        let surface = instance.create_surface(window.clone()).expect("failed to create surface");
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -115,12 +114,7 @@ impl GpuState {
             .expect("no suitable GPU adapter found (check that WebGPU/WebGL2 is available)");
 
         let info = adapter.get_info();
-        log::info!(
-            "adapter: {} ({:?} via {:?})",
-            info.name,
-            info.device_type,
-            info.backend
-        );
+        log::info!("adapter: {} ({:?} via {:?})", info.name, info.device_type, info.backend);
 
         // WebGL2 only supports a reduced limit set (no storage buffers,
         // smaller texture sizes, etc). Requesting the downlevel defaults
@@ -226,17 +220,10 @@ pub struct IndexBufferBinding<'a> {
 
 pub enum Draw {
     /// Non-indexed draw: `pass.draw(vertices, instances)`.
-    Vertices {
-        vertices: Range<u32>,
-        instances: Range<u32>,
-    },
+    Vertices { vertices: Range<u32>, instances: Range<u32> },
     /// Indexed draw: `pass.draw_indexed(indices, base_vertex, instances)`.
     /// Requires `DrawCall::index_buffer` to be set.
-    Indexed {
-        indices: Range<u32>,
-        base_vertex: i32,
-        instances: Range<u32>,
-    },
+    Indexed { indices: Range<u32>, base_vertex: i32, instances: Range<u32> },
 }
 
 /// One draw call: a pipeline, its bind groups, its vertex/index
@@ -298,14 +285,10 @@ impl Frame {
             wgpu::CurrentSurfaceTexture::Lost => return FrameAcquire::Lost,
         };
 
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("frame encoder"),
-            });
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("frame encoder"),
+        });
 
         FrameAcquire::Ready(Self { output, view, encoder })
     }
@@ -333,26 +316,28 @@ impl Frame {
         overlay: impl FnOnce(&mut wgpu::CommandEncoder, &mut wgpu::RenderPass<'static>),
     ) {
         {
-            let mut pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("frame render pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: match clear_color {
-                            Some(c) => wgpu::LoadOp::Clear(c),
-                            None => wgpu::LoadOp::Load,
+            let mut pass = self
+                .encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("frame render pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: match clear_color {
+                                Some(c) => wgpu::LoadOp::Clear(c),
+                                None => wgpu::LoadOp::Load,
+                            },
+                            store: wgpu::StoreOp::Store,
                         },
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            })
-            .forget_lifetime();
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
 
             for call in calls {
                 pass.set_pipeline(call.pipeline);
@@ -368,11 +353,7 @@ impl Frame {
                     Draw::Vertices { vertices, instances } => {
                         pass.draw(vertices.clone(), instances.clone());
                     }
-                    Draw::Indexed {
-                        indices,
-                        base_vertex,
-                        instances,
-                    } => {
+                    Draw::Indexed { indices, base_vertex, instances } => {
                         let ib = call
                             .index_buffer
                             .as_ref()

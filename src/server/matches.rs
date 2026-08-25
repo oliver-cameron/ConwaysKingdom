@@ -17,9 +17,7 @@ pub use crate::net::MatchPhase as Phase;
 impl Victory {
     /// Read `timer 2000` or `territory 500`.
     pub fn parse(kind: &str, value: &str) -> Result<Self, String> {
-        let n: u64 = value
-            .parse()
-            .map_err(|_| format!("\"{value}\" is not a number of {kind}"))?;
+        let n: u64 = value.parse().map_err(|_| format!("\"{value}\" is not a number of {kind}"))?;
         if n == 0 {
             return Err(format!("a {kind} of zero is a match that is over already"));
         }
@@ -73,10 +71,7 @@ mod tests {
     #[test]
     fn win_conditions_read_back_as_they_were_typed() {
         assert_eq!(Victory::parse("timer", "2000"), Ok(Victory::Timer { generations: 2000 }));
-        assert_eq!(
-            Victory::parse("territory", "500"),
-            Ok(Victory::Territory { squares: 500 })
-        );
+        assert_eq!(Victory::parse("territory", "500"), Ok(Victory::Territory { squares: 500 }));
         assert!(Victory::parse("timer", "0").is_err(), "over before it began");
         assert!(Victory::parse("timer", "soon").is_err());
         assert!(Victory::parse("vibes", "3").is_err());

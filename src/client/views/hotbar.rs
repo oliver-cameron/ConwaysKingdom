@@ -80,7 +80,12 @@ pub const DRAWN: [Tool; 3] = [
 pub const WALLED: Tool =
     // Ice is a flag rather than a kind, so a pane lies over a living cell as
     // readily as over empty ground.
-    Tool { name: words::ICE, shows: ICED, placement: Placement::Ice, stroke: Stroke::Rectangle };
+    Tool {
+        name: words::ICE,
+        shows: ICED,
+        placement: Placement::Ice,
+        stroke: Stroke::Rectangle,
+    };
 
 /// What the hand is holding.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -389,8 +394,7 @@ fn square(
 ) -> bool {
     let p = look.theme.palette;
     let m = look.theme.metrics;
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(m.slot, m.slot), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(m.slot, m.slot), egui::Sense::click());
 
     let fill = if selected {
         p.accent.gamma_multiply(0.22)
@@ -473,11 +477,11 @@ mod tests {
     fn the_tool_keys_never_move() {
         for n in [0, 1, ON_THE_BAR, ON_THE_BAR + 5] {
             let keys = shifted(&library(n));
-            assert_eq!(&keys[..3], &[
-                Key::Held(Held::Draw(0)),
-                Key::Held(Held::Draw(1)),
-                Key::Held(Held::Ice),
-            ], "{n} stamps");
+            assert_eq!(
+                &keys[..3],
+                &[Key::Held(Held::Draw(0)), Key::Held(Held::Draw(1)), Key::Held(Held::Ice),],
+                "{n} stamps"
+            );
         }
     }
 

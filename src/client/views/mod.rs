@@ -18,11 +18,11 @@
 //! clipboard handling that egui-winit exists for is not in play.
 
 pub mod battle;
-pub mod hotbar;
 pub mod camera;
+pub mod clock;
+pub mod hotbar;
 pub mod hud;
 pub mod icons;
-pub mod clock;
 pub mod lobby;
 pub mod menu;
 pub mod overlay;
@@ -144,10 +144,7 @@ fn egui_key(key: &winit::keyboard::Key) -> Option<egui::Key> {
 /// fires however faithfully the deltas were handled. Split out so the emptying
 /// can be tested without a GPU, since the bug is in the bookkeeping rather
 /// than in the upload.
-fn consume_textures(
-    delta: &mut egui::TexturesDelta,
-    mut sink: impl FnMut(Change<'_>),
-) {
+fn consume_textures(delta: &mut egui::TexturesDelta, mut sink: impl FnMut(Change<'_>)) {
     // A texture can arrive as several partial updates in one frame, so each id
     // carries a list rather than a single delta.
     for (id, deltas) in &delta.set {
@@ -342,8 +339,7 @@ impl Views {
                         (event.physical_key, event.text.as_ref())
                     {
                         if let Some(index) = digit_index(code) {
-                            let typed: String =
-                                text.chars().filter(|c| !c.is_control()).collect();
+                            let typed: String = text.chars().filter(|c| !c.is_control()).collect();
                             if !typed.is_empty() {
                                 self.shifted_digits[index] = Some(typed);
                             }
@@ -411,10 +407,7 @@ impl Views {
             Change::Free(id) => renderer.free_texture(&id),
         });
 
-        Output {
-            primitives: self.ctx.tessellate(full.shapes, pixels_per_point),
-            pixels_per_point,
-        }
+        Output { primitives: self.ctx.tessellate(full.shapes, pixels_per_point), pixels_per_point }
     }
 
     /// Record the interface into the pass the world was just drawn into.
@@ -492,8 +485,7 @@ mod tests {
     #[test]
     fn panels_claim_themselves_and_not_the_space_between_them() {
         let hud = egui::Rect::from_min_size(egui::pos2(14.0, 14.0), egui::vec2(220.0, 300.0));
-        let hotbar =
-            egui::Rect::from_min_size(egui::pos2(600.0, 700.0), egui::vec2(110.0, 50.0));
+        let hotbar = egui::Rect::from_min_size(egui::pos2(600.0, 700.0), egui::vec2(110.0, 50.0));
         let panels = [hud, hotbar];
 
         assert!(claims(&panels, egui::pos2(100.0, 100.0)), "on the HUD");

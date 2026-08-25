@@ -28,10 +28,8 @@ fn survey(world: &World, me: PlayerId) -> (usize, f32) {
                     continue;
                 }
                 owned += 1;
-                let (r, c) = (
-                    coord.0 * CHUNK_N as i32 + row as i32,
-                    coord.1 * CHUNK_N as i32 + col as i32,
-                );
+                let (r, c) =
+                    (coord.0 * CHUNK_N as i32 + row as i32, coord.1 * CHUNK_N as i32 + col as i32);
                 let ragged = [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|&(dr, dc)| {
                     world.cell_at(r + dr, c + dc).is_none_or(|n| n.player() != me)
                 });
@@ -101,5 +99,10 @@ fn main() {
     );
     run("held      a block stands on it", &[(0, 0), (0, 1), (1, 0), (1, 1)], 400, true);
     run("abandoned nothing alive at all", &[], 400, true);
-    run("passed through   a glider crosses and leaves", &[(-5, -5), (-4, -4), (-3, -6), (-3, -5), (-3, -4)], 400, true);
+    run(
+        "passed through   a glider crosses and leaves",
+        &[(-5, -5), (-4, -4), (-3, -6), (-3, -5), (-3, -4)],
+        400,
+        true,
+    );
 }

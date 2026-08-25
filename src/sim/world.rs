@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::cell::{Cell, Chunk, Halo, Kind, Mined, CHUNK_N};
-use super::rule;
-use super::seed::Roll;
 use super::dir::Dir;
 use super::player::PlayerId;
+use super::rule;
+use super::seed::Roll;
 
 /// Never advance more than this many generations in a single frame.
 const MAX_CATCHUP_STEPS: u32 = 8;
@@ -32,11 +32,7 @@ enum Storage {
     /// A fixed `rows` x `cols` torus, always fully allocated in one contiguous
     /// block. Coordinates wrap, so global coordinates map many-to-one onto
     /// these chunks.
-    Toroidal {
-        rows: i32,
-        cols: i32,
-        chunks: Box<[Chunk]>,
-    },
+    Toroidal { rows: i32, cols: i32, chunks: Box<[Chunk]> },
 }
 
 /// What shape a world is, and how big it is if it wraps.
@@ -84,9 +80,8 @@ pub struct World {
 /// Shared by both binaries so `--torus 18x18` means the same thing to each,
 /// and so the error does too.
 pub fn parse_torus(text: &str) -> Result<WorldKind, String> {
-    let (rows, cols) = text
-        .split_once(['x', 'X'])
-        .ok_or_else(|| format!("expected ROWSxCOLS, got {text:?}"))?;
+    let (rows, cols) =
+        text.split_once(['x', 'X']).ok_or_else(|| format!("expected ROWSxCOLS, got {text:?}"))?;
     let parse = |v: &str, what: &str| {
         v.trim()
             .parse::<i32>()
@@ -191,10 +186,9 @@ impl World {
     pub fn kind(&self) -> WorldKind {
         match &self.storage {
             Storage::Infinite(_) => WorldKind::Infinite,
-            Storage::Toroidal { rows, cols, .. } => WorldKind::Toroidal {
-                rows: *rows,
-                cols: *cols,
-            },
+            Storage::Toroidal { rows, cols, .. } => {
+                WorldKind::Toroidal { rows: *rows, cols: *cols }
+            }
         }
     }
 
@@ -455,8 +449,7 @@ impl World {
             .filter(|&(row, col)| {
                 Dir::ALL.iter().any(|dir| {
                     let (dr, dc) = dir.delta();
-                    self.cell_at(row + dr, col + dc)
-                        .is_some_and(|c| c.is_alive() && !c.is_ice())
+                    self.cell_at(row + dr, col + dc).is_some_and(|c| c.is_alive() && !c.is_ice())
                 })
             })
             .collect()
@@ -735,10 +728,7 @@ impl World {
                         continue;
                     }
                     out.push((
-                        (
-                            crow * CHUNK_N as i32 + row as i32,
-                            ccol * CHUNK_N as i32 + col as i32,
-                        ),
+                        (crow * CHUNK_N as i32 + row as i32, ccol * CHUNK_N as i32 + col as i32),
                         cell.player(),
                         cell.is_alive(),
                     ));
@@ -869,7 +859,6 @@ impl World {
         out.sort_unstable();
         out
     }
-
 }
 
 /// Can anything on the edge facing `dir` change the chunk beyond it?
@@ -1015,8 +1004,7 @@ mod tests {
 
         let first = w.turret_target((0, 0), me, true, 0, &[]).expect("a gap within reach");
         assert_eq!(first, (0, 3), "the nearer gap");
-        let second =
-            w.turret_target((0, 0), me, true, 0, &[first]).expect("and the one past it");
+        let second = w.turret_target((0, 0), me, true, 0, &[first]).expect("and the one past it");
         assert_eq!(second, (0, 5), "once the nearer one is spoken for");
     }
 
@@ -1233,12 +1221,10 @@ mod tests {
         let (mut north, mut west) = (false, false);
         for _ in 0..400 {
             w.step();
-            north |= (-4..0).any(|r| {
-                (0..6).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me))
-            });
-            west |= (0..6).any(|r| {
-                (-4..0).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me))
-            });
+            north |=
+                (-4..0).any(|r| (0..6).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me)));
+            west |=
+                (0..6).any(|r| (-4..0).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me)));
         }
         assert!(north, "nothing ever crept north out of the chunk");
         assert!(west, "nothing ever crept west out of the chunk");
@@ -1315,7 +1301,11 @@ mod tests {
     }
 
     fn gcd(a: u32, b: u32) -> u32 {
-        if b == 0 { a } else { gcd(b, a % b) }
+        if b == 0 {
+            a
+        } else {
+            gcd(b, a % b)
+        }
     }
 
     #[test]
@@ -1330,11 +1320,7 @@ mod tests {
             for _ in 0..period {
                 w.step();
             }
-            assert_eq!(
-                w.live_cells().len(),
-                5,
-                "{rows}x{cols}: the glider must survive wrapping"
-            );
+            assert_eq!(w.live_cells().len(), 5, "{rows}x{cols}: the glider must survive wrapping");
             assert_eq!(w.live_cells(), start, "{rows}x{cols}: expected one full lap");
         }
     }
@@ -1358,10 +1344,7 @@ mod tests {
                 let canon = w.canonical((row, col));
                 assert!((0..3).contains(&canon.0) && (0..2).contains(&canon.1));
                 // The same chunk, however you address it.
-                assert!(std::ptr::eq(
-                    w.chunk_at((row, col)).unwrap(),
-                    w.chunk_at(canon).unwrap()
-                ));
+                assert!(std::ptr::eq(w.chunk_at((row, col)).unwrap(), w.chunk_at(canon).unwrap()));
                 // Stepping to a neighbour and folding gives the same answer as
                 // folding and then stepping.
                 for dir in Dir::ALL {

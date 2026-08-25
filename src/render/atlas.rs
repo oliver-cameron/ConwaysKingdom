@@ -14,7 +14,6 @@
 //! hue arrives at draw time from the cell's player number, so one set of art
 //! serves every player.
 
-
 /// Texels along one edge of a tile — one cell's worth of picture.
 pub const TILE_N: u32 = 16;
 /// Tiles along one edge of a sheet, so 256 of them per state.
@@ -51,11 +50,7 @@ impl Atlas {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprites"),
-            size: wgpu::Extent3d {
-                width: SHEET_N,
-                height: SHEET_N,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width: SHEET_N, height: SHEET_N, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -83,11 +78,7 @@ impl Atlas {
                 bytes_per_row: Some(SHEET_N * 4),
                 rows_per_image: Some(SHEET_N),
             },
-            wgpu::Extent3d {
-                width: SHEET_N,
-                height: SHEET_N,
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width: SHEET_N, height: SHEET_N, depth_or_array_layers: 1 },
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -232,11 +223,7 @@ mod tests {
     fn sprites_have_hard_edges() {
         let texels = decode(SHEET).expect("the sheet must decode");
         for t in texels.chunks(4) {
-            assert!(
-                t[3] == 0 || t[3] == 255,
-                "coverage {} is neither on nor off",
-                t[3]
-            );
+            assert!(t[3] == 0 || t[3] == 255, "coverage {} is neither on nor off", t[3]);
         }
     }
 }

@@ -70,21 +70,21 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 8,
                 player: PlayerId(2),
-                action: Action::Paint {
-                    cells: vec![(3, 3)],
-                    placement: Placement::Ice,
-                },
+                action: Action::Paint { cells: vec![(3, 3)], placement: Placement::Ice },
             }),
             ClientMessage::Subscribe { chunks: vec![(0, 0), (-1, 5)] },
             ClientMessage::Unsubscribe { chunks: vec![(9, 9)] },
-            ClientMessage::Checkpoint { tick: 100, chunks: vec![((0, 0), 0xDEAD_BEEF), ((-1, 4), 7)] },
+            ClientMessage::Checkpoint {
+                tick: 100,
+                chunks: vec![((0, 0), 0xDEAD_BEEF), ((-1, 4), 7)],
+            },
             ClientMessage::Rooms,
             ClientMessage::Act(Stamped {
                 tick: 11,
                 player: PlayerId(4),
                 action: Action::Paint { cells: vec![(2, 2)], placement: Placement::Mine },
             }),
-                    // A world and a match, which differ on the wire by one field.
+            // A world and a match, which differ on the wire by one field.
             ClientMessage::Create {
                 name: "arena".into(),
                 shape: crate::sim::WorldKind::Toroidal { rows: 6, cols: 8 },
@@ -95,7 +95,7 @@ mod tests {
                 shape: crate::sim::WorldKind::Infinite,
                 victory: Some(crate::net::Victory::Timer { generations: 2000 }),
             },
-];
+        ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
             assert_eq!(decode_client(&bytes).unwrap(), msg, "{msg:?}");
@@ -147,11 +147,14 @@ mod tests {
                 world: crate::sim::WorldKind::Toroidal { rows: 18, cols: 24 },
             },
             ServerMessage::Rejected { reason: "full".into() },
-            ServerMessage::Step { tick: 9, actions: vec![Stamped {
-                tick: 1,
-                player: PlayerId(1),
-                action: Action::Paint { cells: vec![(5, 5)], placement: Placement::Life },
-            }] },
+            ServerMessage::Step {
+                tick: 9,
+                actions: vec![Stamped {
+                    tick: 1,
+                    player: PlayerId(1),
+                    action: Action::Paint { cells: vec![(5, 5)], placement: Placement::Life },
+                }],
+            },
             ServerMessage::ChunkData { tick: 3, chunk: (-2, 7), cells: vec![1, 2, 3, 4] },
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },
             ServerMessage::Purse { value: -3 },

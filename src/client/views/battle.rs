@@ -5,12 +5,9 @@
 
 use std::cell::RefCell;
 
-use crate::render::app::App;
 use super::words;
-use super::{
-    camera, clock, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views,
-};
-use hotbar::{Held, Key};
+use super::{camera, clock, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views};
+use crate::render::app::App;
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
     chunk_instance_layout, world_bind_group_layout, CameraUniform, ChunkStore, SHADER_SOURCE,
@@ -18,6 +15,7 @@ use crate::render::chunks::{
 use crate::render::context::{Draw, DrawCall, GpuState};
 use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
 use crate::sim::{World, WorldKind, CHUNK_N};
+use hotbar::{Held, Key};
 
 use crate::net::link::Link;
 use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
@@ -162,7 +160,9 @@ enum Gesture {
     Drawing(Drag),
     /// The view follows the pointer. `button` is what has to come up again to
     /// end it, and is `None` for fingers.
-    Panning { button: Option<winit::event::MouseButton> },
+    Panning {
+        button: Option<winit::event::MouseButton>,
+    },
 }
 
 /// A press that may yet become a drag.
@@ -433,8 +433,7 @@ impl BattleApp {
     /// the surface is reconfigured.
     fn write_camera(&self, gpu: &GpuState) {
         let uniform = self.camera.uniform(!gpu.config.format.is_srgb());
-        gpu.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     fn cell_under_cursor(&self, at: (f64, f64)) -> (i32, i32) {
@@ -916,10 +915,7 @@ impl BattleApp {
                     return Err(words::refused::cells_not_yours(stray));
                 }
                 let full = if drag.full() { ", full" } else { "" };
-                Ok((
-                    drag.path.clone(),
-                    format!("{} cells of {name}{full}", drag.path.len()),
-                ))
+                Ok((drag.path.clone(), format!("{} cells of {name}{full}", drag.path.len())))
             }
             hotbar::Stroke::Rectangle => {
                 let (rows, cols) = span(drag.from, to);
@@ -929,9 +925,8 @@ impl BattleApp {
                 }
                 let (r0, r1) = (drag.from.0.min(to.0), drag.from.0.max(to.0));
                 let (c0, c1) = (drag.from.1.min(to.1), drag.from.1.max(to.1));
-                let cells: Vec<(i32, i32)> = (r0..=r1)
-                    .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
-                    .collect();
+                let cells: Vec<(i32, i32)> =
+                    (r0..=r1).flat_map(|r| (c0..=c1).map(move |c| (r, c))).collect();
                 let stray = outside(&cells);
                 if stray > 0 {
                     return Err(words::refused::cells_not_yours(stray));
@@ -1050,7 +1045,12 @@ impl BattleApp {
 
     /// The same, for a placement the hotbar is not holding — a stamp lays
     /// whatever it captured, which may be two kinds at once.
-    fn quote_as(&self, cells: Vec<(i32, i32)>, taking: bool, placement: Placement) -> (Stamped, i32) {
+    fn quote_as(
+        &self,
+        cells: Vec<(i32, i32)>,
+        taking: bool,
+        placement: Placement,
+    ) -> (Stamped, i32) {
         let action = if taking {
             Action::Erase { cells, placement }
         } else {
@@ -1107,10 +1107,9 @@ impl BattleApp {
         let rects: Vec<egui::Rect> = match drag.stroke {
             // A stroke is its cells; there is no outline to draw round a line
             // that doubles back on itself.
-            hotbar::Stroke::Pencil => cells
-                .iter()
-                .map(|&at| self.camera.cell_rect(at, at))
-                .collect(),
+            hotbar::Stroke::Pencil => {
+                cells.iter().map(|&at| self.camera.cell_rect(at, at)).collect()
+            }
             hotbar::Stroke::Rectangle => vec![self.camera.cell_rect(drag.from, to)],
         };
 
@@ -1389,8 +1388,9 @@ impl BattleApp {
                         self.asked_at = Some(self.elapsed);
                         self.show_menu(menu::Stage::Asking);
                     }
-                    None => self
-                        .show_menu(menu::Stage::Failed(words::menu::not_an_address(&address))),
+                    None => {
+                        self.show_menu(menu::Stage::Failed(words::menu::not_an_address(&address)))
+                    }
                 }
             }
             // The form shuts and nothing was made. Dropping the draft rather
@@ -1446,8 +1446,10 @@ impl BattleApp {
     /// Only while the list is what is on screen. Asking from inside a world
     /// would be answering a question nobody has open.
     fn refresh_room_list(&mut self) {
-        if !matches!(self.screen, Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { .. }, .. }))
-        {
+        if !matches!(
+            self.screen,
+            Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { .. }, .. })
+        ) {
             return;
         }
         if self.elapsed - self.listed_at < ROOM_LIST_REFRESH {
@@ -1555,10 +1557,7 @@ impl App for BattleApp {
             label: Some("world"),
             layout: &bgl,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(chunks.view()),
@@ -1658,7 +1657,7 @@ impl App for BattleApp {
 
         if self.playing() {
             self.apply_pan(dt);
-            }
+        }
 
         if self.link.is_some() {
             self.pump_link();
@@ -1734,9 +1733,8 @@ impl App for BattleApp {
         };
         // What shift and a digit types on this keyboard, as far as anyone has
         // found out by pressing it.
-        let typed = move |digit: u32| {
-            shifted.get(digit.checked_sub(1)? as usize).cloned().flatten()
-        };
+        let typed =
+            move |digit: u32| shifted.get(digit.checked_sub(1)? as usize).cloned().flatten();
         let (r, g, b) = hud::player_colour(self.player());
         let marks = overlay::Marks {
             tint: egui::Color32::from_rgb(r, g, b),
@@ -1794,12 +1792,7 @@ impl App for BattleApp {
                 let clock_rect = lobby.as_ref().and_then(|(phase, victory, _)| {
                     clock::show(ctx, &theme, generation, phase, *victory, &standing)
                 });
-                let look = hotbar::Look {
-                    theme: &theme,
-                    sheet,
-                    player: me,
-                    typed: &typed,
-                };
+                let look = hotbar::Look { theme: &theme, sheet, player: me, typed: &typed };
                 let bar = hotbar::show(ctx, &look, held, &self.stamps);
                 picked = bar.picked;
                 // Over the world rather than instead of it: a match that has
@@ -1892,10 +1885,7 @@ impl App for BattleApp {
             bind_groups: &self.bind_groups,
             vertex_buffers: &self.vertex_buffers,
             index_buffer: None,
-            draw: Draw::Vertices {
-                vertices: 0..4,
-                instances: 0..self.chunks.instance_count(),
-            },
+            draw: Draw::Vertices { vertices: 0..4, instances: 0..self.chunks.instance_count() },
         }]
     }
 
@@ -2095,9 +2085,7 @@ impl App for BattleApp {
             // A trackpad. Pixels are already screen distance, so panning is a
             // straight division by zoom; zooming needs a much gentler factor
             // than a notch or the smallest pinch jumps several levels.
-            D::PixelDelta(p) if ctrl => {
-                self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0))
-            }
+            D::PixelDelta(p) if ctrl => self.zoom_about_cursor(1.15f32.powf(p.y as f32 / 140.0)),
             // In a browser a mouse wheel is pixels too, so the unit no longer
             // separates it from a trackpad and a wheel panned instead of
             // zooming. Two things separate them, and neither alone is enough:
@@ -2116,9 +2104,7 @@ impl App for BattleApp {
             // A heuristic, and named as one. `ctrl` is not: a pinch always
             // zooms, so there is a way to zoom that never guesses.
             D::PixelDelta(p)
-                if cfg!(target_arch = "wasm32")
-                    && p.x == 0.0
-                    && p.y.abs() >= WHEEL_NOTCH =>
+                if cfg!(target_arch = "wasm32") && p.x == 0.0 && p.y.abs() >= WHEEL_NOTCH =>
             {
                 let notches = (p.y / WHEEL_NOTCH).clamp(-1.0, 1.0) as f32;
                 self.zoom_about_cursor(1.15f32.powf(notches))
@@ -2260,9 +2246,7 @@ fn startup() -> Start {
 
 #[cfg(target_arch = "wasm32")]
 fn query_string() -> String {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .unwrap_or_default()
+    web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
 /// On native there is no page to have come from, so the URL is an argument —
@@ -2311,7 +2295,6 @@ fn room_in_query(search: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2350,10 +2333,7 @@ mod tests {
         let mut seen = Vec::new();
         for p in 1..=PlayerId::MAX {
             let c = player_colour(PlayerId(p));
-            assert!(
-                !seen.contains(&c),
-                "players {p} and an earlier one share {c:?}"
-            );
+            assert!(!seen.contains(&c), "players {p} and an earlier one share {c:?}");
             seen.push(c);
         }
         // Player 1 is the saturated tier, player 2 the muted one.
@@ -2541,19 +2521,14 @@ fn middle_of((row, col): (i32, i32)) -> (f32, f32) {
 /// and the product of two of those still has to be a number the cap can be
 /// compared against rather than an overflow.
 fn span(from: (i32, i32), to: (i32, i32)) -> (i64, i64) {
-    (
-        (from.0 as i64 - to.0 as i64).abs() + 1,
-        (from.1 as i64 - to.1 as i64).abs() + 1,
-    )
+    ((from.0 as i64 - to.0 as i64).abs() + 1, (from.1 as i64 - to.1 as i64).abs() + 1)
 }
 
 /// The middle of however many fingers are down. One finger's middle is itself,
 /// which is what lets a pinch that has lost a finger carry on panning.
 fn centroid(touches: &[(u64, (f64, f64))]) -> (f64, f64) {
     let n = touches.len().max(1) as f64;
-    let sum = touches
-        .iter()
-        .fold((0.0, 0.0), |a, t| (a.0 + t.1 .0, a.1 + t.1 .1));
+    let sum = touches.iter().fold((0.0, 0.0), |a, t| (a.0 + t.1 .0, a.1 + t.1 .1));
     (sum.0 / n, sum.1 / n)
 }
 

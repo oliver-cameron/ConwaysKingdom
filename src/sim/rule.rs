@@ -199,7 +199,11 @@ fn contested(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
     let level = (won.1 / LEVEL_SPREAD as i32)
         .min(bits::MAX_LEVEL as i32)
         .min(best[won.0 .0 as usize].saturating_sub(LEVEL_FALL) as i32) as u8;
-    if level == 0 { (PlayerId::UNOWNED, 0) } else { (won.0, level) }
+    if level == 0 {
+        (PlayerId::UNOWNED, 0)
+    } else {
+        (won.0, level)
+    }
 }
 
 fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {

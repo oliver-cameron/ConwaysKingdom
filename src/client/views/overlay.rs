@@ -63,10 +63,8 @@ pub fn show(ctx: &egui::Context, theme: &Theme, marks: &Marks) {
         return;
     }
     let p = theme.palette;
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Background,
-        egui::Id::new("world-marks"),
-    ));
+    let painter = ctx
+        .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("world-marks")));
 
     if let Some(rect) = marks.hover {
         painter.rect_filled(rect, 0.0, marks.tint.gamma_multiply(0.14));
@@ -137,19 +135,13 @@ fn chip(painter: &egui::Painter, theme: &Theme, selection: &Selection) {
     let p = theme.palette;
     let m = theme.metrics;
     let colour = if selection.allowed { p.text } else { p.bad };
-    let galley = painter.layout_no_wrap(
-        selection.label.clone(),
-        egui::FontId::proportional(11.0),
-        colour,
-    );
+    let galley =
+        painter.layout_no_wrap(selection.label.clone(), egui::FontId::proportional(11.0), colour);
 
     let padding = egui::vec2(6.0, 3.0);
     let size = galley.size() + padding * 2.0;
     let screen = painter.clip_rect();
-    let wanted = egui::pos2(
-        selection.bounds.left(),
-        selection.bounds.top() - size.y - 4.0,
-    );
+    let wanted = egui::pos2(selection.bounds.left(), selection.bounds.top() - size.y - 4.0);
     let at = egui::pos2(
         wanted.x.clamp(screen.left() + 4.0, (screen.right() - size.x - 4.0).max(screen.left())),
         wanted.y.clamp(screen.top() + 4.0, (screen.bottom() - size.y - 4.0).max(screen.top())),

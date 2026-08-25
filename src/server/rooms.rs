@@ -32,8 +32,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::net::{ClientMessage, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
-use crate::server::Server;
 use crate::server::matches::{Phase, Victory};
+use crate::server::Server;
 use crate::sim::{PlayerId, WorldKind};
 
 /// Where a connected player is: which world, and who they are in it. Player
@@ -140,8 +140,8 @@ impl Rooms {
         if !fresh {
             for name in saved_in(&dir)? {
                 let path = save_path(&dir, &name);
-                let server = Server::load_or_new(&path, name.clone(), || shape.build())
-                    .map_err(|e| {
+                let server =
+                    Server::load_or_new(&path, name.clone(), || shape.build()).map_err(|e| {
                         std::io::Error::new(
                             e.kind(),
                             format!("room \"{name}\" ({}): {e}", path.display()),
@@ -160,9 +160,7 @@ impl Rooms {
         for raw in declared.iter().map(String::as_str).chain([default_room.as_str()]) {
             let name = crate::net::room_name(raw)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-            rooms
-                .entry(name.clone())
-                .or_insert_with(|| Server::named(name, shape.build()));
+            rooms.entry(name.clone()).or_insert_with(|| Server::named(name, shape.build()));
         }
 
         Ok(Self { rooms, dir, default_room, made: BTreeMap::new(), max_made: MAX_MADE_ROOMS })
@@ -301,9 +299,7 @@ impl Rooms {
     pub fn step(&mut self) -> Vec<(RoomName, ServerMessage)> {
         self.rooms
             .iter_mut()
-            .flat_map(|(name, server)| {
-                server.step().into_iter().map(move |m| (name.clone(), m))
-            })
+            .flat_map(|(name, server)| server.step().into_iter().map(move |m| (name.clone(), m)))
             .collect()
     }
 
@@ -363,9 +359,7 @@ impl Rooms {
         let server = Server::named(name.clone(), shape.build());
         let path = save_path(&self.dir, &name);
         if !self.dir.as_os_str().is_empty() {
-            server
-                .save(&path)
-                .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            server.save(&path).map_err(|e| format!("could not write {}: {e}", path.display()))?;
         }
         log::info!("created room \"{name}\"");
         self.rooms.insert(name.clone(), server);
@@ -502,12 +496,12 @@ impl Rooms {
     pub fn delete(&mut self, name: &str) -> Result<RoomName, String> {
         let name = crate::net::room_name(name)?;
         if name == self.default_room {
-            return Err(format!("\"{name}\" is the default room; every client that names none goes there"));
+            return Err(format!(
+                "\"{name}\" is the default room; every client that names none goes there"
+            ));
         }
-        let server = self
-            .rooms
-            .get(&name)
-            .ok_or_else(|| format!("there is no room called \"{name}\""))?;
+        let server =
+            self.rooms.get(&name).ok_or_else(|| format!("there is no room called \"{name}\""))?;
         let here = server.players().filter(|p| p.online).count();
         if here > 0 {
             return Err(format!("{here} still in \"{name}\""));
@@ -562,12 +556,7 @@ impl Rooms {
             .iter()
             .filter(|(_, s)| !matches!(s.phase(), Phase::Open))
             .map(|(name, s)| {
-                (
-                    name.as_str(),
-                    s.phase(),
-                    s.victory(),
-                    s.players().filter(|p| p.online).count(),
-                )
+                (name.as_str(), s.phase(), s.victory(), s.players().filter(|p| p.online).count())
             })
             .collect()
     }
@@ -592,10 +581,7 @@ impl Rooms {
 
     /// How many players are connected right now, across every room.
     pub fn online(&self) -> usize {
-        self.rooms
-            .values()
-            .map(|s| s.players().filter(|p| p.online).count())
-            .sum()
+        self.rooms.values().map(|s| s.players().filter(|p| p.online).count()).sum()
     }
 }
 
@@ -728,8 +714,7 @@ mod tests {
     fn a_saved_room_comes_back_without_being_declared() {
         let dir = temp_dir("saved");
         {
-            let mut rooms =
-                Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
+            let mut rooms = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
             rooms.get_mut("kept").unwrap().join("alice").unwrap();
             rooms.step();
             rooms.save().unwrap();
@@ -751,8 +736,7 @@ mod tests {
     fn fresh_ignores_every_room_on_disk() {
         let dir = temp_dir("fresh");
         {
-            let mut rooms =
-                Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
+            let mut rooms = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
             rooms.step();
             rooms.save().unwrap();
         }
@@ -771,11 +755,7 @@ mod tests {
 
         let replies = rooms.handle(
             &Caller::nobody(),
-            ClientMessage::Join {
-                name: "alice".into(),
-                token: None,
-                room: Some("hall".into()),
-            },
+            ClientMessage::Join { name: "alice".into(), token: None, room: Some("hall".into()) },
         );
         let [ServerMessage::Welcome { room, world, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
@@ -820,7 +800,8 @@ mod tests {
 
         // A player who left is not a player who is there.
         rooms.get_mut("arena").unwrap().leave(PlayerId(1));
-        let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(&Caller::nobody(), ClientMessage::Rooms)[..]
+        let [ServerMessage::Rooms { rooms: listed }] =
+            &rooms.handle(&Caller::nobody(), ClientMessage::Rooms)[..]
         else {
             panic!("expected a listing");
         };
@@ -932,8 +913,7 @@ mod tests {
             .make(1, "cup", WorldKind::Infinite, Some(Victory::Territory { squares: 500 }))
             .unwrap();
 
-        let [ServerMessage::Rooms { rooms: listed }] =
-            &rooms.handle(&me, ClientMessage::Rooms)[..]
+        let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(&me, ClientMessage::Rooms)[..]
         else {
             panic!("expected a listing");
         };
@@ -954,7 +934,11 @@ mod tests {
 
         let replies = rooms.handle(
             &Caller::new(2),
-            ClientMessage::Create { name: "hall".into(), shape: WorldKind::Infinite, victory: None },
+            ClientMessage::Create {
+                name: "hall".into(),
+                shape: WorldKind::Infinite,
+                victory: None,
+            },
         );
         let [ServerMessage::Made(Err(why))] = &replies[..] else {
             panic!("expected a refusal, got {replies:?}");

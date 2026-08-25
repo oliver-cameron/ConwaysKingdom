@@ -30,9 +30,10 @@ pub use cell::{bits, Cell, Chunk, Halo, Kind, Mined, CHUNK_CELLS, CHUNK_N, HALO_
 pub use dir::Dir;
 pub use player::{Player, PlayerId};
 pub use rule::{
-    next_cell, Chance, Neighbours, RuleFn, Then, BORN_ON, DEFAULT_TORUS, ICE_COST, LEVEL_ADJUST, LEVEL_EBB, LEVEL_FALL, LEVEL_SPREAD,
-    LIFE_COST, MINE_COST, MINE_DRAIN, MINE_UPKEEP, MINE_YIELD, RECLAIM, RULES,
-    STARTING_VALUE, SURVIVES_ON, TURRET_COST, TURRET_DECAY, TURRET_POWER, TURRET_PUSH, TURRET_REACH,
+    next_cell, Chance, Neighbours, RuleFn, Then, BORN_ON, DEFAULT_TORUS, ICE_COST, LEVEL_ADJUST,
+    LEVEL_EBB, LEVEL_FALL, LEVEL_SPREAD, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_UPKEEP, MINE_YIELD,
+    RECLAIM, RULES, STARTING_VALUE, SURVIVES_ON, TURRET_COST, TURRET_DECAY, TURRET_POWER,
+    TURRET_PUSH, TURRET_REACH,
 };
 pub use seed::{mix, Roll, OUT_OF};
 pub use world::{parse_torus, Coord, World, WorldKind};

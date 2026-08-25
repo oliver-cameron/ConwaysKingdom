@@ -9,9 +9,9 @@
 //! [`client`] wires all three together into the app that runs today.
 
 pub mod net;
-pub mod server;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod server;
 pub mod sim;
 
 #[cfg(feature = "render")]
@@ -31,8 +31,8 @@ pub use render::{
     PipelineDescriptor, SHADER_SOURCE,
 };
 pub use sim::{
-    bits, Cell, Chunk, Coord, Dir, Halo, Player, PlayerId, World, WorldKind, CHUNK_CELLS,
-    CHUNK_N, HALO_N,
+    bits, Cell, Chunk, Coord, Dir, Halo, Player, PlayerId, World, WorldKind, CHUNK_CELLS, CHUNK_N,
+    HALO_N,
 };
 
 #[cfg(all(target_arch = "wasm32", feature = "render"))]

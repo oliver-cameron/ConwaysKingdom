@@ -54,27 +54,25 @@ pub fn show(
                     ui.separator();
 
                     match phase {
-                        MatchPhase::Over { winner, held, .. } => {
-                            match winner {
-                                Some(id) => {
-                                    let who = players
-                                        .iter()
-                                        .find(|(p, _)| p == id)
-                                        .map(|(_, name)| name.clone())
-                                        .unwrap_or_else(|| format!("player {}", id.0));
-                                    swatch(ui, *id);
-                                    ui.heading(if *id == me {
-                                        words::YOU_WON.to_string()
-                                    } else {
-                                        who
-                                    });
-                                    ui.colored_label(p.text_dim, words::held(*held));
-                                }
-                                None => {
-                                    ui.label(words::NOBODY);
-                                }
+                        MatchPhase::Over { winner, held, .. } => match winner {
+                            Some(id) => {
+                                let who = players
+                                    .iter()
+                                    .find(|(p, _)| p == id)
+                                    .map(|(_, name)| name.clone())
+                                    .unwrap_or_else(|| format!("player {}", id.0));
+                                swatch(ui, *id);
+                                ui.heading(if *id == me {
+                                    words::YOU_WON.to_string()
+                                } else {
+                                    who
+                                });
+                                ui.colored_label(p.text_dim, words::held(*held));
                             }
-                        }
+                            None => {
+                                ui.label(words::NOBODY);
+                            }
+                        },
                         _ => {
                             ui.label(words::who(players.len()));
                             for (id, name) in players {

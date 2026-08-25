@@ -67,6 +67,20 @@ wasm-pack build --target web               # shipping
 
 The `--profiling` profile is release codegen with the second optimiser switched off, in `[package.metadata.wasm-pack.profile.profiling]`.
 
+## Formatting
+
+`rustfmt.toml` exists because the tree was written to a style rustfmt's defaults disagreed with in about four hundred places, so anybody running `cargo fmt` — or an editor set to format on save — silently rewrote half the crate. Three settings recover what was actually being written by hand:
+
+| setting | why |
+|---|---|
+| `max_width = 100` | what the code was already wrapped to |
+| `use_small_heuristics = "Max"` | a call that fits on the line stays on it |
+| `style_edition = "2021"` | keeps `{Cell, …, CHUNK_N}` import order; 2024 sorts uppercase first |
+
+```
+cargo fmt --check
+```
+
 ## Testing
 
 ```

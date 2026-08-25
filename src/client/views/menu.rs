@@ -136,12 +136,8 @@ impl Draft {
         };
         let victory = match self.ends {
             Ends::Never => None,
-            Ends::Timer => Some(Victory::Timer {
-                generations: self.number()?,
-            }),
-            Ends::Territory => Some(Victory::Territory {
-                squares: self.number()? as usize,
-            }),
+            Ends::Timer => Some(Victory::Timer { generations: self.number()? }),
+            Ends::Territory => Some(Victory::Territory { squares: self.number()? as usize }),
         };
         Ok((name, shape, victory))
     }
@@ -230,9 +226,9 @@ pub fn show(
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
-    let area = egui::Area::new("menu".into())
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
+    let area = egui::Area::new("menu".into()).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
+        ctx,
+        |ui| {
             egui::Frame::new()
                 .fill(p.surface)
                 .stroke(egui::Stroke::new(1.0, p.line))
@@ -384,7 +380,8 @@ pub fn show(
                     }
                     ui.small(words::ALONE_NOTE);
                 });
-        });
+        },
+    );
 
     (chose, Some(area.response.rect))
 }
@@ -489,10 +486,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
                     })
                     .size(m.text_small),
                 );
-                ui.add(
-                    egui::TextEdit::singleline(&mut draft.target)
-                        .desired_width(f32::INFINITY),
-                );
+                ui.add(egui::TextEdit::singleline(&mut draft.target).desired_width(f32::INFINITY));
                 ui.colored_label(
                     p.warn,
                     egui::RichText::new(words::make::MATCH_WAITS).size(m.text_small),
@@ -514,9 +508,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
                 .add_sized(
                     [ui.available_width(), m.action_height],
                     egui::Button::new(
-                        egui::RichText::new(words::make::MAKE)
-                            .size(m.text_action)
-                            .color(p.ground),
+                        egui::RichText::new(words::make::MAKE).size(m.text_action).color(p.ground),
                     )
                     .fill(p.accent),
                 )
@@ -538,9 +530,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) -> Option<Chos
             if ui
                 .add_sized(
                     [ui.available_width(), m.button_height],
-                    egui::Button::new(
-                        egui::RichText::new(words::make::CANCEL).size(m.text_small),
-                    ),
+                    egui::Button::new(egui::RichText::new(words::make::CANCEL).size(m.text_small)),
                 )
                 .clicked()
             {
@@ -574,12 +564,13 @@ fn toggles<T: Copy + PartialEq>(
             / options.len() as f32;
         for (option, label) in options {
             let on = *value == *option;
-            let button = egui::Button::new(
-                egui::RichText::new(*label)
-                    .size(m.text_small)
-                    .color(if on { p.ground } else { p.text }),
-            )
-            .fill(if on { p.accent } else { p.surface });
+            let button =
+                egui::Button::new(egui::RichText::new(*label).size(m.text_small).color(if on {
+                    p.ground
+                } else {
+                    p.text
+                }))
+                .fill(if on { p.accent } else { p.surface });
             if ui.add_sized([each, m.button_height], button).clicked() {
                 *value = *option;
             }
@@ -669,10 +660,7 @@ mod tests {
         assert_eq!(players(1), "1 player", "not \"1 players\"");
         assert_eq!(players(4), "4 players");
         assert_eq!(describe(WorldKind::Infinite), "boundless");
-        assert_eq!(
-            describe(WorldKind::Toroidal { rows: 6, cols: 8 }),
-            "6×8 chunks, wrapping"
-        );
+        assert_eq!(describe(WorldKind::Toroidal { rows: 6, cols: 8 }), "6×8 chunks, wrapping");
     }
 
     /// What was typed becomes what was chosen, and a field that does not
@@ -717,12 +705,8 @@ mod tests {
             ..Draft::default()
         };
         assert!(sizeless.parse().is_err());
-        let endless = Draft {
-            name: "cup".into(),
-            ends: Ends::Timer,
-            target: "0".into(),
-            ..Draft::default()
-        };
+        let endless =
+            Draft { name: "cup".into(), ends: Ends::Timer, target: "0".into(), ..Draft::default() };
         assert!(endless.parse().is_err(), "a match of zero is over already");
     }
 

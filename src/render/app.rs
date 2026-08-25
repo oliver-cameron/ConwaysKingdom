@@ -327,11 +327,8 @@ impl<A: App> ApplicationHandler for Harness<A> {
             use winit::platform::web::WindowAttributesExtWebSys;
             attributes.with_prevent_default(false)
         };
-        let window = Arc::new(
-            event_loop
-                .create_window(attributes)
-                .expect("failed to create window"),
-        );
+        let window =
+            Arc::new(event_loop.create_window(attributes).expect("failed to create window"));
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -522,7 +519,6 @@ impl<A: App> ApplicationHandler for Harness<A> {
                         event_loop.exit();
                     }
                 }
-
             }
             _ => {}
         }

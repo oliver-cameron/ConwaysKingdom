@@ -151,11 +151,7 @@ fn player_shade(sheet: [u8; 4], player: u8) -> [f32; 3] {
     } else {
         0.55
     };
-    shade(
-        sheet[1] as f32 / 255.0,
-        sheet[0] as f32 / 255.0 * tier,
-        hue,
-    )
+    shade(sheet[1] as f32 / 255.0, sheet[0] as f32 / 255.0 * tier, hue)
 }
 
 /// One pixel, from sRGB bytes to the sheet's four channels.
@@ -190,11 +186,8 @@ fn convert(px: [u8; 4]) -> [u8; 4] {
 /// round trip against: any drift between this and `shade()` in the shader
 /// shows up as an error here rather than as art that looks wrong on screen.
 fn back(sheet: [u8; 4]) -> [u8; 3] {
-    let rgb = shade(
-        sheet[1] as f32 / 255.0,
-        sheet[0] as f32 / 255.0,
-        sheet[2] as f32 / 255.0 * TAU,
-    );
+    let rgb =
+        shade(sheet[1] as f32 / 255.0, sheet[0] as f32 / 255.0, sheet[2] as f32 / 255.0 * TAU);
     rgb.map(|v| (linear_to_srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
@@ -307,10 +300,7 @@ fn forward(pixels: &[u8], width: u32) -> (Vec<u8>, String) {
         }
     }
 
-    let mut report = format!(
-        "worst round trip: {worst}/255 at ({}, {})",
-        worst_at.0, worst_at.1
-    );
+    let mut report = format!("worst round trip: {worst}/255 at ({}, {})", worst_at.0, worst_at.1);
     if worst > 8 {
         report.push_str(
             "\n  Colours past what OKLab can show at that lightness clamp to full\n  \
@@ -343,10 +333,7 @@ mod tests {
             let there = convert(px);
             let and_back = back(there);
             for (a, b) in and_back.iter().zip(&px[..3]) {
-                assert!(
-                    (*a as i32 - *b as i32).abs() <= 2,
-                    "{px:?} came back {and_back:?}"
-                );
+                assert!((*a as i32 - *b as i32).abs() <= 2, "{px:?} came back {and_back:?}");
             }
         }
     }

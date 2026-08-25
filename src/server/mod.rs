@@ -182,12 +182,8 @@ impl Server {
     /// ever seen, because their number is written into their ground, and a
     /// lobby listing people who left months ago is a lobby nobody can count.
     pub fn lobby(&self) -> ServerMessage {
-        let mut players: Vec<(PlayerId, String)> = self
-            .players
-            .values()
-            .filter(|p| p.online)
-            .map(|p| (p.id, p.name.clone()))
-            .collect();
+        let mut players: Vec<(PlayerId, String)> =
+            self.players.values().filter(|p| p.online).map(|p| (p.id, p.name.clone())).collect();
         // By number, which is the order they arrived, so the list does not
         // reshuffle itself between two frames.
         players.sort_by_key(|&(id, _)| id);
@@ -326,9 +322,7 @@ impl Server {
     /// on players connected at once, which is what a bearer token is for: a
     /// returning player asks for the number they already have.
     fn next_player_id(&self) -> Option<PlayerId> {
-        (1..=PlayerId::MAX)
-            .map(PlayerId)
-            .find(|id| !self.players.contains_key(id))
+        (1..=PlayerId::MAX).map(PlayerId).find(|id| !self.players.contains_key(id))
     }
 
     /// Let a player in, or let them back in.
@@ -383,11 +377,7 @@ impl Server {
         let id = self.join(name)?;
         self.lobby_changed = true;
         let token = new_token();
-        self.players
-            .get_mut(&id)
-            .expect("just joined")
-            .token
-            .clone_from(&token);
+        self.players.get_mut(&id).expect("just joined").token.clone_from(&token);
         Ok((id, token))
     }
 
@@ -682,11 +672,8 @@ impl Server {
         if self.asleep {
             return Vec::new();
         }
-        let lobby: Vec<ServerMessage> = if std::mem::take(&mut self.lobby_changed) {
-            vec![self.lobby()]
-        } else {
-            Vec::new()
-        };
+        let lobby: Vec<ServerMessage> =
+            if std::mem::take(&mut self.lobby_changed) { vec![self.lobby()] } else { Vec::new() };
 
         if !self.phase.stepping() {
             self.pending.clear();
@@ -721,7 +708,8 @@ impl Server {
         // chosen for eyes rather than for the machine. Sent the moment a match
         // is decided as well, whatever the cadence says, because the last one
         // is the result.
-        if self.tick() % STANDING_EVERY == 0 || matches!(self.phase, Phase::Over { at, .. } if at == self.tick())
+        if self.tick() % STANDING_EVERY == 0
+            || matches!(self.phase, Phase::Over { at, .. } if at == self.tick())
         {
             out.push(self.standing());
         }
@@ -766,11 +754,7 @@ mod tests {
         assert!(a.is_owned(), "zero is reserved for unowned cells");
 
         s.leave(a);
-        assert_eq!(
-            s.join("c").unwrap(),
-            PlayerId(3),
-            "a departed player's number is theirs still"
-        );
+        assert_eq!(s.join("c").unwrap(), PlayerId(3), "a departed player's number is theirs still");
         assert!(!s.players().find(|p| p.id == a).unwrap().online, "and they are marked gone");
     }
 
@@ -864,7 +848,10 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: mine(me, &[(4, 4), (4, 5), (4, 6)]), placement: Placement::Life },
+                action: Action::Paint {
+                    cells: mine(me, &[(4, 4), (4, 5), (4, 6)]),
+                    placement: Placement::Life,
+                },
             }),
         );
         for _ in 0..25 {
@@ -920,12 +907,21 @@ mod tests {
 
         // A 2x2 block: a still life, so it is still where it was put when the
         // next assertion looks. A blinker would have rotated out from under it.
-        act(&mut s, Action::Paint { cells: mine(me, &[(0, 0), (0, 1), (1, 0), (1, 1)]), placement: Placement::Life });
+        act(
+            &mut s,
+            Action::Paint {
+                cells: mine(me, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
+                placement: Placement::Life,
+            },
+        );
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost()));
 
         // Reclaiming two of your own pays two back.
         // Reclaiming pays one each, well short of what they cost to place.
-        act(&mut s, Action::Erase { cells: mine(me, &[(0, 0), (0, 1)]), placement: Placement::Life });
+        act(
+            &mut s,
+            Action::Erase { cells: mine(me, &[(0, 0), (0, 1)]), placement: Placement::Life },
+        );
         assert_eq!(s.value_of(me), Some(start - 4 * Placement::Life.cost() + 2));
 
         // Erasing empty space is neither earned nor spent.
@@ -945,8 +941,7 @@ mod tests {
     /// somebody new, beside territory they could see and could not build on.
     #[test]
     fn a_token_survives_the_server_closing() {
-        let path = std::env::temp_dir()
-            .join(format!("ck-restart-{}.ckw", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ck-restart-{}.ckw", std::process::id()));
         let _ = std::fs::remove_file(&path);
 
         let mut before = Server::named("arena", World::infinite_empty());
@@ -956,8 +951,7 @@ mod tests {
         before.save(&path).unwrap();
 
         // A new process, reading the file the old one left.
-        let mut after =
-            Server::load_or_new(&path, "arena", World::infinite_empty).unwrap();
+        let mut after = Server::load_or_new(&path, "arena", World::infinite_empty).unwrap();
         assert!(!after.players[&me].online, "nobody is connected to a world off a disk");
 
         let (back, same) = after.join_with("alice", Some(&token)).unwrap();
@@ -1068,7 +1062,9 @@ mod tests {
 
         let lobby = |out: &[ServerMessage]| {
             out.iter().find_map(|m| match m {
-                ServerMessage::Match { players, phase, .. } => Some((players.clone(), phase.clone())),
+                ServerMessage::Match { players, phase, .. } => {
+                    Some((players.clone(), phase.clone()))
+                }
                 _ => None,
             })
         };
@@ -1137,9 +1133,8 @@ mod tests {
         stake(&mut s, alice, (900, 900), 4);
         s.start_match().unwrap();
 
-        let standing = |out: &[ServerMessage]| {
-            out.iter().any(|m| matches!(m, ServerMessage::Standing { .. }))
-        };
+        let standing =
+            |out: &[ServerMessage]| out.iter().any(|m| matches!(m, ServerMessage::Standing { .. }));
         assert!(!standing(&s.step()), "tick 1 is not on the cadence");
         assert!(!standing(&s.step()), "nor is tick 2");
         // Tick 3 is the whistle, which sends one whatever the cadence says.
@@ -1208,10 +1203,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: alice,
-                action: Action::Paint {
-                    cells: mine(alice, &[(3, 3)]),
-                    placement: Placement::Life,
-                },
+                action: Action::Paint { cells: mine(alice, &[(3, 3)]), placement: Placement::Life },
             }),
         );
         s.step();
@@ -1264,10 +1256,8 @@ mod tests {
         let (alice, token) = s.join_with("alice", None).unwrap();
         s.start_match().unwrap();
 
-        let refused = s.handle(
-            None,
-            ClientMessage::Join { name: "late".into(), token: None, room: None },
-        );
+        let refused =
+            s.handle(None, ClientMessage::Join { name: "late".into(), token: None, room: None });
         assert!(
             matches!(refused.as_slice(), [ServerMessage::Rejected { reason }] if reason.contains("already under way")),
             "{refused:?}"
@@ -1298,7 +1288,10 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
-                action: Action::Paint { cells: mine(me, &[(0, 0), (0, 1)]), placement: Placement::Life },
+                action: Action::Paint {
+                    cells: mine(me, &[(0, 0), (0, 1)]),
+                    placement: Placement::Life,
+                },
             }),
         );
         s.step();
@@ -1449,10 +1442,7 @@ mod tests {
             }),
         );
         s.step();
-        assert!(
-            s.world().cell_at(row, col).unwrap().is_ice(),
-            "the pane should still be there"
-        );
+        assert!(s.world().cell_at(row, col).unwrap().is_ice(), "the pane should still be there");
         assert_eq!(s.value_of(me), spent, "and nothing should have been paid for it");
     }
 
@@ -1462,19 +1452,30 @@ mod tests {
         let a = s.join("a").unwrap();
         let b = s.join("b").unwrap();
         // A block again, so a's cell survives long enough for b to attack it.
-        s.handle(Some(a), ClientMessage::Act(Stamped {
-            tick: 0,
-            player: a,
-            action: Action::Paint { cells: mine(a, &[(0, 0), (0, 1), (1, 0), (1, 1)]), placement: Placement::Life },
-        }));
+        s.handle(
+            Some(a),
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: a,
+                action: Action::Paint {
+                    cells: mine(a, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
+                    placement: Placement::Life,
+                },
+            }),
+        );
         s.step();
         let (row, col) = mine(a, &[(0, 0)])[0];
         assert_eq!(s.world().cell_at(row, col).map(|c| c.player()), Some(a));
 
         let before = s.value_of(b).unwrap();
-        s.handle(Some(b), ClientMessage::Act(Stamped {
-            tick: s.tick(), player: b, action: Action::Erase { cells: mine(a, &[(0, 0)]), placement: Placement::Life },
-        }));
+        s.handle(
+            Some(b),
+            ClientMessage::Act(Stamped {
+                tick: s.tick(),
+                player: b,
+                action: Action::Erase { cells: mine(a, &[(0, 0)]), placement: Placement::Life },
+            }),
+        );
         s.step();
         assert_eq!(s.value_of(b), Some(before - 1), "taking ground is not free");
     }
@@ -1501,9 +1502,14 @@ mod tests {
             .map(|(r, c)| (row + r, col + c))
             .collect();
 
-        s.handle(Some(me), ClientMessage::Act(Stamped {
-            tick: 0, player: me, action: Action::Paint { cells: too_many, placement: Placement::Life },
-        }));
+        s.handle(
+            Some(me),
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: me,
+                action: Action::Paint { cells: too_many, placement: Placement::Life },
+            }),
+        );
         s.step();
         assert_eq!(s.value_of(me), Some(purse), "nothing was spent");
         assert_eq!(s.world().live_cells(), granted, "and nothing was placed");

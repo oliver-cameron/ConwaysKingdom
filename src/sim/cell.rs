@@ -171,10 +171,7 @@ impl Cell {
         // was owned at level nought, which is a state the rule says cannot
         // exist -- true again a generation later, and wrong on the screen in
         // between.
-        Self::DEAD
-            .with_tile(bits::ALIVE)
-            .with_player(player)
-            .with_level(bits::MAX_LEVEL)
+        Self::DEAD.with_tile(bits::ALIVE).with_player(player).with_level(bits::MAX_LEVEL)
     }
 
     #[inline]
@@ -468,9 +465,7 @@ impl Chunk {
     /// The cost is that an infinite world now grows with territory as well as
     /// with life, and territory has no die-off yet, so it only ever grows.
     pub fn is_empty(&self) -> bool {
-        self.cells
-            .iter()
-            .all(|c| !c.is_alive() && !c.is_ice() && !c.player().is_owned())
+        self.cells.iter().all(|c| !c.is_alive() && !c.is_ice() && !c.player().is_owned())
     }
 
     /// Exactly the `&[u8]` `Queue::write_texture` wants. No conversion.
@@ -589,10 +584,7 @@ impl Halo {
         let mut out = [Cell::DEAD; 8];
         for (i, dir) in Dir::ALL.iter().enumerate() {
             let (dr, dc) = dir.delta();
-            out[i] = self.get(
-                (hr as i32 + dr) as usize,
-                (hc as i32 + dc) as usize,
-            );
+            out[i] = self.get((hr as i32 + dr) as usize, (hc as i32 + dc) as usize);
         }
         out
     }

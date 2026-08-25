@@ -69,10 +69,7 @@ pub fn show(
         // Fixed, or dragging it would be indistinguishable from panning the
         // world underneath.
         .movable(false)
-        .anchor(
-            egui::Align2::LEFT_TOP,
-            [theme.metrics.margin, theme.metrics.margin],
-        )
+        .anchor(egui::Align2::LEFT_TOP, [theme.metrics.margin, theme.metrics.margin])
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // The way out, in the row that is already about who you are
@@ -90,8 +87,7 @@ pub fn show(
                 let (r, g, b) = player_colour(status.player);
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
+                ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
                 ui.heading(format!("Player {}", status.player.0));
             });
 
@@ -137,10 +133,7 @@ pub fn show(
                     status.cursor_cell.1,
                     if status.pointer_on_ui { words::OVER_PANEL } else { words::ON_WORLD }
                 ));
-                ui.small(format!(
-                    "last  {}",
-                    status.last_action.unwrap_or(words::NOTHING_YET)
-                ));
+                ui.small(format!("last  {}", status.last_action.unwrap_or(words::NOTHING_YET)));
 
                 ui.separator();
                 ui.small(format!("holding  {}", status.holding));
@@ -166,11 +159,7 @@ pub fn show(
 /// Each bar is drawn in **its player's own colour**, the same one the shader
 /// gives their cells, so a bar and the ground it counts cannot disagree about
 /// whose it is.
-fn standings(
-    ui: &mut egui::Ui,
-    theme: &crate::client::views::theme::Theme,
-    status: &Status<'_>,
-) {
+fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, status: &Status<'_>) {
     if status.standing.is_empty() {
         return;
     }
@@ -270,4 +259,3 @@ pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) 
 pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
     shade(0.62, 1.0, player)
 }
-

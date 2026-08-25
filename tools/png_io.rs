@@ -17,9 +17,7 @@ pub fn read_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
         .read_info()
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
-    let frame = reader
-        .next_frame(&mut buf)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let frame = reader.next_frame(&mut buf).map_err(|e| format!("{}: {e}", path.display()))?;
     if frame.color_type != png::ColorType::Rgba || frame.bit_depth != png::BitDepth::Eight {
         return Err(format!(
             "{}: expected 8-bit RGBA, found {:?} at {:?}",

@@ -13,7 +13,18 @@ use super::cell::bits;
 /// unclaimed. The cell only has five bits for this, hence [`PlayerId::MAX`].
 #[repr(transparent)]
 #[derive(
-    Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Pod, Zeroable, Serialize,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Hash,
+    Pod,
+    Zeroable,
+    Serialize,
     Deserialize,
 )]
 pub struct PlayerId(pub u8);
@@ -86,4 +97,3 @@ impl Player {
         }
     }
 }
-

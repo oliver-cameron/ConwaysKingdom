@@ -78,9 +78,9 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
     let rest: Vec<&str> = words.collect();
 
     match command {
-        "help" | "?" => Reply::lines(
-            HELP.iter().map(|(form, what)| format!("  {form:<22} {what}")).collect(),
-        ),
+        "help" | "?" => {
+            Reply::lines(HELP.iter().map(|(form, what)| format!("  {form:<22} {what}")).collect())
+        }
 
         // Named for what it does to the process, not for what the person is
         // doing: `quit` reads as leaving, and there is nothing here to leave
@@ -93,7 +93,8 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
                 listing
                     .iter()
                     .map(|room| {
-                        let here = if room.name == rooms.default_room() { " (default)" } else { "" };
+                        let here =
+                            if room.name == rooms.default_room() { " (default)" } else { "" };
                         format!(
                             "  {:<24} {:<22} {} online{here}",
                             room.name,
@@ -125,12 +126,7 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
 /// required now where it used to fall back on whatever the command line asked
 /// for: `match new` has always required one, and the whole point of this is
 /// that they read alike.
-fn world_command(
-    verb: &str,
-    rest: &[&str],
-    rooms: &mut Rooms,
-    default_shape: WorldKind,
-) -> Reply {
+fn world_command(verb: &str, rest: &[&str], rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
     // `new arena infinite` reached here as `new`, so the subcommand is either
     // the word after `world` or the verb itself.
     let (sub, args) = if verb == "world" || verb == "w" {
@@ -299,9 +295,7 @@ fn match_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
 fn parse_shape(shape: &str, size: Option<&str>) -> Result<WorldKind, String> {
     match (shape, size) {
         ("infinite" | "boundless", None) => Ok(WorldKind::Infinite),
-        ("infinite" | "boundless", Some(_)) => {
-            Err("an infinite world has no size to give".into())
-        }
+        ("infinite" | "boundless", Some(_)) => Err("an infinite world has no size to give".into()),
         ("toroidal" | "torus" | "wrapping", Some(size)) => crate::sim::parse_torus(size),
         ("toroidal" | "torus" | "wrapping", None) => {
             Err("a wrapping world needs a size, as ROWSxCOLS".into())

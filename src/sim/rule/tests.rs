@@ -141,10 +141,7 @@ fn every_live_cell_has_an_owner() {
             for me in [Cell::DEAD, Cell::alive(PlayerId(1))] {
                 let next = next_cell(me, &neighbours(&live, player), pattern as u64);
                 if next.is_alive() {
-                    assert!(
-                        next.player().is_owned(),
-                        "live cell with player 0 from {live:?}"
-                    );
+                    assert!(next.player().is_owned(), "live cell with player 0 from {live:?}");
                 }
             }
         }
@@ -176,11 +173,7 @@ fn ice_and_alive_are_independent() {
         for ice in [false, true] {
             let c = Cell::DEAD
                 .with_alive(alive)
-                .with_player(if alive {
-                    PlayerId(1)
-                } else {
-                    PlayerId::UNOWNED
-                })
+                .with_player(if alive { PlayerId(1) } else { PlayerId::UNOWNED })
                 .with_ice(ice);
             assert_eq!(c.is_alive(), alive);
             assert_eq!(c.is_ice(), ice);
@@ -221,13 +214,9 @@ fn a_kind_spreads_through_a_mixed_neighbourhood() {
     n[3] = Cell::alive(PlayerId(1));
     n[6] = Cell::alive(PlayerId(1));
 
-    let mines = (0..300)
-        .filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::MINE)
-        .count();
-    assert!(
-        (60..140).contains(&mines),
-        "one parent in three should carry it, got {mines} in 300"
-    );
+    let mines =
+        (0..300).filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::MINE).count();
+    assert!((60..140).contains(&mines), "one parent in three should carry it, got {mines} in 300");
 }
 
 // --- territory, which is a level now rather than a flag ---------------------
@@ -301,10 +290,7 @@ fn the_heaviest_net_takes_the_square() {
     for i in 3..6 {
         alone[i] = Cell::DEAD.with_player(them).with_level(6);
     }
-    assert!(
-        settled(Cell::DEAD, &alone).level() > contested,
-        "being pushed back should cost them"
-    );
+    assert!(settled(Cell::DEAD, &alone).level() > contested, "being pushed back should cost them");
 
     // Evenly matched is nobody's: the nets cancel.
     let mut even = [Cell::DEAD; 8];
@@ -364,10 +350,7 @@ fn the_roll_decides_the_rate_and_not_the_outcome() {
         }
     }
     let expected = 640 * LEVEL_ADJUST as usize / crate::sim::seed::OUT_OF as usize;
-    assert!(
-        moved.abs_diff(expected) < 90,
-        "{moved} of 640 settled, expected about {expected}"
-    );
+    assert!(moved.abs_diff(expected) < 90, "{moved} of 640 settled, expected about {expected}");
 }
 
 /// Run a square until it has taken whatever reaches it, so a test can say what

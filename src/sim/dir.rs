@@ -14,16 +14,7 @@ pub enum Dir {
 }
 
 impl Dir {
-    pub const ALL: [Dir; 8] = [
-        Dir::N,
-        Dir::Ne,
-        Dir::E,
-        Dir::Se,
-        Dir::S,
-        Dir::Sw,
-        Dir::W,
-        Dir::Nw,
-    ];
+    pub const ALL: [Dir; 8] = [Dir::N, Dir::Ne, Dir::E, Dir::Se, Dir::S, Dir::Sw, Dir::W, Dir::Nw];
 
     #[inline]
     pub const fn delta(self) -> (i32, i32) {
@@ -39,4 +30,3 @@ impl Dir {
         }
     }
 }
-

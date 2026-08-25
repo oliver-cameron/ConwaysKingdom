@@ -126,8 +126,7 @@ pub mod stamps {
     pub const CLOSE: &str = "Close";
     pub const FORGET: &str = "forget";
     pub const NONE_YET: &str = "Nothing kept yet.";
-    pub const HOW: &str =
-        "Grab and drag a box round your own life to take one, or draw one below.";
+    pub const HOW: &str = "Grab and drag a box round your own life to take one, or draw one below.";
     pub const DRAW: &str = "Draw one";
     pub const KEEP: &str = "keep";
     pub const CLEAR: &str = "clear";
@@ -251,7 +250,6 @@ pub mod refused {
     pub fn not_started() -> &'static str {
         "nothing can be placed until the match starts"
     }
-
 
     pub fn cannot_afford(cells: usize, costs: i32, have: i32) -> String {
         format!("{cells} cells costs {costs}, you have {have}")

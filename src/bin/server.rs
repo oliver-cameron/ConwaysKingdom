@@ -57,12 +57,15 @@ fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--addr" => addr = args.next().expect("--addr needs a value").parse().expect("bad addr"),
+            "--addr" => {
+                addr = args.next().expect("--addr needs a value").parse().expect("bad addr")
+            }
             "--rooms" => rooms_dir = args.next().expect("--rooms needs a directory").into(),
             "--room" => declared.push(args.next().expect("--room needs a name")),
             "--serve" => static_dir = Some(args.next().expect("--serve needs a directory").into()),
             "--span" => {
-                let ms: u64 = args.next().expect("--span needs milliseconds").parse().expect("bad span");
+                let ms: u64 =
+                    args.next().expect("--span needs milliseconds").parse().expect("bad span");
                 span = Duration::from_millis(ms);
             }
             "--fresh" => fresh = true,

@@ -150,16 +150,8 @@ const _: () = {
 };
 
 const INSTANCE_ATTRS: [wgpu::VertexAttribute; 2] = [
-    wgpu::VertexAttribute {
-        format: wgpu::VertexFormat::Float32x4,
-        offset: 0,
-        shader_location: 0,
-    },
-    wgpu::VertexAttribute {
-        format: wgpu::VertexFormat::Uint32x4,
-        offset: 16,
-        shader_location: 1,
-    },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 0, shader_location: 0 },
+    wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint32x4, offset: 16, shader_location: 1 },
 ];
 
 pub fn chunk_instance_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -282,12 +274,7 @@ impl ChunkStore {
     /// the original, which meant panning off the third copy fell into blank
     /// space forever, and a large torus paid for nine copies of every chunk
     /// whether or not any of them were on screen.
-    pub fn sync(
-        &mut self,
-        queue: &wgpu::Queue,
-        world: &World,
-        visible: ((i32, i32), (i32, i32)),
-    ) {
+    pub fn sync(&mut self, queue: &wgpu::Queue, world: &World, visible: ((i32, i32), (i32, i32))) {
         // Only what is on screen gets a layer. Uploading every stored chunk
         // made the budget a limit on the size of the *world*, which an
         // infinite world hides -- it holds only what life has reached -- and a

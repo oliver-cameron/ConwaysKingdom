@@ -80,5 +80,9 @@ fn main() {
     run("block        still life, never dies", &[(0, 0), (0, 1), (1, 0), (1, 1)], 300);
     run("blinker      compact, pure churn", &[(0, 0), (0, 1), (0, 2)], 300);
     run("glider       travels, trails corpses", &[(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)], 300);
-    run("r-pentomino  sprawls for hundreds of generations", &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)], 600);
+    run(
+        "r-pentomino  sprawls for hundreds of generations",
+        &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)],
+        600,
+    );
 }

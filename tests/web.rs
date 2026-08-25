@@ -100,10 +100,7 @@ async fn chunk_store_binds_as_a_d2_array() {
     let scope = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
     let chunks = ChunkTexture::new(&g.device, ChunkTexture::LAYER_BUDGET);
-    assert!(
-        chunks.layers > 1,
-        "a single-layer array texture is a TEXTURE_2D on the GL backend"
-    );
+    assert!(chunks.layers > 1, "a single-layer array texture is a TEXTURE_2D on the GL backend");
 
     let camera = g.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("camera"),

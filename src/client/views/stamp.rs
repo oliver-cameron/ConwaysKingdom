@@ -91,10 +91,7 @@ impl Stamp {
 
     /// Where this stamp's cells land if its top-left is put at `at`.
     pub fn at(&self, at: (i32, i32)) -> Vec<((i32, i32), Placement)> {
-        self.cells
-            .iter()
-            .map(|&((r, c), what)| ((at.0 + r, at.1 + c), what))
-            .collect()
+        self.cells.iter().map(|&((r, c), what)| ((at.0 + r, at.1 + c), what)).collect()
     }
 
     /// The cells of one kind only. A `Paint` lays one placement, so a stamp
@@ -193,13 +190,16 @@ fn pad(
     // would do would be a trap.
     ui.horizontal(|ui| {
         for what in [Placement::Life, Placement::Mine, Placement::Turret] {
-            let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(m.slot * 0.6, m.slot * 0.6), egui::Sense::click());
+            let (rect, response) = ui
+                .allocate_exact_size(egui::vec2(m.slot * 0.6, m.slot * 0.6), egui::Sense::click());
             let held = sketch.holding() == what;
             ui.painter().rect_stroke(
                 rect,
                 m.rounding,
-                egui::Stroke::new(if held { 1.5 } else { 1.0 }, if held { p.accent } else { p.line }),
+                egui::Stroke::new(
+                    if held { 1.5 } else { 1.0 },
+                    if held { p.accent } else { p.line },
+                ),
                 egui::StrokeKind::Inside,
             );
             cell(ui.painter(), rect.shrink(4.0), what, player, sheet);
@@ -230,14 +230,10 @@ fn pad(
     let faint = egui::Stroke::new(1.0, p.line.gamma_multiply(0.35));
     for i in 0..=SKETCH_N {
         let at = i as f32 * step;
-        ui.painter().line_segment(
-            [rect.min + egui::vec2(at, 0.0), rect.min + egui::vec2(at, side)],
-            faint,
-        );
-        ui.painter().line_segment(
-            [rect.min + egui::vec2(0.0, at), rect.min + egui::vec2(side, at)],
-            faint,
-        );
+        ui.painter()
+            .line_segment([rect.min + egui::vec2(at, 0.0), rect.min + egui::vec2(at, side)], faint);
+        ui.painter()
+            .line_segment([rect.min + egui::vec2(0.0, at), rect.min + egui::vec2(side, at)], faint);
     }
     ui.painter().rect_stroke(
         rect,
@@ -344,10 +340,7 @@ pub struct Sketch {
 
 impl Default for Sketch {
     fn default() -> Self {
-        Self {
-            cells: vec![None; (SKETCH_N * SKETCH_N) as usize],
-            holding: Placement::Life,
-        }
+        Self { cells: vec![None; (SKETCH_N * SKETCH_N) as usize], holding: Placement::Life }
     }
 }
 
@@ -417,10 +410,7 @@ impl Sketch {
         let right = found.iter().map(|&((_, c), _)| c).max()?;
         Some(Stamp {
             name: format!("{}x{}", bottom - top + 1, right - left + 1),
-            cells: found
-                .into_iter()
-                .map(|((r, c), what)| ((r - top, c - left), what))
-                .collect(),
+            cells: found.into_iter().map(|((r, c), what)| ((r - top, c - left), what)).collect(),
             size: (bottom - top + 1, right - left + 1),
         })
     }
@@ -637,11 +627,7 @@ mod tests {
         cells.sort_by_key(|&(at, _)| at);
         assert_eq!(
             cells,
-            vec![
-                ((0, 0), Placement::Life),
-                ((0, 1), Placement::Mine),
-                ((0, 2), Placement::Turret),
-            ]
+            vec![((0, 0), Placement::Life), ((0, 1), Placement::Mine), ((0, 2), Placement::Turret),]
         );
         assert_eq!(stamp.placements().len(), 3, "and each is laid as its own action");
     }
@@ -704,9 +690,7 @@ mod tests {
         let me = PlayerId(1);
         // A glider at (10, 10).
         let glider = [(10, 11), (11, 12), (12, 10), (12, 11), (12, 12)];
-        let world = world_with(
-            &glider.map(|at| (at, Kind::NORMAL, me)),
-        );
+        let world = world_with(&glider.map(|at| (at, Kind::NORMAL, me)));
 
         // Swept sloppily, far wider than the pattern.
         let stamp = Stamp::capture(&world, me, (5, 5), (20, 20)).unwrap();

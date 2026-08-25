@@ -73,9 +73,7 @@ pub fn room_name(raw: &str) -> Result<RoomName, String> {
         .chars()
         .find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-' || *c == '_'))
     {
-        return Err(format!(
-            "a room name is letters, digits, - and _; {bad:?} is not one of them"
-        ));
+        return Err(format!("a room name is letters, digits, - and _; {bad:?} is not one of them"));
     }
     Ok(name)
 }
@@ -255,18 +253,12 @@ impl Placement {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     /// Put something down for this player, at absolute cell coordinates.
-    Paint {
-        cells: Vec<(i32, i32)>,
-        placement: Placement,
-    },
+    Paint { cells: Vec<(i32, i32)>, placement: Placement },
     /// Take a placement away at absolute cell coordinates, leaving whatever
     /// else is on those cells. Carries what to remove for the same reason
     /// `Paint` carries what to lay: the server judges an intent, and "clear
     /// this square" is a different intent from "kill the life on it".
-    Erase {
-        cells: Vec<(i32, i32)>,
-        placement: Placement,
-    },
+    Erase { cells: Vec<(i32, i32)>, placement: Placement },
 }
 
 /// An action stamped with who did it and when, which is what makes replay on
@@ -493,7 +485,9 @@ pub enum ServerMessage {
         /// derive — nothing it can see says whether the ground ends.
         world: WorldKind,
     },
-    Rejected { reason: String },
+    Rejected {
+        reason: String,
+    },
     /// The answer to [`ClientMessage::Create`]: what the room ended up being
     /// called, or why there is not one.
     ///
@@ -522,12 +516,22 @@ pub enum ServerMessage {
     ///
     /// So the server is the clock. A connected client advances when told and
     /// never on its own.
-    Step { tick: Tick, actions: Vec<Stamped> },
+    Step {
+        tick: Tick,
+        actions: Vec<Stamped>,
+    },
     /// Full contents of a chunk the client does not hold. Bytes are a chunk's
     /// cells exactly as `Chunk::as_bytes` produces them.
-    ChunkData { tick: Tick, chunk: ChunkId, cells: Vec<u8> },
+    ChunkData {
+        tick: Tick,
+        chunk: ChunkId,
+        cells: Vec<u8>,
+    },
     /// The client's copy of these chunks is wrong; here they are again.
-    Resync { tick: Tick, chunks: Vec<ChunkId> },
+    Resync {
+        tick: Tick,
+        chunks: Vec<ChunkId>,
+    },
     /// What the match in this room is doing, and who is in it.
     ///
     /// Sent on joining and again whenever it changes, because a lobby is a
@@ -537,7 +541,11 @@ pub enum ServerMessage {
     /// Names as well as numbers. A lobby is the one screen where players are
     /// people rather than colours, since the whole of it is finding out who
     /// else turned up.
-    Match { phase: MatchPhase, victory: Option<Victory>, players: Vec<(PlayerId, String)> },
+    Match {
+        phase: MatchPhase,
+        victory: Option<Victory>,
+        players: Vec<(PlayerId, String)>,
+    },
     /// Who holds how much ground, most first.
     ///
     /// **From the server because a client cannot work it out.** A client holds
@@ -552,7 +560,10 @@ pub enum ServerMessage {
     /// Broadcast on a cadence rather than every generation. It is one pass
     /// over the world to work out, and a bar that moved four times a second
     /// would be harder to read than one that moved every couple of seconds.
-    Standing { tick: Tick, held: Vec<(PlayerId, u32)> },
+    Standing {
+        tick: Tick,
+        held: Vec<(PlayerId, u32)>,
+    },
     /// What this player actually has to spend.
     ///
     /// Sent in reply to a `Checkpoint`, which is the only regular thing a
@@ -560,14 +571,18 @@ pub enum ServerMessage {
     /// alone; mining made it depend on births anywhere in the world, and a
     /// client holds a viewport — so its number drifts below the server's for
     /// as long as it plays, and nothing else would ever correct it.
-    Purse { value: i32 },
+    Purse {
+        value: i32,
+    },
     /// The rooms this server has, in the order it lists them.
     ///
     /// Ordered by the server rather than sorted by the client, so two players
     /// looking at the same menu see the same list in the same order — and so
     /// the order is one thing a server can decide rather than a thing that
     /// happens.
-    Rooms { rooms: Vec<RoomInfo> },
+    Rooms {
+        rooms: Vec<RoomInfo>,
+    },
 }
 
 /// How wide a patch of ground a player is granted when they join, in cells.
@@ -590,11 +605,7 @@ pub const SPAWN_N: i32 = 12;
 /// hopeful one: a client cannot know what it does not hold, and guessing would
 /// let it predict a cheaper price than the server charges.
 pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
-    world
-        .cell_at(row, col)
-        .filter(|c| c.player() == player)
-        .map(|c| c.influence())
-        .unwrap_or(0)
+    world.cell_at(row, col).filter(|c| c.player() == player).map(|c| c.influence()).unwrap_or(0)
 }
 
 /// Whether `player` may put something down here.
@@ -901,7 +912,8 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
             .cell_at(r, c)
             .is_some_and(|cell| cell.player() == player && !cell.is_alive() && !cell.is_ice())
     };
-    let fits = |r: i32, c: i32| free(r, c) && free(r, c + 1) && free(r + 1, c) && free(r + 1, c + 1);
+    let fits =
+        |r: i32, c: i32| free(r, c) && free(r, c + 1) && free(r + 1, c) && free(r + 1, c + 1);
 
     let mut sites: Vec<(i32, i32)> = (row..row + SPAWN_N - 1)
         .flat_map(|r| (col..col + SPAWN_N - 1).map(move |c| (r, c)))
@@ -910,9 +922,7 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
     // Sorted by distance from the middle, and by coordinate to break ties, so
     // the answer never depends on iteration order -- the client works this out
     // for an offline game and must reach the same one.
-    sites.sort_unstable_by_key(|&(r, c)| {
-        ((r - middle.0).abs() + (c - middle.1).abs(), r, c)
-    });
+    sites.sort_unstable_by_key(|&(r, c)| ((r - middle.0).abs() + (c - middle.1).abs(), r, c));
     sites.first().copied()
 }
 
@@ -1207,7 +1217,10 @@ mod tests {
     fn a_pane_over_a_living_cell_is_a_change() {
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
-        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)), -Placement::Ice.cost());
+        assert_eq!(
+            value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)),
+            -Placement::Ice.cost()
+        );
         assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), 0);
     }
 
@@ -1511,7 +1524,11 @@ mod tests {
         // block wants to go.
         let middle = (row + SPAWN_N / 2 - 1, col + SPAWN_N / 2 - 1);
         world.set_cell_at(middle.0, middle.1, Cell::alive(PlayerId(1)));
-        world.set_cell_at(middle.0, middle.1 + 1, Cell::DEAD.with_ice(true).with_player(PlayerId(1)));
+        world.set_cell_at(
+            middle.0,
+            middle.1 + 1,
+            Cell::DEAD.with_ice(true).with_player(PlayerId(1)),
+        );
 
         grant(&mut world, second);
 
@@ -1523,8 +1540,10 @@ mod tests {
         // The block went somewhere else in the patch rather than nowhere.
         let alive: Vec<(i32, i32)> = (row..row + SPAWN_N)
             .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
-            .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == second
-                && world.cell_at(r, c).unwrap().is_alive())
+            .filter(|&(r, c)| {
+                world.cell_at(r, c).unwrap().player() == second
+                    && world.cell_at(r, c).unwrap().is_alive()
+            })
             .collect();
         assert_eq!(alive.len(), 4, "a whole block, not three cells that die: {alive:?}");
     }
@@ -1658,9 +1677,8 @@ mod tests {
 
         for (players, side) in [(4u8, 2), (9, 3), (16, 4), (25, 5)] {
             let spots = seats(players);
-            let span = |v: Vec<i32>| {
-                (v.iter().max().unwrap() - v.iter().min().unwrap()) / SPAWN_PITCH + 1
-            };
+            let span =
+                |v: Vec<i32>| (v.iter().max().unwrap() - v.iter().min().unwrap()) / SPAWN_PITCH + 1;
             assert_eq!(span(spots.iter().map(|s| s.0).collect()), side, "{players} players");
             assert_eq!(span(spots.iter().map(|s| s.1).collect()), side, "{players} players");
 
@@ -1691,11 +1709,7 @@ mod tests {
 
         let moved = spawn_for(me, &world);
         assert_ne!(moved, wanted, "a seat buried in their country should be given up");
-        assert_eq!(
-            crowding(&world, moved, me),
-            0,
-            "and the one taken instead should be nobody's"
-        );
+        assert_eq!(crowding(&world, moved, me), 0, "and the one taken instead should be nobody's");
 
         // But a couple of stray cells is not a country: `grant` claims dead
         // ground whoever held it and steps the block around anything alive, so

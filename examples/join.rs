@@ -77,8 +77,10 @@ fn main() {
                 .iter()
                 .map(|&(coord, _)| (coord, world.chunk_digest(coord).unwrap()))
                 .collect();
-            println!("received {chunks} chunk(s), {} live cells at tick {tick}",
-                     world.live_cells().len());
+            println!(
+                "received {chunks} chunk(s), {} live cells at tick {tick}",
+                world.live_cells().len()
+            );
             println!("checkpointing {} chunk digests", held.len());
             link.send(ClientMessage::Checkpoint { tick, chunks: held });
             // A silent server means agreement, so give it a moment to object.

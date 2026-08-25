@@ -50,60 +50,54 @@ pub fn create_pipeline_with(
     format: wgpu::TextureFormat,
     desc: &PipelineDescriptor,
 ) -> wgpu::RenderPipeline {
-    let shader = device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(desc.label),
-            source: wgpu::ShaderSource::Wgsl(desc.shader_source.into()),
-        });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(desc.label),
+        source: wgpu::ShaderSource::Wgsl(desc.shader_source.into()),
+    });
 
-    let layout = device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(desc.label),
-            bind_group_layouts: desc.bind_group_layouts,
-            // Push-constant-style "immediate" data — unused here.
-            immediate_size: 0,
-        });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(desc.label),
+        bind_group_layouts: desc.bind_group_layouts,
+        // Push-constant-style "immediate" data — unused here.
+        immediate_size: 0,
+    });
 
     // wgpu 29+ made VertexState::buffers a slice of Option<VertexBufferLayout>
     // (to allow "gap"/unbound slots), so wrap ours before handing them over.
-    let buffers: Vec<Option<wgpu::VertexBufferLayout>> = desc
-        .vertex_buffers
-        .iter()
-        .map(|l| Some(l.clone()))
-        .collect();
+    let buffers: Vec<Option<wgpu::VertexBufferLayout>> =
+        desc.vertex_buffers.iter().map(|l| Some(l.clone())).collect();
 
-    device
-        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(desc.label),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some(desc.vs_entry),
-                buffers: &buffers,
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(desc.fs_entry),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: desc.blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: desc.topology,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: desc.cull_mode,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        })
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(desc.label),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some(desc.vs_entry),
+            buffers: &buffers,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some(desc.fs_entry),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: desc.blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: desc.topology,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: desc.cull_mode,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }

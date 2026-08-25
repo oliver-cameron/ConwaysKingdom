@@ -49,7 +49,9 @@ impl Peer {
                     // was really a misunderstanding.
                     let mut world = shape.build();
                     world.set_generation(tick);
-                    println!("{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}");
+                    println!(
+                        "{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}"
+                    );
                     return Self { name, link, world, me: you, spawn, heard: 0, resyncs: 0 };
                 }
             }

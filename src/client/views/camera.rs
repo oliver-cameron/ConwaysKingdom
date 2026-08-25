@@ -66,20 +66,14 @@ impl Camera {
     /// between the screen and the world starts here.
     pub fn origin(&self) -> (f32, f32) {
         let (vw, vh) = self.viewport;
-        (
-            self.centre.0 - vw / (2.0 * self.zoom),
-            self.centre.1 - vh / (2.0 * self.zoom),
-        )
+        (self.centre.0 - vw / (2.0 * self.zoom), self.centre.1 - vh / (2.0 * self.zoom))
     }
 
     /// Screen position to world position in cells, unrounded. Zoom anchoring
     /// needs the fraction, which the integer form throws away.
     pub fn cell_at_f(&self, (px, py): (f64, f64)) -> (f32, f32) {
         let origin = self.origin();
-        (
-            origin.0 + px as f32 / self.zoom,
-            origin.1 + py as f32 / self.zoom,
-        )
+        (origin.0 + px as f32 / self.zoom, origin.1 + py as f32 / self.zoom)
     }
 
     /// Where a screen position lands in the world, as (row, col). The inverse
@@ -191,10 +185,7 @@ impl Camera {
             return;
         }
         let (vx, vy) = self.velocity;
-        self.velocity = (
-            vx + (dx / dt - vx) * SMOOTHING,
-            vy + (dy / dt - vy) * SMOOTHING,
-        );
+        self.velocity = (vx + (dx / dt - vx) * SMOOTHING, vy + (dy / dt - vy) * SMOOTHING);
     }
 
     fn glide(&mut self, dt: f32) {
@@ -258,10 +249,7 @@ mod tests {
             // The rectangle drawn for that cell must contain the point that
             // chose it. Points, so undo the scale the rectangle is in.
             let point = egui::pos2(at.0 as f32 / c.scale, at.1 as f32 / c.scale);
-            assert!(
-                rect.contains(point),
-                "{at:?} chose cell {cell:?}, drawn at {rect:?}"
-            );
+            assert!(rect.contains(point), "{at:?} chose cell {cell:?}, drawn at {rect:?}");
         }
     }
 

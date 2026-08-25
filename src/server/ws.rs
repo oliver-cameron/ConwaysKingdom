@@ -236,9 +236,9 @@ fn edited(mut editor: rustyline::DefaultEditor, tx: &mpsc::UnboundedSender<Strin
 /// Where the typed history is kept, beside the rest of a user's data.
 #[cfg(feature = "server")]
 fn history_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")))?;
+    let home = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+    })?;
     let dir = home.join("conwayskingdom");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("console-history"))
@@ -469,9 +469,7 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     }
     match &config.static_dir {
         Some(dir) => log::info!("http://{host}/  serving {}", dir.display()),
-        None => log::warn!(
-            "no --serve DIR, so http://{host}/ will 404; only the socket is up"
-        ),
+        None => log::warn!("no --serve DIR, so http://{host}/ will 404; only the socket is up"),
     }
     log::info!("ws://{host}/ws  websocket");
     if config.addr.ip().is_unspecified() {
