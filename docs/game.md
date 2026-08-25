@@ -147,7 +147,7 @@ A wall was tried before levels and was worse than either, because a player whose
 
 `net::may_place` is the whole rule, and the client refuses on the same terms the server does — instantly, and with the same answer. A drag is all or nothing, so one cell out of reach refuses the stroke rather than trimming it.
 
-That is what a grant is for. A player who owned nothing could still act, at ten times the price, but a hundred of value buys ten cells of life and nothing else — so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it, which is somewhere to build at the ordinary rate.
+That is what a grant is for. A player who owned nothing could do nothing at all, since there would be nowhere their influence reached — so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it, which is somewhere to build from the moment you arrive.
 
 A grant claims **dead ground whoever held it**. It used to claim only cells nobody held, on the principle that territory is taken by life reaching it rather than handed out over what is already held — and that principle costs a player the game. Territory only ever spreads, so a world with an edge eventually belongs to whoever got there first, and a player joining after that was granted nothing: no ground, and therefore no block, since the block only stands on ground they own. They could place nothing, could never come to own anything, and were locked out of a world they were looking at. On a torus that is not an edge case; it is what happens to the second player to arrive at a world that has been running.
 
@@ -169,7 +169,7 @@ Life holds the ground around it, because a square touching something alive is cl
 
 Every chance in the rules is out of **sixty-four**, per cell, per generation — `SPREAD` 40, `CREEP` 8, `DECAY` 2, `MINE_UPKEEP` 16. One denominator, so a constant is a chance and nothing has to say which way round it reads.
 
-Your **granted patch is the exception** and never decays. It is no longer the difference between playing and not — placing outside your own ground is a price now rather than a refusal — but it is the ground the cheap rate applies on, and a player who has lost everything else still has somewhere to build at one a cell. It is a mark on the ground rather than on the cells, so it survives the ground changing hands, and an opponent who grows over your home keeps it as theirs.
+Your **granted patch is the exception** and never decays, which is exactly what makes the wall above safe to have: a player who has lost everything else still has a patch with a live gradient around it, and so still has somewhere to build. It is a mark on the ground rather than on the cells, so it survives the ground changing hands, and an opponent who grows over your home keeps it as theirs.
 
 ## Ice
 

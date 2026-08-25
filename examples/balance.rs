@@ -3,7 +3,7 @@
 //!     cargo run --no-default-features --example balance
 //!
 //! Three constants decide whether mining is worth doing — `MINE_COST`,
-//! `MINE_YIELD` and `rule::MINE_UPKEEP_ODDS` — and no amount of arguing about
+//! `MINE_YIELD` and `rule::MINE_UPKEEP` — and no amount of arguing about
 //! them settles anything, because the answer depends on how many corpses a
 //! pattern drags behind it and that is not a thing anybody can estimate. So
 //! this runs the patterns and prints the table.

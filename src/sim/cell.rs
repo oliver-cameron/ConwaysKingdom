@@ -398,7 +398,7 @@ kinds! {
 ///
 /// `born` is a count of births. `upkeep` is a count of **charges falling due**
 /// on dead mines — not of deaths. A mine's corpse costs its owner for as long
-/// as it lies there, one generation in [`super::rule::MINE_UPKEEP_ODDS`], so a
+/// as it lies there, one generation in [`super::rule::MINE_UPKEEP`], so a
 /// square can be counted many times and a square that dies and is never
 /// counted is possible too.
 ///

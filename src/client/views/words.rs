@@ -235,22 +235,6 @@ pub mod hud {
     ];
 }
 
-/// Unused while placing is a wall rather than a price. Kept because the two
-/// have swapped places twice now.
-#[allow(dead_code)]
-///
-/// Empty when none of it is, so it appends to a label without a branch at
-/// every call site. Placing outside your own ground is a price rather than a
-/// refusal, and a price the player cannot see is one they only find out about
-/// by being poorer.
-pub fn outside(n: usize) -> String {
-    if n == 0 {
-        String::new()
-    } else {
-        format!(", {n} outside your ground at ten times")
-    }
-}
-
 /// What the world says back when it refuses something.
 pub mod refused {
     /// A match that has not started, or one that is decided. Said rather than

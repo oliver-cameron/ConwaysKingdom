@@ -101,7 +101,7 @@ pub enum Placement {
     /// mine's children are mines, and since a birth picks one of three parents
     /// at random the kind spreads through a mixed population rather than being
     /// handed down whole. What you are paying for is a **lineage**, not a
-    /// cell — which is why it costs what a stroke of life costs ten times over.
+    /// cell — which is why it costs what ten cells of life cost.
     Mine,
     /// A living cell that claims ground at range: every generation it takes
     /// the nearest square that is not its owner's and makes it theirs, and a
@@ -572,35 +572,11 @@ pub enum ServerMessage {
 
 /// How wide a patch of ground a player is granted when they join, in cells.
 ///
-/// Placing outside your own territory costs ten times as much, so a player who
-/// owned nothing could still act but would pay a mine's price for a cell of
-/// life. The grant is the ground the cheap rate applies on, and the seed the
-/// rest spreads from.
+/// A player may only place where their own influence reaches, so somebody who
+/// owned nothing could do nothing at all. The grant is what makes that wall
+/// safe: a patch that never decays, with a live gradient around it, so there
+/// is always somewhere to build. It is also the seed the rest spreads from.
 pub const SPAWN_N: i32 = 12;
-
-/// Whether this cell is inside `player`'s own territory — the cell carries
-/// their number.
-///
-/// Territory is the owner field on dead cells, which the rule spreads outward
-/// from living ones, so a player's ground grows where their life goes.
-///
-/// This used to be `may_place`, and placing anywhere else was refused. It is a
-/// **price** now: outside costs [`OUTSIDE_MULTIPLIER`] times as much, and the
-/// question this asks is which of the two rates applies. Refusing made
-/// territory a wall — a player whose life went out could never place again,
-/// and reaching a neighbour meant growing all the way to them — where a price
-/// lets somebody buy their way somewhere and feel it.
-///
-/// Somebody else's ground and ground nobody has reached are the same answer,
-/// because they cost the same: what is being paid for is putting something
-/// where your own life has not got to.
-///
-/// Unheld ground reads as outside, which is the honest answer rather than a
-/// hopeful one: a client cannot know what it does not hold, and guessing yes
-/// there would let it predict a cheaper price than the server charges.
-pub fn own_ground(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
-    influence(world, player, row, col) > 0
-}
 
 /// How much of `player`'s influence reaches this square, nought to
 /// [`crate::sim::bits::MAX_LEVEL`].
@@ -621,41 +597,22 @@ pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
         .unwrap_or(0)
 }
 
-/// What one cell of a placement costs here: the placement's own price inside
-/// the player's territory, and [`OUTSIDE_MULTIPLIER`] times it outside.
-///
-/// Per cell rather than per action, because a drag crosses the boundary all
-/// the time — a stroke that starts on your ground and runs off it is the
-/// ordinary case, and charging the whole of it at either rate would be wrong
-/// in one direction or the other.
-pub fn cell_cost(
-    _world: &World,
-    _player: PlayerId,
-    _row: i32,
-    _col: i32,
-    placement: Placement,
-) -> i32 {
-    // Flat, wherever it is. A price that rose as influence thinned went out
-    // with the shading that made it visible: a cost the player cannot see is a
-    // cost they cannot play around, and one that varies across ground which
-    // all looks the same is worse than one that does not vary at all.
-    //
-    // The world and the square are still taken, because whether a placement is
-    // *allowed* depends on both -- `may_place` is that question, and it is
-    // asked before this one.
-    placement.cost()
-}
-
-/// Whether `player` may put something down here at all.
+/// Whether `player` may put something down here.
 ///
 /// **Only where their own influence reaches.** Placing anywhere for a multiple
-/// was tried and is out: it made the map somewhere you bought your way into
-/// rather than somewhere you grew into, and ten times a cell is no obstacle at
-/// all to anybody with a mine running.
+/// of the price was tried and is out: it made the map somewhere you bought
+/// your way into rather than somewhere you grew into, and ten times a cell is
+/// no obstacle at all to anybody with a mine running. See
+/// [docs/game.md#where-you-may-build].
 ///
 /// Safe in a way the same wall was not before levels: granted ground is a
 /// **source**, so a player whose life has gone out still has a patch with a
 /// live gradient around it and can always build somewhere.
+///
+/// Territory is the owner field on dead cells, which the rule spreads outward
+/// from living ones, so a player's ground grows where their life goes.
+///
+/// [docs/game.md#where-you-may-build]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     influence(world, player, row, col) > 0
 }
@@ -1004,7 +961,13 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
                 if placement.apply_to(existing, stamped.player) == existing {
                     return 0;
                 }
-                cell_cost(world, stamped.player, row, col, *placement)
+                // Flat, wherever it is. A price that rose as influence
+                // thinned went out with the shading that made it visible: a
+                // cost the player cannot see is a cost they cannot play
+                // around. Whether a placement is *allowed* still depends on
+                // the square — `may_place` is that question, asked before
+                // this one.
+                placement.cost()
             })
             .sum::<i32>(),
         // What counts as "there" depends on what is being taken, since life
@@ -1434,10 +1397,10 @@ mod tests {
         let (me, them) = (PlayerId(1), PlayerId(2));
         let (row, col) = spawn_for(me, &world);
 
-        assert!(!own_ground(&world, me, row, col), "nothing is owned yet");
+        assert!(!may_place(&world, me, row, col), "nothing is owned yet");
         grant(&mut world, me);
-        assert!(own_ground(&world, me, row, col), "granted ground is buildable");
-        assert!(!own_ground(&world, them, row, col), "and only by its owner");
+        assert!(may_place(&world, me, row, col), "granted ground is buildable");
+        assert!(!may_place(&world, them, row, col), "and only by its owner");
 
         // Ground at the edges, and a block standing in the middle of it.
         assert!(!world.cell_at(row, col).unwrap().is_alive(), "the corner is bare");
@@ -1449,8 +1412,8 @@ mod tests {
         assert!(block.iter().all(|c| c.is_alive() && c.player() == me), "a 2x2 block");
 
         // Beyond the patch is nobody's, and nobody's is closed to everyone.
-        assert!(!own_ground(&world, me, row, col + SPAWN_N));
-        assert!(!own_ground(&world, me, 10_000, 10_000));
+        assert!(!may_place(&world, me, row, col + SPAWN_N));
+        assert!(!may_place(&world, me, 10_000, 10_000));
     }
 
     /// Every player is within reach of several others. A line put the last
@@ -1533,7 +1496,7 @@ mod tests {
         );
 
         // And they can actually place, which is the whole point.
-        assert!(own_ground(&world, second, row, col));
+        assert!(may_place(&world, second, row, col));
     }
 
     /// A grant takes ground and never anybody's life or panes -- those are

@@ -1328,7 +1328,7 @@ mod tests {
 
     /// Another player's territory has to reach you, or you cannot see whose
     /// ground you are standing next to — and, worse, your own does not reach
-    /// you either: `own_ground` reads the owner off the cell, so a client that
+    /// you either: `may_place` reads the owner off the cell, so a client that
     /// never receives the chunk refuses to build on ground that is its own.
     ///
     /// The case that nearly slipped through is a chunk holding *only*

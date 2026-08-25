@@ -222,7 +222,11 @@ A turret fits better under levels than it does now. It flips a square today; it 
 
 ### Placing outside your own ground
 
-Playtesting says ten times is not enough. With a level field the answer falls out of the model rather than needing a new rule: **price by level.** A placement costs its own price where your influence is full, more where it is thin, and is refused at nought. One number, already there, replacing both the boolean check and the flat multiplier — and the frontier becomes a slope of cost rather than a cliff.
+**Settled, and settled twice.** Placing anywhere for ten times the price was tried and is out — it was no obstacle at all to anybody with a mine running, and it made the map somewhere you bought your way into rather than somewhere you grew into. Grading that price by how thin your influence was went with it, for a reason worth keeping: once ground stopped being shaded by its level there was nothing on screen to read the price off, and a cost the player cannot see is a cost they cannot play around.
+
+So `net::may_place` is a wall again, at influence nought. What makes that safe where the same wall was not safe before levels is that a granted patch is a **source** — a player whose life has gone out still has a live gradient around their home, and can always build somewhere.
+
+If the level is ever drawn, the graded price is worth reconsidering and not before: the two stand or fall together.
 
 Removing it outright also becomes safe again, if that is what playtesting wants. The reason it was made a price was that a wall left a player whose life went out with nothing they could ever do; home-as-a-source fixes that directly, because everybody always has a patch with a live gradient on it.
 
@@ -265,7 +269,7 @@ It could be rescued by a countdown — freeze, then everyone gets the same sixty
 Three readings, and they are different games.
 
 - **Nothing.** No placing at all once the clock starts. The purest, and the least to do for however long the match lasts.
-- **Territory pays, and you may intervene.** Value per generation in proportion to ground held, spent on repairs and raids. The win condition and the economy become the same thing, which falls the right way at the end — a player losing ground earns less and falls further behind. Placing outside your own ground already costs ten times, so reaching into somebody else's half is expensive and deliberate rather than a click.
+- **Territory pays, and you may intervene.** Value per generation in proportion to ground held, spent on repairs and raids. The win condition and the economy become the same thing, which falls the right way at the end — a player losing ground earns less and falls further behind. Reaching into somebody else's half is not a matter of price at all: you may only place where your own influence reaches, so it means growing there first.
 - **A second build phase**, partway through. Freeze, everybody draws, unfreeze. Keeps the front-loaded decision and gives the match a second act.
 
 The middle one is the recommendation, with the first worth trying as a variant because it costs nothing to offer.
