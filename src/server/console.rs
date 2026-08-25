@@ -43,12 +43,17 @@ impl Reply {
 }
 
 pub const HELP: &[(&str, &str)] = &[
-    ("new NAME [ROWSxCOLS]", "make a room; wrapping if a size is given"),
-    ("rooms", "what rooms there are, and who is in them"),
-    ("match new NAME SHAPE [ROWSxCOLS] HOW N", "a match: infinite|toroidal, timer|territory"),
+    ("world new NAME SHAPE [ROWSxCOLS]", "make a world: infinite|toroidal"),
+    ("world delete NAME", "remove it, and the file it was saved to"),
+    ("world sleep NAME", "stop stepping it"),
+    ("world wake NAME", "step it again"),
+    ("world", "what worlds there are, and who is in them"),
+    ("match new NAME SHAPE [ROWSxCOLS] HOW N", "a match, and timer|territory N"),
     ("match start NAME", "start that match's clock"),
     ("match dispatch", "start the one match that is waiting"),
+    ("match delete NAME", "remove it"),
     ("match", "what matches there are, and what they are doing"),
+    ("rooms", "everything, worlds and matches together"),
     ("stop", "save every room and shut down"),
     ("help", "this"),
 ];
@@ -100,16 +105,71 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
             )
         }
 
-        "new" | "room" => {
-            let Some(name) = rest.first() else {
-                return Reply::say("new NAME [ROWSxCOLS] -- a room needs a name");
+        "world" | "w" | "new" | "room" => world_command(command, &rest, rooms, default_shape),
+
+        "match" | "m" => match_command(&rest, rooms),
+
+        other => Reply::say(format!("no command \"{other}\"; try help")),
+    }
+}
+
+/// `world`, and everything under it.
+///
+/// The same shape as `match` down to the word order, because they are the same
+/// thing with and without a way to win: a world is a match with no clock. Two
+/// vocabularies for one idea is how a console stops being something anybody
+/// can remember.
+///
+/// `new` and `room` still reach it, since they are what the muscle typed for
+/// months — but they take `world`'s arguments, not the old ones. A shape is
+/// required now where it used to fall back on whatever the command line asked
+/// for: `match new` has always required one, and the whole point of this is
+/// that they read alike.
+fn world_command(
+    verb: &str,
+    rest: &[&str],
+    rooms: &mut Rooms,
+    default_shape: WorldKind,
+) -> Reply {
+    // `new arena infinite` reached here as `new`, so the subcommand is either
+    // the word after `world` or the verb itself.
+    let (sub, args) = if verb == "world" || verb == "w" {
+        (rest.first().copied(), &rest[rest.len().min(1)..])
+    } else {
+        (Some("new"), rest)
+    };
+
+    match sub {
+        None | Some("ls") | Some("list") => {
+            let listing = rooms.worlds();
+            Reply::lines(
+                listing
+                    .iter()
+                    .map(|(name, world, players, asleep)| {
+                        let here = if *name == rooms.default_room() { " (default)" } else { "" };
+                        let state = if *asleep { "  asleep" } else { "" };
+                        format!(
+                            "  {name:<24} {:<22} {players} online{here}{state}",
+                            describe(*world)
+                        )
+                    })
+                    .collect(),
+            )
+        }
+
+        Some("new") => {
+            let (name, shape) = match args {
+                [name, shape] => (*name, parse_shape(shape, None)),
+                [name, shape, size] => (*name, parse_shape(shape, Some(size))),
+                // One word is the old form, which said nothing about shape.
+                // Answered rather than guessed, because the shape is the whole
+                // of what makes one world different from another.
+                [name] => (*name, Ok(default_shape)),
+                _ => return Reply::say("world new NAME SHAPE [ROWSxCOLS] -- infinite|toroidal"),
             };
-            let shape = match rest.get(1) {
-                None => default_shape,
-                Some(size) => match crate::sim::parse_torus(size) {
-                    Ok(shape) => shape,
-                    Err(e) => return Reply::say(e),
-                },
+            let shape = match shape {
+                Ok(shape) => shape,
+                Err(e) => return Reply::say(e),
             };
             match rooms.create(name, shape) {
                 Ok(name) => Reply::say(format!("made \"{name}\", {}", describe(shape))),
@@ -117,9 +177,26 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
             }
         }
 
-        "match" | "m" => match_command(&rest, rooms),
+        Some("delete" | "rm") => match args.first() {
+            None => Reply::say("world delete NAME"),
+            Some(name) => match rooms.delete(name) {
+                Ok(name) => Reply::say(format!("deleted \"{name}\"")),
+                Err(e) => Reply::say(e),
+            },
+        },
 
-        other => Reply::say(format!("no command \"{other}\"; try help")),
+        Some(verb @ ("sleep" | "wake")) => match args.first() {
+            None => Reply::say(format!("world {verb} NAME")),
+            Some(name) => match rooms.set_asleep(name, verb == "sleep") {
+                Ok(name) => Reply::say(format!(
+                    "\"{name}\" is {}",
+                    if verb == "sleep" { "asleep" } else { "awake" }
+                )),
+                Err(e) => Reply::say(e),
+            },
+        },
+
+        Some(other) => Reply::say(format!("no world command \"{other}\"; try help")),
     }
 }
 
@@ -197,6 +274,14 @@ fn match_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
             },
         },
 
+        Some("delete" | "rm") => match rest.get(1) {
+            None => Reply::say("match delete NAME"),
+            Some(name) => match rooms.delete(name) {
+                Ok(name) => Reply::say(format!("deleted \"{name}\"")),
+                Err(e) => Reply::say(e),
+            },
+        },
+
         Some("dispatch" | "go") => match rooms.dispatch() {
             Ok(name) => Reply::say(format!("\"{name}\" is running; no more joining")),
             Err(e) => Reply::say(e),
@@ -247,19 +332,81 @@ mod tests {
     }
 
     #[test]
-    fn a_room_is_made_by_naming_it() {
+    fn a_world_reads_like_a_match_without_a_way_to_win() {
         let mut rooms = rooms();
-        assert!(out("new arena", &mut rooms).contains("arena"));
-        assert!(rooms.get("arena").is_some());
+        assert!(out("world new arena infinite", &mut rooms).contains("arena"));
         assert_eq!(rooms.get("arena").unwrap().world().kind(), WorldKind::Infinite);
 
         // A size makes it wrap, which a single --torus on the command line
-        // cannot do for one room and not another.
-        out("new ring 4x6", &mut rooms);
+        // cannot do for one room and not another. Word for word what
+        // `match new` takes, less the win condition.
+        out("world new ring toroidal 4x6", &mut rooms);
         assert_eq!(
             rooms.get("ring").unwrap().world().kind(),
             WorldKind::Toroidal { rows: 4, cols: 6 }
         );
+
+        // `new` is what the muscle typed for months, and still lands here.
+        out("new lobby toroidal 3x3", &mut rooms);
+        assert!(rooms.get("lobby").is_some());
+
+        let listing = out("world", &mut rooms);
+        assert!(listing.contains("arena") && listing.contains("ring"));
+        assert!(!listing.contains("asleep"), "nothing is, yet");
+    }
+
+    /// Stopping a world it costs nothing to keep. Every room steps four times
+    /// a second for as long as the process lives, whether or not anybody is in
+    /// it.
+    #[test]
+    fn a_world_sleeps_and_wakes_and_a_match_does_neither() {
+        let mut rooms = rooms();
+        out("world new arena infinite", &mut rooms);
+
+        assert!(out("world sleep arena", &mut rooms).contains("sleep"));
+        assert!(rooms.get("arena").unwrap().is_asleep());
+        assert!(out("world sleep arena", &mut rooms).contains("already asleep"));
+
+        // The tick is the generation, so a sleeping world does not move and
+        // waking is indistinguishable from never having slept.
+        let at = rooms.get("arena").unwrap().tick();
+        rooms.step();
+        rooms.step();
+        assert_eq!(rooms.get("arena").unwrap().tick(), at, "asleep is a whole stop");
+
+        assert!(out("world wake arena", &mut rooms).contains("wake"));
+        rooms.step();
+        assert_eq!(rooms.get("arena").unwrap().tick(), at + 1);
+
+        // A match has a clock and a deadline in generations, so a sleep would
+        // be a pause in a race some of whose runners are asleep.
+        out("match new dawn infinite timer 100", &mut rooms);
+        assert!(out("world sleep dawn", &mut rooms).contains("does not sleep"));
+    }
+
+    /// Deleting is the one thing here that cannot be taken back.
+    #[test]
+    fn deleting_refuses_what_it_cannot_take_back() {
+        let mut rooms = rooms();
+        out("world new arena infinite", &mut rooms);
+
+        // The default room is where every client naming none is sent.
+        assert!(out("world delete main", &mut rooms).contains("default"));
+        assert!(rooms.get("main").is_some());
+
+        // And a world somebody is standing in.
+        rooms.get_mut("arena").unwrap().join_with("alice", None).unwrap();
+        assert!(out("world delete arena", &mut rooms).contains("still in"));
+        assert!(rooms.get("arena").is_some());
+
+        rooms.leave(&("arena".to_string(), crate::sim::PlayerId(1)));
+        assert!(out("world delete arena", &mut rooms).contains("deleted"));
+        assert!(rooms.get("arena").is_none());
+
+        // A match goes the same way, by the same verb under its own noun.
+        out("match new dawn infinite timer 100", &mut rooms);
+        assert!(out("match delete dawn", &mut rooms).contains("deleted"));
+        assert!(rooms.get("dawn").is_none());
     }
 
     /// Every way of getting it wrong says what was wrong, and changes nothing.
@@ -268,9 +415,9 @@ mod tests {
         let mut rooms = rooms();
         let before: Vec<String> = rooms.names().map(str::to_string).collect();
 
-        assert!(out("new", &mut rooms).contains("needs a name"));
+        assert!(out("new", &mut rooms).contains("world new NAME"));
         assert!(out("new ../escape", &mut rooms).contains("letters"));
-        assert!(out("new arena sideways", &mut rooms).contains("ROWSxCOLS"));
+        assert!(out("world new arena sideways", &mut rooms).contains("no world shape"));
         assert!(out("frobnicate", &mut rooms).contains("no command"));
         assert!(out("new main", &mut rooms).contains("already"));
 
@@ -322,7 +469,7 @@ mod tests {
         // one command. Deduplicated rather than listed once, because the
         // subcommands are what somebody reading help needs to see.
         listed.dedup();
-        assert_eq!(listed, ["new", "rooms", "match", "stop", "help"]);
+        assert_eq!(listed, ["world", "match", "rooms", "stop", "help"]);
         for word in &listed {
             let reply = run(word, &mut rooms, WorldKind::Infinite);
             assert!(

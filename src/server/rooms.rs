@@ -366,6 +366,70 @@ impl Rooms {
         }
     }
 
+    /// Remove a room and the file it was saved to.
+    ///
+    /// **Refused while anybody is in it.** Deleting a world somebody is
+    /// standing in is the one thing here that cannot be taken back, and the
+    /// difference between "nobody is in it" and "nobody was in it a moment
+    /// ago" is a question the person typing can answer and this cannot.
+    ///
+    /// The default room is refused too: `resolve(None)` sends every client
+    /// that names no room to it, so a server without one has nowhere to put
+    /// anybody.
+    pub fn delete(&mut self, name: &str) -> Result<RoomName, String> {
+        let name = crate::net::room_name(name)?;
+        if name == self.default_room {
+            return Err(format!("\"{name}\" is the default room; every client that names none goes there"));
+        }
+        let server = self
+            .rooms
+            .get(&name)
+            .ok_or_else(|| format!("there is no room called \"{name}\""))?;
+        let here = server.players().filter(|p| p.online).count();
+        if here > 0 {
+            return Err(format!("{here} still in \"{name}\""));
+        }
+        self.rooms.remove(&name);
+        if !self.dir.as_os_str().is_empty() {
+            let path = save_path(&self.dir, &name);
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("removed room \"{name}\" but not {}: {e}", path.display());
+                }
+            }
+        }
+        log::info!("deleted room \"{name}\"");
+        Ok(name)
+    }
+
+    /// Stop or start a world.
+    pub fn set_asleep(&mut self, name: &str, asleep: bool) -> Result<RoomName, String> {
+        let name = crate::net::room_name(name)?;
+        let server = self
+            .rooms
+            .get_mut(&name)
+            .ok_or_else(|| format!("there is no room called \"{name}\""))?;
+        server.set_asleep(asleep)?;
+        log::info!("room \"{name}\" is {}", if asleep { "asleep" } else { "awake" });
+        Ok(name)
+    }
+
+    /// Every room that is not a match, and whether it is running.
+    pub fn worlds(&self) -> Vec<(&str, WorldKind, usize, bool)> {
+        self.rooms
+            .iter()
+            .filter(|(_, s)| matches!(s.phase(), Phase::Open))
+            .map(|(name, s)| {
+                (
+                    name.as_str(),
+                    s.world().kind(),
+                    s.players().filter(|p| p.online).count(),
+                    s.is_asleep(),
+                )
+            })
+            .collect()
+    }
+
     /// Every match, and what it is doing.
     pub fn matches(&self) -> Vec<(&str, &Phase, Option<Victory>, usize)> {
         self.rooms

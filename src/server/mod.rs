@@ -41,6 +41,15 @@ pub struct Server {
     phase: Phase,
     /// How this match is won, once it is running. `None` on an open room.
     victory: Option<Victory>,
+    /// Stopped, and not stepping until somebody says otherwise.
+    ///
+    /// Every room steps four times a second for as long as the process lives,
+    /// whether or not anybody is in it — a world somebody built in and walked
+    /// away from costs its full simulation for nobody. Sleeping is the answer,
+    /// and it is nearly free because **the tick is the generation**: a world
+    /// that is not stepping is not moving, so waking is indistinguishable from
+    /// never having slept and a client adopts the tick it left off at.
+    asleep: bool,
     /// Somebody joined, left, or the phase moved, and the lobby on every
     /// client is now out of date.
     ///
@@ -86,6 +95,7 @@ impl Server {
             pending: Vec::new(),
             phase: Phase::Open,
             victory: None,
+            asleep: false,
             lobby_changed: false,
         }
     }
@@ -138,6 +148,24 @@ impl Server {
             Phase::Running { .. } => Err("that match is already running".into()),
             Phase::Over { .. } => Err("that match is over".into()),
         }
+    }
+
+    /// Stop or start this world. Refused on a match: a match has a clock and
+    /// a deadline measured in generations, and a sleep would be a pause in a
+    /// race some of whose runners are asleep and some of whom are not.
+    pub fn set_asleep(&mut self, asleep: bool) -> Result<(), String> {
+        if !matches!(self.phase, Phase::Open) {
+            return Err("a match does not sleep".into());
+        }
+        if self.asleep == asleep {
+            return Err(format!("already {}", if asleep { "asleep" } else { "awake" }));
+        }
+        self.asleep = asleep;
+        Ok(())
+    }
+
+    pub fn is_asleep(&self) -> bool {
+        self.asleep
     }
 
     pub fn phase(&self) -> &Phase {
@@ -634,6 +662,12 @@ impl Server {
         // phases. Emptied rather than left, so an action that arrived in the
         // same breath as the whistle cannot be applied a phase later than it
         // was priced.
+        // Asleep is a whole stop: no generation, and no actions applied
+        // either, since an action applied to a world that is not moving would
+        // land on a tick that has not happened.
+        if self.asleep {
+            return Vec::new();
+        }
         let lobby: Vec<ServerMessage> = if std::mem::take(&mut self.lobby_changed) {
             vec![self.lobby()]
         } else {

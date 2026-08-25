@@ -100,15 +100,28 @@ The subscribe line is the useful one when a client sees nothing: it says whether
 The server reads its own terminal. `help` lists what it takes:
 
 ```
-  new NAME [ROWSxCOLS]                 make a room; wrapping if a size is given
-  rooms                                what rooms there are, and who is in them
-  match new NAME SHAPE [ROWSxCOLS] HOW N   a match: infinite|toroidal, timer|territory
-  match start NAME                     start that match's clock
-  match dispatch                       start the one match that is waiting
-  match                                what matches there are, and what they are doing
-  stop                                 save every room and shut down
-  help                                 this
+  world new NAME SHAPE [ROWSxCOLS]         make a world: infinite|toroidal
+  world delete NAME                        remove it, and the file it was saved to
+  world sleep NAME                         stop stepping it
+  world wake NAME                          step it again
+  world                                    what worlds there are, and who is in them
+  match new NAME SHAPE [ROWSxCOLS] HOW N   a match, and timer|territory N
+  match start NAME                         start that match's clock
+  match dispatch                           start the one match that is waiting
+  match delete NAME                        remove it
+  match                                    what matches there are, and what they are doing
+  rooms                                    everything, worlds and matches together
+  stop                                     save every room and shut down
+  help                                     this
 ```
+
+**A world reads like a match without a way to win**, word for word, because that is what one is. Two vocabularies for one idea is how a console stops being something anybody can remember, so `world new` takes exactly what `match new` takes less the win condition — including *requiring* a shape, where the old `new arena` fell back on whatever the command line asked for. `new` and `room` still reach it, since that is what the muscle typed for months, but they take the new arguments.
+
+**Sleeping is nearly free, because the tick is the generation.** Every room steps four times a second for as long as the process lives, whether or not anybody is in it — a world somebody built in and walked away from costs its full simulation for nobody. A sleeping world does not move, so waking is indistinguishable from never having slept and a returning client adopts the tick it left off at. Actions are not applied either: one applied to a world that is not moving would land on a tick that has not happened.
+
+**A match does not sleep.** It has a clock and a deadline measured in generations, and a sleep would be a pause in a race some of whose runners are asleep and some of whom are not.
+
+**Deleting refuses what it cannot take back**: a world with anybody in it, because the difference between "nobody is in it" and "nobody was a moment ago" is a question the person typing can answer and the server cannot; and the default room, because `resolve(None)` sends every client that names none there and a server without one has nowhere to put anybody.
 
 `new` exists because a room was declared on the command line and there was no way to make one afterwards, so adding a world meant restarting — which disconnects everybody in every *other* world to add one nobody is in yet. A room made this way is **saved before anything is in it**: one that lived only in memory until the next periodic save would vanish on a crash, and the person who made it would have no way to tell whether it had ever been real.
 
