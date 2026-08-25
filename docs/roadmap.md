@@ -18,12 +18,6 @@ Room names are typed, and typed names collide, are guessed, and have to be told 
 
 The second reason is the more interesting one. `Rooms` lists everything it has, so every world is public; a coded room could be **unlisted**, which is what somebody wants when they make a match for four friends rather than for whoever is on the server. That is a change to the listing rather than to the code.
 
-## Making games and matches from the client
-
-Rooms and matches are made at the server's own terminal, so making one means being the person running the server. The wire change is small — a `ClientMessage::Create` carrying what `match new` carries.
-
-The policy is not small, and it is the actual blocker. **A server that lets any client make worlds is a server anyone can fill with worlds**, and every room steps four times a second for as long as the process lives whether or not anybody is in it. So this wants at least one of: a cap per connection, an owner who can close what they opened, or [sleeping rooms](planned.md#rooms-per-server), which is already written down and not built. Sleeping is the one that fixes the cost rather than rationing it.
-
 ## Stamps that outlive the tab
 
 A stamp lives as long as the client does. Capture a glider gun, close the tab, and it is gone — which makes the library a scratchpad rather than a collection, and makes drawing one by hand something you do again every session.

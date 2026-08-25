@@ -24,6 +24,74 @@ Rooms are listed too: `ClientMessage::Rooms` is answerable without a seat, and t
 
 **The token is keyed by room but not by server.** Two servers both running a room called `main` share one secret, and visiting the second costs you your player on the first. The address is not remembered anywhere yet; when the menu remembers it, that is the second half of this key.
 
+## Making rooms from the client
+
+**Being built** — this is the branch. Rooms and matches are made at the server's own terminal, so making one means being the person running the server, which on a public server is one person and on a phone is nobody. The wire change is small; the policy and the screen are the work.
+
+### The wire
+
+`ClientMessage::Create { name, shape, victory }` — the same three things `world new` and `match new` take, with `victory: Option<Victory>` being the whole of the difference between them. Answerable **without a seat**, which makes it the third such message after `Join` and `Rooms`, and for the same reason: it names a room that does not exist yet, so there is nowhere to be standing when you send it.
+
+The answer is `ServerMessage::Made(Result<RoomName, String>)`. A `Result` rather than two variants because it is one question with two answers, and because every `Rooms` method that could refuse already returns exactly this — `create`, `new_match` and `delete` all hand back `Result<RoomName, String>`, so the wire carries what the server already says.
+
+**Making a room does not put you in it.** The client sends `Join` with the name that came back, which is the same `Join` the room list sends, so the whole of joining — resolving the name, leaving an old seat, the token, the grant, `Welcome` — is reached by one path rather than two. One extra round trip on a menu click costs nothing, and the alternative is a second way to enter a world that has to be kept in step with the first.
+
+### The screen, and where it is borrowed from
+
+Three games, each for one thing.
+
+[Infinite Chess](https://www.infinitechess.org/) for the **shape of the form**: one labelled row per decision, and a control that appears only when the decision it belongs to is live. Its play screen never shows a difficulty until the opponent is a computer, and never shows a board size for a variant that has none. Ours has exactly two such dependencies — a size that means something only on a wrapping world, and a target that means something only in a match — so the same rule covers both, and the form is three rows for a world and five for a match rather than five rows with two of them greyed out. The other half worth taking is that a game you make appears in the same list everybody else is looking at; there is no separate "your games" pane. Ours needs nothing for this, because `ClientMessage::Rooms` is the only listing there is.
+
+[Clash Royale](https://interfaceingame.com/games/clash-royale/) for **depth and hierarchy**. Its interface almost never goes more than one level down, and where it does it is disguised as one — which is the argument for opening the form *in place* under the room list rather than as a second screen, and it is the same argument that put the menu and the game in one `App` rather than two. Its colour rule is the sharper borrowing: one accent on the single thing you are meant to do next, a second colour on everything secondary, and no third. Our palette already has `accent`, `good` and `text_dim` in those three roles and the menu does not yet use them that way — "See what rooms are there", every room row and "Play alone" are currently the same weight, so the screen has no primary action at all. The form makes that worse unless it is fixed: with a `Make it` button on screen there are two things competing to be the obvious one. The rule to hold is **one accent-coloured control per state of the menu**, and it is a rule about the whole menu rather than about the form.
+
+The third Clash Royale point is reach. Everything important sits where a thumb lands on a phone held in one hand, which for a centred panel means the primary action goes at the **bottom** of the form and the fields above it. That is the opposite of the usual desktop instinct and it is right for the client that has no keyboard.
+
+[generals.io](https://generals.io/) for **ownership and for the count**. Its lobby creator owns the lobby and keeps owning it between games, which is the precedent for the owner recorded below — somebody made this room, and that is worth knowing before any question about who may close it. And its play menu shows the *number* of open custom lobbies before you drill into the list, so the button says what is behind it. `RoomInfo` already carries `players`, so a count of rooms and of people in them is arithmetic on a list the client already has.
+
+What is deliberately **not** taken is the dropdown. Every choice here is two or three wide, and a row of toggle buttons shows the whole choice at once where a combo box shows one of it; egui's `ComboBox` also wants a popup layer, which is one more thing to keep off the world behind it. And the private invite code is a different feature — see [roadmap.md](roadmap.md#games-and-matches-by-code) — which wants a code-to-room map on the server before it wants a field on this form.
+
+So, under the room list and above "play alone", a single **New world** button that opens this in place:
+
+| row | control | when |
+|---|---|---|
+| Name | text field | always |
+| Shape | Boundless / Wrapping | always |
+| Size | `ROWSxCOLS`, chunks | wrapping only |
+| Ends | Never / Timer / Territory | always |
+| Target | generations, or squares | timer or territory |
+| — | **Make it**, then Cancel | always, at the foot |
+
+"Ends: Never" is what makes a world rather than a match, which is the honest way round: a room with no end is the ordinary case and a match is the one with a condition on it. That also means the form never has to ask "world or match?" as a question of its own — the win condition **is** the question, and the answer "never" is a legal one.
+
+### Every number and every word has a home
+
+The form is where a screen full of magic numbers usually arrives — a width, five heights, three text sizes, two defaults for a torus, a cap. None of them belong inline.
+
+- **What the player reads** goes in `client::views::words`, which already holds every string the client puts on screen and would otherwise be bypassed the moment a form has five labels.
+- **How it looks** goes in `client::views::theme::Metrics`, which is the file that exists so that no view names a size directly. The menu is currently the worst offender in the crate for this and is fixed on the way past: `420.0`, `40.0`, `36.0`, `54.0` and three font sizes are all inline in `views::menu` today.
+- **What the game turns on** goes in `sim::rule`, by the rule that file already states — every tunable number in the game, labelled not explained.
+- **What the server will allow** is the one that has no home yet. A room cap is neither a rule of the game nor a thing on screen, so it goes beside the other server policy in `server::rooms` as a named constant, and is overridable by `--max-rooms` the way every other server figure is a flag.
+
+### The policy, which is the actual blocker
+
+**A server that lets any client make worlds is a server anybody can fill with worlds**, and every room steps four times a second for as long as the process lives whether or not anybody is in it. Three things hold the line, in ascending order of how well they work.
+
+**A cap.** The cheapest and the least satisfying: past it, `Create` is refused with a reason that says so. It applies to rooms made over the wire and not to rooms declared on the command line or typed at the console, because an operator asking for forty rooms has made a decision and this is not the place to second-guess it.
+
+**An owner.** The connection that made a room is recorded against it, which is what generals.io does and for the same reason. Nothing enforces anything yet; what it buys is that "close what you opened" and "you have three open already" are both answerable later without a migration, and that the log line for a room that appeared says who asked for it.
+
+**Auto-sleep, which is the one that fixes the cost rather than rationing it.** Half of this is already built and unused: `Server::set_asleep` exists, `Server::step` returns nothing for a sleeping room, and `world sleep` / `world wake` are at the console. What is missing is the trigger — a room whose last player leaves sleeps after a grace period, and the `Join` that resolves to it wakes it. A room nobody is in then costs nothing, which turns the cap from a budget into a backstop.
+
+Waking has to be indistinguishable from never having slept, and it is, for a reason worth stating rather than assuming: the tick **is** the generation, `World::generation`, and nothing else advances while a world is not stepping. There is no second clock to drift. The one thing to watch is the save, which records that tick — a room saved asleep records the generation it stopped at, which is the right number under the only meaning the field has ever had.
+
+A match must not sleep, and does not: `set_asleep` already refuses on anything but `Phase::Open`, because a deadline measured in generations in a race where some runners are asleep is not a deadline.
+
+### What this leaves
+
+**No way to close a room from the client.** The owner is recorded and nothing reads it. `Rooms::delete` exists and is at the console; putting it on the wire wants the owner check to be real, and wants an answer for a room somebody is standing in.
+
+**Nothing starts a match but `match dispatch`.** A client can make a match and cannot blow the whistle on it, so a client-made match still needs the operator for its one remaining verb. `ClientMessage::Start` is the same shape as `Create` and wants the same owner check, so it belongs with the paragraph above rather than with this one.
+
 ## Auto-mining
 
 **Built** — see [game.md](game.md#mining). A mine is a living cell that pays its owner every time one of its kind is born, and the mechanism is **inheritance**: a birth copies its parent, kind and all, so a mine's children are mines and the kind spreads through a mixed population because the parent is picked at random.
