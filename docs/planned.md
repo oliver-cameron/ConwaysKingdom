@@ -422,7 +422,9 @@ Which suggests the order. Do it for wrapping worlds first, where it is nearly fr
 
 The page lays out at device width now and the canvas no longer asks for three device pixels a point, which were the two things making it unusable. What is left is the interface rather than the plumbing.
 
-The HUD is a desktop panel: it covers a third of a phone screen and its hint lines name a left button, a right button, WASD and escape, none of which a phone has. The hotbar is reachable but small. And there is no way to reach a server without a command line, which is the menu above.
+**Touch reaches the interface now**, which it did not: `Views` translated winit's mouse events by hand and never translated a touch, so egui received no press at all and every button on a phone was dead — see [gotchas](gotchas.md#a-finger-is-not-a-pointer-unless-somebody-says-so). The world always worked, because the client reads `App::on_touch` itself, which is why it went unnoticed.
+
+What is left is the layout rather than the plumbing. The HUD is a desktop panel: it covers a third of a phone screen and its hint lines name a left button, a right button, WASD and escape, none of which a phone has. The hotbar is reachable but small. And the key list behind `?` is a list of keys, which is a screen a phone has no way to open and nothing to do with once it is open.
 
 ## Known, and left alone
 

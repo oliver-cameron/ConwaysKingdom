@@ -10,6 +10,16 @@ egui hands over a `TexturesDelta`, and dropping one that still holds deltas pani
 
 *Also:* apply textures when they are **produced**, not when they are drawn. A frame is not always drawn.
 
+## A finger is not a pointer unless somebody says so
+
+`Views` translated winit's mouse events into `egui::RawInput` by hand and never translated `WindowEvent::Touch` — so on a touchscreen egui received **no press at all**, and every button in the interface was dead: the menu, the lobby, the hotbar, the library.
+
+*Symptom:* the game works and only the things drawn on top of it do not, which is what makes it hard to place. The world responds to a finger because the client reads `App::on_touch` itself; the interface does not, because egui was never told a finger exists. It reads as "the UI is broken" rather than as "one event is missing", and it is invisible on any machine with a mouse.
+
+Two things it needs beyond the obvious press and release. A `PointerMoved` **before** the press, because egui decides what a press landed on using the pointer's position, and on a touchscreen the pointer was last left wherever the previous touch ended. And a `PointerGone` on release, because a finger that lifts leaves nothing hovering — without it a button stays looking hovered under no finger.
+
+Whether the finger belongs to the interface or the world is decided **once, when it goes down**, and remembered until it lifts. A drag that began on a button must not become a drag on the world halfway through because it slid off the button.
+
 ## A control drawn inside a platform branch is a control one platform does not have
 
 The refresh that reaches a server was drawn inside the `else` that makes the address a **field**. A browser has a label there instead — its socket comes from the page it was served by, so a typed address would be a promise the client cannot keep — and the button went with the field. The web client then had no way to ask any server anything, and looked exactly like a client that could not connect.

@@ -378,22 +378,39 @@ pub fn show(
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
-    // **Escape gets you out of a text field.** egui takes the keyboard while
-    // one has focus, so the app's own escape ladder never sees the key — and a
-    // selection you cannot clear, in a field you cannot leave, is the whole of
-    // the complaint. Handled here, before anything is drawn, so it is the
-    // innermost rung: a field lets go before a form shuts.
-    if let Some(id) = ctx.memory(|mem| mem.focused()) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            // **The selection goes too.** Surrendering focus on its own leaves
-            // the highlight painted where it was, so the field looks as though
-            // it still has the keyboard and there is nothing left to press to
-            // make it let go. Collapsing the cursor range is what actually
-            // clears it.
+    // **Two ways out of a text field, because there have to be two.**
+    //
+    // egui takes the keyboard while a field has focus, so the app's own escape
+    // ladder never sees the key — a selection you cannot clear, in a field you
+    // cannot leave, was the whole of the complaint. Escape is the first way.
+    //
+    // The second is pressing somewhere else, which is what anybody does before
+    // they think to reach for a key. egui gives focus up when a press lands on
+    // another *widget*; a press on the panel between them lands on nothing and
+    // leaves the field looking as though it still has the keyboard, with the
+    // highlight painted where it was.
+    //
+    // Both end the same way: surrender the focus **and collapse the cursor
+    // range**. Surrendering alone leaves the selection drawn, which is the
+    // half of it that reads as broken.
+    let focused = ctx.memory(|mem| mem.focused());
+    if let Some(id) = focused {
+        let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        // Where the field is, so a press inside it can be left alone: clearing
+        // on every press would make a field impossible to click into.
+        let field = ctx.read_response(id).map(|r| r.rect);
+        let elsewhere = ctx.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|at| field.is_none_or(|rect| !rect.contains(at)))
+        });
+        if escaped || elsewhere {
             if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
                 state.cursor.set_char_range(None);
                 egui::TextEdit::store_state(ctx, id, state);
             }
+            ctx.memory_mut(|mem| mem.surrender_focus(id));
             ctx.memory_mut(|mem| mem.stop_text_input());
         }
     }
@@ -890,12 +907,6 @@ enum Picked {
     Watch,
 }
 
-impl Picked {
-    fn is_nothing(&self) -> bool {
-        matches!(self, Self::Nothing)
-    }
-}
-
 fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool) -> Option<Chose> {
     let p = theme.palette;
     let m = theme.metrics;
@@ -1266,7 +1277,7 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
         .inner_margin(m.panel_padding * 0.6)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let head = ui.horizontal(|ui| {
+            ui.horizontal(|ui| {
                 ui.set_min_height(m.row_height * 0.6);
                 ui.label(egui::RichText::new(&room.name).size(m.text_body));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1298,40 +1309,52 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                 egui::RichText::new(under).size(m.text_small),
             );
 
+            // **Selection takes the name and the line under it, and stops
+            // there.** It used to take the whole row and was registered
+            // *after* the buttons below, which in an immediate-mode interface
+            // puts it on top of them: a press on Join never reached Join, it
+            // reached the row, and the row's answer to being pressed while
+            // selected is to deselect. That is a Join button that visibly
+            // depresses and puts the room away instead of entering it.
+            //
+            // Taken before the buttons exist, so there is nothing for it to
+            // cover.
+            let head = ui.min_rect();
+            if ui.interact(head, ui.id().with(&room.id), egui::Sense::CLICK).clicked() {
+                picked = Picked::Select;
+            }
+
             if selected {
                 ui.add_space(m.item_spacing);
                 ui.horizontal_top(|ui| {
                     ui.set_min_height(m.button_height);
                     let each = (ui.available_width() - m.item_spacing) / 2.0;
-                    let join = ui.add_sized(
-                        [each, m.button_height],
-                        egui::Button::new(
-                            egui::RichText::new(words::watch::JOIN)
-                                .size(m.text_small)
-                                .color(p.ground),
+                    if ui
+                        .add_sized(
+                            [each, m.button_height],
+                            egui::Button::new(
+                                egui::RichText::new(words::watch::JOIN)
+                                    .size(m.text_small)
+                                    .color(p.ground),
+                            )
+                            .fill(p.accent),
                         )
-                        .fill(p.accent),
-                    );
-                    let watch = ui.add_sized(
-                        [each, m.button_height],
-                        egui::Button::new(
-                            egui::RichText::new(words::watch::WATCH).size(m.text_small),
-                        ),
-                    );
-                    if join.clicked() {
+                        .clicked()
+                    {
                         picked = Picked::Join;
                     }
-                    if watch.clicked() {
+                    if ui
+                        .add_sized(
+                            [each, m.button_height],
+                            egui::Button::new(
+                                egui::RichText::new(words::watch::WATCH).size(m.text_small),
+                            ),
+                        )
+                        .clicked()
+                    {
                         picked = Picked::Watch;
                     }
                 });
-            }
-
-            // Anywhere on the row selects it. A row that could only be
-            // selected by its title is a row most presses miss.
-            let body = ui.interact(ui.min_rect(), ui.id().with(&room.id), egui::Sense::click());
-            if (body.clicked() || head.response.clicked()) && picked.is_nothing() {
-                picked = Picked::Select;
             }
         });
 
@@ -1673,6 +1696,110 @@ mod tests {
         assert!(
             probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Create { .. })),
             "the world form could not be submitted"
+        );
+    }
+
+    fn a_room(id: &str) -> RoomInfo {
+        RoomInfo {
+            id: RoomId::from(id),
+            name: id.into(),
+            phase: crate::net::MatchPhase::Open,
+            victory: None,
+            players: 0,
+            world: WorldKind::Infinite,
+        }
+    }
+
+    /// **A press on nothing lets the keyboard go.**
+    ///
+    /// egui gives focus up when a press lands on another widget; a press on
+    /// the panel between them lands on nothing, and the field kept both the
+    /// focus and its highlight — which reads as a selection there is no way to
+    /// escape, because from inside the game there was not one.
+    #[test]
+    fn pressing_into_nothing_lets_a_field_go() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Play;
+        menu.attempted = Some("ws://host:8080/ws".into());
+        menu.stage = Stage::Choosing { rooms: Vec::new(), note: None };
+
+        let ctx = egui::Context::default();
+        let mut clock = 0.0;
+        let mut tick = |menu: &mut Menu, events| {
+            clock += 1.0 / 60.0;
+            frame(&ctx, clock, menu, at(1.0, false), events)
+        };
+
+        // Into the address field, which the play screen always has.
+        let (_, rect) = tick(&mut menu, Vec::new());
+        let mut into = None;
+        let mut y = rect.top();
+        while y < rect.bottom() && into.is_none() {
+            let point = egui::pos2(rect.center().x, y);
+            tick(&mut menu, down(point));
+            tick(&mut menu, up(point));
+            if ctx.memory(|m| m.focused()).is_some() {
+                into = Some(point);
+            }
+            y += 6.0;
+        }
+        let into = into.expect("nothing on the play screen takes the keyboard");
+
+        // A press well away from it — the far corner, which is panel and
+        // nothing else.
+        let nowhere = rect.min + egui::vec2(4.0, 4.0);
+        assert_ne!(nowhere, into);
+        tick(&mut menu, down(nowhere));
+        tick(&mut menu, up(nowhere));
+        assert!(
+            ctx.memory(|m| m.focused()).is_none(),
+            "the field kept the keyboard after a press on nothing"
+        );
+    }
+
+    /// **The press that actually starts a game.** Select a room, then join it.
+    ///
+    /// Two presses rather than one, which is what makes it worth testing: the
+    /// row's own click was registered *after* the buttons it reveals, and in
+    /// an immediate-mode interface that puts it on top of them — so a press on
+    /// Join reached the row instead, and the row's answer to being pressed
+    /// while selected is to put itself away. A Join that visibly depresses and
+    /// closes the room is exactly what "the buttons work but do not take me to
+    /// the game" looks like.
+    #[test]
+    fn a_room_can_be_selected_and_then_joined() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Play;
+        menu.attempted = Some("ws://host:8080/ws".into());
+        menu.stage = Stage::Choosing { rooms: vec![a_room("arena")], note: None };
+
+        assert!(
+            probe(&mut menu, at(1.0, false), |m, _| m.selected.is_some()),
+            "a room could not be selected"
+        );
+        assert_eq!(menu.selected, Some(RoomId::from("arena")));
+
+        assert!(
+            probe(&mut menu, at(1.0, false), |_, chose| matches!(
+                chose,
+                Chose::Join(id) if id.as_str() == "arena"
+            )),
+            "the selected room could not be joined"
+        );
+    }
+
+    /// And watching it, which is the other button the row reveals.
+    #[test]
+    fn a_selected_room_can_be_watched() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Play;
+        menu.attempted = Some("ws://host:8080/ws".into());
+        menu.stage = Stage::Choosing { rooms: vec![a_room("arena")], note: None };
+        menu.selected = Some(RoomId::from("arena"));
+
+        assert!(
+            probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Watch(_))),
+            "a selected room could not be watched"
         );
     }
 

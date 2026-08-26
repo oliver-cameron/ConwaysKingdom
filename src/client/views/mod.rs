@@ -54,6 +54,10 @@ pub struct Views {
     /// a HUD at the top left and a hotbar at the bottom centre is most of the
     /// window, so the world only received the strip beyond it.
     claimed: Vec<egui::Rect>,
+    /// The finger the interface is following, and whether it began on the
+    /// interface. One finger: egui's pointer is a pointer, and a second is a
+    /// pinch, which is the world's business.
+    finger: Option<(u64, bool)>,
     /// True while a widget is being dragged, so a drag that leaves the panel
     /// still belongs to the panel.
     dragging_widget: bool,
@@ -202,6 +206,7 @@ impl Views {
             pointer: egui::Pos2::ZERO,
             modifiers: egui::Modifiers::default(),
             claimed: Vec::new(),
+            finger: None,
             dragging_widget: false,
             start: 0.0,
             shifted_digits: COMMON_SHIFTED_DIGITS.map(|c| Some(c.to_string())),
@@ -282,6 +287,69 @@ impl Views {
                     modifiers: self.modifiers,
                 });
                 self.wants_pointer()
+            }
+            // **A finger is a pointer, and egui was never told.**
+            //
+            // Nothing here translated a touch, so on a touchscreen egui
+            // received no press at all and every button in the interface was
+            // dead — the menu, the lobby, the hotbar, the library. The world
+            // was fine, because the client reads `App::on_touch` itself, which
+            // is exactly why it went unnoticed: the game worked and only the
+            // things drawn on top of it did not.
+            //
+            // One finger, the first one down. egui has no use for a second —
+            // its pointer is a pointer — and the second finger is a pinch,
+            // which is the world's business.
+            WindowEvent::Touch(touch) => {
+                use winit::event::TouchPhase;
+                let at =
+                    egui::pos2(touch.location.x as f32 / scale, touch.location.y as f32 / scale);
+                match touch.phase {
+                    TouchPhase::Started if self.finger.is_none() => {
+                        // Moved first, so that what egui decides about this
+                        // press is decided at the place it happened. Without
+                        // it the press lands wherever the pointer was left,
+                        // which on a touchscreen is wherever the last one
+                        // ended.
+                        self.pointer = at;
+                        self.events.push(egui::Event::PointerMoved(at));
+                        self.events.push(egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: self.modifiers,
+                        });
+                        // Whether this finger belongs to the interface is
+                        // decided **once, here**, and remembered: a drag that
+                        // began on a button must not become a drag on the
+                        // world halfway through because it left the button.
+                        let claimed = claims(&self.claimed, at);
+                        self.finger = Some((touch.id, claimed));
+                        claimed
+                    }
+                    _ if self.finger.map(|(id, _)| id) != Some(touch.id) => false,
+                    TouchPhase::Moved => {
+                        self.pointer = at;
+                        self.events.push(egui::Event::PointerMoved(at));
+                        self.finger.is_some_and(|(_, claimed)| claimed)
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        let claimed = self.finger.is_some_and(|(_, claimed)| claimed);
+                        self.events.push(egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: self.modifiers,
+                        });
+                        // Gone, not merely up. A finger that lifts leaves
+                        // nothing hovering, and a button left looking hovered
+                        // under no finger is a button that appears stuck.
+                        self.events.push(egui::Event::PointerGone);
+                        self.finger = None;
+                        claimed
+                    }
+                    TouchPhase::Started => false,
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (unit, d) = match delta {
