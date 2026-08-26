@@ -6,6 +6,7 @@
 
 pub mod desync;
 pub mod record;
+pub mod route;
 pub mod views;
 
 pub use views::battle::{BattleApp, GENERATION_SPAN};

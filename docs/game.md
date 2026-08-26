@@ -324,6 +324,26 @@ The **evenness is checked at the whistle**, not in the lobby: a match will not s
 
 On the web the server is shown but not editable: the socket is derived from the page's origin, so a typed address would be a promise the client cannot keep. Natively it is a field, because there is no page to have come from.
 
+## Where you are, in the address bar
+
+On the web, **each screen has its own address**, so a link means something more than "the front door", a refresh puts you back where you were, and a bug report can arrive as a URL.
+
+| address | screen |
+|---|---|
+| `?screen=home` | your name and your record |
+| `?screen=play` | a server and what is on it |
+| `?room=ID` | in a world |
+| `?lobby=ID` | waiting in a match, before the whistle |
+| `?watch=ID` | watching a room without a seat in it |
+
+Query parameters rather than paths, which is forced rather than preferred: the client is one file served out of whatever `--serve` was pointed at, so `/play` would be a request the server has no route for and would 404 on a refresh.
+
+**A lobby and a room are one request read and two screens written.** Following either does the same thing — join that room — and what you get is whichever screen the phase calls for; what differs is what the address says while you are there, which is the point of having one per screen. It follows that a link can go stale: send somebody `?lobby=` and they open it after the whistle, and they are refused for being late rather than shown a lobby. That is the honest outcome, and the refusal says so.
+
+Watching is its own address rather than a flag on a room, because "come and play" and "come and watch" are two different invitations and are answered by two different messages.
+
+The address is **replaced, not pushed**. A client that pushed every screen change would fill the history with the six presses it took to get into a game, and the back button would walk them backwards rather than leaving — which is not what a back button means to somebody who wants out.
+
 ## The HUD
 
 Player and their colour, value, generation, **who is winning**, connection state, which room, whether the world wraps, and why the last action was refused.

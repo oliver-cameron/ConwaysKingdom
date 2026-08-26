@@ -1499,24 +1499,134 @@ mod tests {
     /// is unreachable on one platform, or in one state, which no amount of
     /// reading the drawing code reliably catches. egui runs perfectly well
     /// with no window, so the menu can simply be *asked*.
+    /// One pass, because one pass is one frame and the menu changes its own
+    /// state as it decides — a second would run against a menu that had
+    /// already acted, and report that it did nothing.
     fn one_frame(menu: &mut Menu, at: Where) -> Chose {
         let ctx = egui::Context::default();
-        let theme = Theme::default();
-        // One pass, because one pass is one frame and the menu changes its own
-        // state as it decides — a second would run against a menu that had
-        // already acted, and report that it did nothing.
-        ctx.begin_pass(egui::RawInput::default());
-        let (chose, _) = show(&ctx, &theme, menu, at);
-        // Cleared, not dropped. A `TexturesDelta` that still holds deltas
-        // panics on drop, and the font atlas arrives on the first pass — see
-        // docs/gotchas.md, which is where this cost a day once already.
-        let mut out = ctx.end_pass();
-        out.textures_delta.clear();
-        chose
+        frame(&ctx, 0.0, menu, at, Vec::new()).0
     }
 
     fn at(now: f64, on_web: bool) -> Where {
         Where { now, on_web, waiting_in_a_match: false }
+    }
+
+    /// Run a frame with these events and say what the menu chose.
+    fn frame(
+        ctx: &egui::Context,
+        clock: f64,
+        menu: &mut Menu,
+        at: Where,
+        events: Vec<egui::Event>,
+    ) -> (Chose, egui::Rect) {
+        let theme = Theme::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            time: Some(clock),
+            focused: true,
+            events,
+            ..Default::default()
+        });
+        let (chose, rect) = show(ctx, &theme, menu, at);
+        // Cleared, not dropped — see docs/gotchas.md.
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        (chose, rect.unwrap_or(egui::Rect::NOTHING))
+    }
+
+    /// The two halves of a press, as **two frames**.
+    ///
+    /// Not one. A click is a press and then a release, and egui decides one
+    /// happened by watching the pointer across frames — put both in a single
+    /// frame's events and nothing is clicked, which is a fault in the test and
+    /// reads exactly like a fault in the screen. That mistake cost the first
+    /// version of this harness, which accused the menu of being dead.
+    fn down(at: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ]
+    }
+
+    fn up(at: egui::Pos2) -> Vec<egui::Event> {
+        vec![egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }]
+    }
+
+    /// **Is this screen clickable at all?**
+    ///
+    /// Written after a report that buttons had stopped working, which no
+    /// amount of reading the drawing code settles: a widget can be laid out
+    /// perfectly and still be unreachable, covered by something drawn after
+    /// it, or sitting where the pointer is not.
+    ///
+    /// The buttons on these screens run the full width of the panel, so the
+    /// centre line crosses every one of them. Walk it, press at each step, and
+    /// see whether anything answers.
+    fn probe(menu: &mut Menu, at: Where, mut answered: impl FnMut(&Menu, &Chose) -> bool) -> bool {
+        // **One context for the whole walk.** egui interacts against widgets
+        // it has already seen, and a fresh context has seen nothing — a probe
+        // that made one per press would be testing a screen's first frame over
+        // and over, which is never a frame anybody clicks on.
+        let ctx = egui::Context::default();
+        let mut clock = 0.0;
+        let mut tick = |menu: &mut Menu, events| {
+            clock += 1.0 / 60.0;
+            frame(&ctx, clock, menu, at, events)
+        };
+
+        let (_, rect) = tick(menu, Vec::new());
+        assert!(rect.width() > 1.0, "the menu drew nothing to press: {rect:?}");
+        let mut y = rect.top();
+        while y < rect.bottom() {
+            let point = egui::pos2(rect.center().x, y);
+            tick(menu, down(point));
+            let (chose, _) = tick(menu, up(point));
+            if answered(menu, &chose) {
+                return true;
+            }
+            y += 4.0;
+        }
+        false
+    }
+
+    /// The home screen's one accent-coloured control, pressed the way a player
+    /// presses it.
+    #[test]
+    fn the_play_button_can_be_pressed() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        assert!(
+            probe(&mut menu, at(1.0, false), |m, _| m.page == Page::Play),
+            "nothing on the home screen answered a press"
+        );
+    }
+
+    /// And the world form's, which is the one that had to be reached through
+    /// two columns and a frame.
+    #[test]
+    fn the_make_button_can_be_pressed() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Play;
+        menu.attempted = Some("ws://host:8080/ws".into());
+        menu.stage = Stage::Choosing { rooms: Vec::new(), note: None };
+        menu.draft = Some(Draft { name: "arena".into(), ..Draft::default() });
+
+        assert!(
+            probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Create { .. })),
+            "the world form could not be submitted"
+        );
     }
 
     /// **A browser must be able to reach its own server.** The refresh button

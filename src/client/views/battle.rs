@@ -480,6 +480,9 @@ pub struct BattleApp {
     /// From the server because a client holds only the chunks it subscribed
     /// to: counting locally would score its own screen rather than the world.
     standing: Vec<(crate::sim::PlayerId, u32)>,
+    /// The address last written down, so it is written again only when it
+    /// would say something different.
+    said_where: Option<(bool, bool, bool, Option<crate::net::RoomId>)>,
     /// Whether the key list is on screen.
     ///
     /// Above every screen rather than on one, because the keys it lists work
@@ -787,6 +790,7 @@ impl BattleApp {
                     // could not build on while the socket was still opening.
                     self.screen = Screen::Playing;
                     self.asked_at = None;
+                    self.say_where();
                     // Now, and only now, drop the local world. Until Welcome
                     // arrives there is nothing authoritative to replace it
                     // with, and an empty screen is worse than a local game.
@@ -836,6 +840,7 @@ impl BattleApp {
                     self.room_name = Some(name);
                     self.screen = Screen::Playing;
                     self.asked_at = None;
+                    self.say_where();
                     self.world = world.build();
                     self.world.set_generation(tick);
                     self.subscribed.clear();
@@ -1585,6 +1590,47 @@ impl BattleApp {
         }
     }
 
+    /// Say where the client is, in the address bar.
+    ///
+    /// Called wherever the screen or the room changes rather than every frame:
+    /// it is a browser API and a no-op on native, and neither wants doing
+    /// sixty times a second to say the same thing.
+    /// Whether this room is a match that has not started.
+    fn gathering(&self) -> bool {
+        matches!(self.lobby.as_ref().map(|l| &l.phase), Some(crate::net::MatchPhase::Gathering))
+    }
+
+    /// What the address would say, as something comparable — so it is written
+    /// again only when it would say something different.
+    fn here(&self) -> Option<(bool, bool, bool, Option<crate::net::RoomId>)> {
+        Some((
+            matches!(self.screen, Screen::Playing),
+            match &self.screen {
+                Screen::Menu(m) => m.page == menu::Page::Play,
+                Screen::Playing => self.watching,
+            },
+            self.gathering(),
+            self.room.clone(),
+        ))
+    }
+
+    fn say_where(&self) {
+        use crate::client::route::Route;
+        let route = match (&self.screen, &self.room) {
+            (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
+            (Screen::Menu(_), _) => Route::Home,
+            (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
+            // A lobby is a screen of its own, so it says so. Following either
+            // does the same thing — join that room — and what you get is
+            // whichever screen the phase calls for.
+            (Screen::Playing, Some(room)) if self.gathering() => Route::Lobby(room.clone()),
+            (Screen::Playing, Some(room)) => Route::Room(room.clone()),
+            // Offline: there is no room to name and no link to hand anybody.
+            (Screen::Playing, None) => Route::Home,
+        };
+        crate::client::route::show(&route);
+    }
+
     fn show_menu(&mut self, stage: menu::Stage) {
         match &mut self.screen {
             Screen::Menu(m) => {
@@ -1786,23 +1832,34 @@ impl App for BattleApp {
         // line or in a link is a choice already made; anything else opens the
         // menu, which is the only way a room can be chosen without a terminal.
         let (screen, link) = match startup() {
-            Start::Join { url, name, room } => {
+            Start::Join { url, name, room, watch } => {
                 log::info!("connecting to {url}, asking for room {room:?}");
                 // `--room` and `?room=` are typed, so they are names rather
                 // than ids -- and the server resolves either, along with a
                 // code, which is what lets one flag carry all three.
                 let room = room.map(crate::net::RoomId);
-                let link = dial(&url).inspect(|link| {
-                    link.send(ClientMessage::Join {
+                let link = dial(&url).inspect(|link| match (&room, watch) {
+                    // A link that says watch is answered by `Watch`, which
+                    // takes no name and no token: there is no player to be
+                    // remembered as.
+                    (Some(room), true) => link.send(ClientMessage::Watch { room: room.clone() }),
+                    _ => link.send(ClientMessage::Join {
                         name,
                         token: crate::net::keep::token_for_join(room.as_ref().map(|r| r.as_str())),
-                        room,
-                    })
+                        room: room.clone(),
+                    }),
                 });
                 (Screen::Playing, link)
             }
-            Start::Menu { address } => {
-                (Screen::Menu(menu::Menu::new(address, cfg!(target_arch = "wasm32"))), None)
+            Start::Menu { address, page } => {
+                let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
+                // A link to the play screen lands on it, and asks at once —
+                // the same two things pressing Play does.
+                if page == menu::Page::Play {
+                    m.page = page;
+                    m.typed_at = Some(0.0);
+                }
+                (Screen::Menu(m), None)
             }
         };
         // Always start with something on screen. Holding an empty world until
@@ -1921,6 +1978,7 @@ impl App for BattleApp {
             picking_stamp: false,
             standing: Vec::new(),
             sides: crate::net::Sides::SOLO,
+            said_where: None,
             helping: false,
             naming_side: None,
             in_play: None,
@@ -2223,6 +2281,12 @@ impl App for BattleApp {
         }
         if leaving {
             self.back_to_menu();
+        }
+        // After the frame, because the menu's own page moves inside it — a
+        // press on Play changes a field the client only sees on the way out.
+        if self.said_where != self.here() {
+            self.said_where = self.here();
+            self.say_where();
         }
         *self.ui_output.borrow_mut() = Some(output);
 
@@ -2595,9 +2659,17 @@ enum Start {
     /// Straight into a game, because something said where to go — `--ws` on a
     /// command line, or `?room=` on a page. A stated destination is a choice
     /// already made, and asking again would be the menu getting in the way.
-    Join { url: String, name: String, room: Option<String> },
-    /// Show the menu, with this address filled in.
-    Menu { address: String },
+    Join {
+        url: String,
+        name: String,
+        room: Option<String>,
+        /// Watch it rather than play in it. A link that says watch is a
+        /// different invitation from one that says come and play, and the two
+        /// are answered by different messages.
+        watch: bool,
+    },
+    /// Show the menu, with this address filled in and on this page.
+    Menu { address: String, page: menu::Page },
 }
 
 /// Connect, and ask nothing yet.
@@ -2624,11 +2696,20 @@ fn dial(url: &str) -> Option<Link> {
 /// how a link takes somebody straight to a world. With none, the menu asks.
 #[cfg(target_arch = "wasm32")]
 fn startup() -> Start {
+    use crate::client::route::Route;
     let url = Link::origin_url("/ws").unwrap_or_else(|| "ws://localhost:8080/ws".into());
     let name = crate::net::keep::name().unwrap_or_else(|| "web".into());
-    match room_in_query(&query_string()) {
-        Some(room) => Start::Join { url, name, room: Some(room) },
-        None => Start::Menu { address: url },
+    // The address bar is where a browser client is told to go: a link into a
+    // match, a link to watch one, or the page on its own.
+    match Route::read(&query_string()) {
+        Some(Route::Watch(room)) => Start::Join { url, name, room: Some(room.0), watch: true },
+        // A lobby and a room are one request: join it, and what comes back is
+        // whichever screen the match's phase calls for.
+        Some(route) if route.to_join().is_some() => {
+            Start::Join { url, name, room: route.to_join().map(|r| r.0.clone()), watch: false }
+        }
+        Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play },
+        _ => Start::Menu { address: url, page: menu::Page::Home },
     }
 }
 
@@ -2643,12 +2724,14 @@ fn query_string() -> String {
 fn startup() -> Start {
     let taken = CONNECTION.lock().unwrap().take();
     let Some(Connection { url, name, room }) = taken else {
-        return Start::Menu { address: DEFAULT_ADDRESS.into() };
+        return Start::Menu { address: DEFAULT_ADDRESS.into(), page: menu::Page::Home };
     };
     crate::net::keep::remember_name(&name);
     match url {
-        Some(url) => Start::Join { url, name, room },
-        None => Start::Menu { address: DEFAULT_ADDRESS.into() },
+        // `--ws` is a command line, which has no way to say "watch" yet and
+        // does not need one: somebody at a terminal can pass `--room`.
+        Some(url) => Start::Join { url, name, room, watch: false },
+        None => Start::Menu { address: DEFAULT_ADDRESS.into(), page: menu::Page::Home },
     }
 }
 
@@ -2670,60 +2753,12 @@ pub fn default_address() -> &'static str {
     DEFAULT_ADDRESS
 }
 
-/// The `room` parameter out of a query string, given the string.
-///
-/// Reached only from the browser's startup, so off wasm32 nothing but the test
-/// below calls it — which is the point of the split, and why the allow is
-/// narrower than silencing the warning at the module.
-///
-/// Split from the lookup above so it can be tested at all: everything that
-/// reaches a browser's `location` is unreachable off wasm32, and this is the
-/// half with the decisions in it.
-///
-/// Parsed by hand rather than through `UrlSearchParams`, which would be
-/// another web-sys feature for one lookup. No percent-decoding, deliberately:
-/// a room name is letters, digits, `-` and `_`, so a name that needed decoding
-/// was never a room name, and refusing it here would say only "no" where the
-/// server can say what the rooms actually are.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-fn room_in_query(search: &str) -> Option<String> {
-    search
-        .trim_start_matches('?')
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| *key == "room")
-        .map(|(_, value)| value.to_string())
-        .filter(|value| !value.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// How a browser client says which world it wants. There is no command
     /// line on a page, and the socket comes from the origin, so the query
-    /// string is the only thing left to carry it.
-    #[test]
-    fn the_room_comes_out_of_the_query_string() {
-        assert_eq!(room_in_query("?room=lobby").as_deref(), Some("lobby"));
-        assert_eq!(room_in_query("room=lobby").as_deref(), Some("lobby"), "with or without the ?");
-        assert_eq!(
-            room_in_query("?name=alice&room=arena&zoom=4").as_deref(),
-            Some("arena"),
-            "and wherever it sits among the others"
-        );
-
-        // Nothing to say means the server decides, which is what keeps a bare
-        // URL a game.
-        for none in ["", "?", "?room=", "?rooms=lobby", "?roomy=lobby", "?name=alice"] {
-            assert_eq!(room_in_query(none), None, "{none:?}");
-        }
-
-        // Not validated here. A name that is not one goes to the server,
-        // which refuses it with the list of rooms that do exist -- and that
-        // list is the only way a player finds out what is there.
-        assert_eq!(room_in_query("?room=NOT A ROOM").as_deref(), Some("NOT A ROOM"));
-    }
 
     /// The HUD swatch and the cells on the board must agree about a player's
     /// colour, so this reproduces the shader's arithmetic and checks the result
