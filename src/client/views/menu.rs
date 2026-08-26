@@ -400,31 +400,56 @@ pub fn show(
 
     // The window, in points, which is what `Views` handed egui — not physical
     // pixels, so this reads the same on a hidpi display as on any other.
-    let width = theme.panel_width(ctx.content_rect().width());
-    let area = egui::Area::new("menu".into()).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
-        ctx,
-        |ui| {
-            egui::Frame::new()
-                .fill(theme.palette.surface)
-                .stroke(egui::Stroke::new(1.0, theme.palette.line))
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding * 1.6)
-                .show(ui, |ui| {
-                    // A share of the screen rather than a fixed 420, which was
-                    // right on a phone and left three quarters of a desktop
-                    // empty. Still fixed for a given window, which is the
-                    // property that mattered: a panel sized by its *contents*
-                    // jumps every time the room list changes length, and moves
-                    // the buttons out from under the hand reaching for them.
-                    ui.set_width(width);
-                    ui.spacing_mut().item_spacing.y = m.item_spacing;
-                    match menu.page {
-                        Page::Home => chose = home(ui, theme, menu, at),
-                        Page::Play => chose = play(ui, theme, menu, at),
-                    }
+    let screen = ctx.content_rect();
+    let width = theme.panel_width(screen.width());
+
+    // **The menu is the screen, so it is drawn as the screen.** It was a card
+    // floating in the middle of a much larger dark field, which reads as
+    // cramped however wide the card is: the eye takes the border as the edge
+    // of the thing, and everything outside it as space the game is refusing to
+    // use. Filling the window and letting the *content* be a column inside it
+    // is the same information without the fence around it.
+    //
+    // No stroke, for the same reason. A border is what tells you where one
+    // surface ends and another begins, and at the edge of the window there is
+    // nothing on the other side of it.
+    //
+    // [game.md](../../../docs/game.md#the-menu) has said the menu has the
+    // screen to itself since it stopped being a corner panel; this is that
+    // sentence being true.
+    let area = egui::Area::new("menu".into())
+        .fixed_pos(screen.min)
+        .order(egui::Order::Background)
+        .show(ctx, |ui| {
+            egui::Frame::new().fill(theme.palette.surface).show(ui, |ui| {
+                ui.set_min_size(screen.size());
+                // Scrolled, because filling the screen does not make the
+                // screen taller: a server with a dozen rooms and the form
+                // beside them still runs off the bottom of a laptop, and
+                // content that cannot be reached is worse than content that
+                // looks cramped.
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        // A column inside the window rather than the window
+                        // itself. A room list stretched across two thousand
+                        // points is a list nobody can follow from a name to
+                        // the count beside it, and prose that wide is
+                        // unreadable — the screen is not cramped, so the
+                        // content need not sprawl to prove it.
+                        ui.add_space(m.margin * 2.0);
+                        ui.allocate_ui(egui::vec2(width, screen.height()), |ui| {
+                            ui.set_width(width);
+                            ui.spacing_mut().item_spacing.y = m.item_spacing;
+                            match menu.page {
+                                Page::Home => chose = home(ui, theme, menu, at),
+                                Page::Play => chose = play(ui, theme, menu, at),
+                            }
+                        });
+                        ui.add_space(m.margin * 2.0);
+                    });
                 });
-        },
-    );
+            });
+        });
 
     (chose, Some(area.response.rect))
 }
@@ -1565,6 +1590,19 @@ mod tests {
         }]
     }
 
+    /// The menu fills the window rather than floating a card in the middle of
+    /// it, so its rectangle is the window — which is also what tells the
+    /// client that no press on this screen belongs to the world behind.
+    #[test]
+    fn the_menu_is_the_whole_screen() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        let ctx = egui::Context::default();
+        let (_, rect) = frame(&ctx, 0.0, &mut menu, at(0.0, false), Vec::new());
+        // The harness hands egui a 1200x800 window.
+        assert!(rect.width() >= 1200.0, "the menu left the sides of the screen: {rect:?}");
+        assert!(rect.height() >= 800.0, "and the top or the bottom: {rect:?}");
+    }
+
     /// **Is this screen clickable at all?**
     ///
     /// Written after a report that buttons had stopped working, which no
@@ -1589,15 +1627,24 @@ mod tests {
 
         let (_, rect) = tick(menu, Vec::new());
         assert!(rect.width() > 1.0, "the menu drew nothing to press: {rect:?}");
+
+        // Four columns of probe rather than the centre line. The centre line
+        // was enough while every control ran the full width of a card; on a
+        // two-column screen it runs down the **gap between them** and finds
+        // nothing, which is a fault in the probe that reads as a dead button.
+        let lanes: Vec<f32> =
+            (1..=4).map(|n| rect.left() + rect.width() * n as f32 / 5.0).collect();
         let mut y = rect.top();
         while y < rect.bottom() {
-            let point = egui::pos2(rect.center().x, y);
-            tick(menu, down(point));
-            let (chose, _) = tick(menu, up(point));
-            if answered(menu, &chose) {
-                return true;
+            for &x in &lanes {
+                let point = egui::pos2(x, y);
+                tick(menu, down(point));
+                let (chose, _) = tick(menu, up(point));
+                if answered(menu, &chose) {
+                    return true;
+                }
             }
-            y += 4.0;
+            y += 6.0;
         }
         false
     }

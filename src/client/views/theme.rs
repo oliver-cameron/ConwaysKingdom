@@ -109,9 +109,12 @@ impl Default for Theme {
                 item_spacing: 6.0,
                 margin: 14.0,
                 slot: 44.0,
-                panel_share: 0.42,
+                // More of the screen now that the menu fills it: a column in
+                // the middle of a window has the whole window to be measured
+                // against, where a card had only itself.
+                panel_share: 0.62,
                 panel_min: 360.0,
-                panel_max: 760.0,
+                panel_max: 1040.0,
                 two_column_min: 660.0,
                 action_height: 40.0,
                 button_height: 36.0,
@@ -219,8 +222,8 @@ mod tests {
     fn the_menu_takes_a_share_of_whatever_screen_it_is_on() {
         let t = Theme::default();
         assert_eq!(t.panel_width(1920.0), t.metrics.panel_max, "capped on a monitor");
-        assert_eq!(t.panel_width(1400.0), 588.0, "a share of a laptop");
-        assert_eq!(t.panel_width(800.0), t.metrics.panel_min, "floored on a small window");
+        assert_eq!(t.panel_width(1400.0), 868.0, "a share of a laptop");
+        assert_eq!(t.panel_width(500.0), t.metrics.panel_min, "floored on a small window");
         assert_eq!(t.panel_width(320.0), 320.0, "and never wider than the screen itself");
     }
 }
