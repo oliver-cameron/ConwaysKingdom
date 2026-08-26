@@ -25,7 +25,7 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--addr ADDR` | listen address | `[::]:8080` |
 | `--rooms DIR` | where rooms are saved, one file each | `rooms` |
 | `--room NAME` | declare a room; repeatable | one called `main` |
-| `--serve DIR` | static files at `/` | none, so `/` 404s |
+| `--serve DIR` | the browser client: `index.html`, `pkg/`, `assets/` | none, so `/` 404s |
 | `--span MS` | milliseconds per generation | 250 |
 | `--fresh` | ignore every existing save | off |
 | `--max-rooms N` | how many rooms players may make | 32 |

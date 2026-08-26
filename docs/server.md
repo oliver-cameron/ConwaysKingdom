@@ -8,6 +8,14 @@ cargo run --no-default-features --features server --bin server -- --serve .
 
 `Server::handle` takes a decoded `ClientMessage` and returns the replies, so whatever carries the bytes is somebody else's problem.
 
+## What is served
+
+`--serve DIR` publishes the browser client, and it publishes **three things and nothing else**: `index.html`, `pkg/` and `assets/`.
+
+That is an allowlist and it has to be. The documentation tells people to run `--serve .`, and `.` is the repository — so serving the directory wholesale published `src/`, `Cargo.toml` and, worse, `.git/`, which carries every version of everything ever committed. A denylist of `/src` and a handful of other names would be whack-a-mole against a directory the server does not control; naming what the client needs leaves nothing else to reach.
+
+Each of the client's own screens is answered with the page, so a refresh on `/play` or `/room/arena` comes back with the client rather than a 404 — see [game.md](game.md#where-you-are-in-the-address-bar). Those paths are listed by name for the same reason: an unknown path is a **404 and not a copy of the page**, so a mistyped address says so instead of silently opening the game.
+
 ## Rooms
 
 One `Server` is one **room**: one world, one player table, one tick. A process runs several side by side in a `server::rooms::Rooms`, so "the server" in the sense of the address you connect to is the `Rooms`, and a `Server` is one of the worlds behind it.

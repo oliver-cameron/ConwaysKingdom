@@ -27,7 +27,7 @@ use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::net::codec::{decode_client, encode_server};
 use crate::net::{ClientMessage, RoomId, ServerMessage};
@@ -443,7 +443,7 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     let state = AppState { to_sim, broadcast: broadcast_tx };
     let mut app = Router::new().route("/ws", get(upgrade));
     if let Some(dir) = &config.static_dir {
-        app = app.fallback_service(ServeDir::new(dir));
+        app = serve_client(app, dir);
     }
     let app = app.with_state(state);
 
@@ -546,6 +546,38 @@ fn outward_address(port: u16) -> Option<SocketAddr> {
 
 async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(|socket| connection(socket, state))
+}
+
+/// What the browser client is served from, and nothing else.
+///
+/// **An allowlist, not a denylist.** `--serve .` is what the documentation
+/// tells people to run, and `.` is the repository — so serving the directory
+/// wholesale published `src/`, `Cargo.toml` and, worse, `.git/`, which carries
+/// every version of everything ever committed. Blocking `/src` and a list of
+/// other names would be whack-a-mole against a directory nobody controls; this
+/// says what the client needs and there is nothing else to reach.
+///
+/// Three things: the page, the wasm module `wasm-pack` writes, and the art.
+///
+/// Every other path a *client route* can be is answered with the page, because
+/// the address bar carries the screen — see [`crate::client::route`] — and a
+/// refresh on `/play` has to come back with something. That is an allowlist
+/// too: an unknown path is a 404 rather than the page, so a mistyped URL says
+/// so instead of silently opening the game.
+fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState> {
+    let page = dir.join("index.html");
+    let index = || ServeFile::new(page.clone());
+
+    app.route_service("/", index())
+        // The client's own screens. Listed rather than matched by a catch-all,
+        // so that `/src/main.rs` is a 404 and not a copy of the page.
+        .route_service("/home", index())
+        .route_service("/play", index())
+        .route_service("/room/{id}", index())
+        .route_service("/lobby/{id}", index())
+        .route_service("/watch/{id}", index())
+        .nest_service("/pkg", ServeDir::new(dir.join("pkg")))
+        .nest_service("/assets", ServeDir::new(dir.join("assets")))
 }
 
 async fn connection(socket: WebSocket, state: AppState) {

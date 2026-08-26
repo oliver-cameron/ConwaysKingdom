@@ -6,12 +6,17 @@
 //! are rendering problems and all three are fixed by the same thing: the
 //! address bar saying where you are.
 //!
-//! Query parameters rather than paths, and that is forced rather than
-//! preferred. The client is served as one file from whatever directory
-//! `--serve` was pointed at; a path like `/play` would be a request the server
-//! has no route for and would 404 on a refresh. A parameter is the same
-//! document either way, which is what a client with no router can actually
-//! honour.
+//! **Paths, with parameters read as well.** A path is what people expect and
+//! what reads as an address rather than as machinery; the objection to it was
+//! that the client is one file served out of `--serve`, so `/play` would be a
+//! request with no route behind it and would 404 on a refresh. That is a fact
+//! about the server and the server was changed: `server::ws::serve_client`
+//! answers each of these paths with the page — by name, so an unknown path is
+//! still a 404 and not a copy of the client.
+//!
+//! Query parameters are still read, because `?room=` was the link this game
+//! had before it had any others and links do not stop existing when a scheme
+//! changes.
 //!
 //! Native has no address bar, so all of this is a no-op there — deliberately
 //! not `cfg`-gated at the call sites, because a client that has to remember
@@ -57,6 +62,10 @@ pub enum Route {
 
 impl Route {
     /// The query string this route is, without the leading `?`.
+    ///
+    /// Not what the client writes any more — it writes a path — but still what
+    /// a link made before paths existed says, and so still something to be
+    /// able to produce and compare against.
     pub fn query(&self) -> String {
         match self {
             Self::Home => format!("{SCREEN}=home"),
@@ -65,6 +74,43 @@ impl Route {
             Self::Lobby(id) => format!("{LOBBY}={id}"),
             Self::Watch(id) => format!("{WATCH}={id}"),
         }
+    }
+
+    /// The path this route is, for the address bar.
+    pub fn path(&self) -> String {
+        match self {
+            Self::Home => "/home".into(),
+            Self::Play => "/play".into(),
+            Self::Room(id) => format!("/room/{id}"),
+            Self::Lobby(id) => format!("/lobby/{id}"),
+            Self::Watch(id) => format!("/watch/{id}"),
+        }
+    }
+
+    /// What a path says, if it says anything.
+    pub fn from_path(path: &str) -> Option<Self> {
+        let mut parts = path.trim_matches('/').split('/');
+        let head = parts.next()?;
+        let tail = parts.next().map(decode).filter(|t| !t.is_empty());
+        match (head, tail) {
+            ("home", _) => Some(Self::Home),
+            ("play", _) => Some(Self::Play),
+            ("room", Some(id)) => Some(Self::Room(RoomId(id))),
+            ("lobby", Some(id)) => Some(Self::Lobby(RoomId(id))),
+            ("watch", Some(id)) => Some(Self::Watch(RoomId(id))),
+            _ => None,
+        }
+    }
+
+    /// Where a whole address points: the path if it says something, and the
+    /// query if it does not.
+    ///
+    /// The path wins, because it is the newer scheme and the one the client
+    /// writes. A query is read for the sake of links made before there were
+    /// paths — `?room=` in particular, which is the one this game has had
+    /// longest and the one most likely to be sitting in somebody's messages.
+    pub fn of(path: &str, query: &str) -> Option<Self> {
+        Self::from_path(path).or_else(|| Self::read(query))
     }
 
     /// What a query string says, if it says anything.
@@ -145,7 +191,7 @@ fn decode(raw: &str) -> String {
 pub fn show(route: &Route) {
     let Some(window) = web_sys::window() else { return };
     let Ok(history) = window.history() else { return };
-    let url = format!("?{}", route.query());
+    let url = route.path();
     // Failing is a nuisance and nothing more: some embeddings forbid touching
     // history, and the game plays perfectly well with a stale address.
     if history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url)).is_err() {
@@ -161,8 +207,9 @@ pub fn show(_route: &Route) {}
 mod tests {
     use super::*;
 
-    /// Every route survives being written down and read back, which is the
-    /// whole of what an address has to do.
+    /// Every route survives being written down and read back — as a path,
+    /// which is what the client writes, and as a query, which is what older
+    /// links say. Both are the whole of what an address has to do.
     #[test]
     fn a_route_survives_the_address_bar() {
         for route in [
@@ -173,6 +220,10 @@ mod tests {
             Route::Lobby(RoomId::from("cup")),
             Route::Watch(RoomId::from("lobby")),
         ] {
+            let path = route.path();
+            assert_eq!(Route::from_path(&path), Some(route.clone()), "{path}");
+            assert_eq!(Route::of(&path, ""), Some(route.clone()), "{path}");
+
             let query = route.query();
             assert_eq!(Route::read(&query), Some(route.clone()), "{query}");
             // And with the `?` a browser hands over, which `location.search`
@@ -220,6 +271,34 @@ mod tests {
         // Watching is a different message, so it is not something to join.
         assert_eq!(Route::Watch(cup).to_join(), None);
         assert_eq!(Route::Home.to_join(), None);
+    }
+
+    /// A path that names no screen is nothing, so a mistyped address opens
+    /// where the client always did rather than somewhere a stray word
+    /// suggested. The server 404s these before the client ever sees them; this
+    /// is the second half of the same rule.
+    #[test]
+    fn a_path_that_names_no_screen_routes_nowhere() {
+        for path in ["/", "", "/src/main.rs", "/.git/config", "/room", "/room/", "/nonsense"] {
+            assert_eq!(Route::from_path(path), None, "{path:?}");
+        }
+    }
+
+    /// A path wins over a query, because it is what the client writes — but a
+    /// query is still read, so a `?room=` link made before paths existed
+    /// still goes where it always did.
+    #[test]
+    fn a_path_wins_and_an_old_link_still_works() {
+        assert_eq!(
+            Route::of("/play", "room=arena"),
+            Some(Route::Play),
+            "the path is what this client wrote down"
+        );
+        assert_eq!(
+            Route::of("/", "room=arena"),
+            Some(Route::Room(RoomId::from("arena"))),
+            "and a link from before paths still means what it meant"
+        );
     }
 
     /// A room id needs no encoding, so this is for the malformed link: left

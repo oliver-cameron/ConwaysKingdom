@@ -2701,7 +2701,7 @@ fn startup() -> Start {
     let name = crate::net::keep::name().unwrap_or_else(|| "web".into());
     // The address bar is where a browser client is told to go: a link into a
     // match, a link to watch one, or the page on its own.
-    match Route::read(&query_string()) {
+    match Route::of(&path_name(), &query_string()) {
         Some(Route::Watch(room)) => Start::Join { url, name, room: Some(room.0), watch: true },
         // A lobby and a room are one request: join it, and what comes back is
         // whichever screen the match's phase calls for.
@@ -2711,6 +2711,13 @@ fn startup() -> Start {
         Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play },
         _ => Start::Menu { address: url, page: menu::Page::Home },
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+/// The path the page was opened at, which is where the client is told to go.
+#[cfg(target_arch = "wasm32")]
+fn path_name() -> String {
+    web_sys::window().and_then(|w| w.location().pathname().ok()).unwrap_or_default()
 }
 
 #[cfg(target_arch = "wasm32")]

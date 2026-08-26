@@ -330,13 +330,15 @@ On the web, **each screen has its own address**, so a link means something more 
 
 | address | screen |
 |---|---|
-| `?screen=home` | your name and your record |
-| `?screen=play` | a server and what is on it |
-| `?room=ID` | in a world |
-| `?lobby=ID` | waiting in a match, before the whistle |
-| `?watch=ID` | watching a room without a seat in it |
+| `/home` | your name and your record |
+| `/play` | a server and what is on it |
+| `/room/ID` | in a world |
+| `/lobby/ID` | waiting in a match, before the whistle |
+| `/watch/ID` | watching a room without a seat in it |
 
-Query parameters rather than paths, which is forced rather than preferred: the client is one file served out of whatever `--serve` was pointed at, so `/play` would be a request the server has no route for and would 404 on a refresh.
+Paths, because that is what an address looks like. The objection to them was that the client is one file served out of `--serve`, so `/play` would be a request with nothing behind it and would 404 on a refresh — which is a fact about the server, and the server answers each of these paths with the page now. By name: an unknown path is still a 404, so `/src/main.rs` says no rather than quietly returning the client. See [server.md](server.md#what-is-served).
+
+`?room=`, `?lobby=`, `?watch=` and `?screen=` are still **read**, because `?room=` was the link this game had before it had any others and links do not stop existing when a scheme changes. The path wins where both say something.
 
 **A lobby and a room are one request read and two screens written.** Following either does the same thing — join that room — and what you get is whichever screen the phase calls for; what differs is what the address says while you are there, which is the point of having one per screen. It follows that a link can go stale: send somebody `?lobby=` and they open it after the whistle, and they are refused for being late rather than shown a lobby. That is the honest outcome, and the refusal says so.
 
