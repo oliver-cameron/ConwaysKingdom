@@ -22,6 +22,9 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Teams](#teams) | Designed | more than one player to a side |
 | [Rating](#rating) | Decided | an Elo-shaped number, and what it would have to survive |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Decided | decentralise discovery and identity; never a world |
+| [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
+| [Bots](#bots) | Decided | a player the server plays, and no protocol change |
+| [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
 | [The session comes out of the battle view](#the-session-comes-out-of-the-battle-view) | Designed | the one place the architecture does not hold |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
 | [Auto-mining](#auto-mining) | Built | |
@@ -84,7 +87,7 @@ The one thing to be careful of: **do not oust somebody who has just arrived.** A
 
 ## Teams
 
-**Built for matches** — see [game.md](game.md#sides) and [server.md](server.md#sides). Solo or sides is chosen on the creation form; how many sides is chosen there too; who is on which, and what each is called, is settled in the lobby.
+**Built for matches** — see [game.md](game.md#teams) and [server.md](server.md#sides). Solo or sides is chosen on the creation form; how many sides is chosen there too; who is on which, and what each is called, is settled in the lobby.
 
 It turned out as small as the design said, and for the reason it gave: the cell already carries an owner and the rules already read it, so what a side changes is not what a cell *is* but **what counts as yours**. That is `net::reach`, which is `influence` with one comparison widened from `==` to `Sides::allied`, and `net::value_delta`, where an ally's cell reclaims at your own rate rather than a raid's. `sim` learned nothing, exactly as matches did not: the `territory` rule still contests per player, so two allies keep a border between their ground and simply cannot be hurt by it.
 
@@ -125,6 +128,8 @@ Two more, both real:
 **Elo is for two players.** A match here is up to fifteen, and multiplayer Elo is a genuine choice rather than a formula: treat the result as every pairwise outcome (everybody you beat, everybody who beat you), or score against the field average, or rate only the winner. The pairwise reading is the usual answer and is what a free-for-all wants, and it falls out naturally once [teams](#teams) exist, because a team result is one pairwise outcome per opposing pair.
 
 The order that makes sense is identity, then teams, then this. Doing it before identity means building a rating on a number that gets handed to somebody else next week — and the identity in question is the keypair in [many servers](#many-servers-and-what-must-not-be-decentralised), which is the same missing piece seen from a different side.
+
+[A leaderboard](#a-leaderboard) is the other half of this and waits on exactly the same thing; the tiers, the placement matches and the decay are written up there rather than here, because they are what a rating is *shown* as and this is what it is.
 
 ## Many servers, and what must not be decentralised
 
@@ -169,6 +174,58 @@ The order that makes sense is identity, then multi-homing, then a tracker, and g
 **Rating stays server-side and per-server**, at least at first. A rating that travels between servers needs signed results, which needs servers to trust each other's arithmetic, which is a much larger thing than a keypair — and a per-server ladder is a perfectly good ladder. See [rating](#rating).
 
 **Anti-cheat does not get easier.** The server is authoritative over its own world and always was; nothing here weakens that, and nothing here helps with a server that lies about its own results. That is the wall a cross-server rating runs into and is why it is not in this entry.
+
+## Better interfaces
+
+**Decided.** The menu has had two passes and everything else has had none, so the client now reads as two different products depending on which screen you are on.
+
+What is actually wrong, in the order it bites:
+
+**The HUD is a desktop panel.** It covers a third of a phone screen, and its hint lines name a left button, a right button, WASD and escape — none of which a phone has. It also has no hierarchy: every line is the same weight, so nothing on it says what matters, where the menu now has one accent per column and says exactly that.
+
+**There is no help a phone can open.** `?` shows the key list, and a phone has no `?` and nothing to do with a list of keys once it has one. What a touch client needs is not that list; it is the four or five gestures, shown once, dismissible.
+
+**The hotbar is reachable and small.** It was sized against a mouse. Ten stamps and four tools on a phone want either bigger targets or fewer of them on screen at once.
+
+**Numbers still shuffle.** [Type, and the numbers that jitter](#type-and-the-numbers-that-jitter) is the entry for that, and the record panel is the only place it has been fixed — everything else still sets a changing figure in a proportional face.
+
+None of this is a rewrite. The pieces the menu needed already exist: `theme::Metrics` holds the sizes, `words` holds the strings, and `hue` holds the colours. What is missing is somebody applying them to the other four views.
+
+## Bots
+
+**Decided, and smaller than it sounds.** A player the server plays.
+
+The reason it is small is that **nothing about the protocol changes**. A bot is a `Player` with no connection: the server generates a `Stamped` action for it, pushes it into `pending`, and it goes out in the next `Step` like anybody else's. Every client already applies actions from players it has never heard from, because that is what a `Step` is. No new message, and no client work at all beyond the lobby saying which players are bots.
+
+Three things it does need.
+
+**A seat.** A bot occupies one of fifteen, and the cap is per room — so a match with four bots is a match four people cannot join. That is the right behaviour and it wants saying in the lobby, next to the count.
+
+**Somewhere to run.** In `Server::step`, before the world steps, on whatever cadence its difficulty says. It must not run on the *client*, and that is not a policy preference: a client-run bot would need a connection and could be edited into a cheat, and the server is the only thing that knows the whole world anyway — a client holds the chunks it subscribed to.
+
+**Something to play.** This is the interesting part and the reason it is worth doing. `examples/balance.rs` already measured what the economy rewards: a blinker pays, a glider bleeds, a sprawl bleeds badly. So a competent bot is not a search — it is a small book of shapes and a rule about where to put them. Compact oscillators inside its own ground to earn, life at the frontier where territory is contested, and ice on anything it wants to keep. Difficulty is then how often it acts and how well it chooses, which are two dials rather than an algorithm.
+
+What it runs into: **a bot that plays well makes a match unwinnable, and one that plays badly is a candidate for [the mercy rule](#the-mercy-rule)** — which would oust it, freeing its seat mid-match, which is either exactly right or very confusing and has not been played enough to say.
+
+Determinism is not a problem, which is worth stating because it looks like one. A bot's choices are made once, on the server, and reach every client as ordinary actions at a stated tick — so two clients never disagree about what it did, and a bot may use whatever randomness it likes without touching `sim::seed`.
+
+## A leaderboard
+
+**Decided.** Who is best on this server, and a screen that says so.
+
+It is the second half of [rating](#rating) and it waits on the same thing: a rating is a fact about a person, and until a person is a keypair rather than a seat there is nothing to key a table by — see [many servers](#many-servers-and-what-must-not-be-decentralised). Building it before that means a table of numbers that get handed to somebody else next week.
+
+Once there is an identity, the work is ordinary: a table on the server keyed by it, a `ClientMessage::Leaderboard` answerable without a seat the way `Rooms` is, and a screen. It is the **first thing the server would keep that is not a world**, which is the part worth thinking about rather than the ranking — a save format, a place for it to live, and an answer for what happens when it cannot be written.
+
+Three decisions taken from [MCSR Ranked](inspiration.md#the-dashboard-and-a-rating) and worth taking together:
+
+**Named tiers over a bare number.** Six ranks at thresholds, so a rating is something to reach rather than a figure to read. A raw number tells a player nothing about where they stand.
+
+**Placement matches before a rating is shown**, so one bad first game does not define somebody.
+
+**Decay only at the top, and only on inactivity.** It keeps the top of a table honest without punishing anybody who plays occasionally.
+
+What it runs into is that **a leaderboard is a reason to cheat**, and this game has never had one before. Per server it is manageable: the server is authoritative over its own world, so the only lever is who you play and how often. Across servers it is not — a server can say whatever it likes about its own results — which is why [rating](#rating) stays per-server until there is a reason to solve that properly.
 
 ## The session comes out of the battle view
 
