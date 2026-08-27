@@ -262,6 +262,15 @@ struct Running<A> {
     ctrl: bool,
     /// What the cursor was last set to, so it is only set again on a change.
     cursor: winit::window::CursorIcon,
+    /// How many frames in a row have been acquired and then thrown away.
+    ///
+    /// Three of [`FrameAcquire`]'s four arms returned in silence, and a client
+    /// that builds a frame and never presents one looks exactly like a client
+    /// that has stopped: the loop turns, `update` runs, the surface is
+    /// measured and logged, and nothing reaches the screen. Counted rather
+    /// than logged each time, so the console says "every frame since the
+    /// first" instead of saying it sixty times a second.
+    dropped: u32,
 }
 
 struct Harness<A> {
@@ -298,6 +307,7 @@ impl<A: App> Harness<A> {
             frames: Vec::new(),
             ctrl: false,
             cursor: winit::window::CursorIcon::Default,
+            dropped: 0,
         });
         if let Some(r) = &self.running {
             r.window.request_redraw();
@@ -519,6 +529,10 @@ impl<A: App> ApplicationHandler for Harness<A> {
 
                 match Frame::begin(&r.gpu) {
                     FrameAcquire::Ready(frame) => {
+                        if r.dropped > 0 {
+                            log::warn!("presenting again after {} dropped frame(s)", r.dropped);
+                            r.dropped = 0;
+                        }
                         let calls = r.app.draw_calls();
                         let app = &r.app;
                         let gpu = &r.gpu;
@@ -526,8 +540,13 @@ impl<A: App> ApplicationHandler for Harness<A> {
                             app.overlay(gpu, encoder, pass);
                         });
                     }
-                    FrameAcquire::Skip => {}
+                    FrameAcquire::Skip => {
+                        r.dropped += 1;
+                        dropped_frame(r.dropped, "timed out, occluded, or refused", r.gpu.size);
+                    }
                     FrameAcquire::Reconfigure => {
+                        r.dropped += 1;
+                        dropped_frame(r.dropped, "outdated; reconfiguring", r.gpu.size);
                         let (w, h) = r.gpu.size;
                         r.gpu.resize(w, h);
                     }
@@ -539,6 +558,18 @@ impl<A: App> ApplicationHandler for Harness<A> {
             }
             _ => {}
         }
+    }
+}
+
+/// Say that a frame was acquired and thrown away.
+///
+/// At the first one and then rarely: a surface that refuses every frame would
+/// otherwise fill the console with one line per frame, which is the same
+/// problem as saying nothing.
+fn dropped_frame(count: u32, why: &str, size: (u32, u32)) {
+    const THEN_EVERY: u32 = 240;
+    if count == 1 || count.is_multiple_of(THEN_EVERY) {
+        log::warn!("frame {why} ({count} in a row); surface {size:?}");
     }
 }
 

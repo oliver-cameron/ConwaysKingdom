@@ -478,7 +478,9 @@ impl Views {
             Change::Free(id) => renderer.free_texture(&id),
         });
 
-        Output { primitives: self.ctx.tessellate(full.shapes, pixels_per_point), pixels_per_point }
+        let primitives = self.ctx.tessellate(full.shapes, pixels_per_point);
+        report_geometry(&self.ctx, gpu, pixels_per_point, &primitives);
+        Output { primitives, pixels_per_point }
     }
 
     /// Record the interface into the pass the world was just drawn into.
@@ -571,4 +573,48 @@ mod tests {
             "the union swallowed open world, which is the bug this replaced"
         );
     }
+}
+
+/// What egui was handed, and what came back — said once, and again whenever it
+/// changes.
+///
+/// A frame can be built, tessellated, uploaded and still reach nobody.
+/// `egui-wgpu` drops any primitive whose clip rect, multiplied by
+/// `pixels_per_point` and clamped into `size_in_pixels`, comes out zero-sized
+/// — see `ScissorRect::new` in its `renderer.rs` — and it does that without a
+/// word. So an interface that is entirely scissored away is indistinguishable
+/// from one that was never drawn, and neither the console nor a panic hook has
+/// anything to say about it.
+///
+/// These are the numbers that decide it: the surface in physical pixels, the
+/// points-per-pixel the two ends of the pair were built with, the rectangle
+/// egui laid out in, and whether anything came out the far side. On a change
+/// only — they change when the window does and not otherwise, and a line a
+/// frame is a line nobody reads.
+fn report_geometry(
+    ctx: &egui::Context,
+    gpu: &GpuState,
+    pixels_per_point: f32,
+    primitives: &[egui::ClippedPrimitive],
+) {
+    use std::cell::Cell;
+    thread_local! {
+        static LAST: Cell<Option<(u32, u32, u32, bool)>> = const { Cell::new(None) };
+    }
+    // The factor is a float and this is an identity, so it is compared as
+    // thousandths rather than by an equality nobody should be writing on a
+    // `f32`.
+    let now = (gpu.size.0, gpu.size.1, (pixels_per_point * 1000.0) as u32, primitives.is_empty());
+    if LAST.with(|last| last.replace(Some(now))) == Some(now) {
+        return;
+    }
+    log::info!(
+        "egui: surface {:?} at {pixels_per_point} ppp, screen {:?} points, content {:?}, \
+         {} primitive(s), first clip {:?}",
+        gpu.size,
+        (gpu.size.0 as f32 / pixels_per_point, gpu.size.1 as f32 / pixels_per_point),
+        ctx.content_rect(),
+        primitives.len(),
+        primitives.first().map(|p| p.clip_rect),
+    );
 }
