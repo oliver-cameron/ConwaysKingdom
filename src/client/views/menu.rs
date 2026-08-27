@@ -1626,6 +1626,63 @@ mod tests {
         assert!(rect.height() >= 800.0, "and the top or the bottom: {rect:?}");
     }
 
+    /// **The home screen with a record on it.**
+    ///
+    /// The chart, the form strip and the tiles are only drawn when there is
+    /// something to draw — so a client that has never played never runs any of
+    /// it, and a client that has runs all of it on every frame of the menu.
+    /// That is a real difference between two machines with the same build, and
+    /// exactly the shape of a fault that follows the machine rather than the
+    /// commit.
+    #[test]
+    fn the_home_screen_draws_a_record_it_actually_has() {
+        use crate::client::record::{Game, Outcome, Summary};
+        use crate::sim::WorldKind;
+
+        let games: Vec<Game> = (0..40)
+            .map(|i| Game {
+                room: format!("room-{i}"),
+                world: if i % 2 == 0 {
+                    WorldKind::Infinite
+                } else {
+                    WorldKind::Toroidal { rows: 6, cols: 8 }
+                },
+                generations: i as u64 * 137,
+                // Including nought, which is the case the chart has to give a
+                // stub to rather than scale away.
+                best: if i % 7 == 0 { 0 } else { i as u32 * 31 },
+                outcome: match i % 3 {
+                    0 => Outcome::Won,
+                    1 => Outcome::Lost,
+                    _ => Outcome::Played,
+                },
+            })
+            .collect();
+
+        for (w, h) in [(1200.0, 800.0), (420.0, 700.0), (64.0, 64.0)] {
+            let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+            menu.record = Summary::of(&games);
+            menu.games = games.clone();
+            assert!(menu.record.any(), "the record must be non-empty to test it");
+
+            let ctx = egui::Context::default();
+            let theme = Theme::default();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
+                time: Some(0.0),
+                focused: true,
+                ..Default::default()
+            });
+            let (_, rect) = show(&ctx, &theme, &mut menu, at(0.0, false));
+            let mut out = ctx.end_pass();
+            out.textures_delta.clear();
+            assert!(
+                rect.is_some_and(|r| r.width() > 1.0),
+                "the home screen drew nothing at {w}x{h} with a record on it"
+            );
+        }
+    }
+
     /// **A canvas has no size on its first frames**, and a browser's is the
     /// worst case: winit's `inner_size` starts at zero, so the surface is
     /// configured 1x1 before any resize observation lands — see
