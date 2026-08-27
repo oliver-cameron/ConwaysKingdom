@@ -263,7 +263,16 @@
       // the second is the module refusing to instantiate or run.
       say.textContent = "Starting";
       bar.classList.add("unknown");
-      await init({ module_or_path });
+      // **The bytes, not `{ module_or_path: bytes }`.** Both forms work with a
+      // current wasm-bindgen; only this one works with an older module. `pkg/`
+      // is generated and gitignored, so a working copy keeps whatever
+      // wasm-pack last wrote there while this page moves on — and a page that
+      // calls the newer form against an older module fails in a way that looks
+      // like everything else on this screen.
+      //
+      // A `Uint8Array` is not a plain object, so the newer init passes it
+      // straight through as the module rather than trying to destructure it.
+      await init(module_or_path);
       loading.classList.add("done");
       // Removed rather than hidden, so nothing of it is left over the canvas
       // to swallow a press.
