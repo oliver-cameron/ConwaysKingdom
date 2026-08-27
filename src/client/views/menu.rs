@@ -451,34 +451,57 @@ pub fn show(
         // screen, and a fade that does not finish is a screen with nothing on
         // it — which is the shape of the fault being chased.
         .fade_in(false)
+        // Nothing here is a floating window, and `Area::new` makes one movable
+        // by default. `fixed_pos` re-pins it every frame so a drag never went
+        // anywhere visible, which is not the same as it not happening: the
+        // whole screen was answering a drag with a move nobody asked for.
+        .movable(false)
         .show(ctx, |ui| {
+            // **An area does not bound its content, so the bounds are stated
+            // here.** `Area` builds its `Ui` from the size it was *measured*
+            // at on the previous frame — and on the first frame there is no
+            // previous one, so it uses egui's default area size and runs a
+            // sizing pass. A `ScrollArea` works out its viewport from the room
+            // it is given, so inside an area it is working from a rectangle
+            // that has nothing to do with the window, and
+            // `auto_shrink([false, false])` then tells it to fill exactly
+            // that. The screen is what this panel is, so the screen is what it
+            // is given, before anything inside it asks.
+            ui.set_max_size(screen.size());
             egui::Frame::new().fill(theme.palette.surface).show(ui, |ui| {
                 ui.set_min_size(screen.size());
+                ui.set_max_size(screen.size());
                 // Scrolled, because filling the screen does not make the
                 // screen taller: a server with a dozen rooms and the form
                 // beside them still runs off the bottom of a laptop, and
                 // content that cannot be reached is worse than content that
                 // looks cramped.
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        // A column inside the window rather than the window
-                        // itself. A room list stretched across two thousand
-                        // points is a list nobody can follow from a name to
-                        // the count beside it, and prose that wide is
-                        // unreadable — the screen is not cramped, so the
-                        // content need not sprawl to prove it.
-                        ui.add_space(m.margin * 2.0);
-                        ui.allocate_ui(egui::vec2(width, screen.height()), |ui| {
-                            ui.set_width(width);
-                            ui.spacing_mut().item_spacing.y = m.item_spacing;
-                            match menu.page {
-                                Page::Home => chose = home(ui, theme, menu, at),
-                                Page::Play => chose = play(ui, theme, menu, at),
-                            }
+                // Told how tall rather than left to work it out: a scroll
+                // area with no viewport it can trust is one that clips its
+                // content against a rectangle it invented.
+                egui::ScrollArea::vertical()
+                    .max_height(screen.height())
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            // A column inside the window rather than the window
+                            // itself. A room list stretched across two thousand
+                            // points is a list nobody can follow from a name to
+                            // the count beside it, and prose that wide is
+                            // unreadable — the screen is not cramped, so the
+                            // content need not sprawl to prove it.
+                            ui.add_space(m.margin * 2.0);
+                            ui.allocate_ui(egui::vec2(width, screen.height()), |ui| {
+                                ui.set_width(width);
+                                ui.spacing_mut().item_spacing.y = m.item_spacing;
+                                match menu.page {
+                                    Page::Home => chose = home(ui, theme, menu, at),
+                                    Page::Play => chose = play(ui, theme, menu, at),
+                                }
+                            });
+                            ui.add_space(m.margin * 2.0);
                         });
-                        ui.add_space(m.margin * 2.0);
                     });
-                });
             });
         });
 
