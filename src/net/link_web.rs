@@ -142,3 +142,19 @@ impl Link {
         self.shared.borrow().closed
     }
 }
+
+/// Closing the socket, which dropping it does not do.
+///
+/// Dropping a `Closure` detaches the handler it was attached with, so a
+/// dropped `Link` stops *listening* straight away — and the connection itself
+/// stays open until the browser gets round to collecting the `WebSocket`.
+/// Until it does, the server is holding a connection that will never say
+/// another word, and the client that walked away from it has no way to say so.
+///
+/// Native needs none of this: its `Link` owns the sending half of a channel,
+/// and the socket thread returns the moment that half is dropped.
+impl Drop for Link {
+    fn drop(&mut self) {
+        let _ = self.socket.close();
+    }
+}

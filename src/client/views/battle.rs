@@ -1609,6 +1609,54 @@ impl BattleApp {
         }
     }
 
+    /// Leave whatever server this client is on, and start a game of one.
+    ///
+    /// **Playing alone has to mean alone**, and it meant "the same screen with
+    /// the menu gone". The reasoning was that `init` builds and grants a local
+    /// world whether or not anyone connects, so there was nothing left to do —
+    /// true on the first press and false on every press after a room, because
+    /// a `Welcome` replaces that world with the server's.
+    ///
+    /// So a client that had been anywhere got the room's world back, at the
+    /// server's tick, with the player number and the value the server issued,
+    /// a HUD that said connected, and — worst of it — a board that did not
+    /// move. `update` steps the local world only when there is no link, since
+    /// a connected client takes its generations from the server and must never
+    /// invent its own; the link was still open, so nothing stepped. A frozen
+    /// board in a world you cannot build in is not a game.
+    ///
+    /// The seat itself was already given up on the way here: `back_to_menu`
+    /// sends `Leave`. This is the connection going, and the world with it.
+    fn play_alone(&mut self) {
+        log::info!("playing alone");
+        self.file_game();
+        // Dropping it closes it — see the `Drop` on the browser's `Link`, and
+        // the socket thread that ends with its channel on native.
+        self.link = None;
+        // Or the room list this client is no longer waiting for times out and
+        // drags it back to the menu, four seconds into a game of one, to say
+        // that a server it has stopped talking to did not answer.
+        self.asked_at = None;
+        self.me = None;
+        self.room = None;
+        self.room_name = None;
+        self.lobby = None;
+        self.standing.clear();
+        self.subscribed.clear();
+        self.watching = false;
+        // A different world is a different argument about it.
+        self.geiger.reset();
+        // What the server had issued belonged to the seat that was given up.
+        self.value = Player::STARTING_VALUE;
+        let (world, home) = solo_world();
+        self.world = world;
+        self.camera.centre = home;
+        // The chunk store still holds the room's world, and a dirty camera is
+        // what makes `update` sync it against this one.
+        self.camera.dirty = true;
+        self.screen = Screen::Playing;
+    }
+
     /// Say where the client is, in the address bar.
     ///
     /// Called wherever the screen or the room changes rather than every frame:
@@ -1688,13 +1736,7 @@ impl BattleApp {
     fn chose(&mut self, chose: menu::Chose) {
         match chose {
             menu::Chose::Nothing => {}
-            // The local world is already built and already granted -- `init`
-            // does that whether or not anyone connects -- so this is a change
-            // of screen and nothing else.
-            menu::Chose::Offline => {
-                log::info!("playing alone");
-                self.screen = Screen::Playing;
-            }
+            menu::Chose::Offline => self.play_alone(),
             // The list refreshes itself; this is for somebody who has just
             // made a room elsewhere and does not want to wait out the
             // interval. Asking again is one small message.
@@ -1887,19 +1929,7 @@ impl App for BattleApp {
         // all and looks broken. A socket object exists long before it
         // connects, and may never connect, so its mere existence is no reason
         // to blank the view. `Welcome` is what replaces this.
-        let mut world = chosen_world().build();
-        if crate::net::too_cramped_for_grants(&world) {
-            log::warn!("this world is too small for every player to get a square of their own");
-        }
-        // Placing is confined to a player's own territory, so an offline game
-        // needs the grant a server would have made. Without it there is no
-        // opening move: nothing is owned, so nothing may be placed, so nothing
-        // ever comes to own anything.
-        crate::net::grant(&mut world, PlayerId(1));
-        // And look at it. Where a grant lands depends on the shape of the
-        // world, so this is read back rather than assumed -- the same reason
-        // `Welcome` carries the spawn for a connected client.
-        let home = middle_of(crate::net::spawn_for(PlayerId(1), &world));
+        let (world, home) = solo_world();
         let mut chunks = ChunkStore::new(&gpu.device);
         let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
@@ -2968,6 +2998,27 @@ mod tests {
         assert_eq!(pinch_span(&one), None);
         assert_eq!(pinch_span(&[]), None);
     }
+}
+
+/// A world of one: granted, and where the camera should be pointing at it.
+///
+/// Shared by [`App::init`] and by pressing play alone, because the two have to
+/// produce the same thing and did not. See [`BattleApp::play_alone`].
+fn solo_world() -> (World, (f32, f32)) {
+    let mut world = chosen_world().build();
+    if crate::net::too_cramped_for_grants(&world) {
+        log::warn!("this world is too small for every player to get a square of their own");
+    }
+    // Placing is confined to a player's own territory, so an offline game
+    // needs the grant a server would have made. Without it there is no
+    // opening move: nothing is owned, so nothing may be placed, so nothing
+    // ever comes to own anything.
+    crate::net::grant(&mut world, PlayerId(1));
+    // And look at it. Where a grant lands depends on the shape of the world,
+    // so this is read back rather than assumed -- the same reason `Welcome`
+    // carries the spawn for a connected client.
+    let home = middle_of(crate::net::spawn_for(PlayerId(1), &world));
+    (world, home)
 }
 
 /// The middle of a granted patch, as the camera wants it: (x, y), which is
