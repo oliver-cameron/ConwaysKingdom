@@ -658,6 +658,37 @@ fn canary(ctx: &egui::Context, gpu: &GpuState, pixels_per_point: f32) {
         egui::FontId::monospace(11.0),
         egui::Color32::BLACK,
     );
+
+    // **One square per layer order, because the bar above only proves that a
+    // painter reaches the glass.** Every panel in this client is an `Area` or
+    // a `Window`, which is a different path: egui can render an area invisible
+    // of its own accord — a sizing pass does it deliberately, and an
+    // unfinished fade does it by arithmetic — and it does none of that to a
+    // layer painted directly. So three areas, identical but for their order,
+    // with the fade off so that one variable is the only variable.
+    //
+    // Left to right: background, middle, foreground. All three and areas draw
+    // at every order, so a screen that does not is about its own content. Only
+    // the right two and `Order::Background` is the fault, which is where the
+    // menu used to be and no other panel is. None of them and areas do not
+    // draw at all, whatever a bare painter manages.
+    for (i, order) in [egui::Order::Background, egui::Order::Middle, egui::Order::Foreground]
+        .into_iter()
+        .enumerate()
+    {
+        let at = rect.left_bottom() + egui::vec2(i as f32 * 30.0, 6.0);
+        egui::Area::new(egui::Id::new(("canary", i)))
+            .order(order)
+            .fixed_pos(at)
+            .fade_in(false)
+            .movable(false)
+            .interactable(false)
+            .show(ctx, |ui| {
+                let (square, _) =
+                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                ui.painter().rect_filled(square, 0.0, egui::Color32::from_rgb(255, 0, 170));
+            });
+    }
 }
 
 /// Whether this client was asked for the canary. Read once: the client

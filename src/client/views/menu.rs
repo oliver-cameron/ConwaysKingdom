@@ -434,9 +434,23 @@ pub fn show(
     // [game.md](../../../docs/game.md#the-menu) has said the menu has the
     // screen to itself since it stopped being a corner panel; this is that
     // sentence being true.
+    //
+    // **Not at `Order::Background`, which it used to be and which bought
+    // nothing.** There is nothing behind the menu to be behind: the world is
+    // not drawn on this screen at all — `BattleApp::showing_world` is false
+    // for `Screen::Menu`, so `draw_calls` returns an empty list and the frame
+    // is a clear and this panel. Background was the one attribute separating
+    // the single panel that has been reported blank from the several that are
+    // not: the HUD is a `Window`, and the hotbar, the clock, the lobby and the
+    // stamp library are all `Area`s at the default `Order::Middle`. An
+    // attribute that is unique to the thing that fails, and that nothing
+    // depends on, does not get to stay.
     let area = egui::Area::new("menu".into())
         .fixed_pos(screen.min)
-        .order(egui::Order::Background)
+        // A fade is for something arriving over something else. This is the
+        // screen, and a fade that does not finish is a screen with nothing on
+        // it — which is the shape of the fault being chased.
+        .fade_in(false)
         .show(ctx, |ui| {
             egui::Frame::new().fill(theme.palette.surface).show(ui, |ui| {
                 ui.set_min_size(screen.size());
