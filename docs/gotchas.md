@@ -10,6 +10,14 @@ egui hands over a `TexturesDelta`, and dropping one that still holds deltas pani
 
 *Also:* apply textures when they are **produced**, not when they are drawn. A frame is not always drawn.
 
+## A relative import resolves against the path the page was served at
+
+Every screen has a path now, and each is answered with the same `index.html`. The page imported its module as `./pkg/conwayskingdom.js`, which at `/` means `/pkg/…` and at `/room/arena` means **`/room/pkg/…`** — a 404, so the module never loads and the page is blank.
+
+*Symptom:* it works until you reload, and then it does not. In-app movement is `history.replaceState`, which changes the address and fetches nothing, so the wrong base URL is never exercised while you are playing. A refresh is the first time the browser actually loads the document from that path.
+
+Absolute — `/pkg/…` — because the client is mounted at the root. `<base href="/">` would do the same job and would also silently retarget every other relative URL on the page, which is a wider promise than the one being made.
+
 ## A finger is not a pointer unless somebody says so
 
 `Views` translated winit's mouse events into `egui::RawInput` by hand and never translated `WindowEvent::Touch` — so on a touchscreen egui received **no press at all**, and every button in the interface was dead: the menu, the lobby, the hotbar, the library.

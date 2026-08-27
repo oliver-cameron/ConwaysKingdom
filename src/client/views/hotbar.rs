@@ -167,13 +167,17 @@ pub fn stamp_for_digit(digit: u32) -> Option<usize> {
 /// The keys that are not stamps, in the order they sit on the bar. Shift and a
 /// digit picks one of these.
 pub fn shifted(_library: &Library) -> Vec<Key> {
-    vec![
-        Key::Held(Held::Draw(0)),
-        Key::Held(Held::Draw(1)),
-        Key::Held(Held::Ice),
-        Key::Held(Held::Capture),
-        Key::More,
-    ]
+    // **Derived from [`DRAWN`], not listed beside it.** It was a hand-written
+    // list of two draw tools, and `DRAWN` has three — so shift and 3 reached
+    // ice, everything after it was out by one, and the turret had no key at
+    // all. The bar labels its squares 1, 2, 3… from its own layout, so the
+    // screen said one thing and the keyboard did another.
+    //
+    // A fourth tool now appears here by existing.
+    (0..DRAWN.len())
+        .map(|i| Key::Held(Held::Draw(i)))
+        .chain([Key::Held(Held::Ice), Key::Held(Held::Capture), Key::More])
+        .collect()
 }
 
 /// Which of those shift and this digit picks.
@@ -477,11 +481,11 @@ mod tests {
     fn the_tool_keys_never_move() {
         for n in [0, 1, ON_THE_BAR, ON_THE_BAR + 5] {
             let keys = shifted(&library(n));
-            assert_eq!(
-                &keys[..3],
-                &[Key::Held(Held::Draw(0)), Key::Held(Held::Draw(1)), Key::Held(Held::Ice),],
-                "{n} stamps"
-            );
+            let expected: Vec<Key> = (0..DRAWN.len())
+                .map(|i| Key::Held(Held::Draw(i)))
+                .chain([Key::Held(Held::Ice)])
+                .collect();
+            assert_eq!(&keys[..expected.len()], &expected[..], "{n} stamps");
         }
     }
 
@@ -513,12 +517,23 @@ mod tests {
     #[test]
     fn shift_picks_the_tools_in_the_order_they_sit() {
         let few = library(1);
-        assert_eq!(shifted_for_digit(1, &few), Some(Key::Held(Held::Draw(0))));
-        assert_eq!(shifted_for_digit(2, &few), Some(Key::Held(Held::Draw(1))));
-        assert_eq!(shifted_for_digit(3, &few), Some(Key::Held(Held::Ice)));
-        assert_eq!(shifted_for_digit(4, &few), Some(Key::Held(Held::Capture)));
-        assert_eq!(shifted_for_digit(5, &few), Some(Key::More));
-        assert_eq!(shifted_for_digit(6, &few), None);
+        // Every draw tool, in the order it sits on the bar. This used to stop
+        // at two while `DRAWN` held three: shift and 3 reached ice, everything
+        // after was out by one, and the turret had no key at all.
+        for (i, tool) in DRAWN.iter().enumerate() {
+            assert_eq!(
+                shifted_for_digit(i as u32 + 1, &few),
+                Some(Key::Held(Held::Draw(i))),
+                "shift and {} should pick {}",
+                i + 1,
+                tool.name
+            );
+        }
+        let after = DRAWN.len() as u32;
+        assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Held(Held::Ice)));
+        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::Held(Held::Capture)));
+        assert_eq!(shifted_for_digit(after + 3, &few), Some(Key::More));
+        assert_eq!(shifted_for_digit(after + 4, &few), None);
 
         // And not one of them moves when a pattern is captured.
         let many = library(ON_THE_BAR + 1);

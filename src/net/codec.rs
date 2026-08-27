@@ -99,6 +99,11 @@ mod tests {
                 teams: Some(2),
                 private: true,
             },
+            ClientMessage::Leave,
+            ClientMessage::Start,
+            ClientMessage::Watch { room: "r-abc234".into() },
+            ClientMessage::TakeSide { team: crate::net::TeamId(2) },
+            ClientMessage::NameSide { team: crate::net::TeamId(1), name: "Reds".into() },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();

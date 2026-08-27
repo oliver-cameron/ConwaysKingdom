@@ -825,6 +825,8 @@ impl Server {
             // Answered by `Rooms::handle`, which is the only thing that knows
             // who made a room and so the only thing that can judge this.
             ClientMessage::Start => Vec::new(),
+            // Answered by `Rooms::handle`, which owns the seat this gives up.
+            ClientMessage::Leave => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::TakeSide { team } => {

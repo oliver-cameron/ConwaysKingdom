@@ -1581,6 +1581,25 @@ impl BattleApp {
     /// as anyway.
     fn back_to_menu(&mut self) {
         self.file_game();
+        // **Give the seat up.** Going back used to keep it, on the reasoning
+        // that another `Join` would take its place — true of somebody who
+        // rejoins the same room, and false of everything else. The player
+        // stayed online, so the room went on counting them, and the rejoin
+        // token, which only returns you to a player who is *not* online, found
+        // them online and issued a new one. Leave and come back three times
+        // and a room with one person in it said three.
+        //
+        // The token is kept: this is the seat being vacated, not the player
+        // being forgotten, and coming back should still be coming back.
+        if let (Some(link), true) = (&self.link, self.me.is_some() || self.watching) {
+            link.send(ClientMessage::Leave);
+        }
+        self.me = None;
+        self.room = None;
+        self.room_name = None;
+        self.lobby = None;
+        self.standing.clear();
+        self.subscribed.clear();
         self.watching = false;
         let asking = self.link.is_some();
         self.show_menu(if asking { menu::Stage::Asking } else { menu::Stage::Idle });

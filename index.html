@@ -141,11 +141,18 @@
     <div id="say">Loading</div>
   </div>
   <script type="module">
-    // wasm-pack names its output after the crate, so this is pkg/<crate>.js —
+    // **Absolute, not relative.** Every screen has a path now — `/play`,
+    // `/room/ID`, `/lobby/ID` — and each is answered with this same page. A
+    // relative `./pkg/…` resolves against the path it was *served at*, so at
+    // `/room/arena` it asks for `/room/pkg/…`, which is a 404: the module
+    // never loads and the page is blank. From the root it happened to work,
+    // which is why it only showed up on a reload.
+    //
+    // wasm-pack names its output after the crate, so this is /pkg/<crate>.js —
     // `conwayskingdom`, per the `name` in Cargo.toml. Rename here if the crate
     // is ever renamed, or the browser gets the server's 404 page and refuses
     // it as "disallowed MIME type (text/html)".
-    import init from "./pkg/conwayskingdom.js";
+    import init from "/pkg/conwayskingdom.js";
 
     const loading = document.getElementById("loading");
     const bar = document.getElementById("bar");
@@ -158,7 +165,7 @@
     // to get it, which is a fair trade at this size — the compile is not the
     // part anybody is waiting on.
     async function load() {
-      const response = await fetch("./pkg/conwayskingdom_bg.wasm");
+      const response = await fetch("/pkg/conwayskingdom_bg.wasm");
       if (!response.ok) throw new Error(`${response.status} fetching the module`);
 
       const total = Number(response.headers.get("content-length")) || 0;

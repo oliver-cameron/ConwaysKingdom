@@ -630,6 +630,21 @@ pub enum ClientMessage {
     /// Answerable without a seat, like `Join`, and it names its own room for
     /// the same reason.
     Watch { room: RoomId },
+    /// Give up this seat, without closing the connection.
+    ///
+    /// **Leaving a world used to have no signal at all.** A client that went
+    /// back to the menu kept its seat, on the reasoning that the seat is held
+    /// until another `Join` takes its place — which is true of a client that
+    /// then rejoins the *same* room, and false of everything else. The player
+    /// stayed marked online, so the room went on counting them; and the
+    /// rejoin token, which only brings you back to a player who is *not*
+    /// online, found them online and issued a new player instead. Leave and
+    /// come back three times and a room with one person in it says three.
+    ///
+    /// Not the same as the socket closing, which already frees a seat. This is
+    /// for a client that is still connected and no longer playing: it wants to
+    /// keep listing rooms.
+    Leave,
     /// Take a side, or leave the one you are on.
     ///
     /// Only while a match is **gathering**. Changing sides mid-match would

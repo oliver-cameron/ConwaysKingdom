@@ -646,6 +646,12 @@ async fn connection(socket: WebSocket, state: AppState) {
                 match frame {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
+                            // The seat goes here too, or this task would go on
+                            // routing to one the simulation has already freed.
+                            if matches!(msg, ClientMessage::Leave) {
+                                me = None;
+                                watching = None;
+                            }
                             let _ = state.to_sim.send(ToSim::Message {
                                 from: Caller {
                                     connection: id,

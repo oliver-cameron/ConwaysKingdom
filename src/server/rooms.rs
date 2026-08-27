@@ -482,6 +482,16 @@ impl Rooms {
                 Err(reason) => vec![ServerMessage::NotStarted { reason }],
             };
         }
+        // Giving up a seat without closing the socket. Handled here because a
+        // seat is this map's business — a `Server` is told who left, it does
+        // not find out.
+        if let ClientMessage::Leave = msg {
+            if let Some(seat) = caller.seat.as_ref() {
+                log::info!("{:?} left room \"{}\"", seat.1, self.name_of(&seat.0));
+                self.leave(seat);
+            }
+            return Vec::new();
+        }
         let seat = caller.seat.as_ref();
         if let ClientMessage::Join { room, .. } = &msg {
             let asked = room.clone();
@@ -1636,6 +1646,62 @@ mod tests {
         let out = rooms.handle(&Caller::sitting(3, (id.clone(), *you)), ClientMessage::Start);
         let [ServerMessage::NotStarted { reason }] = &out[..] else { panic!("{out:?}") };
         assert!(reason.contains("console"), "{reason}");
+    }
+
+    /// **Leaving frees the seat, and the token still brings you back.**
+    ///
+    /// Going back to the menu used to send nothing at all, so the player
+    /// stayed online: the room went on counting them, and the rejoin token —
+    /// which only returns you to a player who is *not* online — found them
+    /// online and issued a new one instead. Leave and come back three times
+    /// and a room with one person in it said three.
+    #[test]
+    fn leaving_frees_the_seat_and_the_token_still_comes_back() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let hall = RoomId::from("hall");
+        let me = Caller::new(3);
+        let join = |token: Option<String>| ClientMessage::Join {
+            name: "alice".into(),
+            token,
+            room: Some(RoomId::from("hall")),
+        };
+
+        let out = rooms.handle(&me, join(None));
+        let [ServerMessage::Welcome { you, token, .. }] = &out[..] else { panic!("{out:?}") };
+        let (first, token) = (*you, token.clone());
+        assert_eq!(rooms.get(&hall).unwrap().players().filter(|p| p.online).count(), 1);
+
+        // Back to the menu, still connected.
+        rooms.handle(&Caller::sitting(3, (hall.clone(), first)), ClientMessage::Leave);
+        assert_eq!(
+            rooms.get(&hall).unwrap().players().filter(|p| p.online).count(),
+            0,
+            "the room still counts somebody who left"
+        );
+
+        // And back in, with the token: the same player, not a new one.
+        let out = rooms.handle(&me, join(Some(token)));
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        assert_eq!(*you, first, "coming back made a second player");
+        assert_eq!(
+            rooms.get(&hall).unwrap().players().filter(|p| p.online).count(),
+            1,
+            "one person, however many times they have come and gone"
+        );
+
+        // Three times over, which is what the listing was counting.
+        for _ in 0..3 {
+            rooms.handle(&Caller::sitting(3, (hall.clone(), first)), ClientMessage::Leave);
+            let mine = rooms
+                .get(&hall)
+                .unwrap()
+                .players()
+                .find(|p| p.id == first)
+                .map(|p| p.token.clone())
+                .unwrap();
+            rooms.handle(&me, join(Some(mine)));
+        }
+        assert_eq!(rooms.listing()[0].players, 1, "the room list counted the comings and goings");
     }
 
     /// Late to a match, and what happens now: the join is **refused** and the
