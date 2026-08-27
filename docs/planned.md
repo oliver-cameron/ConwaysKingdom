@@ -8,6 +8,7 @@
 | **Being built** | on a branch now |
 | **Designed** | worked out, including what it costs; not started |
 | **Decided** | a direction agreed and not costed. What used to be the roadmap |
+| **Open** | a fault that is known and not fixed, with what has been ruled out |
 
 The system as it actually stands is [the rest of docs/](README.md). Everything here is an intention. Where an idea was borrowed from somebody, [inspiration.md](inspiration.md) says whom and for what.
 
@@ -22,6 +23,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Teams](#teams) | Designed | more than one player to a side |
 | [Rating](#rating) | Decided | an Elo-shaped number, and what it would have to survive |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Decided | decentralise discovery and identity; never a world |
+| [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
@@ -174,6 +176,27 @@ The order that makes sense is identity, then multi-homing, then a tracker, and g
 **Rating stays server-side and per-server**, at least at first. A rating that travels between servers needs signed results, which needs servers to trust each other's arithmetic, which is a much larger thing than a keypair — and a per-server ladder is a perfectly good ladder. See [rating](#rating).
 
 **Anti-cheat does not get easier.** The server is authoritative over its own world and always was; nothing here weakens that, and nothing here helps with a server that lies about its own results. That is the wall a cross-server rating runs into and is why it is not in this entry.
+
+## The menu draws nothing on some machines
+
+**Open, and not reproduced.** On one laptop the client starts, the canvas is created and the background colour is painted — and no interface is ever drawn. On the web the loading panel stays up, which means `init()` has not resolved; on native the window is simply empty. Joining a room directly with `?room=main` works, and from there the back arrow reaches a menu that draws perfectly.
+
+What is known, all of it checked rather than assumed:
+
+- **It is not the code.** A fresh clone of the same commit is fine. Whatever differs is not in git.
+- **It is not the GPU.** The `?room=main` path renders the world — the shader, the sheet, the chunk texture — so the adapter works. `render::context` falls back to WebGL2 anyway.
+- **It is not the module path.** `/` and `/?room=main` are both at the root, where relative and absolute resolve identically, so it cannot be what separates them.
+- **It is not the toolchain**, by the owner's account, though `rust-version` is declared now so an old one says so by name.
+- **It is not a debug assertion in the offline simulation**, which is the one thing the menu runs that a joined client does not — the local world only steps when there is no link. Four thousand generations of a granted world with assertions live trips nothing.
+- **It is not a small or zero-size canvas, nor a populated record**, both of which now have tests.
+
+What is still worth suspecting, in order:
+
+**The pending GPU is collected only when something else happens.** `resumed` puts the window and an async `GpuState` aside; `take_pending` collects it on the next event. `about_to_wait` used to request a redraw *only if the app was already running*, so before that there was nothing scheduled and the loop slept under `ControlFlow::Wait` — whether it ever woke came down to an unrelated event arriving. That is fixed here: it polls until the GPU is in hand. It matches the symptom exactly and it is unconfirmed, because it cannot be reproduced on a machine where it does not happen.
+
+**The menu's own geometry.** It is the one panel that places and sizes itself by hand — an `Area` at `ctx.content_rect().min` sized by `set_min_size`, at `Order::Background` — where every panel that *does* appear for them lets egui place it. A panel at the wrong place is a panel that is not there, and that is precisely a background colour with nothing on it. Replacing it was attempted and abandoned: `CentralPanel::show` takes a `&mut Ui` rather than a `Context` in egui 0.36, and the client only has a `Context`; the intermediate arrangement clipped the form's action button behind a scroll region. **The next attempt should start by measuring `ctx.content_rect()` on the machine that fails**, because every hypothesis here turns on whether it is the screen.
+
+What would end it in one step is the browser console on a failing load, or the same for native with `RUST_LOG=debug`.
 
 ## Better interfaces
 

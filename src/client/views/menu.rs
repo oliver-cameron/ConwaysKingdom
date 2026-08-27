@@ -1895,6 +1895,13 @@ mod tests {
     /// is what differs between the two; asking is not.
     #[test]
     fn the_web_client_can_ask_its_server_and_so_can_a_native_one() {
+        // `Menu::new` reads the remembered address on native, so this asserts
+        // against the store as much as against the menu.
+        let _store = crate::net::keep::lock_store();
+        let empty = std::env::temp_dir().join(format!("ck-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        crate::net::keep::keep_in(empty.clone());
+
         for on_web in [true, false] {
             let mut menu = Menu::new("ws://origin:8080/ws".into(), on_web);
             menu.page = Page::Play;
@@ -2021,6 +2028,10 @@ mod tests {
     /// the machine that served it.
     #[test]
     fn the_web_menu_does_not_remember_an_address() {
+        // The store is one per process and these tests run in parallel: taken
+        // before anything touches it, or two tests point it at two
+        // directories and neither tests what it thinks.
+        let _store = crate::net::keep::lock_store();
         let dir = std::env::temp_dir().join(format!("ck-menu-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         crate::net::keep::keep_in(dir.clone());

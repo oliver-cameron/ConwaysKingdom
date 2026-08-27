@@ -44,6 +44,25 @@ pub fn keep_in(dir: std::path::PathBuf) {
     *OVERRIDE.lock().unwrap() = Some(dir);
 }
 
+/// Taken by every test that touches the store, so they do not race.
+///
+/// The store is **one per process** — a directory on native, `localStorage` in
+/// a browser — which is right for a client and wrong for a test suite that
+/// runs its tests in parallel threads of one process. Two tests calling
+/// [`keep_in`] interleave, and a third that merely *reads* (building a `Menu`
+/// reads the remembered name and address) picks up whichever directory won.
+///
+/// The symptom is a test that passes on one machine and fails on another,
+/// which is the worst kind: it looks like the code differing when it is the
+/// scheduling.
+#[cfg(test)]
+pub fn lock_store() -> std::sync::MutexGuard<'static, ()> {
+    static STORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A test that panics while holding it poisons it; the next test still
+    // wants the lock, and the poisoning tells it nothing it can act on.
+    STORE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The token kept for this room, if any.
 pub fn token(room: &str) -> Option<String> {
     imp::token(room).filter(|t| !t.is_empty())
@@ -249,8 +268,13 @@ mod tests {
     /// global and cargo runs the tests of one binary in parallel threads: two
     /// of them pointing it at two directories would take turns and neither
     /// would be testing what it thought.
+    ///
+    /// That was said and not enforced, and a second test in `views::menu` did
+    /// exactly it — so both took turns and which one lost depended on the
+    /// machine. [`super::lock_store`] is the enforcement.
     #[test]
     fn what_a_client_keeps_between_visits() {
+        let _store = super::lock_store();
         let dir = std::env::temp_dir().join(format!("ck-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         super::keep_in(dir.clone());

@@ -391,10 +391,27 @@ impl<A: App> ApplicationHandler for Harness<A> {
     /// there is always exactly one frame pending. Pacing then comes from the
     /// present queue, which is `Fifo` and is the thing that should be setting
     /// it.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(r) = &self.running {
-            r.window.request_redraw();
-        }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // **Nothing has started yet, and nothing will unless the loop keeps
+        // turning.** On the web `GpuState::new` is async: `resumed` puts the
+        // window and a future aside, and `take_pending` collects the result
+        // the next time anything happens. Under `ControlFlow::Wait` that "next
+        // time" may never come — there is no window to request a redraw on
+        // yet, so this used to request nothing, and the loop went to sleep
+        // with the adapter still being negotiated. Whether it ever woke came
+        // down to whether some unrelated event arrived: a mouse move, a
+        // resize, a socket. Nothing arrives on a page nobody has touched.
+        //
+        // Polling until the GPU is in hand costs a few frames of doing nothing
+        // once, at startup, and is the difference between a client that starts
+        // and one that sits on a blank canvas for ever.
+        let Some(r) = &self.running else {
+            event_loop.set_control_flow(ControlFlow::Poll);
+            self.take_pending();
+            return;
+        };
+        event_loop.set_control_flow(ControlFlow::Wait);
+        r.window.request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
