@@ -568,7 +568,8 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
     let page = dir.join("index.html");
     let index = || ServeFile::new(page.clone());
 
-    app.route_service("/", index())
+    let files = Router::<AppState>::new()
+        .route_service("/", index())
         // The client's own screens. Listed rather than matched by a catch-all,
         // so that `/src/main.rs` is a 404 and not a copy of the page.
         .route_service("/home", index())
@@ -578,6 +579,36 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
         .route_service("/watch/{id}", index())
         .nest_service("/pkg", ServeDir::new(dir.join("pkg")))
         .nest_service("/assets", ServeDir::new(dir.join("assets")))
+        .layer(axum::middleware::map_response(revalidate));
+
+    app.merge(files)
+}
+
+/// **Ask before reusing.** `ServeDir` and `ServeFile` send `Last-Modified` and
+/// no `Cache-Control` at all, and a response with a validator and no caching
+/// directive is one a browser is *entitled* to reuse without asking: the rule
+/// is a heuristic freshness lifetime, commonly a tenth of the file's age. A
+/// module built a day ago is therefore fresh for a couple of hours, and a
+/// rebuild inside that window changes nothing anybody can see.
+///
+/// Which is the worst version of the failure this repository already knows
+/// about. [gotchas.md] says `pkg/` is generated, gitignored and never updated
+/// by a pull, so the page and the module diverge with nothing to detect it;
+/// this is the same divergence arriving *after* a successful build, which
+/// removes the one check that catches the other — reading the build output.
+///
+/// `no-cache` does not mean do not store. It means revalidate before use, so
+/// the conditional request `ServeDir` already answers still comes back 304 and
+/// costs a round trip rather than a download. Nothing here is served from a
+/// CDN and the only client is on the same machine or the same network.
+///
+/// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
+async fn revalidate(mut response: axum::response::Response) -> axum::response::Response {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    response
 }
 
 async fn connection(socket: WebSocket, state: AppState) {
