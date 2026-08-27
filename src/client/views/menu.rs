@@ -1626,6 +1626,34 @@ mod tests {
         assert!(rect.height() >= 800.0, "and the top or the bottom: {rect:?}");
     }
 
+    /// **A canvas has no size on its first frames**, and a browser's is the
+    /// worst case: winit's `inner_size` starts at zero, so the surface is
+    /// configured 1x1 before any resize observation lands — see
+    /// docs/gotchas.md. Whatever the menu does then, it must not be nothing.
+    #[test]
+    fn the_menu_survives_a_screen_with_no_size() {
+        for (w, h) in [(0.0, 0.0), (1.0, 1.0), (64.0, 48.0), (320.0, 200.0)] {
+            let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+            let ctx = egui::Context::default();
+            let theme = Theme::default();
+            ctx.begin_pass(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
+                time: Some(0.0),
+                focused: true,
+                ..Default::default()
+            });
+            let (_, rect) = show(&ctx, &theme, &mut menu, at(0.0, false));
+            let mut out = ctx.end_pass();
+            out.textures_delta.clear();
+
+            let rect = rect.unwrap_or(egui::Rect::NOTHING);
+            assert!(
+                rect.width() > 1.0 && rect.height() > 1.0,
+                "at {w}x{h} the menu drew nothing at all: {rect:?}"
+            );
+        }
+    }
+
     /// **Is this screen clickable at all?**
     ///
     /// Written after a report that buttons had stopped working, which no
