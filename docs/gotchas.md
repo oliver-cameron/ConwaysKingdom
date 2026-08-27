@@ -14,6 +14,8 @@ egui hands over a `TexturesDelta`, and dropping one that still holds deltas pani
 
 The browser client is built by `wasm-pack` into `pkg/`, which `.gitignore` excludes. So a working copy keeps whatever was last built there while `index.html` and the Rust move on, and **nothing detects that they have diverged**. A copy that used to work stops working at a commit that is fine everywhere else, which sends you looking at the commit.
 
+**A build that fails leaves the old `pkg/` standing.** `wasm-pack` writes into that directory; it does not empty it first. So a toolchain too old to compile the crate — the floor is 1.87, and `rust-version` names it now — produces an error and *no change on disk*, and the page goes on serving whatever was built months ago. Reading the output of the build is the whole of catching that.
+
 *Symptom:* it fails on one machine and a fresh clone of the same commit is fine. That is the tell, and it means the difference is something not in git — `pkg/` first, then the browser's cache.
 
 The specific way it bit: `index.html` called `init({ module_or_path })`, the object form, which an older `wasm-bindgen` does not unwrap. It passes the bytes bare now, which every version accepts — a `Uint8Array` is not a plain object, so a newer init takes it as the module rather than trying to destructure it.

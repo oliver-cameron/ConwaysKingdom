@@ -59,7 +59,11 @@ Both clients open on a **menu**: a name, a server, and — once that server has 
 
 The browser client needs no address; it derives its socket from the page's own origin. `?room=lobby` in the URL skips the menu and goes straight to that room, which is how a link takes somebody to a world.
 
-`pkg/` is **generated and not committed** — it is in `.gitignore` — so a pull never updates it. A working copy keeps whatever `wasm-pack` last wrote there while `index.html` and the Rust move on, and nothing detects the mismatch. If a copy that used to work stops, and a fresh clone of the same commit does not, rebuild it before looking anywhere else:
+Building needs **Rust 1.87 or newer** — `rust-version` in `Cargo.toml` says so, so an older toolchain is refused by name rather than by a parse error somewhere in the middle of the crate. Edition 2024 sets the floor at 1.85 and `is_multiple_of` on integers raises it to 1.87.
+
+That matters more for the browser client than it looks, and the two are worth reading together:
+
+`pkg/` is **generated and not committed** — it is in `.gitignore` — so a pull never updates it. A working copy keeps whatever `wasm-pack` last wrote there while `index.html` and the Rust move on, and nothing detects the mismatch. If a copy that used to work stops, and a fresh clone of the same commit does not, rebuild it before looking anywhere else — and read the output, because **a build that fails leaves the old `pkg/` in place** and the page then runs an old module against a new page:
 
 ```
 rm -rf pkg && wasm-pack build --target web

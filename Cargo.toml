@@ -2,6 +2,15 @@
 name = "conwayskingdom"
 version = "0.1.0"
 edition = "2024"
+# The oldest toolchain this builds on, so an older one is refused by name
+# rather than by a parse error somewhere in the middle of the crate.
+#
+# Set by two things: edition 2024, which wants 1.85, and `is_multiple_of` on
+# integers, which stabilised in 1.87. The browser client is the reason it
+# matters — `pkg/` is generated and gitignored, so a toolchain too old to
+# build simply leaves whatever was there last, and the page then runs an
+# old module against a new page. See docs/gotchas.md.
+rust-version = "1.87"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
