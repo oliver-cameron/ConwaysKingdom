@@ -200,19 +200,31 @@
     // Told first, so the watchdog above knows this ran at all.
     window.__ckStarted = true;
 
-    // **Relative, and the page is only ever served from the root.** An
-    // absolute `/pkg/…` was tried and is wrong: it assumes the client is
-    // mounted at the origin's root, which is a promise a page cannot make
-    // about wherever somebody has put it. Relative works from any mount point
-    // and breaks only if the document is served from a *deeper path* — so the
-    // server does not serve it from one. Every pretty path redirects to the
-    // root with the screen in the query; see `server::ws::serve_client`.
+    // **Absolute, because every screen is a path and the module is not under
+    // any of them.** A relative `./pkg/…` resolves against the *document's*
+    // URL, dropping everything after the last slash in its path — so at `/`
+    // and at `/?room=main` it means `/pkg/…` and works, and at `/room/main`
+    // it means `/room/pkg/…`, which `serve_client` answers with a 404 because
+    // `nest_service("/pkg", …)` matches only `/pkg/*`. The module then never
+    // loads, and because this is an ES import the whole `type="module"` block
+    // never runs — including its own try/catch — so the failure arrives eight
+    // seconds later from the watchdog above, blaming a `pkg/` that is fine.
     //
-    // wasm-pack names its output after the crate, so this is pkg/<crate>.js —
+    // Relative was restored once on the grounds that absolute assumes the
+    // client is mounted at the origin's root, which a page cannot promise
+    // about wherever somebody has put it. It can here: `serve_client` mounts
+    // it at the root by construction — `route_service("/")` for the page and
+    // `nest_service("/pkg", …)` for the module — so there is no other mount
+    // point for the promise to be wrong about. The objection is real and it
+    // is about a server this repository does not have. If one ever does,
+    // `<base href="/">` is not the answer either: it silently retargets every
+    // other relative URL on the page, which is a wider promise than this one.
+    //
+    // wasm-pack names its output after the crate, so this is /pkg/<crate>.js —
     // `conwayskingdom`, per the `name` in Cargo.toml. Rename here if the crate
     // is ever renamed, or the browser gets the server's 404 page and refuses
     // it as "disallowed MIME type (text/html)".
-    import init from "./pkg/conwayskingdom.js";
+    import init from "/pkg/conwayskingdom.js";
 
     const loading = document.getElementById("loading");
     const bar = document.getElementById("bar");
@@ -225,7 +237,8 @@
     // to get it, which is a fair trade at this size — the compile is not the
     // part anybody is waiting on.
     async function load() {
-      const response = await fetch("./pkg/conwayskingdom_bg.wasm");
+      // Absolute for the reason the import above is.
+      const response = await fetch("/pkg/conwayskingdom_bg.wasm");
       if (!response.ok) throw new Error(`${response.status} fetching the module`);
 
       const total = Number(response.headers.get("content-length")) || 0;

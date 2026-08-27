@@ -28,6 +28,8 @@ Every screen has a path now, and each is answered with the same `index.html`. Th
 
 Absolute — `/pkg/…` — because the client is mounted at the root. `<base href="/">` would do the same job and would also silently retarget every other relative URL on the page, which is a wider promise than the one being made.
 
+This was reverted once and had to be put back, which is worth recording because the reasoning for the revert was sound and aimed at the wrong comparison. It said an absolute path assumes the client sits at the origin's root, and that `/` and `/?room=main` both resolve it identically so it could not be what separated them. Both true. The pair it separates is `/room/main` from `/?room=main` — a two-segment path against the root with the room in the query — and that pair is what a reload actually lands on, because `client::route` writes the path form into the address bar. The mount-point worry is answered by `server::ws::serve_client` itself: it mounts the page at `/` and the module at `/pkg` and offers no way to put either anywhere else.
+
 ## A finger is not a pointer unless somebody says so
 
 `Views` translated winit's mouse events into `egui::RawInput` by hand and never translated `WindowEvent::Touch` — so on a touchscreen egui received **no press at all**, and every button in the interface was dead: the menu, the lobby, the hotbar, the library.
