@@ -547,8 +547,20 @@ impl<A: App> ApplicationHandler for Harness<A> {
                     FrameAcquire::Reconfigure => {
                         r.dropped += 1;
                         dropped_frame(r.dropped, "outdated; reconfiguring", r.gpu.size);
+                        // **Measured again, not applied again.** A surface is
+                        // outdated because it no longer matches the thing it
+                        // presents to, and on the web that thing is the
+                        // canvas. Handing it back the size it already has is
+                        // reconfiguring to the configuration that just went
+                        // stale: it comes back outdated, and so does the next
+                        // one, and nothing is ever presented — while `update`
+                        // goes on running and logging as though it were.
+                        #[cfg(target_arch = "wasm32")]
+                        let (w, h) = wanted_canvas_size(&r.window).unwrap_or(r.gpu.size);
+                        #[cfg(not(target_arch = "wasm32"))]
                         let (w, h) = r.gpu.size;
                         r.gpu.resize(w, h);
+                        r.app.resize(&r.gpu);
                     }
                     FrameAcquire::Lost => {
                         log::error!("GPU device lost");

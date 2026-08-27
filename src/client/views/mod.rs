@@ -468,6 +468,7 @@ impl Views {
 
         self.ctx.begin_pass(input);
         self.claimed = build(&self.ctx);
+        canary(&self.ctx, gpu, pixels_per_point);
         let mut full = self.ctx.end_pass();
 
         self.dragging_widget = self.ctx.egui_is_using_pointer();
@@ -617,4 +618,78 @@ fn report_geometry(
         primitives.len(),
         primitives.first().map(|p| p.clip_rect),
     );
+}
+
+/// A shape nothing else draws, over everything, when the address says `debug`.
+///
+/// **For the one question that cannot be answered from the front.** An
+/// interface that does not appear is either an interface that was never built
+/// or one that was built and did not reach the surface, and the two look
+/// identical: a window of clear colour either way. Nothing in the console
+/// separates them either — `egui-wgpu` drops a primitive it cannot scissor or
+/// cannot find a texture for without a word, and a screen that produced no
+/// shapes produces no complaint about it.
+///
+/// So: one rectangle, in a colour no theme here uses, at `Order::Foreground`,
+/// built by the integration rather than by any screen. If it appears and the
+/// screen behind it does not, then what egui produces reaches the glass and
+/// the fault is in what that screen produced. If it does not appear either,
+/// nothing egui produces reaches anything, and the renderer is where to look.
+///
+/// The numbers ride along so the same load says what the geometry was without
+/// anybody opening an inspector, which matters on a machine where opening one
+/// is not a given. The bar is painted before the text, because a font atlas
+/// that never arrived would take every glyph on the page with it and the bar
+/// is the half that does not depend on one.
+fn canary(ctx: &egui::Context, gpu: &GpuState, pixels_per_point: f32) {
+    if !debugging() {
+        return;
+    }
+    let painter =
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("canary")));
+    let content = ctx.content_rect();
+    let rect =
+        egui::Rect::from_min_size(content.min + egui::vec2(8.0, 8.0), egui::vec2(380.0, 26.0));
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(255, 0, 170));
+    painter.text(
+        rect.min + egui::vec2(7.0, 6.0),
+        egui::Align2::LEFT_TOP,
+        format!("{:?} at {pixels_per_point} ppp, content {:?}", gpu.size, content.size()),
+        egui::FontId::monospace(11.0),
+        egui::Color32::BLACK,
+    );
+}
+
+/// Whether this client was asked for the canary. Read once: the client
+/// rewrites its own address as you move between screens, and a flag that
+/// stopped applying the moment `route::show` dropped the query would be a flag
+/// nobody could keep hold of.
+fn debugging() -> bool {
+    use std::cell::Cell;
+    thread_local! {
+        static ASKED: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+    ASKED.with(|asked| {
+        if let Some(known) = asked.get() {
+            return known;
+        }
+        let known = asked_for_debug();
+        asked.set(Some(known));
+        known
+    })
+}
+
+/// `?debug` anywhere in the query, so it composes with the links that are
+/// already in use — `/?room=main&debug` goes where it always went and says so.
+#[cfg(target_arch = "wasm32")]
+fn asked_for_debug() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .is_some_and(|query| query.contains("debug"))
+}
+
+/// Native has no address to put it in.
+#[cfg(not(target_arch = "wasm32"))]
+fn asked_for_debug() -> bool {
+    std::env::var_os("CK_DEBUG").is_some()
 }
