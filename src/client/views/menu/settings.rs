@@ -20,25 +20,52 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
 
     ui.add_space(m.item_spacing * 2.0);
     ui.label(egui::RichText::new(words::home::settings::KEY).size(m.text_small));
-    if menu.key.is_empty() {
-        // Nothing to show and nothing to paste over. A key is made on the
-        // first join rather than at startup, so a client that has never
-        // reached a server has none and saying so is the whole answer.
+    let Some(mine) = crate::net::keep::key() else {
+        // A key is made on the first join rather than at startup, so a client
+        // that has never reached a server has none and saying so is the whole
+        // answer.
         ui.small(words::home::settings::KEY_NONE);
-    } else {
-        // Editable because it is also how another one is brought in: showing a
-        // key and accepting one are the same question, and two boxes side by
-        // side would be two answers to it. Typing here changes nothing until
-        // the button below is pressed and the asking is answered.
-        ui.add(egui::TextEdit::singleline(&mut menu.key).desired_width(f32::INFINITY));
+        return Chose::Nothing;
+    };
+
+    // **The public half, which is safe to look at.** What used to be here was
+    // the secret one in an editable box, which is the most destructive control
+    // in the client sitting in the form that invites typing. This names you
+    // and cannot be used to be you, and it is the same line `ssh-keygen -y`
+    // would print, so it is recognisable rather than sixty-four hex
+    // characters.
+    ui.label(egui::RichText::new(mine.public()).monospace().size(m.text_small));
+
+    // Natively the key is a file and the honest thing to show is where it is:
+    // whoever wants to back it up should copy the file, not select text out of
+    // a game. A browser has no path to give, so it offers the file instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = crate::net::keep::key_path() {
+        ui.small(words::home::settings::key_lives_at(&path.display().to_string()));
+    }
+
+    ui.add_space(m.item_spacing);
+    if ui.small_button(words::home::settings::reveal(menu.revealed)).clicked() {
+        menu.revealed = !menu.revealed;
+        // Loaded on the way open rather than held all the time: a secret that
+        // is only in memory while somebody is looking at it is one that cannot
+        // be typed over while they are not.
+        menu.key = if menu.revealed { mine.written() } else { String::new() };
+    }
+    if menu.revealed {
         ui.small(words::home::settings::KEY_NOTE);
-        // Offered only when the field says something else and that something
-        // else reads as a key. A button that is always pressable, for a press
+        ui.add(
+            egui::TextEdit::multiline(&mut menu.key)
+                .desired_width(f32::INFINITY)
+                .desired_rows(4)
+                .font(egui::TextStyle::Monospace),
+        );
+        // Offered only when what is in the box is a different key from the one
+        // this client holds. A button that is always pressable, for a press
         // that usually means "become who I already am", is one that only ever
         // gets pressed by accident.
         let typed = crate::net::Key::read(&menu.key).ok().map(|k| k.written());
-        let mine = crate::net::keep::key().map(|k| k.written());
-        if let Some(typed) = typed.filter(|t| Some(t) != mine.as_ref()) {
+        if let Some(typed) = typed.filter(|t| *t != mine.written()) {
             ui.add_space(m.item_spacing);
             if ui.button(words::home::settings::KEY_TAKE).clicked() {
                 menu.asking = Some(Ask::UseKey(typed));

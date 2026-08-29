@@ -132,6 +132,10 @@ pub struct Menu {
     /// is a drawer somebody opened once to do a thing, and a client that
     /// remembered it open would put the key back where it used to be.
     pub advanced: bool,
+    /// Whether the secret half is on screen. Shut on every build of the menu,
+    /// because a secret nobody is looking at should not be one anybody can
+    /// type over.
+    pub revealed: bool,
     /// What is waiting to be confirmed, if anything.
     ///
     /// Held on the menu rather than answered where it is asked, because the
@@ -217,7 +221,7 @@ impl Menu {
         } else {
             crate::net::keep::server().unwrap_or(default_address)
         };
-        let key = crate::net::keep::key().map(|k| k.written()).unwrap_or_default();
+        let key = String::new();
         Self {
             name: crate::net::keep::name().unwrap_or_else(|| "player".to_string()),
             address,
@@ -232,6 +236,7 @@ impl Menu {
             record: crate::client::record::Summary::of(&crate::client::record::games()),
             key,
             advanced: false,
+            revealed: false,
             asking: None,
             draft: None,
         }

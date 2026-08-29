@@ -85,13 +85,30 @@ pub mod menu {
 
         pub mod settings {
             pub const KEY: &str = "Your player key";
+
+            /// Native only. A path is a thing somebody can act on -- copy it,
+            /// back it up, put it in a password manager -- and is a better
+            /// answer to "where is my key" than a box of text.
+            pub fn key_lives_at(path: &str) -> String {
+                format!("Kept at {path}")
+            }
+
+            pub fn reveal(showing: bool) -> &'static str {
+                if showing {
+                    "Hide the key itself"
+                } else {
+                    "Show the key itself"
+                }
+            }
             /// Said plainly, because it is not the bargain people expect from
             /// something called a key. There is no account behind it, no
             /// address to send a reset to, and it is the same you on every
             /// server rather than one of them.
-            pub const KEY_NOTE: &str = "This is who you are, on every server. \
-                 Copy it to play as yourself in another browser. \
-                 Whoever has it is you, and nobody can give it back.";
+            pub const KEY_NOTE: &str =
+                "An OpenSSH private key -- ssh-keygen reads it. Save it somewhere \
+                 to play as yourself in another browser, or paste one in to \
+                 become somebody else. Whoever has it is you, on every server, \
+                 and nobody can give it back.";
             pub const KEY_TAKE: &str = "Use this key";
             pub const KEY_NONE: &str =
                 "No key yet. One is made for you the first time you reach a server.";

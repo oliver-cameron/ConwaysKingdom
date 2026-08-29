@@ -123,6 +123,24 @@ pub fn remember_server(address: &str) {
     set("server", address);
 }
 
+/// What the key is filed under.
+///
+/// A name OpenSSH would use, because natively this **is** a file and the
+/// point of the format is that it is recognisable: somebody who finds
+/// `id_ed25519` in a data directory knows what they have found, and somebody
+/// who finds `key` does not.
+const KEY_FIELD: &str = "id_ed25519";
+
+/// Where the key file is, for a client that can say so.
+///
+/// Native only, and not because the browser's answer is different — it is
+/// that the browser has no answer. `localStorage` is not a path and nothing
+/// can be pointed at it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn key_path() -> Option<std::path::PathBuf> {
+    Some(imp::base()?.join(KEY_FIELD))
+}
+
 /// This client's key, if it has one.
 ///
 /// **One, not one per server**, which is the whole of what changed when the
@@ -136,7 +154,7 @@ pub fn remember_server(address: &str) {
 /// it. One format rather than a store format and a transfer format that have
 /// to agree.
 pub fn key() -> Option<Key> {
-    Key::read(&get("key")?).ok()
+    Key::read(imp::get(KEY_FIELD)?.trim()).ok()
 }
 
 /// The key this client will use, making one if it has none.
@@ -163,13 +181,13 @@ pub fn key_or_new() -> Option<Key> {
 }
 
 pub fn remember_key(key: &Key) {
-    set("key", &key.written());
+    set(KEY_FIELD, &key.written());
 }
 
 /// Forget who we are. The next join is somebody new, and there is no way back
 /// to who we were — see [`Key::written`].
 pub fn forget_key() {
-    set("key", "");
+    set(KEY_FIELD, "");
 }
 
 /// Forget everything this client has kept: the key, the record, the name, the
@@ -185,7 +203,7 @@ pub fn forget_key() {
 /// directory somebody may have pointed elsewhere with [`keep_in`]. Removing
 /// what is ours is the only thing that is ours to do.
 pub fn forget_everything() {
-    for field in ["key", "name", "server", "games", "last-room"] {
+    for field in [KEY_FIELD, "name", "server", "games", "last-room"] {
         set(field, "");
     }
     imp::forget_tokens();
@@ -303,7 +321,7 @@ mod imp {
 
     /// Beside the rest of a user's data rather than in the working directory,
     /// so running the client from somewhere else does not lose the player.
-    fn base() -> Option<PathBuf> {
+    pub(super) fn base() -> Option<PathBuf> {
         if let Some(chosen) = super::OVERRIDE.lock().unwrap().clone() {
             return Some(chosen);
         }

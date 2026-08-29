@@ -47,6 +47,9 @@ use serde::{Deserialize, Serialize};
 /// Bytes in the seed a signing key is built from, and in a public key.
 const SEED_N: usize = 32;
 
+/// What a key file says it is for, in the place OpenSSH puts an email address.
+const COMMENT: &str = "conwayskingdom";
+
 /// The public half: who somebody is.
 ///
 /// Shown, stored against results, and safe to hand out. An ed25519 public key
@@ -115,30 +118,45 @@ impl Key {
         Some(Self(SigningKey::from_bytes(&seed()?)))
     }
 
-    /// Read a key back from what [`Self::written`] produced.
+    /// Read a key back from a file [`Self::written`] produced.
+    ///
+    /// Bare hex is accepted too, and only for one reason: it is what earlier
+    /// builds stored, and a client that could not read its own store would
+    /// silently become somebody new on the first run after an update.
     pub fn read(written: &str) -> Result<Self, String> {
-        let raw = written.trim().to_ascii_lowercase();
-        if raw.len() != SEED_N * 2 {
-            return Err(format!(
-                "a player key is {} characters; this one is {}",
-                SEED_N * 2,
-                raw.len()
-            ));
+        let raw = written.trim();
+        if raw.contains("OPENSSH PRIVATE KEY") {
+            return Ok(Self(SigningKey::from_bytes(&super::openssh::seed_of(raw)?)));
         }
-        let seed = unhex::<SEED_N>(&raw).ok_or("a player key is hexadecimal")?;
+        let raw = raw.to_ascii_lowercase();
+        if raw.len() != SEED_N * 2 {
+            return Err("that is not an OpenSSH private key file".into());
+        }
+        let seed = unhex::<SEED_N>(&raw).ok_or("that is not an OpenSSH private key file")?;
         Ok(Self(SigningKey::from_bytes(&seed)))
     }
 
-    /// The key as one line, to carry to another browser or another machine.
+    /// The key as a file, to keep somewhere and to carry to another machine.
     ///
     /// **This is the secret half**, and it has to be: a public key proves
     /// nothing without the private one behind it, so there is no weaker thing
     /// to export that would still be you at the far end. Whoever holds this is
     /// you, everywhere, for ever — which is the same bargain as the rejoin
-    /// token and a much bigger one, because it is not scoped to a room or to a
+    /// token and a much bigger one, since it is scoped to neither a room nor a
     /// server. Wherever it is shown, that sentence goes with it.
+    ///
+    /// OpenSSH's format rather than bare hex, because the point of it being a
+    /// file is that it is a *recognisable* one — `ssh-keygen -y` reads it, a
+    /// password manager will hold it beside the others, and it looks like
+    /// something to keep rather than a string to paste over.
     pub fn written(&self) -> String {
-        hex(self.0.to_bytes().as_slice())
+        super::openssh::private(&self.0.to_bytes(), self.0.verifying_key().as_bytes(), COMMENT)
+    }
+
+    /// The public half as an `authorized_keys` line: the same 32 bytes the id
+    /// is, said in a way people recognise.
+    pub fn public(&self) -> String {
+        super::openssh::public(self.0.verifying_key().as_bytes(), COMMENT)
     }
 
     /// Who this is, publicly.
@@ -210,19 +228,30 @@ mod tests {
         assert_eq!(carried.written(), mine.written());
     }
 
-    /// It arrives by copy and paste, so it arrives with whatever came with it.
+    /// It arrives from a file picker or a clipboard, so it arrives with
+    /// whatever came with it: an editor's trailing newline, Windows line
+    /// endings, indentation from having been pasted into a chat window.
     #[test]
-    fn a_pasted_key_is_forgiven_its_edges() {
-        let written = key().written();
-        let id = Key::read(&written).unwrap().id();
+    fn a_pasted_key_file_is_forgiven_its_edges() {
+        let mine = key();
+        let written = mine.written();
         for messy in [
-            format!("  {written}"),
-            format!("{written}\n"),
-            format!("\t{written}  \r\n"),
-            written.to_ascii_uppercase(),
+            format!("\n\n{written}\n\n"),
+            format!("   {}   ", written.trim()),
+            written.replace('\n', "\r\n"),
+            written.lines().map(|l| format!("  {l}\n")).collect::<String>(),
         ] {
-            assert_eq!(Key::read(&messy).unwrap().id(), id, "{messy:?}");
+            assert_eq!(Key::read(&messy).unwrap().id(), mine.id(), "{messy:?}");
         }
+    }
+
+    /// Bare hex is still read, and for one reason: it is what earlier builds
+    /// stored, and a client that could not read its own store would quietly
+    /// become somebody new on the first run after an update.
+    #[test]
+    fn a_key_stored_before_key_files_still_reads() {
+        let old = Key::read(&"a1".repeat(32)).expect("an old store was unreadable");
+        assert_eq!(Key::read(&old.written()).unwrap().id(), old.id());
     }
 
     /// A key that is nearly one is not one. Accepting it would hand somebody
@@ -230,12 +259,14 @@ mod tests {
     /// find out when their record was empty.
     #[test]
     fn a_key_that_is_not_one_says_so() {
-        let good = key().written();
+        let written = key().written();
         for bad in [
             String::new(),
-            good[..62].to_string(),
-            format!("{good}00"),
-            format!("zz{}", &good[2..]),
+            "hello".to_string(),
+            // The armour with nothing inside it, and with rubbish inside it.
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n-----END OPENSSH PRIVATE KEY-----".to_string(),
+            written.lines().take(2).collect::<Vec<_>>().join("\n"),
+            written.replace("AAAA", "!!!!"),
         ] {
             assert!(Key::read(&bad).is_err(), "{bad:?} was accepted");
         }

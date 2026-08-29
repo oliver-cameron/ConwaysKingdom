@@ -14,6 +14,7 @@
 //!
 //! [many servers]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#many-servers-and-what-must-not-be-decentralised
 
+pub mod openssh;
 pub mod person;
 
 pub use person::{Claim, Key, PersonId};
