@@ -615,6 +615,18 @@ async fn connection(socket: WebSocket, state: AppState) {
     let id = next_connection();
     log::info!("connection {id} opened");
     let (mut sink, mut stream) = socket.split();
+
+    // **Sent before anything is asked for**, because the first thing a client
+    // says is the join this answers and it cannot ask for a challenge without
+    // saying something first. One per connection: a client may join several
+    // rooms on one socket and signs the same nonce each time, which is the
+    // same client saying the same true thing twice. What a nonce of this
+    // server's own prevents is a *different* server replaying a signature it
+    // was shown, and that it prevents whether or not this one rotates.
+    let challenge = crate::server::new_token();
+    if !send(&mut sink, &ServerMessage::Challenge { nonce: challenge.clone() }).await {
+        return;
+    }
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut subscribed = state.broadcast.subscribe();
     // Which world this connection is in, and who they are in it. Both come
@@ -688,6 +700,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                                     connection: id,
                                     seat: me.clone(),
                                     watching: watching.clone(),
+                                    challenge: challenge.clone(),
                                 },
                                 msg,
                                 reply: reply_tx.clone(),

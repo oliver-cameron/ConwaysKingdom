@@ -80,15 +80,38 @@ pub mod menu {
         pub const PLAY: &str = "Play";
         pub const WHO: &str = "You are";
         pub const RECORD: &str = "So far";
-        pub const KEY: &str = "Your key on this server";
-        /// Said plainly, because it is the whole bargain and it is not the one
-        /// people expect from something called a key. There is no account
-        /// behind it and no address to send a reset to.
-        pub const KEY_NOTE: &str =
-            "Copy it to play as yourself on another browser. Whoever has it is you.";
-        pub const KEY_TAKE: &str = "Use this key";
-        pub const KEY_NONE: &str =
-            "Reach a server and this fills in: a key is something a server gives you.";
+        pub const SETTINGS: &str = "Settings";
+        pub const SETTINGS_HIDE: &str = "Close settings";
+
+        pub mod settings {
+            pub const KEY: &str = "Your player key";
+            /// Said plainly, because it is not the bargain people expect from
+            /// something called a key. There is no account behind it, no
+            /// address to send a reset to, and it is the same you on every
+            /// server rather than one of them.
+            pub const KEY_NOTE: &str = "This is who you are, on every server. \
+                 Copy it to play as yourself in another browser. \
+                 Whoever has it is you, and nobody can give it back.";
+            pub const KEY_TAKE: &str = "Use this key";
+            pub const KEY_NONE: &str =
+                "No key yet. One is made for you the first time you reach a server.";
+
+            pub const FORGET: &str = "Forget everything";
+            pub const FORGET_NOTE: &str =
+                "Your key, your name, your record and every world you have played in.";
+
+            pub const CONFIRM: &str = "Yes, do it";
+            pub const CANCEL: &str = "No, leave it";
+            pub const FORGET_ASK: &str = "Forget everything?";
+            pub const FORGET_ASK_NOTE: &str =
+                "Your key goes with it, and nobody -- including this server -- \
+                 has a copy to give back. Everything you have ever held becomes \
+                 somebody else's ground.";
+            pub const KEY_ASK: &str = "Become somebody else?";
+            pub const KEY_ASK_NOTE: &str =
+                "The key you have now is replaced. Unless you have written it \
+                 down somewhere, you cannot go back to being who you are.";
+        }
         /// A first visit has nothing to show, and five zeroes would say only
         /// that the game keeps score.
         pub const NOTHING_YET: &str = "Nothing played yet. That is what Play is for.";

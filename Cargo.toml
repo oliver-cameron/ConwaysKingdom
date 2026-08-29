@@ -85,6 +85,7 @@ tower-http = { version = "0.6", features = ["fs"], optional = true }
 # Native only and behind `server`, because `server::console` is compiled for
 # wasm32 as well and the browser has no terminal to read.
 rustyline = { version = "18", optional = true, default-features = false, features = ["with-file-history"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "30", features = ["webgl"], optional = true }
@@ -97,6 +98,9 @@ web-sys = { version = "0.3", features = [
     "EventTarget", "WheelEvent", "KeyboardEvent", "MouseEvent", "Storage",
     # The address bar, so a screen has a link — see client::route.
     "History",
+    # Key generation. The browser has a real CSPRNG; `getrandom` on wasm32
+    # needs a cfg flag and a feature to find it, and this needs neither.
+    "Crypto",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1.0"
@@ -110,6 +114,7 @@ pollster = "0.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
+getrandom = "0.3"
 
 [profile.release]
 opt-level = "s"

@@ -92,7 +92,7 @@ const STANDING_EVERY: u64 = 8;
 /// is what hashing relies on to resist collision attacks — two of them give
 /// 128 bits without a dependency. Strong enough for what this is: a claim
 /// ticket for a game with no accounts, not a credential worth attacking.
-pub(crate) fn new_token() -> String {
+pub fn new_token() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
 
@@ -710,9 +710,6 @@ impl Server {
                         tick: self.tick(),
                         spawn,
                         token,
-                        // Filled in by `rooms::Rooms`, which is what minted
-                        // it and the only thing that knows whether it is new.
-                        person: None,
                         value,
                         room: crate::net::RoomId(self.room.clone()),
                         name: self.room.clone(),
@@ -1572,7 +1569,7 @@ mod tests {
             },
         );
         match welcome.as_slice() {
-            [ServerMessage::Welcome { you, token: back, person: None, value, .. }] => {
+            [ServerMessage::Welcome { you, token: back, value, .. }] => {
                 assert_eq!(*you, me, "the same number");
                 assert_eq!(*back, token, "and the same secret, so it keeps working");
                 assert_eq!(*value, spent, "and the value they had");

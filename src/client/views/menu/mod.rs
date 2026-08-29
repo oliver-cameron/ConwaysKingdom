@@ -21,6 +21,7 @@
 pub mod draft;
 mod home;
 mod play;
+mod settings;
 
 pub use draft::{Draft, Ends, Shape, Together};
 
@@ -125,8 +126,20 @@ pub struct Menu {
     /// ends.
     pub games: Vec<crate::client::record::Game>,
     pub record: crate::client::record::Summary,
-    /// This client's key on this server, shown so it can be copied and
-    /// editable so another one can be pasted over it.
+    /// Whether the settings at the foot of the home screen are open.
+    ///
+    /// Shut every time the menu is built, because it is not a preference: it
+    /// is a drawer somebody opened once to do a thing, and a client that
+    /// remembered it open would put the key back where it used to be.
+    pub advanced: bool,
+    /// What is waiting to be confirmed, if anything.
+    ///
+    /// Held on the menu rather than answered where it is asked, because the
+    /// question is drawn over every screen and the press that raises it is in
+    /// a column half way down one.
+    pub asking: Option<Ask>,
+    /// This client's key, shown so it can be copied and editable so another
+    /// one can be pasted over it.
     ///
     /// **One field for both jobs**, because they are one question — who is
     /// this browser — and two fields side by side, one showing a key and one
@@ -167,6 +180,9 @@ pub enum Chose {
     Clear,
     /// Back into the world already behind this menu, without joining anything.
     Resume,
+    /// Forget the key, the record, the name and every room's token. There is
+    /// no way back from this, which is why it is asked about first.
+    ResetEverything,
     /// Be the person this key names, from the next join onwards.
     ///
     /// Raw rather than parsed, unlike [`Self::Create`] — the menu checks that
@@ -201,7 +217,7 @@ impl Menu {
         } else {
             crate::net::keep::server().unwrap_or(default_address)
         };
-        let key = crate::net::keep::person(&address).map(|p| p.key()).unwrap_or_default();
+        let key = crate::net::keep::key().map(|k| k.written()).unwrap_or_default();
         Self {
             name: crate::net::keep::name().unwrap_or_else(|| "player".to_string()),
             address,
@@ -215,6 +231,8 @@ impl Menu {
             games: crate::client::record::games(),
             record: crate::client::record::Summary::of(&crate::client::record::games()),
             key,
+            advanced: false,
+            asking: None,
             draft: None,
         }
     }
@@ -222,6 +240,18 @@ impl Menu {
 
 /// Draw it, and say what was chosen. Returns the rectangle it covered, so the
 /// world behind it does not also take the click.
+/// A question the menu has raised and not had answered.
+///
+/// Both of these destroy a key, and a key is the one thing in this client that
+/// nobody anywhere holds a second copy of.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Ask {
+    /// Forget everything, including who this client is.
+    Forget,
+    /// Replace this client's key with the one that was pasted in.
+    UseKey(String),
+}
+
 /// What the client already is, which the menu cannot see for itself.
 ///
 /// The menu holds what was typed and what the server said; whether there is a
@@ -377,6 +407,23 @@ pub fn show(
                     });
             });
         });
+
+    // **Over everything, and drawn last.** What is being confirmed changes
+    // what this client *is* rather than what it is looking at, so it is not a
+    // row of buttons half way down a column somebody is already scrolling
+    // past. A press below it does nothing while it is up, because it covers
+    // the screen and takes the pointer.
+    if let Some(ask) = menu.asking.clone()
+        && let Some(answer) = settings::confirm(ctx, theme, &ask)
+    {
+        menu.asking = None;
+        if answer {
+            chose = match ask {
+                Ask::Forget => Chose::ResetEverything,
+                Ask::UseKey(key) => Chose::UseKey(key),
+            };
+        }
+    }
 
     (chose, Some(area.response.rect))
 }

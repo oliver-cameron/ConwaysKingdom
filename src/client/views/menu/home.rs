@@ -87,30 +87,17 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.small(note);
     }
 
-    // **At the foot, because it is maintenance and not a way to play.**
-    // Everything above it is what somebody came here to do; this is what they
-    // came here to do once, on the day they moved to another browser.
+    // **At the foot, and behind a press.** Everything above this is a way to
+    // play; a player key is not one, and it used to sit here as an editable
+    // field — which put the most destructive control in the client directly
+    // under the second thing anybody reads.
     ui.add_space(m.item_spacing * 3.0);
-    ui.label(egui::RichText::new(words::home::KEY).size(m.text_small));
-    if menu.key.is_empty() && crate::net::keep::person(&menu.address).is_none() {
-        // Nothing to show and nothing to paste over: a key is something a
-        // server hands out, and this client has not been handed one.
-        ui.small(words::home::KEY_NONE);
-        return chose;
+    let label = if menu.advanced { words::home::SETTINGS_HIDE } else { words::home::SETTINGS };
+    if ui.small_button(label).clicked() {
+        menu.advanced = !menu.advanced;
     }
-    ui.add(egui::TextEdit::singleline(&mut menu.key).desired_width(f32::INFINITY));
-    ui.small(words::home::KEY_NOTE);
-    // Offered only when the field says something else and that something else
-    // reads as a key. A button that is always pressable, for a press that
-    // usually means "adopt what I already am", is a button that only ever
-    // gets pressed by accident.
-    let typed = crate::net::Person::parse(&menu.key).ok();
-    let mine = crate::net::keep::person(&menu.address);
-    if let Some(typed) = typed.filter(|t| Some(t) != mine.as_ref()) {
-        ui.add_space(m.item_spacing);
-        if ui.button(words::home::KEY_TAKE).clicked() {
-            chose = Chose::UseKey(typed.key());
-        }
+    if menu.advanced {
+        chose = super::settings::show(ui, theme, menu);
     }
 
     chose

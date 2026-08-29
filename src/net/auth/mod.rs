@@ -1,13 +1,11 @@
 //! Who somebody is, and how they prove it.
 //!
-//! A folder rather than a file because this is the beginning of something
-//! rather than the whole of it. What is here is [`person`]: a server-minted id
-//! and the bearer proof that says the id is yours, which is enough to key a
-//! rating by and enough to carry between browsers. What is not here yet is a
-//! keypair, which is what being the same person on *several* servers would
-//! need — see [many servers] — and which would sit beside `person` rather than
-//! replacing it, since a server that mints keys goes on minting them for
-//! clients that have no other way to be somebody.
+//! What is here is [`person`]: a keypair the client generates and never
+//! sends, whose public half is the name everything else is keyed by. A
+//! server-minted bearer secret came first and was replaced, because a bearer
+//! secret cannot be both cross-server and safe — see the module for the two
+//! ways it fails once the same key is meant to mean the same person in more
+//! than one place.
 //!
 //! Deliberately in [`crate::net`] and not in `server`: both ends of the wire
 //! have to agree on what a person is, and the client is the one that keeps the
@@ -18,4 +16,4 @@
 
 pub mod person;
 
-pub use person::{Person, PersonId};
+pub use person::{Claim, Key, PersonId};

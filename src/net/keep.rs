@@ -29,7 +29,7 @@
 //! remembered now, which is half of what that key would need; making it the
 //! other half of the token's is the work that is left.
 
-use crate::net::Person;
+use crate::net::Key;
 
 /// Where all of this is kept, when somewhere other than the usual place is
 /// wanted. Native only, and set before the client starts.
@@ -123,43 +123,72 @@ pub fn remember_server(address: &str) {
     set("server", address);
 }
 
-/// Who this client is on `address`, if that server has told it.
+/// This client's key, if it has one.
 ///
-/// **Keyed by the server, unlike everything else here**, and that is the whole
-/// point of it rather than an inconsistency: a token is a claim on a seat in
-/// one room, and this is a claim on being somebody, which only means anything
-/// against the server that minted it. Offering one server a key issued by
-/// another is refused — see [`crate::server::people`] — so a client must not
-/// be able to do it by accident.
+/// **One, not one per server**, which is the whole of what changed when the
+/// key stopped being something a server issued. A signature proves who you are
+/// to anybody who cares to check, so there is nothing to file under a server's
+/// name — and filing it that way would have made you a different person on
+/// every machine you visited, which is exactly the bug this replaced.
 ///
-/// Stored as the written-down key, which is exactly what [`Person::key`]
-/// produces, so exporting an identity is reading this field and importing one
-/// is writing it. One format rather than a store format and a transfer format
-/// that have to agree.
-pub fn person(address: &str) -> Option<Person> {
-    Person::parse(&get(&format!("person.{}", slug(address)))?).ok()
+/// Stored as the written key, which is what [`Key::written`] produces, so
+/// exporting an identity is reading this field and importing one is writing
+/// it. One format rather than a store format and a transfer format that have
+/// to agree.
+pub fn key() -> Option<Key> {
+    Key::read(&get("key")?).ok()
 }
 
-pub fn remember_person(address: &str, person: &Person) {
-    set(&format!("person.{}", slug(address)), &person.key());
-}
-
-/// Forget who we are here, so the next join is a first one.
-pub fn forget_person(address: &str) {
-    set(&format!("person.{}", slug(address)), "");
-}
-
-/// An address as something that can be part of a key.
+/// The key this client will use, making one if it has none.
 ///
-/// Hex rather than a readable slug, because a slug has to be *injective* and a
-/// readable one is not: replacing everything but letters and digits would file
-/// `ws://a.b/` and `ws://a/b/` under one name, and two servers sharing one
-/// identity is exactly what keying by server exists to prevent. This is a
-/// filesystem-safe encoding of the address and nothing cleverer — it reaches a
-/// file name natively and a `localStorage` key in a browser, and both want the
-/// same guarantee.
-fn slug(address: &str) -> String {
-    address.bytes().map(|b| format!("{b:02x}")).collect()
+/// **Made on first use rather than at startup**, because a client that never
+/// reaches a server never needs one and a key made in a browser that cannot
+/// store it is a new person every visit. Returns `None` where there is no
+/// entropy to make one from, which on the web means a page with no `crypto` —
+/// and a client with no key still plays, it is just nobody the server will
+/// remember.
+pub fn key_or_new() -> Option<Key> {
+    if let Some(key) = key() {
+        return Some(key);
+    }
+    let key = Key::new()?;
+    remember_key(&key);
+    // Read back rather than returned directly: if the store refused the write,
+    // this client is about to be somebody new on its next visit and the log
+    // should say so once rather than never.
+    if self::key().is_none() {
+        log::warn!("could not keep this client's key; it will be somebody new next time");
+    }
+    Some(key)
+}
+
+pub fn remember_key(key: &Key) {
+    set("key", &key.written());
+}
+
+/// Forget who we are. The next join is somebody new, and there is no way back
+/// to who we were — see [`Key::written`].
+pub fn forget_key() {
+    set("key", "");
+}
+
+/// Forget everything this client has kept: the key, the record, the name, the
+/// server, and every room's token.
+///
+/// **Not recoverable, and the key is why.** A name and a record are a
+/// nuisance to lose; a key is who you are on every server you have ever
+/// played on, nobody else holds a copy, and there is no account behind it to
+/// ask. Anything calling this should have asked twice.
+///
+/// Fields are cleared rather than the store emptied, because the store is
+/// shared: `localStorage` belongs to the origin and a native store is a
+/// directory somebody may have pointed elsewhere with [`keep_in`]. Removing
+/// what is ours is the only thing that is ours to do.
+pub fn forget_everything() {
+    for field in ["key", "name", "server", "games", "last-room"] {
+        set(field, "");
+    }
+    imp::forget_tokens();
 }
 
 /// The name last played under.
@@ -248,6 +277,24 @@ mod imp {
             .set_item(key, value)
             .map_err(|_| "local storage refused the write".to_string())
     }
+
+    /// Every room's token, which is a set this module cannot enumerate: they
+    /// are keyed by room name and there is no list of rooms here. So the keys
+    /// are read off the store itself and the ones under our prefix removed.
+    pub fn forget_tokens() {
+        let Some(storage) = storage() else { return };
+        let prefix = token_key("");
+        let mut doomed = Vec::new();
+        for i in 0..storage.length().unwrap_or(0) {
+            match storage.key(i) {
+                Ok(Some(key)) if key.starts_with(&prefix) => doomed.push(key),
+                _ => {}
+            }
+        }
+        for key in doomed {
+            let _ = storage.remove_item(&key);
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -299,6 +346,17 @@ mod imp {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         std::fs::write(&path, value).map_err(|e| e.to_string())
+    }
+
+    /// The tokens directory, whole. Its name is ours and everything in it is
+    /// a room's token, so this is the one place a whole directory may go.
+    pub fn forget_tokens() {
+        let Some(base) = base() else { return };
+        if let Err(e) = std::fs::remove_dir_all(base.join("tokens"))
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("could not forget the rejoin tokens: {e}");
+        }
     }
 }
 

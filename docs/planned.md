@@ -21,8 +21,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Designed | more than one player to a side |
-| [Rating](#rating) | Being built | the arithmetic is in; what to key it by is not |
-| [Many servers](#many-servers-and-what-must-not-be-decentralised) | Decided | decentralise discovery and identity; never a world |
+| [Rating](#rating) | Being built | the arithmetic is in, and so is what to key it by |
+| [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | identity is in; discovery is not |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
@@ -127,7 +127,7 @@ What is left is the sentence below, and it is all of what is left.
 
 Most of the rest exists. A match already has a winner, `Victory` already says how it was decided, and `client::record` already keeps what this client has played — so the *client* half of showing a rating is nearly free.
 
-What it runs into is that **a rating is a fact about a person, and this game has no people.** It has `PlayerId`, which is a seat in one room and is reused; and a rejoin token, which is a secret filed per room and is the closest thing to an identity there is. So a rating cannot be stored until there is something to store it against, and that is the same missing piece as [fifteen slots and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients): a person becomes a UUID, and a seat becomes a thing that person holds.
+What it ran into was that a rating is a fact about a person and this game had no people. **That is answered now**: a person is a keypair, `sim::Player` records who is sitting in each seat, and `server::people` is the table to key by — see [identity](#identity-which-is-the-real-unlock). What is left is the table itself and the call, which is one `rating::deltas` at `MatchPhase::Over`.
 
 Two more, both real:
 
@@ -151,13 +151,17 @@ So what decentralises is **discovery and identity**. Three pieces, in the order 
 
 Today a player is a `PlayerId` — a seat in one room, reused when a world forgets somebody — plus a **rejoin token**, which is a secret the *server* issues and the client files under a room name. That has a bug in it already: the token is keyed by room and not by server, so two servers both holding a room called `main` share one secret and visiting the second costs you your player on the first. `client::record` has the same hole from the other end: it files a game under a room's display name, so two servers' `arena` are one line of history.
 
-Replace the token with a **keypair the client generates and never sends**. Joining becomes: the server offers a challenge, the client signs it, and the server knows it is talking to the same person as last time without ever having issued them anything. That inverts who owns an identity, and everything else here follows from it:
+**Built.** The token is joined by a **keypair the client generates and never sends** — `net::auth::person`. Joining is: the server offers a challenge on the socket's first word, the client signs it, and the server knows who it is talking to without ever having issued them anything. That inverts who owns an identity, and everything else here follows from it:
 
 - **A person is the same person on every server**, with no registry, no account, and nothing to federate. This is the whole of what "decentralised identity" needs to mean here.
 - **A seat becomes something a person holds**, which is the missing piece [fifteen slots and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients) and [rating](#rating) are both waiting on.
 - **The store keys by server**, because a public key needs no room to be filed under. The two bugs above stop being bugs rather than being fixed.
 
-What it costs is a signature scheme in a crate that builds for wasm32 — ed25519 is the obvious one and does — plus a decision about what happens when somebody loses their key, which is that they are somebody new. That is the honest answer and it should be said out loud on screen rather than discovered.
+What it cost was a signature scheme in a crate that builds for wasm32 — `ed25519-dalek`, which does — plus a decision about what happens when somebody loses their key, which is that they are somebody new. That is said out loud on screen now, in the settings drawer and again in the dialogue that asks before either press that can destroy one.
+
+Two things worth recording, because both were the opposite of the first attempt at this. **A key this server has never seen is a person, not an impostor**, so the answer to a new one is to write it down — the reverse of a server-minted secret, where an unknown id had to be refused or the first machine to claim one would own it. And **`server::people` holds no secrets at all** now: a join is checked by arithmetic rather than by looking anything up, so there is nothing in that file worth stealing.
+
+What is left of this entry is `client::record`, which still files a game under a room's *display name*, so two servers' `arena` are one line of history. The store keys by server for its rooms and by nothing for the key, which is right; the record has not caught up.
 
 ### Multi-homing the client
 

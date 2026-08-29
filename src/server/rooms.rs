@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use crate::net::{ClientMessage, Made, RoomId, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
 use crate::server::matches::{Phase, Victory};
-use crate::server::{new_token, Server};
+use crate::server::Server;
 use crate::sim::{PlayerId, WorldKind};
 
 /// Where a connected player is: which world, and who they are in it. Player
@@ -68,12 +68,22 @@ pub struct Caller {
     /// judges an action asks the first and the code that routes a read asks
     /// either, and one field would make those the same question.
     pub watching: Option<RoomId>,
+    /// What this connection was asked to sign, so a `Join` can be checked.
+    ///
+    /// Per connection and not per join: within one connection a replayed
+    /// signature is the same client saying the same true thing twice, and the
+    /// thing worth preventing is a *different* server replaying a signature it
+    /// saw — which a nonce of this server's own stops by construction.
+    ///
+    /// Empty for a caller with no socket behind it: the console, and tests.
+    /// Nothing signs anything for those, so nothing claims to be anybody.
+    pub challenge: String,
 }
 
 impl Caller {
     /// A connection that has not joined anything.
     pub fn new(connection: ConnectionId) -> Self {
-        Self { connection, seat: None, watching: None }
+        Self { connection, seat: None, watching: None, challenge: String::new() }
     }
 
     /// For tests, and for the console, which is nobody's socket.
@@ -82,7 +92,7 @@ impl Caller {
     }
 
     pub fn sitting(connection: ConnectionId, seat: Seat) -> Self {
-        Self { connection, seat: Some(seat), watching: None }
+        Self { challenge: String::new(), connection, seat: Some(seat), watching: None }
     }
 
     /// Which room's messages this connection may be routed to, seated or not.
@@ -512,26 +522,30 @@ impl Rooms {
             // somebody is. A refusal is a refusal to join at all: a client
             // that offered a key meant to be somebody, and putting them in as
             // a stranger instead would be answering a different question.
-            let admitted = self.people.admit(person.as_ref(), || (new_token(), new_token()));
-            let (who, mut minted) = match admitted {
-                Ok(pair) => pair,
-                Err(reason) => return vec![ServerMessage::Rejected { reason }],
+            // **Checked, not looked up.** A signature over this connection's
+            // challenge is the whole of the proof: the client made its own key
+            // and this server has issued nothing, so an id it has never seen
+            // is a person rather than an impostor, and the answer to a new one
+            // is to write it down. A claim that does not verify is refused
+            // outright -- somebody signed nothing, or signed somebody else's
+            // question, and neither should quietly become a stranger with a
+            // seat.
+            let who = match person {
+                Some(claim) if !claim.verifies(&caller.challenge) => {
+                    log::warn!("a claim that does not answer this connection's challenge");
+                    return vec![ServerMessage::Rejected {
+                        reason: "that player key did not check out".into(),
+                    }];
+                }
+                Some(claim) => Some(claim.id.clone()),
+                None => None,
             };
-            // The identity that was *admitted*, which is the offered one when
-            // it checked out and the minted one when there was none.
-            let authoritative = minted
-                .clone()
-                .or_else(|| person.clone())
-                .expect("admitting either mints a person or believes one");
-            debug_assert_eq!(authoritative.id, who);
-            let mut msg = msg;
-            if let ClientMessage::Join { person, .. } = &mut msg {
-                *person = Some(authoritative);
-            }
-            // A key that was just minted has to reach disk before its owner
-            // relies on it: told a key and then handed it back a stranger
-            // after a restart is worse than never having been told one.
-            if minted.is_some() {
+            if let Some(who) = &who
+                && self.people.seen(who)
+            {
+                // A person met for the first time reaches disk before they
+                // rely on having been here: a rating earned by somebody this
+                // server forgets on a restart is worse than none.
                 self.save_people();
             }
             return match self.resolve(asked.as_ref().map(RoomId::as_str)) {
@@ -565,14 +579,9 @@ impl Rooms {
                     let owner = self.owner.get(&name).copied();
                     let code = self.codes.get(&name).cloned();
                     for reply in &mut out {
-                        if let ServerMessage::Welcome { room, name: called, person, .. } = reply {
+                        if let ServerMessage::Welcome { room, name: called, .. } = reply {
                             *room = name.clone();
                             *called = room_name.clone();
-                            // Only when it was just decided. A client that
-                            // presented a key already has one, and echoing it
-                            // would put a credential on the wire every join
-                            // for nothing.
-                            *person = minted.take();
                         }
                         stamp(reply, owner, code.clone());
                     }
@@ -1140,7 +1149,7 @@ fn saved_in(dir: &Path) -> std::io::Result<Vec<RoomName>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::Person;
+    use crate::net::Key;
     use crate::sim::World;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1737,83 +1746,95 @@ mod tests {
         assert!(reason.contains("console"), "{reason}");
     }
 
-    /// **A person is minted once and believed after**, and the seat they sit
-    /// in records who they are.
+    /// **The client issues the key and the server merely checks it**, which is
+    /// the reversal from a server-minted secret and is what makes the same key
+    /// the same person everywhere.
     ///
-    /// The whole of what identity buys: a number that survives the room it was
-    /// earned in. `PlayerId` is a seat and a rejoin token is a claim on one, so
-    /// neither of them can carry anything to the next match. This can.
+    /// A signature over this connection's challenge is the whole of the proof.
+    /// A key this server has never seen is a person rather than an impostor,
+    /// because holding the private half is not something anybody can fake, so
+    /// the answer to a new one is to write it down.
     #[test]
-    fn a_person_is_minted_once_and_the_seat_remembers_them() {
+    fn a_signed_claim_is_believed_and_the_seat_remembers_who() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let hall = RoomId::from("hall");
-        let join = |person: Option<Person>| ClientMessage::Join {
+        let me = Key::new().unwrap();
+        let caller = |n: u64, challenge: &str| Caller {
+            connection: n,
+            seat: None,
+            watching: None,
+            challenge: challenge.into(),
+        };
+        let join = |claim| ClientMessage::Join {
             name: "alice".into(),
             token: None,
             room: Some(RoomId::from("hall")),
-            person,
+            person: claim,
         };
 
-        let out = rooms.handle(&Caller::new(1), join(None));
-        let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
-        let (first, me) = (*you, person.clone().expect("a first join is handed a key"));
-
-        // The seat knows who took it, which is the point of all of this.
-        let seat = rooms.get(&hall).unwrap().players().find(|p| p.id == first).unwrap();
-        assert_eq!(seat.person.as_deref(), Some(me.id.as_str()));
-
-        // And a later join is believed rather than reissued: a client that
-        // already has a key must not be handed a second one, or it would be
-        // somebody new every time it connected.
-        let out = rooms.handle(&Caller::new(2), join(Some(me.clone())));
-        let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
-        assert!(person.is_none(), "a key was reissued to a client that had one");
+        let out = rooms.handle(&caller(1, "nonce-one"), join(Some(me.claim("nonce-one"))));
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
         let seat = rooms.get(&hall).unwrap().players().find(|p| p.id == *you).unwrap();
-        assert_eq!(
-            seat.person.as_deref(),
-            Some(me.id.as_str()),
-            "the second seat is the same person"
+        assert_eq!(seat.person.as_deref(), Some(me.id().as_str()));
+
+        // A second connection, a different challenge, the same key: the same
+        // person. That is the whole of transferring an identity -- nothing was
+        // reissued and nothing was looked up.
+        let out = rooms.handle(&caller(2, "nonce-two"), join(Some(me.claim("nonce-two"))));
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let seat = rooms.get(&hall).unwrap().players().find(|p| p.id == *you).unwrap();
+        assert_eq!(seat.person.as_deref(), Some(me.id().as_str()), "the same key was two people");
+    }
+
+    /// A signature is worth nothing against a question it was not asked, which
+    /// is what stops a server that saw one from being you somewhere else.
+    #[test]
+    fn a_claim_for_another_challenge_is_refused() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let me = Key::new().unwrap();
+        let caller = Caller {
+            connection: 1,
+            seat: None,
+            watching: None,
+            challenge: "what this server asked".into(),
+        };
+        let out = rooms.handle(
+            &caller,
+            ClientMessage::Join {
+                name: "alice".into(),
+                token: None,
+                room: Some(RoomId::from("hall")),
+                // Signed for somebody else's question, which is exactly what a
+                // replayed signature is.
+                person: Some(me.claim("what that server asked")),
+            },
+        );
+        assert!(matches!(&out[..], [ServerMessage::Rejected { .. }]), "{out:?}");
+        assert!(
+            !rooms.get(&RoomId::from("hall")).unwrap().players().any(|p| p.online),
+            "a refused claim took a seat anyway"
         );
     }
 
-    /// A key is two strings, so it goes wherever its owner does — and a wrong
-    /// one is refused rather than quietly swapped for a fresh identity, which
-    /// would make a typo and somebody else's key look identical to the person
-    /// they happened to.
+    /// A client with no key plays. It is nobody the server will remember,
+    /// which is the honest outcome for a browser that cannot keep one rather
+    /// than a reason to refuse to let anybody in.
     #[test]
-    fn a_key_travels_and_a_wrong_one_is_refused() {
+    fn a_client_with_no_key_still_plays() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
-        let join = |person: Option<Person>| ClientMessage::Join {
-            name: "alice".into(),
-            token: None,
-            room: Some(RoomId::from("hall")),
-            person,
-        };
-
-        let out = rooms.handle(&Caller::new(1), join(None));
-        let [ServerMessage::Welcome { person, .. }] = &out[..] else { panic!("{out:?}") };
-        let me = person.clone().unwrap();
-
-        // Written down on one machine and read back on another.
-        let carried = Person::parse(&me.key()).expect("a key that will not read back");
-        assert_eq!(carried, me);
-        let out = rooms.handle(&Caller::new(9), join(Some(carried)));
-        assert!(
-            matches!(&out[..], [ServerMessage::Welcome { person: None, .. }]),
-            "a transferred key was not believed: {out:?}"
+        let out = rooms.handle(
+            &Caller::new(1),
+            ClientMessage::Join {
+                name: "alice".into(),
+                token: None,
+                room: Some(RoomId::from("hall")),
+                person: None,
+            },
         );
-
-        // A proof that is not the one on file is refused outright, and the
-        // refusal does not mint anybody: the count of people is unchanged.
-        let wrong = Person { id: me.id.clone(), proof: "f".repeat(32) };
-        let out = rooms.handle(&Caller::new(4), join(Some(wrong)));
-        assert!(matches!(&out[..], [ServerMessage::Rejected { .. }]), "{out:?}");
-
-        // And an id this server never issued, which is the squatting case: a
-        // key adopted here would lock its real owner out for good.
-        let stranger = Person { id: crate::net::PersonId("0".repeat(32)), proof: "1".repeat(32) };
-        let out = rooms.handle(&Caller::new(5), join(Some(stranger)));
-        assert!(matches!(&out[..], [ServerMessage::Rejected { .. }]), "{out:?}");
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let seat =
+            rooms.get(&RoomId::from("hall")).unwrap().players().find(|p| p.id == *you).unwrap();
+        assert_eq!(seat.person, None);
     }
 
     /// **Leaving frees the seat, and the token still brings you back.**
@@ -1959,7 +1980,12 @@ mod tests {
     fn a_watcher_is_sent_chunks_and_changes_nothing() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let seated = rooms.get_mut(&RoomId::from("hall")).unwrap().join("alice").unwrap();
-        let watcher = Caller { connection: 4, seat: None, watching: Some(RoomId::from("hall")) };
+        let watcher = Caller {
+            connection: 4,
+            seat: None,
+            watching: Some(RoomId::from("hall")),
+            challenge: String::new(),
+        };
 
         let before = rooms.get(&RoomId::from("hall")).unwrap().world().digest();
 
