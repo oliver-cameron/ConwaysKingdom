@@ -112,6 +112,29 @@ pub enum Shape {
     Stamp(usize),
 }
 
+impl Shape {
+    /// The other of the two shapes a gesture is usually in.
+    ///
+    /// From a stamp or a capture this is `Draw`, so the one square is a way
+    /// back to drawing as well as a way between the two — the same reasoning
+    /// as the key beside it.
+    pub fn other(self) -> Self {
+        match self {
+            Self::Draw => Self::Rect,
+            _ => Self::Draw,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Draw => words::DRAW,
+            Self::Rect => words::PANE,
+            Self::Capture => words::CAPTURE,
+            Self::Stamp(_) => words::PATTERN,
+        }
+    }
+}
+
 /// **Two axes: a shape and what it is made of.**
 ///
 /// It was one — a list of tools and stamps where picking any of them replaced
@@ -314,20 +337,27 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
                 // The stamps segment stands even when it is empty, so the bar
                 // does not change shape the first time anything is captured.
                 segment(ui, theme, |ui| {
-                    // **How the cells are chosen.** Draw and pane first,
-                    // because they are what most gestures are, and the toggle
-                    // between them is the one key on the bar that is a verb.
-                    for (shape, name) in [(Shape::Draw, words::DRAW), (Shape::Rect, words::PANE)] {
-                        if square(
-                            ui,
-                            look,
-                            Face::Text(name),
-                            name,
-                            (shape == Shape::Draw).then(|| words::FLIP_KEY.to_string()),
-                            held.shape == shape,
-                        ) {
-                            picked = Some(Key::Shape(shape));
-                        }
+                    // **One square, not two.** Draw and pane are one choice
+                    // with two answers, so they are one control that says
+                    // which answer is current — two squares spent twice the
+                    // room saying the same thing, and left the unselected one
+                    // looking like a third thing you could be doing rather
+                    // than the other half of what you are.
+                    //
+                    // It shows what is held, which includes a stamp: the shape
+                    // axis is where a pattern lives too, so the square says so
+                    // rather than going blank, and a click on it is the way
+                    // back to drawing.
+                    let shown = held.shape;
+                    if square(
+                        ui,
+                        look,
+                        Face::Text(shown.name()),
+                        shown.name(),
+                        Some(words::FLIP_KEY.to_string()),
+                        true,
+                    ) {
+                        picked = Some(Key::Shape(shown.other()));
                     }
                     rule(ui, theme);
                     // The capture square: it is where a library comes from, so

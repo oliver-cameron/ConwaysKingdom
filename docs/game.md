@@ -217,7 +217,7 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 Two segments, and one thing selected across both:
 
 ```
-    [ Life  Mine  Turret  Ice ]   [ Draw  Pane │ Grab  stamps … +7 ]
+    [ Life  Mine  Turret  Ice ]   [ Draw │ Grab  stamps … +7 ]
 ```
 
 **Two axes: what a cell is, and how the cells are chosen.** It was one — a row
@@ -227,6 +227,8 @@ always whatever it had been captured as. A line of ice and a pane of mines were
 not unimplemented, they were *unsayable*, because the stroke came attached to
 the material. The left segment is the material and the right is the shape, and
 picking one never disturbs the other.
+
+Draw and Pane share **one square**, which says which is current rather than offering both: they are one choice with two answers, and two squares spent twice the room saying the same thing while making the unselected one look like a third thing you could be doing. A click takes the other; while a stamp is held the square says so, since the shape axis is where a pattern lives too, and clicking it is the way back to drawing.
 
 Ice is among the kinds now rather than behind a rule. It used to sit apart
 because it was the one that walls people off and because it came with a
