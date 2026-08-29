@@ -293,6 +293,15 @@ pub mod hotbar {
     pub const TURRET: &str = "Turret";
     pub const ICE: &str = "Ice";
     /// The square that takes a stamp. Short, because it sits in a 44px box.
+    /// The shape axis. Verbs, because they are how the cells get chosen
+    /// rather than what ends up in them.
+    pub const DRAW: &str = "Draw";
+    pub const PANE: &str = "Pane";
+    /// What flips between the two, shown on the square rather than in a help
+    /// screen: it is the one key on the bar that does something rather than
+    /// selecting something.
+    pub const FLIP_KEY: &str = "S`";
+
     pub const CAPTURE: &str = "Grab";
     /// The square that opens the library.
     pub const LIBRARY: &str = "Stamps";

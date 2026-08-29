@@ -1252,7 +1252,7 @@ impl GameApp {
         // Nor under a stamp's ghost, for the same reason a swept rectangle
         // hides it: the thing about to be laid is already drawn, and a box
         // round one cell of it says something less true.
-        if matches!(self.held, Held::Stamp(_)) {
+        if matches!(self.held.shape, hotbar::Shape::Stamp(_)) {
             return None;
         }
         let at = self.cell_under_cursor(self.cursor);
@@ -1301,7 +1301,7 @@ impl GameApp {
             cells: rects,
             outlined: drag.stroke == hotbar::Stroke::Rectangle,
             tint: egui::Color32::from_rgb(r, g, b),
-            hatched: self.held == Held::Ice,
+            hatched: self.held.placement() == Some(crate::net::Placement::Ice),
             label,
             allowed,
         })
@@ -1320,7 +1320,7 @@ impl GameApp {
     /// label saying what it costs. What the drag preview does for a rectangle,
     /// this does for a pattern.
     fn stamp_preview(&self) -> Option<overlay::Selection> {
-        let Held::Stamp(index) = self.held else { return None };
+        let hotbar::Shape::Stamp(index) = self.held.shape else { return None };
         if !self.hovering || self.is_panning() || self.camera.zoom < HOVER_MIN_ZOOM {
             return None;
         }
@@ -1330,14 +1330,11 @@ impl GameApp {
 
         // Priced by the same call the placement itself makes, so what the
         // preview says and what the click charges cannot drift apart.
-        let delta: i32 = stamp
-            .placements()
-            .into_iter()
-            .map(|placement| self.quote_as(stamp.of(corner, placement), false, placement).1)
-            .sum();
+        let what = self.held.placement()?;
+        let delta = self.quote_as(laid.clone(), false, what).1;
         let stray = laid
             .iter()
-            .filter(|&&((r, c), _)| {
+            .filter(|&&(r, c)| {
                 !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
             })
             .count();
@@ -1358,7 +1355,7 @@ impl GameApp {
             // Cell by cell rather than one rectangle over the extent: a
             // pattern is mostly holes, and a wash over its bounding box would
             // say it fills them.
-            cells: laid.iter().map(|&(at, _)| self.camera.cell_rect(at, at)).collect(),
+            cells: laid.iter().map(|&at| self.camera.cell_rect(at, at)).collect(),
             outlined: false,
             tint: egui::Color32::from_rgb(r, g, b),
             hatched: false,
@@ -1389,7 +1386,7 @@ impl GameApp {
     fn click(&mut self, row: i32, col: i32) {
         // A stamp is not a cell, so a click with one held stamps rather than
         // placing or taking.
-        if let Held::Stamp(index) = self.held {
+        if let hotbar::Shape::Stamp(index) = self.held.shape {
             self.stamp_at(index, (row, col));
             return;
         }
@@ -1456,19 +1453,27 @@ impl GameApp {
 
     /// What the hotbar is holding, for the HUD and for a drag's label.
     fn holding(&self) -> &str {
-        match self.held {
-            Held::Stamp(i) => self.stamps.get(i).map(|s| s.name.as_str()).unwrap_or("Stamp"),
-            other => other.tool().map(|t| t.name).unwrap_or("nothing"),
+        // Both axes, because both are what you are holding: a pane of ice and
+        // a pencil of ice are different things to be about to do.
+        match self.held.shape {
+            hotbar::Shape::Stamp(i) => {
+                self.stamps.get(i).map(|s| s.name.as_str()).unwrap_or("Stamp")
+            }
+            _ => self.held.tool().map(|t| t.name).unwrap_or("nothing"),
         }
     }
 
     /// Take what the hotbar was clicked or keyed for.
     fn pick(&mut self, key: Key) {
         match key {
-            Key::Held(held) => {
-                self.held = held;
+            // **One axis each, which is the whole of what two axes buys.**
+            // Picking a material does not put your pencil down, and picking a
+            // shape does not change what it is made of.
+            Key::Shape(shape) => {
+                self.held.shape = shape;
                 self.picking_stamp = false;
             }
+            Key::Kind(kind) => self.held.kind = kind,
             Key::More => self.picking_stamp = !self.picking_stamp,
         }
     }
@@ -1493,17 +1498,17 @@ impl GameApp {
         };
         let corner = stamp.centred_on(at);
 
-        let quotes: Vec<(Stamped, i32)> = stamp
-            .placements()
-            .into_iter()
-            .map(|placement| self.quote_as(stamp.of(corner, placement), false, placement))
-            .collect();
+        // **One kind, so one quote.** A stamp used to carry a placement per
+        // cell and went down as several actions; it is a shape now and what it
+        // is made of comes off the hotbar, so it is one.
+        let Some(what) = self.held.placement() else { return };
+        let laid = stamp.at(corner);
+        let quotes = [self.quote_as(laid.clone(), false, what)];
 
         let cells: usize = stamp.cells.len();
-        let stray = stamp
-            .at(corner)
+        let stray = laid
             .iter()
-            .filter(|&&((r, c), _)| {
+            .filter(|&&(r, c)| {
                 !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
             })
             .count();
@@ -1534,7 +1539,7 @@ impl GameApp {
                 self.stamps.keep(taken);
                 // Held straight away: you swept it out because you want to put
                 // it somewhere, and it is the newest so it is at index zero.
-                self.held = Held::Stamp(0);
+                self.held.shape = hotbar::Shape::Stamp(0);
                 self.notice = None;
                 self.last_action = Some(words::stamps::captured(&name, cells));
             }
@@ -2317,7 +2322,9 @@ impl App for GameApp {
                         let clock_rect = lobby.as_ref().and_then(|l| {
                             clock::show(ctx, &theme, generation, &l.phase, l.victory, &standing)
                         });
-                        let look = hotbar::Look { theme: &theme, sheet, player: me, typed: &typed };
+                        let what = held.placement().unwrap_or(crate::net::Placement::Life);
+                        let look =
+                            hotbar::Look { theme: &theme, what, sheet, player: me, typed: &typed };
                         let bar = hotbar::show(ctx, &look, held, &self.stamps);
                         picked = bar.picked;
                         // Over the world rather than instead of it: a match that has
@@ -2334,8 +2341,15 @@ impl App for GameApp {
                             rect
                         });
                         if picking {
-                            let (chose, rect) =
-                                stamp::show(ctx, &theme, &self.stamps, &mut sketch, me, sheet);
+                            let (chose, rect) = stamp::show(
+                                ctx,
+                                &theme,
+                                &self.stamps,
+                                &mut sketch,
+                                what,
+                                me,
+                                sheet,
+                            );
                             from_library = chose;
                             return [hud_rect, bar.rect, rect, waiting, clock_rect]
                                 .into_iter()
@@ -2368,7 +2382,7 @@ impl App for GameApp {
         match from_library {
             stamp::Picked::Nothing => {}
             stamp::Picked::Hold(i) => {
-                self.held = Held::Stamp(i);
+                self.held.shape = hotbar::Shape::Stamp(i);
                 self.picking_stamp = false;
             }
             // Held by index, so forgetting one shifts everything after it --
@@ -2376,14 +2390,14 @@ impl App for GameApp {
             // pattern than the one that was on screen a moment ago.
             stamp::Picked::Forget(i) => {
                 self.stamps.forget(i);
-                self.held = Held::default();
+                self.held.shape = hotbar::Shape::default();
             }
             // Kept where a captured one is kept, and held straight away: you
             // drew it because you meant to place it.
             stamp::Picked::Keep(stamp) => {
                 let (name, cells) = (stamp.name.clone(), stamp.cells.len());
                 self.stamps.keep(stamp);
-                self.held = Held::Stamp(0);
+                self.held.shape = hotbar::Shape::Stamp(0);
                 self.notice = Some(words::stamps::captured(&name, cells));
             }
             stamp::Picked::Close => self.picking_stamp = false,
@@ -2499,6 +2513,16 @@ impl App for GameApp {
             self.helping = !self.helping;
             return;
         }
+        // **The shape axis has one key, and it is a verb.** Draw and pane are
+        // the two shapes almost every gesture is, so they get a toggle rather
+        // than two bindings — and it doubles as the way out of a stamp or a
+        // capture, since "put the pattern down and go back to drawing" is the
+        // thing you want a key for after placing one.
+        if pressed && code == K::Backquote && self.shift {
+            self.held = self.held.flipped();
+            self.picking_stamp = false;
+            return;
+        }
         if pressed && code == K::Escape && self.helping {
             self.helping = false;
             return;
@@ -2530,7 +2554,7 @@ impl App for GameApp {
                 } else {
                     hotbar::stamp_for_digit(d)
                         .filter(|&i| i < self.stamps.len())
-                        .map(|i| Key::Held(Held::Stamp(i)))
+                        .map(|i| Key::Shape(hotbar::Shape::Stamp(i)))
                 };
                 if let Some(key) = key {
                     self.pick(key);

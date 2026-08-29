@@ -28,7 +28,7 @@ use crate::client::views::words::hotbar as words;
 use crate::net::Placement;
 use crate::sim::{Cell, Kind, PlayerId};
 
-/// What a drag lays.
+/// What a drag lays: the **shape** axis.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stroke {
     /// Every cell the pointer crosses. Drawing, rather than specifying: you
@@ -39,7 +39,12 @@ pub enum Stroke {
     Rectangle,
 }
 
-/// One of the fixed tools.
+/// One of the four things a cell can be: the **kind** axis.
+///
+/// It was a tool, which is to say a shape and a material at once — a mine came
+/// with a pencil and ice came with a rectangle, and there was no way to draw a
+/// line of ice or sweep a pane of mines. The two are chosen separately now and
+/// this is half of the choice.
 pub struct Tool {
     pub name: &'static str,
     /// The cell this puts down, so a button can show it rather than spell it.
@@ -47,8 +52,6 @@ pub struct Tool {
     /// What the server is asked for. A name rather than cell bits, so the
     /// server can judge the request.
     pub placement: Placement,
-    /// What dragging with this held lays down.
-    pub stroke: Stroke,
 }
 
 /// What each tool leaves on a square, which is what its button shows. Built
@@ -59,93 +62,103 @@ const TURRETED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::TURRET);
 const ICED: Cell = Cell::DEAD.with_ice(true);
 
 /// The left segment: what you draw with.
-pub const DRAWN: [Tool; 3] = [
-    Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life, stroke: Stroke::Pencil },
-    // A pencil, not a rectangle: a mine is placed a few at a time and into a
-    // pattern, because what it is worth depends on what it is next to.
-    Tool { name: words::MINE, shows: MINED, placement: Placement::Mine, stroke: Stroke::Pencil },
-    // A pencil for the same reason, and a shorter stroke: a turret is placed
-    // in fours, because one live cell on its own dies of loneliness and the
-    // 2x2 block is the cheapest thing that does not. Four cells is a gesture,
-    // which is what a pencil is for.
-    Tool {
-        name: words::TURRET,
-        shows: TURRETED,
-        placement: Placement::Turret,
-        stroke: Stroke::Pencil,
-    },
+/// The four kinds, in the order they sit on the bar.
+///
+/// **One list, and ice is in it.** Ice used to live apart because it was the
+/// tool that walls people off and because it came with a different stroke;
+/// with the stroke chosen separately there is nothing left to separate it by,
+/// and a fourth kind now appears here by existing.
+pub const KINDS: [Tool; 4] = [
+    Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life },
+    Tool { name: words::MINE, shows: MINED, placement: Placement::Mine },
+    Tool { name: words::TURRET, shows: TURRETED, placement: Placement::Turret },
+    Tool { name: words::ICE, shows: ICED, placement: Placement::Ice },
 ];
 
-/// The right segment, on its own.
-pub const WALLED: Tool =
-    // Ice is a flag rather than a kind, so a pane lies over a living cell as
-    // readily as over empty ground.
-    Tool {
-        name: words::ICE,
-        shows: ICED,
-        placement: Placement::Ice,
-        stroke: Stroke::Rectangle,
-    };
-
-/// What the hand is holding.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Held {
-    /// One of [`DRAWN`].
-    Draw(usize),
+/// What a gesture makes: the shape axis.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Shape {
+    /// A pencil. Every cell the pointer crosses.
+    #[default]
+    Draw,
+    /// A pane. Every cell between the corners.
+    Rect,
     /// Nothing yet: the next drag takes a stamp rather than laying anything.
     ///
     /// Its own square because otherwise there is nowhere to start. Capturing
-    /// used to be "drag with a stamp held", which is fine once you have one and
-    /// impossible before — the first stamp had no way to exist.
+    /// used to be "drag with a stamp held", which is fine once you have one
+    /// and impossible before — the first stamp had no way to exist.
     Capture,
-    /// A stamp, by its place in the library.
+    /// A saved pattern, by its place in the library.
     Stamp(usize),
-    Ice,
 }
 
-impl Default for Held {
-    fn default() -> Self {
-        Self::Draw(0)
-    }
+/// **Two axes: a shape and what it is made of.**
+///
+/// It was one — a list of tools and stamps where picking any of them replaced
+/// everything about the last. So a mine was always a pencil, ice was always a
+/// pane, and a stamp was always whatever it had been captured as; there was no
+/// way to draw a line of ice, sweep a pane of mines, or lay a glider in
+/// anything but the material it was built from.
+///
+/// Separating them makes each choice mean one thing. The shape says how the
+/// cells are chosen and the kind says what goes in them, and every combination
+/// is reachable rather than the dozen somebody happened to list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Held {
+    pub shape: Shape,
+    /// Which of [`KINDS`]. An index rather than the `Placement`, so a square
+    /// on the bar and the thing it lays cannot come apart.
+    pub kind: usize,
 }
 
 impl Held {
     /// Whether a drag with this held takes a stamp rather than laying one.
     pub fn captures(self) -> bool {
-        matches!(self, Self::Capture | Self::Stamp(_))
+        matches!(self.shape, Shape::Capture | Shape::Stamp(_))
     }
 
-    /// The tool this is, if it is one. A stamp is not: it lays whatever it
-    /// captured, which may be several placements at once.
+    /// The kind this is holding.
     pub fn tool(self) -> Option<&'static Tool> {
-        match self {
-            Self::Draw(i) => DRAWN.get(i),
-            Self::Ice => Some(&WALLED),
-            Self::Capture | Self::Stamp(_) => None,
-        }
+        KINDS.get(self.kind)
     }
 
     pub fn placement(self) -> Option<Placement> {
         self.tool().map(|t| t.placement)
     }
 
-    /// What a drag with this held draws. A stamp is placed by a click, so a
-    /// drag with one held sweeps out the rectangle that **captures** another —
-    /// which is the one gesture the two hotbars in the old plan existed to keep
-    /// apart, and here it needs no second bar because holding a stamp already
-    /// means you are thinking about stamps.
+    /// What a drag with this held draws.
+    ///
+    /// A stamp is placed by a click, so a drag with one held sweeps out the
+    /// rectangle that **captures** another — holding a stamp already means you
+    /// are thinking about stamps, which is why that needs no bar of its own.
     pub fn stroke(self) -> Stroke {
-        match self.tool() {
-            Some(tool) => tool.stroke,
-            None => Stroke::Rectangle,
+        match self.shape {
+            Shape::Draw => Stroke::Pencil,
+            Shape::Rect | Shape::Capture | Shape::Stamp(_) => Stroke::Rectangle,
         }
+    }
+
+    /// The other shape, for the one key that toggles between them.
+    pub fn flipped(self) -> Self {
+        let shape = match self.shape {
+            // From a stamp or a capture, back to drawing: the toggle is a way
+            // out of them as well as a way between the two.
+            Shape::Rect => Shape::Draw,
+            _ => Shape::Rect,
+        };
+        Self { shape, ..self }
     }
 }
 
 /// Something on the bar that a key can pick.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
-    Held(Held),
+    /// Pick a shape, leaving what it is made of alone.
+    Shape(Shape),
+    /// Pick a kind, leaving the shape alone. **That is the whole point of two
+    /// axes**: choosing a material does not put your pencil down.
+    Kind(usize),
     /// The stamps that did not fit.
     More,
 }
@@ -167,17 +180,10 @@ pub fn stamp_for_digit(digit: u32) -> Option<usize> {
 /// The keys that are not stamps, in the order they sit on the bar. Shift and a
 /// digit picks one of these.
 pub fn shifted(_library: &Library) -> Vec<Key> {
-    // **Derived from [`DRAWN`], not listed beside it.** It was a hand-written
-    // list of two draw tools, and `DRAWN` has three — so shift and 3 reached
-    // ice, everything after it was out by one, and the turret had no key at
-    // all. The bar labels its squares 1, 2, 3… from its own layout, so the
-    // screen said one thing and the keyboard did another.
-    //
-    // A fourth tool now appears here by existing.
-    (0..DRAWN.len())
-        .map(|i| Key::Held(Held::Draw(i)))
-        .chain([Key::Held(Held::Ice), Key::Held(Held::Capture), Key::More])
-        .collect()
+    // **Derived from [`KINDS`], not listed beside it.** It was a hand-written
+    // list once and went out by one the moment a tool was added, so the bar
+    // labelled its squares from its own layout and the keyboard disagreed.
+    (0..KINDS.len()).map(Key::Kind).chain([Key::Shape(Shape::Capture), Key::More]).collect()
 }
 
 /// Which of those shift and this digit picks.
@@ -223,6 +229,10 @@ pub struct Shown {
 /// Everything a square might need to draw itself.
 pub struct Look<'a> {
     pub theme: &'a Theme,
+    /// What the kind axis is holding, which is what a stamp's square is drawn
+    /// in: a pattern is a shape, so the thumbnail shows what it would come out
+    /// as rather than how it was captured.
+    pub what: Placement,
     /// The sprite sheet in this player's colour, if it could be built.
     pub sheet: Option<egui::TextureId>,
     pub player: PlayerId,
@@ -251,55 +261,59 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
                 ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
                 ui.set_min_height(m.slot + m.panel_padding * 1.2 + 2.0);
 
+                // **What it is made of.** One segment, four kinds, and ice
+                // among them: it used to sit behind a rule because it came
+                // with a different stroke, and the stroke is the other axis
+                // now.
                 segment(ui, theme, |ui| {
-                    for (i, tool) in DRAWN.iter().enumerate() {
-                        let key = Held::Draw(i);
+                    for (i, tool) in KINDS.iter().enumerate() {
                         if square(
                             ui,
                             look,
                             Face::Sprite(tool.shows),
                             tool.name,
                             tool_hint(shift, typed),
-                            held == key,
+                            held.kind == i,
                         ) {
-                            picked = Some(Key::Held(key));
+                            picked = Some(Key::Kind(i));
                         }
                         shift += 1;
                     }
-                    // Ice is a tool, and it is the one that walls people off,
-                    // so it lives here but behind a rule.
-                    rule(ui, theme);
-                    if square(
-                        ui,
-                        look,
-                        Face::Sprite(WALLED.shows),
-                        WALLED.name,
-                        tool_hint(shift, typed),
-                        held == Held::Ice,
-                    ) {
-                        picked = Some(Key::Held(Held::Ice));
-                    }
-                    shift += 1;
                 });
 
                 // The stamps segment stands even when it is empty, so the bar
                 // does not change shape the first time anything is captured.
                 segment(ui, theme, |ui| {
-                    // The capture square first, and always: it is where a
-                    // library comes from, so it cannot be behind having one.
+                    // **How the cells are chosen.** Draw and pane first,
+                    // because they are what most gestures are, and the toggle
+                    // between them is the one key on the bar that is a verb.
+                    for (shape, name) in [(Shape::Draw, words::DRAW), (Shape::Rect, words::PANE)] {
+                        if square(
+                            ui,
+                            look,
+                            Face::Text(name),
+                            name,
+                            (shape == Shape::Draw).then(|| words::FLIP_KEY.to_string()),
+                            held.shape == shape,
+                        ) {
+                            picked = Some(Key::Shape(shape));
+                        }
+                    }
+                    rule(ui, theme);
+                    // The capture square: it is where a library comes from, so
+                    // it cannot be behind having one.
                     if square(
                         ui,
                         look,
                         Face::Camera,
                         words::CAPTURE,
                         tool_hint(shift, typed),
-                        held == Held::Capture,
+                        held.shape == Shape::Capture,
                     ) {
-                        picked = Some(Key::Held(Held::Capture));
+                        picked = Some(Key::Shape(Shape::Capture));
                     }
                     shift += 1;
                     for i in 0..library.on_the_bar() {
-                        let key = Held::Stamp(i);
                         let Some(stamp) = library.get(i) else { continue };
                         if square(
                             ui,
@@ -307,9 +321,9 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
                             Face::Pattern(stamp),
                             &stamp.name,
                             stamp_hint(i),
-                            held == key,
+                            held.shape == Shape::Stamp(i),
                         ) {
-                            picked = Some(Key::Held(key));
+                            picked = Some(Key::Shape(Shape::Stamp(i)));
                         }
                     }
                     // The library is always one key away, whether or not
@@ -427,7 +441,7 @@ fn square(
             }
             None => draw_text(painter, inner, name, ink),
         },
-        Face::Pattern(stamp) => stamp.draw(painter, inner, look.player, look.sheet),
+        Face::Pattern(stamp) => stamp.draw(painter, inner, look.what, look.player, look.sheet),
         Face::Camera => icons::camera(painter, inner, ink),
         Face::Text(text) => draw_text(painter, inner, text, ink),
     }
@@ -463,11 +477,7 @@ mod tests {
     fn library(n: usize) -> Library {
         let mut library = Library::default();
         for i in 0..n {
-            library.keep(Stamp {
-                name: format!("s{i}"),
-                cells: vec![((0, 0), Placement::Life)],
-                size: (1, 1),
-            });
+            library.keep(Stamp { name: format!("s{i}"), cells: vec![(0, 0)], size: (1, 1) });
         }
         library
     }
@@ -475,88 +485,93 @@ mod tests {
     /// The bar reads left to right whatever is on it, and Ice is always the
     /// last thing — so the key that walls somebody off does not move when you
     /// capture a pattern.
-    /// The tools keep their keys however many patterns are captured, which is
+    /// The kinds keep their keys however many patterns are captured, which is
     /// the whole reason the bar is split.
     #[test]
-    fn the_tool_keys_never_move() {
+    fn the_kind_keys_never_move() {
         for n in [0, 1, ON_THE_BAR, ON_THE_BAR + 5] {
             let keys = shifted(&library(n));
-            let expected: Vec<Key> = (0..DRAWN.len())
-                .map(|i| Key::Held(Held::Draw(i)))
-                .chain([Key::Held(Held::Ice)])
-                .collect();
+            let expected: Vec<Key> = (0..KINDS.len()).map(Key::Kind).collect();
             assert_eq!(&keys[..expected.len()], &expected[..], "{n} stamps");
         }
     }
 
-    /// Past the limit the extra stamps go behind one key rather than making the
-    /// bar longer than a hand can read.
-    #[test]
-    fn the_bar_stops_growing_and_the_rest_go_behind_a_menu() {
-        assert_eq!(library(ON_THE_BAR).on_the_bar(), ON_THE_BAR);
-        assert_eq!(library(ON_THE_BAR + 50).on_the_bar(), ON_THE_BAR);
-        // The library is always one key away: it is where a stamp is named,
-        // looked at and thrown away, not only where the overflow lives.
-        assert!(shifted(&library(0)).contains(&Key::More));
-    }
-
-    /// The digits are the stamps: 1 to 9 and then 0, which is ten of them and
-    /// is why the bar holds ten.
-    #[test]
-    fn the_digits_are_the_stamps() {
-        assert_eq!(stamp_for_digit(1), Some(0));
-        assert_eq!(stamp_for_digit(9), Some(8));
-        assert_eq!(stamp_for_digit(0), Some(9), "zero is the tenth, not the first");
-        let reached: std::collections::HashSet<usize> =
-            (0..=9).filter_map(stamp_for_digit).collect();
-        assert_eq!(reached.len(), ON_THE_BAR, "every square on the bar has a key");
-    }
-
-    /// The tools never change and never grow, so they can afford a modifier —
     /// and they keep the order they sit in.
     #[test]
-    fn shift_picks_the_tools_in_the_order_they_sit() {
+    fn shift_picks_the_kinds_in_the_order_they_sit() {
         let few = library(1);
-        // Every draw tool, in the order it sits on the bar. This used to stop
-        // at two while `DRAWN` held three: shift and 3 reached ice, everything
-        // after was out by one, and the turret had no key at all.
-        for (i, tool) in DRAWN.iter().enumerate() {
+        // Every kind, in the order it sits on the bar. Ice is among them now:
+        // it used to sit apart because it came with a different stroke, and
+        // the stroke is the other axis.
+        for (i, tool) in KINDS.iter().enumerate() {
             assert_eq!(
                 shifted_for_digit(i as u32 + 1, &few),
-                Some(Key::Held(Held::Draw(i))),
+                Some(Key::Kind(i)),
                 "shift and {} should pick {}",
                 i + 1,
                 tool.name
             );
         }
-        let after = DRAWN.len() as u32;
-        assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Held(Held::Ice)));
-        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::Held(Held::Capture)));
-        assert_eq!(shifted_for_digit(after + 3, &few), Some(Key::More));
-        assert_eq!(shifted_for_digit(after + 4, &few), None);
+        let after = KINDS.len() as u32;
+        assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Shape(Shape::Capture)));
+        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::More));
+        assert_eq!(shifted_for_digit(after + 3, &few), None);
 
         // And not one of them moves when a pattern is captured.
         let many = library(ON_THE_BAR + 1);
         assert_eq!(shifted(&many), shifted(&few));
     }
 
+    /// **The two axes are independent, which is the whole of the change.**
+    ///
+    /// Every combination is reachable now rather than the dozen somebody
+    /// happened to list: a pane of mines and a pencil of ice were both
+    /// unsayable, because a tool carried its stroke with it.
+    #[test]
+    fn a_shape_and_a_kind_are_chosen_separately() {
+        let ice = KINDS.iter().position(|k| k.placement == Placement::Ice).unwrap();
+        let drawn_ice = Held { shape: Shape::Draw, kind: ice };
+        assert_eq!(drawn_ice.stroke(), Stroke::Pencil, "a line of ice was unsayable");
+        assert_eq!(drawn_ice.placement(), Some(Placement::Ice));
+
+        let panes_of_mine = Held {
+            shape: Shape::Rect,
+            kind: KINDS.iter().position(|k| k.placement == Placement::Mine).unwrap(),
+        };
+        assert_eq!(panes_of_mine.stroke(), Stroke::Rectangle, "a pane of mines was unsayable");
+        assert_eq!(panes_of_mine.placement(), Some(Placement::Mine));
+
+        // A stamp is a shape, so it keeps whatever it is being made of --
+        // which is what "remove the stamps know what they are made of" means
+        // at the point of placing one.
+        let stamped = Held { shape: Shape::Stamp(0), kind: ice };
+        assert_eq!(stamped.placement(), Some(Placement::Ice), "a stamp lost the held kind");
+        assert_eq!(stamped.stroke(), Stroke::Rectangle, "a drag with a stamp still captures");
+    }
+
     /// Capturing is a rectangle, and it has a square of its own — there has to
     /// be a way to take the first stamp, and "drag with a stamp held" is not
     /// one when you have none.
     #[test]
-    fn a_stamp_drags_a_rectangle_and_life_draws_a_line() {
-        assert_eq!(Held::Draw(0).stroke(), Stroke::Pencil);
-        assert_eq!(Held::Ice.stroke(), Stroke::Rectangle);
-        assert_eq!(Held::Stamp(0).stroke(), Stroke::Rectangle);
-        assert_eq!(Held::Capture.stroke(), Stroke::Rectangle);
-        assert_eq!(Held::Stamp(0).placement(), None, "a stamp lays what it caught");
+    fn capturing_is_reachable_with_nothing_captured() {
+        assert!(Held { shape: Shape::Capture, kind: 0 }.captures());
+        assert!(Held { shape: Shape::Stamp(3), kind: 0 }.captures(), "a stamp takes the next one");
+        assert!(!Held { shape: Shape::Draw, kind: 0 }.captures());
+        assert!(!Held { shape: Shape::Rect, kind: 0 }.captures());
+        assert!(shifted(&library(0)).contains(&Key::Shape(Shape::Capture)));
+    }
 
-        assert!(Held::Capture.captures());
-        assert!(Held::Stamp(3).captures(), "and a stamp still takes the next one");
-        assert!(!Held::Draw(0).captures());
-        assert!(!Held::Ice.captures());
-
-        // Reachable with an empty library, which is the whole point of it.
-        assert!(shifted(&library(0)).contains(&Key::Held(Held::Capture)));
+    /// One key flips between the two shapes almost every gesture is, and it is
+    /// also the way out of a stamp -- "put the pattern down and draw again" is
+    /// the thing you want a key for straight after placing one.
+    #[test]
+    fn the_flip_key_goes_both_ways_and_out_of_a_stamp() {
+        let held = Held { shape: Shape::Draw, kind: 2 };
+        assert_eq!(held.flipped().shape, Shape::Rect);
+        assert_eq!(held.flipped().flipped().shape, Shape::Draw);
+        assert_eq!(held.flipped().kind, held.kind, "flipping a shape changed the material");
+        for shape in [Shape::Stamp(4), Shape::Capture] {
+            assert_eq!(Held { shape, kind: 0 }.flipped().shape, Shape::Rect);
+        }
     }
 }

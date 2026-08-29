@@ -32,7 +32,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
 | [Auto-mining](#auto-mining) | Built | |
 | [Turrets](#turrets) | Built | |
-| [Stamps](#stamps) | Built | including what would make them outlive the tab |
+| [Stamps](#stamps) | Built | a shape; what it is made of is the hotbar's other axis |
 | [Territory as a level, not a flag](#territory-as-a-level-not-a-flag) | Built | |
 | [Matches](#matches) | Built | |
 | [Type, and the numbers that jitter](#type-and-the-numbers-that-jitter) | Decided | |
