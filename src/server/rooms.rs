@@ -1283,7 +1283,11 @@ mod tests {
         // together and this would pass for the wrong reason -- hence the
         // second player's own room being checked for emptiness too.
         rooms.get_mut(&RoomId::from("a")).unwrap().step();
-        let (row, col) = crate::net::spawn_for(a, rooms.get(&RoomId::from("a")).unwrap().world());
+        let (row, col) = crate::net::spawn_for(
+            a,
+            rooms.get(&RoomId::from("a")).unwrap().world(),
+            &crate::net::Sides::SOLO,
+        );
         assert!(rooms.get(&RoomId::from("a")).unwrap().world().cell_at(row, col).is_some());
         assert_eq!(
             rooms.get(&RoomId::from("b")).unwrap().world().generation,

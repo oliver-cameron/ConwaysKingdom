@@ -20,7 +20,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Spectating](#spectating) | Built | a room with no seat in it |
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
-| [Teams](#teams) | Designed | more than one player to a side |
+| [Teams](#teams) | Built | one seat, one platform and one purse to a side |
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | identity is in; discovery is not |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |

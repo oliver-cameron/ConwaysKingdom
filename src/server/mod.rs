@@ -621,6 +621,27 @@ impl Server {
         self.players.values().any(|p| p.token == token && !p.online)
     }
 
+    /// Move a purse, which on a side is every ally's.
+    ///
+    /// **The invariant is that allies hold the same figure**, kept by writing
+    /// every change to all of them rather than by keeping one number
+    /// somewhere and looking it up. What that buys is that everything which
+    /// reads a value -- the refusal in `handle`, `value_of`, the `Purse`
+    /// message, the save -- goes on reading one player's and gets the side's,
+    /// with no second place for the two to disagree.
+    ///
+    /// It holds because sides only exist in a match and a match starts
+    /// everybody at the same figure; see [`Self::starting_value`]. An ordinary
+    /// room has no teams to share anything.
+    pub(crate) fn credit(&mut self, player: PlayerId, delta: i32) {
+        let sides = self.sides;
+        for other in self.players.values_mut() {
+            if other.id == player || sides.allied(other.id, player) {
+                other.value += delta;
+            }
+        }
+    }
+
     pub fn join(&mut self, name: impl Into<String>) -> Result<PlayerId, String> {
         let Some(id) = self.next_player_id() else {
             let name = name.into();
@@ -664,8 +685,8 @@ impl Server {
     /// what the rejoin path relies on: a player coming back is granted again
     /// here, and used to get a fresh block on top of whatever they had built.
     fn grant_territory(&mut self, id: PlayerId) {
-        crate::net::grant(&mut self.world, id);
-        let (row, col) = crate::net::spawn_for(id, &self.world);
+        crate::net::grant(&mut self.world, id, &self.sides);
+        let (row, col) = crate::net::spawn_for(id, &self.world, &self.sides);
         log::info!("{id:?} granted ground at ({row}, {col})");
         // **Written down, because a grant changes the world and no client is
         // watching for it.** A player arriving is told their spawn in the
@@ -771,7 +792,7 @@ impl Server {
                 let who = person.as_ref().map(|p| p.id.clone());
                 match self.join_with(name, token.as_deref(), who.as_ref()) {
                     Ok((you, token)) => {
-                        let spawn = crate::net::spawn_for(you, &self.world);
+                        let spawn = crate::net::spawn_for(you, &self.world, &self.sides);
                         let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
                         vec![ServerMessage::Welcome {
                             you,
@@ -872,9 +893,7 @@ impl Server {
                         );
                         return Vec::new();
                     }
-                    if let Some(p) = self.players.get_mut(&stamped.player) {
-                        p.value += delta;
-                    }
+                    self.credit(stamped.player, delta);
                     self.pending.push(stamped);
                 }
                 Vec::new()
@@ -1025,12 +1044,33 @@ impl Server {
 
         // What the mines paid out. The world counted the births; the price is
         // here, and this is the only place a purse is authoritative.
-        for player in self.players.values_mut() {
-            // Floored at zero. A cost that comes from an action is refused
-            // when it cannot be paid; a drain arrives whether or not there is
-            // anything to take it from, and a player in debt would be a player
-            // who cannot act and has no way to stop owing.
-            player.value = (player.value + crate::net::earnings(&mined, player.id)).max(0);
+        //
+        // **One purse to a side.** A team's mines pay the team, so what any
+        // one of them earns is what all of them have -- summed over the side
+        // and credited to each of its members, which is the same invariant
+        // `credit` keeps for spending. Quadratic in the roster and the roster
+        // is fifteen, so the obviously-correct version is also the fast one.
+        let sides = self.sides;
+        let ids: Vec<PlayerId> = self.players.keys().copied().collect();
+        let earned: Vec<(PlayerId, i32)> = ids
+            .iter()
+            .map(|&id| {
+                let side: i32 = ids
+                    .iter()
+                    .filter(|&&other| other == id || sides.allied(other, id))
+                    .map(|&other| crate::net::earnings(&mined, other))
+                    .sum();
+                (id, side)
+            })
+            .collect();
+        for (id, earned) in earned {
+            if let Some(player) = self.players.get_mut(&id) {
+                // Floored at zero. A cost that comes from an action is refused
+                // when it cannot be paid; a drain arrives whether or not there
+                // is anything to take it from, and a player in debt would be a
+                // player who cannot act and has no way to stop owing.
+                player.value = (player.value + earned).max(0);
+            }
         }
 
         self.decide();
@@ -1074,7 +1114,8 @@ mod tests {
         // not depend on the world at all -- only a torus has to share out what
         // ground there is. So one is made here rather than threaded through
         // every call and fought with the borrow checker over.
-        let (row, col) = crate::net::spawn_for(id, &World::infinite_empty());
+        let (row, col) =
+            crate::net::spawn_for(id, &World::infinite_empty(), &crate::net::Sides::SOLO);
         offsets.iter().map(|&(r, c)| (row + r, col + c)).collect()
     }
     use crate::net::{Action, Placement};
@@ -1375,7 +1416,7 @@ mod tests {
         // Two blocks, one each, and each on its own granted patch.
         assert_eq!(s.world().live_cells().len(), 8, "a block each, laid together");
         for id in [alice, bob] {
-            let (row, col) = crate::net::spawn_for(id, s.world());
+            let (row, col) = crate::net::spawn_for(id, s.world(), &crate::net::Sides::SOLO);
             assert_eq!(s.world().cell_at(row, col).unwrap().player(), id);
         }
     }
@@ -1547,6 +1588,62 @@ mod tests {
         );
         s.step();
         assert_eq!(s.world().live_cells().len(), before);
+    }
+
+    /// **A side is one seat, one platform and one purse.**
+    ///
+    /// Allies build on each other's ground and cannot hurt each other, so
+    /// seating them separately hands one team two opening positions where a
+    /// solo player gets one -- twice the frontage, and a border between them
+    /// no rule will ever contest. The size of a side is meant to be the
+    /// advantage, not where it starts.
+    #[test]
+    fn a_side_shares_a_seat_a_platform_and_a_purse() {
+        use crate::net::TeamId;
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 1000 });
+        s.make_teams(2).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let (carol, _) = s.join_with("carol", None, None).unwrap();
+        s.take_side(alice, TeamId(1)).unwrap();
+        s.take_side(bob, TeamId(1)).unwrap();
+        s.take_side(carol, TeamId(2)).unwrap();
+        s.start_match(None).unwrap();
+
+        let sides = s.sides();
+        let seat = |id| crate::net::spawn_for(id, s.world(), &sides);
+        assert_eq!(seat(alice), seat(bob), "allies were seated apart");
+        assert_ne!(seat(alice), seat(carol), "two sides shared a seat");
+
+        // One platform: the second ally to be granted finds the ground already
+        // held by their own side and leaves it alone, rather than laying a
+        // second block on top of their team's opening.
+        let home = seat(alice);
+        let blocks = (home.0..home.0 + crate::net::SPAWN_N)
+            .flat_map(|r| (home.1..home.1 + crate::net::SPAWN_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| s.world().cell_at(r, c).is_some_and(|cell| cell.is_alive()))
+            .count();
+        assert_eq!(blocks, 4, "a side has one 2x2 block, and found {blocks} live cells");
+
+        // A match starts everybody at nothing, which is the invariant's
+        // starting condition as well as the game's.
+        s.step();
+        for id in [alice, bob, carol] {
+            assert_eq!(s.value_of(id), Some(0), "a match did not start everybody level");
+        }
+
+        // One purse: what reaches one ally reaches both, and stops at the
+        // touchline.
+        s.credit(alice, 40);
+        assert_eq!(s.value_of(alice), Some(40));
+        assert_eq!(s.value_of(bob), Some(40), "an ally was not paid");
+        assert_eq!(s.value_of(carol), Some(0), "the other side was");
+
+        s.credit(bob, -15);
+        assert_eq!(s.value_of(alice), Some(25), "an ally's spending did not come out of the purse");
+        assert_eq!(s.value_of(bob), Some(25));
+        assert_eq!(s.value_of(carol), Some(0));
     }
 
     /// **The door is shut once a match is running**, and it was ajar.
@@ -1783,7 +1880,7 @@ mod tests {
         let (alice, _) = s.join_with("alice", None, None).unwrap();
         let (bob, _) = s.join_with("bob", None, None).unwrap();
 
-        let (row, col) = crate::net::spawn_for(alice, s.world());
+        let (row, col) = crate::net::spawn_for(alice, s.world(), &crate::net::Sides::SOLO);
         let chunk = (row.div_euclid(CHUNK_N as i32), col.div_euclid(CHUNK_N as i32));
 
         let sent = s.handle(Some(bob), ClientMessage::Subscribe { chunks: vec![chunk] });
@@ -1995,7 +2092,7 @@ mod tests {
     fn coming_back_does_not_grant_a_second_platform() {
         let mut s = Server::new(World::infinite_empty());
         let (me, token) = s.join_with("alice", None, None).unwrap();
-        let at = crate::net::spawn_for(me, s.world());
+        let at = crate::net::spawn_for(me, s.world(), &crate::net::Sides::SOLO);
 
         // Clear the block they were given, which is what a player who has
         // played for a while and lost it looks like.
@@ -2102,7 +2199,8 @@ mod tests {
         // since painting over what is already there is free and so would not
         // count towards the bill.
         let n = crate::net::SPAWN_N;
-        let (row, col) = crate::net::spawn_for(me, &World::infinite_empty());
+        let (row, col) =
+            crate::net::spawn_for(me, &World::infinite_empty(), &crate::net::Sides::SOLO);
         let block = n / 2 - 1;
         let too_many: Vec<_> = (0..n)
             .flat_map(|r| (0..n).map(move |c| (r, c)))
