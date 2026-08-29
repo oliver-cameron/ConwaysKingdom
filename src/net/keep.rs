@@ -29,6 +29,8 @@
 //! remembered now, which is half of what that key would need; making it the
 //! other half of the token's is the work that is left.
 
+use crate::net::Person;
+
 /// Where all of this is kept, when somewhere other than the usual place is
 /// wanted. Native only, and set before the client starts.
 ///
@@ -119,6 +121,45 @@ pub fn server() -> Option<String> {
 
 pub fn remember_server(address: &str) {
     set("server", address);
+}
+
+/// Who this client is on `address`, if that server has told it.
+///
+/// **Keyed by the server, unlike everything else here**, and that is the whole
+/// point of it rather than an inconsistency: a token is a claim on a seat in
+/// one room, and this is a claim on being somebody, which only means anything
+/// against the server that minted it. Offering one server a key issued by
+/// another is refused — see [`crate::server::people`] — so a client must not
+/// be able to do it by accident.
+///
+/// Stored as the written-down key, which is exactly what [`Person::key`]
+/// produces, so exporting an identity is reading this field and importing one
+/// is writing it. One format rather than a store format and a transfer format
+/// that have to agree.
+pub fn person(address: &str) -> Option<Person> {
+    Person::parse(&get(&format!("person.{}", slug(address)))?).ok()
+}
+
+pub fn remember_person(address: &str, person: &Person) {
+    set(&format!("person.{}", slug(address)), &person.key());
+}
+
+/// Forget who we are here, so the next join is a first one.
+pub fn forget_person(address: &str) {
+    set(&format!("person.{}", slug(address)), "");
+}
+
+/// An address as something that can be part of a key.
+///
+/// Hex rather than a readable slug, because a slug has to be *injective* and a
+/// readable one is not: replacing everything but letters and digits would file
+/// `ws://a.b/` and `ws://a/b/` under one name, and two servers sharing one
+/// identity is exactly what keying by server exists to prevent. This is a
+/// filesystem-safe encoding of the address and nothing cleverer — it reaches a
+/// file name natively and a `localStorage` key in a browser, and both want the
+/// same guarantee.
+fn slug(address: &str) -> String {
+    address.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The name last played under.

@@ -22,7 +22,13 @@ const MAGIC: &[u8; 4] = b"CKW\0";
 /// owner byte's split moved, so a version 4 file read as version 5 is a
 /// plausible world with every square owned by the wrong player at the wrong
 /// strength. There is no honest migration -- a flag carries no level.
-const VERSION: u8 = 5;
+///
+/// And to 6 when a seat gained the person sitting in it. A version 5 file read
+/// as 6 would take the next player's first bytes as a length and then as a
+/// name, so the version is what turns a silently shuffled roster into a
+/// refusal. Nothing is lost going forward: a seat saved before people existed
+/// loads with none, which is exactly what it had.
+const VERSION: u8 = 6;
 
 const KIND_INFINITE: u8 = 0;
 const KIND_TOROIDAL: u8 = 1;
@@ -90,6 +96,12 @@ pub fn save(path: &Path, world: &World, players: &[Player], tick: u64) -> io::Re
         let token = p.token.as_bytes();
         out.extend_from_slice(&(token.len() as u16).to_le_bytes());
         out.extend_from_slice(token);
+        // Length-prefixed like the others, and empty for a seat with nobody
+        // recorded in it -- there is no separate "absent" to encode when the
+        // thing being encoded is a string that is never legitimately empty.
+        let person = p.person.as_deref().unwrap_or_default().as_bytes();
+        out.extend_from_slice(&(person.len() as u16).to_le_bytes());
+        out.extend_from_slice(person);
     }
 
     // Write beside the target and rename, so a crash mid-write cannot leave a
@@ -160,6 +172,9 @@ pub fn load(path: &Path) -> io::Result<Snapshot> {
         p.value = r.i32()?;
         let len = r.u16()? as usize;
         p.token = String::from_utf8_lossy(r.take(len)?).into_owned();
+        let len = r.u16()? as usize;
+        let person = String::from_utf8_lossy(r.take(len)?).into_owned();
+        p.person = (!person.is_empty()).then_some(person);
         // Nobody is connected to a world that has just been read off a disk.
         //
         // `Player::new` is what a player *joins* with, and joining means being

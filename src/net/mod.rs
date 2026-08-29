@@ -22,8 +22,11 @@ pub mod keep;
 pub mod link;
 #[cfg(target_arch = "wasm32")]
 pub mod link_web;
+pub mod person;
 #[cfg(target_arch = "wasm32")]
 pub use link_web as link;
+
+pub use person::{Person, PersonId};
 
 use serde::{Deserialize, Serialize};
 
@@ -597,6 +600,21 @@ pub enum ClientMessage {
         /// numbers, value, territory and the rejoin token are all per room. A
         /// player in two rooms is two players.
         room: Option<RoomId>,
+        /// Who is asking, as against which seat they want back.
+        ///
+        /// `None` from a client that has never joined this server, which is
+        /// answered by minting a pair and handing it back in the [`Welcome`].
+        /// Present and wrong is refused rather than quietly reissued: a proof
+        /// that does not match is a bug or somebody else's key, and minting a
+        /// fresh identity would hide both.
+        ///
+        /// Beside the token rather than instead of it, because the two answer
+        /// different questions — this one is *who*, and the token is *which
+        /// seat in this room* — and a person may hold a seat in several rooms
+        /// at once.
+        ///
+        /// [`Welcome`]: ServerMessage::Welcome
+        person: Option<Person>,
     },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
@@ -730,6 +748,13 @@ pub enum ServerMessage {
         /// Keep this. Presenting it on a later `Join` asks for this player
         /// back — the same number, the same value, the same ground.
         token: String,
+        /// Who this server now believes you are, **when it has just decided**.
+        ///
+        /// Sent once, on the join that mints it, and `None` on every join
+        /// after — a client that presented a person already has one, and
+        /// sending it back each time would put a credential on the wire for no
+        /// reason and invite a client to overwrite a good one with an echo.
+        person: Option<Person>,
         /// What this player has to spend.
         ///
         /// Sent, because a returning player has a value already and the client

@@ -78,6 +78,18 @@ pub struct Player {
     /// somebody else would hand over their territory with it, and the ground
     /// outlives the connection.
     pub online: bool,
+    /// **Who is sitting here**, as against which seat this is.
+    ///
+    /// The id alone -- never the proof, which lives in the server's own table
+    /// and in the client's store and is not a thing a world has any business
+    /// persisting. A `String` rather than `net::PersonId` because `sim` owes
+    /// `net` nothing, the same reason `last_seen` is a plain counter.
+    ///
+    /// `None` for a seat filled before this existed, and for one filled by a
+    /// client that has not been told who it is yet. A seat with no person is
+    /// still a player: it plays, it holds ground, it comes back with its
+    /// token. What it cannot do is carry anything that outlives the room.
+    pub person: Option<String>,
 }
 
 impl Player {
@@ -94,6 +106,7 @@ impl Player {
             value: Self::STARTING_VALUE,
             token: String::new(),
             online: true,
+            person: None,
         }
     }
 }

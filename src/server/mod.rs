@@ -14,6 +14,7 @@
 
 pub mod console;
 pub mod matches;
+pub mod people;
 pub mod persist;
 pub mod rating;
 pub mod rooms;
@@ -91,7 +92,7 @@ const STANDING_EVERY: u64 = 8;
 /// is what hashing relies on to resist collision attacks — two of them give
 /// 128 bits without a dependency. Strong enough for what this is: a claim
 /// ticket for a game with no accounts, not a credential worth attacking.
-fn new_token() -> String {
+pub(crate) fn new_token() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
 
@@ -517,6 +518,7 @@ impl Server {
         &mut self,
         name: impl Into<String>,
         token: Option<&str>,
+        person: Option<&crate::net::PersonId>,
     ) -> Result<(PlayerId, String), String> {
         let name = name.into();
         if let Some(token) = token.filter(|t| !t.is_empty()) {
@@ -526,6 +528,10 @@ impl Server {
                     p.name = name;
                     p.last_seen = 0;
                     p.online = true;
+                    // Refreshed on the way back in, because a seat records
+                    // who is in it and a person may have been minted, or
+                    // transferred to this device, since they last sat here.
+                    p.person = person.map(|p| p.0.clone());
                     let (id, token) = (p.id, p.token.clone());
                     self.lobby_changed = true;
                     let started = self.phase.accepts_actions();
@@ -555,7 +561,9 @@ impl Server {
         let id = self.join(name)?;
         self.lobby_changed = true;
         let token = new_token();
-        self.players.get_mut(&id).expect("just joined").token.clone_from(&token);
+        let seat = self.players.get_mut(&id).expect("just joined");
+        seat.token.clone_from(&token);
+        seat.person = person.map(|p| p.0.clone());
         Ok((id, token))
     }
 
@@ -686,7 +694,14 @@ impl Server {
                     reason: format!("\"{}\" is a match already under way", self.room),
                 }]
             }
-            ClientMessage::Join { name, token, room: _ } => match self.join_with(name, token.as_deref()) {
+            ClientMessage::Join { name, token, room: _, person } => {
+                // Who is asking was settled before this room ever saw the
+                // message -- people are a *server's* table and a room is one
+                // world on it, so `rooms::Rooms` admits and this stamps. A
+                // room asked to decide would be fifteen rooms each with their
+                // own idea of who somebody is.
+                let who = person.as_ref().map(|p| p.id.clone());
+                match self.join_with(name, token.as_deref(), who.as_ref()) {
                 Ok((you, token)) => {
                     let spawn = crate::net::spawn_for(you, &self.world);
                     let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
@@ -695,6 +710,9 @@ impl Server {
                         tick: self.tick(),
                         spawn,
                         token,
+                        // Filled in by `rooms::Rooms`, which is what minted
+                        // it and the only thing that knows whether it is new.
+                        person: None,
                         value,
                         room: crate::net::RoomId(self.room.clone()),
                         name: self.room.clone(),
@@ -706,7 +724,8 @@ impl Server {
                     }]
                 }
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
-            },
+                }
+            }
             ClientMessage::Act(stamped) => {
                 // **An action belongs to the connection that sent it**, not to
                 // the player it names. Without this the `player` field is a
@@ -1177,7 +1196,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let mut before = Server::named("arena", World::infinite_empty());
-        let (me, token) = before.join_with("alice", None).unwrap();
+        let (me, token) = before.join_with("alice", None, None).unwrap();
         before.players.get_mut(&me).unwrap().value = 42;
         assert!(before.players[&me].online, "connected while playing");
         before.save(&path).unwrap();
@@ -1186,7 +1205,7 @@ mod tests {
         let mut after = Server::load_or_new(&path, "arena", World::infinite_empty).unwrap();
         assert!(!after.players[&me].online, "nobody is connected to a world off a disk");
 
-        let (back, same) = after.join_with("alice", Some(&token)).unwrap();
+        let (back, same) = after.join_with("alice", Some(&token), None).unwrap();
         assert_eq!(back, me, "the token brings them back to their own number");
         assert_eq!(same, token, "and the same secret, so it goes on working");
         assert_eq!(after.players[&me].value, 42, "with what they had");
@@ -1215,8 +1234,8 @@ mod tests {
     fn a_timer_match_ends_and_names_a_winner() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 5 });
-        let (alice, _) = s.join_with("alice", None).unwrap();
-        let (bob, _) = s.join_with("bob", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
 
         // Gathering holds still, which is what makes the opening drawn rather
         // than raced: nobody gains generations by arriving early.
@@ -1256,8 +1275,8 @@ mod tests {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 100 });
 
-        let (alice, _) = s.join_with("alice", None).unwrap();
-        let (bob, _) = s.join_with("bob", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
         assert!(s.world().live_cells().is_empty(), "no world yet");
         assert_eq!(s.territory().iter().sum::<usize>(), 0, "and no ground either");
         assert_eq!(s.value_of(alice), Some(0), "and nothing to spend");
@@ -1278,7 +1297,7 @@ mod tests {
     #[test]
     fn an_ordinary_room_still_grants_on_arrival() {
         let mut s = Server::named("main", World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         assert_eq!(s.world().live_cells().len(), 4, "a block, at once");
         assert_eq!(s.value_of(alice), Some(Player::STARTING_VALUE));
     }
@@ -1310,7 +1329,7 @@ mod tests {
         // Quiet in between: a lobby nobody has touched is not resent.
         assert!(lobby(&s.step()).is_none(), "nothing changed, so nothing is said");
 
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         let (players, _) = lobby(&s.step()).expect("somebody arrived");
         assert_eq!(players, vec![(alice, "alice".to_string())]);
 
@@ -1334,9 +1353,9 @@ mod tests {
     #[test]
     fn the_standing_is_most_first_and_leaves_out_the_empty() {
         let mut s = Server::named("arena", World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None).unwrap();
-        let (bob, _) = s.join_with("bob", None).unwrap();
-        let (carol, _) = s.join_with("carol", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let (carol, _) = s.join_with("carol", None, None).unwrap();
 
         // A grant is not a score, so before anybody wins ground it is empty.
         let ServerMessage::Standing { held, .. } = s.standing() else { panic!() };
@@ -1361,7 +1380,7 @@ mod tests {
     fn the_standing_goes_out_on_a_cadence_and_at_the_whistle() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 3 });
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         stake(&mut s, alice, (900, 900), 4);
         s.start_match(None).unwrap();
 
@@ -1383,7 +1402,7 @@ mod tests {
     fn a_gathering_match_takes_no_actions() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 100 });
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         let cells = mine(alice, &[(3, 3), (3, 4)]);
 
         let before = s.world().live_cells().len();
@@ -1424,7 +1443,7 @@ mod tests {
     fn an_over_match_takes_no_actions() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1 });
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         s.start_match(None).unwrap();
         s.step();
         assert!(matches!(s.phase(), Phase::Over { .. }), "one generation, then over");
@@ -1447,7 +1466,7 @@ mod tests {
     fn a_territory_match_ends_when_somebody_reaches_the_count() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Territory { squares: 50 });
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         s.start_match(None).unwrap();
 
         s.step();
@@ -1470,7 +1489,7 @@ mod tests {
     #[test]
     fn granted_ground_does_not_count_towards_a_score() {
         let mut s = Server::named("arena", World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
         assert_eq!(s.territory()[alice.0 as usize], 0, "a grant is not a score");
 
         stake(&mut s, alice, (900, 900), 3);
@@ -1485,11 +1504,13 @@ mod tests {
     fn a_running_match_takes_no_newcomers_but_takes_its_own_back() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1000 });
-        let (alice, token) = s.join_with("alice", None).unwrap();
+        let (alice, token) = s.join_with("alice", None, None).unwrap();
         s.start_match(None).unwrap();
 
-        let refused =
-            s.handle(None, ClientMessage::Join { name: "late".into(), token: None, room: None });
+        let refused = s.handle(
+            None,
+            ClientMessage::Join { name: "late".into(), token: None, room: None, person: None },
+        );
         assert!(
             matches!(refused.as_slice(), [ServerMessage::Rejected { reason }] if reason.contains("already under way")),
             "{refused:?}"
@@ -1498,7 +1519,12 @@ mod tests {
         s.leave(alice);
         let back = s.handle(
             None,
-            ClientMessage::Join { name: "alice".into(), token: Some(token), room: None },
+            ClientMessage::Join {
+                name: "alice".into(),
+                token: Some(token),
+                room: None,
+                person: None,
+            },
         );
         assert!(
             matches!(back.first(), Some(ServerMessage::Welcome { you, .. }) if *you == alice),
@@ -1512,7 +1538,7 @@ mod tests {
     #[test]
     fn a_token_brings_a_player_back_to_themselves() {
         let mut s = Server::new(World::infinite_empty());
-        let (me, token) = s.join_with("alice", None).unwrap();
+        let (me, token) = s.join_with("alice", None, None).unwrap();
 
         // Spend some, so there is state worth coming back to.
         s.handle(
@@ -1538,10 +1564,15 @@ mod tests {
         // to spend money the server knows is gone.
         let welcome = s.handle(
             None,
-            ClientMessage::Join { name: "alice".into(), token: Some(token.clone()), room: None },
+            ClientMessage::Join {
+                name: "alice".into(),
+                token: Some(token.clone()),
+                room: None,
+                person: None,
+            },
         );
         match welcome.as_slice() {
-            [ServerMessage::Welcome { you, token: back, value, .. }] => {
+            [ServerMessage::Welcome { you, token: back, person: None, value, .. }] => {
                 assert_eq!(*you, me, "the same number");
                 assert_eq!(*back, token, "and the same secret, so it keeps working");
                 assert_eq!(*value, spent, "and the value they had");
@@ -1563,8 +1594,8 @@ mod tests {
     #[test]
     fn territory_reaches_the_clients_that_ask_for_it() {
         let mut s = Server::new(World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None).unwrap();
-        let (bob, _) = s.join_with("bob", None).unwrap();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
 
         let (row, col) = crate::net::spawn_for(alice, s.world());
         let chunk = (row.div_euclid(CHUNK_N as i32), col.div_euclid(CHUNK_N as i32));
@@ -1606,15 +1637,15 @@ mod tests {
     #[test]
     fn a_token_already_in_use_joins_as_somebody_new() {
         let mut s = Server::new(World::infinite_empty());
-        let (alice, token) = s.join_with("alice", None).unwrap();
+        let (alice, token) = s.join_with("alice", None, None).unwrap();
 
-        let (bob, other) = s.join_with("bob", Some(&token)).unwrap();
+        let (bob, other) = s.join_with("bob", Some(&token), None).unwrap();
         assert_ne!(bob, alice, "alice is still playing as alice");
         assert_ne!(other, token, "and bob gets a secret of his own");
 
         // Once she has gone, her own token brings her back.
         s.leave(alice);
-        let (back, _) = s.join_with("alice", Some(&token)).unwrap();
+        let (back, _) = s.join_with("alice", Some(&token), None).unwrap();
         assert_eq!(back, alice);
     }
 
@@ -1623,8 +1654,8 @@ mod tests {
     #[test]
     fn an_unknown_token_joins_as_somebody_new() {
         let mut s = Server::new(World::infinite_empty());
-        let (first, token) = s.join_with("alice", None).unwrap();
-        let (second, other) = s.join_with("bob", Some("not a token anybody has")).unwrap();
+        let (first, token) = s.join_with("alice", None, None).unwrap();
+        let (second, other) = s.join_with("bob", Some("not a token anybody has"), None).unwrap();
         assert_ne!(first, second);
         assert_ne!(token, other, "and gets a secret of its own");
     }
@@ -1636,7 +1667,7 @@ mod tests {
         let mut s = Server::new(World::infinite_empty());
         let mut seen = std::collections::HashSet::new();
         for i in 0..8 {
-            let (_, token) = s.join_with(format!("p{i}"), None).unwrap();
+            let (_, token) = s.join_with(format!("p{i}"), None, None).unwrap();
             assert_eq!(token.len(), 32, "128 bits, written as hex");
             assert!(seen.insert(token), "a token was handed out twice");
         }
@@ -1777,7 +1808,7 @@ mod tests {
     #[test]
     fn coming_back_does_not_grant_a_second_platform() {
         let mut s = Server::new(World::infinite_empty());
-        let (me, token) = s.join_with("alice", None).unwrap();
+        let (me, token) = s.join_with("alice", None, None).unwrap();
         let at = crate::net::spawn_for(me, s.world());
 
         // Clear the block they were given, which is what a player who has
@@ -1794,7 +1825,7 @@ mod tests {
         assert_eq!(s.world().live_cells().len(), 0, "nothing of theirs is alive");
 
         s.leave(me);
-        let (back, _) = s.join_with("alice", Some(&token)).unwrap();
+        let (back, _) = s.join_with("alice", Some(&token), None).unwrap();
         assert_eq!(back, me, "the token brought them back to themselves");
         assert_eq!(
             s.world().live_cells().len(),

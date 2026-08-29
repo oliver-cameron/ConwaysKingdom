@@ -39,7 +39,7 @@ impl Peer {
     fn join(url: &str, name: &'static str, room: Option<String>) -> Self {
         let room = room.map(conwayskingdom::net::RoomId);
         let mut link = Link::connect(url.to_string());
-        link.send(ClientMessage::Join { name: name.into(), token: None, room });
+        link.send(ClientMessage::Join { name: name.into(), token: None, room, person: None });
         for _ in 0..200 {
             for msg in link.drain() {
                 if let ServerMessage::Welcome { you, tick, spawn, room, world: shape, .. } = msg {

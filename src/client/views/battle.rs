@@ -750,7 +750,27 @@ impl BattleApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick, spawn, token, value, room, name, world } => {
+                ServerMessage::Welcome {
+                    you,
+                    tick,
+                    spawn,
+                    token,
+                    person,
+                    value,
+                    room,
+                    name,
+                    world,
+                } => {
+                    // **Kept before the token, and for a stronger reason.** A
+                    // token brings you back to a seat in one room; this is who
+                    // you are on this server, and it arrives exactly once —
+                    // on the join that mints it. Losing it here means the
+                    // server believes in somebody this client can no longer
+                    // prove it is, and there is no second chance to be told.
+                    if let Some(person) = &person {
+                        log::info!("this server knows us as {}", person.id);
+                        crate::net::keep::remember_person(&self.address_hint(), person);
+                    }
                     // Kept first, before anything else can go wrong: the whole
                     // value of it is being able to come back, and a client that
                     // crashes on its first frame is exactly the case that needs
@@ -1813,6 +1833,7 @@ impl BattleApp {
                 log::info!("joining {room} as \"{name}\"");
                 link.send(ClientMessage::Join {
                     token: crate::net::keep::token_for_join(Some(room.as_str())),
+                    person: crate::net::keep::person(&self.address_hint()),
                     name,
                     room: Some(room),
                 });
@@ -1907,6 +1928,7 @@ impl App for BattleApp {
                     _ => link.send(ClientMessage::Join {
                         name,
                         token: crate::net::keep::token_for_join(room.as_ref().map(|r| r.as_str())),
+                        person: crate::net::keep::person(&url),
                         room: room.clone(),
                     }),
                 });
