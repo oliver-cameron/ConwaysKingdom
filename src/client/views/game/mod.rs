@@ -2513,13 +2513,14 @@ impl App for GameApp {
             self.helping = !self.helping;
             return;
         }
-        // **The shape axis has one key, and it is a verb.** Draw and pane are
-        // the two shapes almost every gesture is, so they get a toggle rather
-        // than two bindings — and it doubles as the way out of a stamp or a
-        // capture, since "put the pattern down and go back to drawing" is the
-        // thing you want a key for after placing one.
+        // **The shape axis has one key, and it always lands in one place.**
+        // It puts the shape back to whatever the held material is usually
+        // wanted in — a pencil for life, mines and turrets, a pane for ice —
+        // rather than toggling, so its meaning does not depend on what was
+        // pressed last. That also makes it the way out of a stamp or a
+        // capture without looking at the bar to see what it will do.
         if pressed && code == K::Backquote && self.shift {
-            self.held = self.held.flipped();
+            self.held = self.held.defaulted();
             self.picking_stamp = false;
             return;
         }

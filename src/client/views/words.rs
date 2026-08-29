@@ -297,10 +297,15 @@ pub mod hotbar {
     /// rather than what ends up in them.
     pub const DRAW: &str = "Draw";
     pub const PANE: &str = "Pane";
-    /// What flips between the two, shown on the square rather than in a help
-    /// screen: it is the one key on the bar that does something rather than
-    /// selecting something.
-    pub const FLIP_KEY: &str = "S`";
+    /// The key that puts the shape back to whatever the held material is
+    /// usually wanted in, shown on the square rather than in a help screen —
+    /// it is the one key on the bar that does something rather than selecting
+    /// something.
+    ///
+    /// Written as the character it produces rather than as the chord that
+    /// produces it: shift and backtick **is** tilde on every layout this is
+    /// bound for, and `S\`` was two symbols asking to be decoded.
+    pub const FLIP_KEY: &str = "~";
 
     pub const CAPTURE: &str = "Grab";
     /// The square that opens the library.

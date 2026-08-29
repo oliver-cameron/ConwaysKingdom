@@ -52,6 +52,20 @@ pub struct Tool {
     /// What the server is asked for. A name rather than cell bits, so the
     /// server can judge the request.
     pub placement: Placement,
+    /// The shape this kind is usually wanted in — **a default and not a
+    /// constraint**, which is the difference between this and the tool it grew
+    /// out of.
+    ///
+    /// A mine is placed a few at a time and into a pattern, because what it is
+    /// worth depends on what it is next to; a turret goes down in fours,
+    /// because one live cell on its own dies of loneliness and a 2x2 block is
+    /// the cheapest thing that does not. Both are gestures, which is what a
+    /// pencil is for. Ice is a wall, and a wall is a thing you say the size of
+    /// before it exists.
+    ///
+    /// The shape axis can still be set to anything; this is only where the one
+    /// key that resets it goes.
+    pub usually: Shape,
 }
 
 /// What each tool leaves on a square, which is what its button shows. Built
@@ -69,10 +83,15 @@ const ICED: Cell = Cell::DEAD.with_ice(true);
 /// with the stroke chosen separately there is nothing left to separate it by,
 /// and a fourth kind now appears here by existing.
 pub const KINDS: [Tool; 4] = [
-    Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life },
-    Tool { name: words::MINE, shows: MINED, placement: Placement::Mine },
-    Tool { name: words::TURRET, shows: TURRETED, placement: Placement::Turret },
-    Tool { name: words::ICE, shows: ICED, placement: Placement::Ice },
+    Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life, usually: Shape::Draw },
+    Tool { name: words::MINE, shows: MINED, placement: Placement::Mine, usually: Shape::Draw },
+    Tool {
+        name: words::TURRET,
+        shows: TURRETED,
+        placement: Placement::Turret,
+        usually: Shape::Draw,
+    },
+    Tool { name: words::ICE, shows: ICED, placement: Placement::Ice, usually: Shape::Rect },
 ];
 
 /// What a gesture makes: the shape axis.
@@ -139,14 +158,19 @@ impl Held {
         }
     }
 
-    /// The other shape, for the one key that toggles between them.
-    pub fn flipped(self) -> Self {
-        let shape = match self.shape {
-            // From a stamp or a capture, back to drawing: the toggle is a way
-            // out of them as well as a way between the two.
-            Shape::Rect => Shape::Draw,
-            _ => Shape::Rect,
-        };
+    /// Back to the shape this kind is usually wanted in.
+    ///
+    /// **One key, and it goes somewhere rather than somewhere else.** A toggle
+    /// between draw and pane is a key whose meaning depends on what you last
+    /// pressed, so using it means remembering where you are; this always lands
+    /// in the same place for a given material — a pencil for life, mines and
+    /// turrets, a pane for ice — and is therefore also the way out of a stamp
+    /// or a capture without looking at the bar to see what it will do.
+    ///
+    /// The other shape is a click away on the bar, which is the right home for
+    /// the choice you make occasionally.
+    pub fn defaulted(self) -> Self {
+        let shape = self.tool().map(|k| k.usually).unwrap_or_default();
         Self { shape, ..self }
     }
 }
@@ -447,12 +471,16 @@ fn square(
     }
 
     if let Some(key) = key {
-        painter.text(
+        // Brighter as well as bigger: a key hint at `text_dim` over a sprite
+        // was the least legible thing on the screen, and it is the one piece
+        // of writing here somebody is looking for rather than reading.
+        shadowed(
+            painter,
             rect.left_top() + egui::vec2(4.0, 2.0),
             egui::Align2::LEFT_TOP,
-            key,
-            egui::FontId::proportional(10.0),
-            if selected { p.accent } else { p.text_dim },
+            &key,
+            13.0,
+            if selected { p.accent } else { p.text },
         );
     }
 
@@ -460,13 +488,38 @@ fn square(
 }
 
 fn draw_text(painter: &egui::Painter, rect: egui::Rect, text: &str, colour: egui::Color32) {
+    shadowed(painter, rect.center(), egui::Align2::CENTER_CENTER, text, 14.0, colour);
+}
+
+/// Text with something dark under it, so it reads whatever it is over.
+///
+/// **Every square on this bar has a picture behind its writing** — a sprite,
+/// a pattern, the world showing through a gap — and thin light glyphs on top
+/// of a busy one are a smear rather than a word. A shadow is the cheap answer
+/// and the right one here: no panel behind the text, which would cover the
+/// picture the square exists to show, and no outline, which at this size turns
+/// a glyph into a blob.
+///
+/// Offset by one point rather than blurred, because a blur is several draws
+/// and this is drawn per square per frame.
+fn shadowed(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    align: egui::Align2,
+    text: impl std::fmt::Display,
+    size: f32,
+    colour: egui::Color32,
+) {
+    let font = egui::FontId::proportional(size);
+    let text = text.to_string();
     painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(11.0),
-        colour,
+        at + egui::vec2(1.0, 1.0),
+        align,
+        &text,
+        font.clone(),
+        egui::Color32::BLACK.gamma_multiply(0.75),
     );
+    painter.text(at, align, text, font, colour);
 }
 
 #[cfg(test)]
@@ -561,17 +614,33 @@ mod tests {
         assert!(shifted(&library(0)).contains(&Key::Shape(Shape::Capture)));
     }
 
-    /// One key flips between the two shapes almost every gesture is, and it is
-    /// also the way out of a stamp -- "put the pattern down and draw again" is
-    /// the thing you want a key for straight after placing one.
+    /// **The one key lands in one place**, which is what makes it usable
+    /// without looking: a toggle's meaning depends on what was pressed last,
+    /// and this always puts the shape back to whatever the held material is
+    /// usually wanted in.
     #[test]
-    fn the_flip_key_goes_both_ways_and_out_of_a_stamp() {
-        let held = Held { shape: Shape::Draw, kind: 2 };
-        assert_eq!(held.flipped().shape, Shape::Rect);
-        assert_eq!(held.flipped().flipped().shape, Shape::Draw);
-        assert_eq!(held.flipped().kind, held.kind, "flipping a shape changed the material");
-        for shape in [Shape::Stamp(4), Shape::Capture] {
-            assert_eq!(Held { shape, kind: 0 }.flipped().shape, Shape::Rect);
+    fn the_reset_key_goes_to_what_the_kind_is_usually_wanted_in() {
+        let kind = |what: Placement| KINDS.iter().position(|k| k.placement == what).unwrap();
+
+        for (what, expected) in [
+            (Placement::Life, Shape::Draw),
+            (Placement::Mine, Shape::Draw),
+            (Placement::Turret, Shape::Draw),
+            (Placement::Ice, Shape::Rect),
+        ] {
+            let held = Held { shape: Shape::Capture, kind: kind(what) };
+            assert_eq!(held.defaulted().shape, expected, "{what:?}");
+            // Twice is the same place, which a toggle could not promise.
+            assert_eq!(
+                held.defaulted().defaulted().shape,
+                expected,
+                "{what:?} moved on a second press"
+            );
+            assert_eq!(held.defaulted().kind, held.kind, "resetting a shape changed the material");
         }
+
+        // And it is the way out of a stamp, whatever is held.
+        let stamped = Held { shape: Shape::Stamp(4), kind: kind(Placement::Ice) };
+        assert_eq!(stamped.defaulted().shape, Shape::Rect);
     }
 }
