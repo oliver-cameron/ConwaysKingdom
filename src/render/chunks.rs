@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::sim::{Chunk, Coord, World, CHUNK_N};
+use crate::sim::{Cell, Coord, World, CHUNK_CELLS, CHUNK_N};
 
 /// The WGSL both entry points live in.
 pub const SHADER_SOURCE: &str = include_str!("shaders/grid.wgsl");
@@ -44,7 +44,28 @@ pub struct ChunkTexture {
 }
 
 impl ChunkTexture {
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Uint;
+    /// Four bytes rather than the cell's two.
+    ///
+    /// **The texture stopped being a copy of the world.** It was
+    /// `bytemuck::bytes_of` over a `Chunk` — a reinterpret of simulation
+    /// memory, which is why the byte layout was pinned to `sim::cell::bits`
+    /// by a comment in the shader. Two of the bytes still are that. The third
+    /// is a **neighbour mask**, which is not in a `Cell` and must never be:
+    /// it is a fact about a cell *and its neighbours*, it is derived, and
+    /// putting it in the wire format would make appearance something two
+    /// clients can disagree about and desync over. It is computed here, on the
+    /// way to the GPU, by the only thing that has both the whole world and no
+    /// authority over it.
+    ///
+    /// The fourth is spare. Candidates, in the order they are worth having:
+    /// the ownership level (byte 0 bits 1..4, which nothing currently reads),
+    /// a second mask so a territory border can be drawn separately from a
+    /// material edge, and a per-cell seed so a large flat region does not
+    /// visibly repeat.
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Uint;
+
+    /// Bytes per cell in the texture, which is no longer `size_of::<Cell>()`.
+    pub const STRIDE: usize = 4;
 
     /// Layers to allocate, the guaranteed floor for `max_texture_array_layers`.
     /// Allocated up front because an array texture cannot be resized.
@@ -82,10 +103,15 @@ impl ChunkTexture {
         Self { texture, view, layers }
     }
 
-    /// Upload one chunk into one layer. `Queue::write_texture` is exempt from
-    /// the 256-byte `bytes_per_row` alignment, so a 64-byte row is fine.
-    pub fn upload(&self, queue: &wgpu::Queue, layer: u32, chunk: &Chunk) {
+    /// Upload one chunk's worth of texels into one layer. `Queue::write_texture`
+    /// is exempt from the 256-byte `bytes_per_row` alignment, so a 64-byte row
+    /// is fine.
+    ///
+    /// Takes texels rather than a `&Chunk`, because they are no longer the
+    /// same thing — see [`Self::FORMAT`].
+    pub fn upload(&self, queue: &wgpu::Queue, layer: u32, texels: &[u8]) {
         debug_assert!(layer < self.layers);
+        debug_assert_eq!(texels.len(), CHUNK_CELLS * Self::STRIDE);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
@@ -93,10 +119,10 @@ impl ChunkTexture {
                 origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
                 aspect: wgpu::TextureAspect::All,
             },
-            chunk.as_bytes(),
+            texels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(Chunk::bytes_per_row()),
+                bytes_per_row: Some((CHUNK_N * Self::STRIDE) as u32),
                 rows_per_image: Some(CHUNK_N as u32),
             },
             wgpu::Extent3d {
@@ -106,6 +132,64 @@ impl ChunkTexture {
             },
         );
     }
+}
+
+/// A chunk as the GPU wants it: its two cell bytes, and what is next to it.
+///
+/// **This is the pass that used to be a memcpy**, and everything a
+/// neighbour-sensitive sheet needs is here rather than in the shader. A
+/// fragment knows only its own array layer, and the chunk-to-layer map is a
+/// `HashMap` on this side, so a cell on a chunk edge has no way to reach its
+/// neighbour's layer at all. Up here the whole world is in hand and the
+/// coordinates are already folded for a torus.
+///
+/// A kilobyte per chunk across the fifty or so on screen, once per sync.
+fn texels(world: &World, chunk_at: Coord, chunk: &crate::sim::Chunk) -> Vec<u8> {
+    let (base_row, base_col) = (chunk_at.0 * CHUNK_N as i32, chunk_at.1 * CHUNK_N as i32);
+    let mut out = Vec::with_capacity(CHUNK_CELLS * ChunkTexture::STRIDE);
+    for row in 0..CHUNK_N as i32 {
+        for col in 0..CHUNK_N as i32 {
+            let cell = chunk[(row as usize, col as usize)];
+            let bytes = bytemuck::bytes_of(&cell);
+            out.push(bytes[0]);
+            out.push(bytes[1]);
+            out.push(neighbours(world, cell, (base_row + row, base_col + col)));
+            // Spare. See `ChunkTexture::FORMAT` for what it is for.
+            out.push(0);
+        }
+    }
+    out
+}
+
+/// Which of the four sides of this cell have the same thing on them.
+///
+/// **"The same thing" is "would draw the same sprite"** — the same owner and
+/// the same tile byte — because what this is for is making a mass of cells
+/// read as one shape, and two cells that draw differently are not one shape
+/// however related they are underneath. It is the relation an outline wants.
+///
+/// Four sides rather than eight: an edge mask needs sixteen variants and a
+/// corner-aware one needs forty-seven, and the byte holds either whenever
+/// somebody draws them. Nothing here has to change for that.
+///
+/// A cell in a chunk this client does not hold reads as **unlike**, which is
+/// the same answer the backdrop already gives: ground that has not arrived is
+/// drawn as ground that is not there, and an edge against it is honest rather
+/// than a border that appears when a chunk loads.
+fn neighbours(world: &World, cell: Cell, (row, col): (i32, i32)) -> u8 {
+    const SIDES: [(i32, i32); 4] = [(-1, 0), (0, 1), (1, 0), (0, -1)];
+    let mut mask = 0;
+    for (bit, (dr, dc)) in SIDES.into_iter().enumerate() {
+        // `cell_at` folds the chunk coordinate itself, so a neighbour off the
+        // edge of a torus comes back from the other side without help.
+        let like = world
+            .cell_at(row + dr, col + dc)
+            .is_some_and(|other| other.player() == cell.player() && other.tile() == cell.tile());
+        if like {
+            mask |= 1 << bit;
+        }
+    }
+    mask
 }
 
 /// One drawn chunk.
@@ -256,7 +340,7 @@ impl ChunkStore {
 
     /// Zero layer zero once. It stays dead for the life of the app.
     pub fn init_unloaded_layer(&self, queue: &wgpu::Queue) {
-        self.texture.upload(queue, UNLOADED_LAYER, &Chunk::dead());
+        self.texture.upload(queue, UNLOADED_LAYER, &[0u8; CHUNK_CELLS * ChunkTexture::STRIDE]);
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
@@ -324,7 +408,7 @@ impl ChunkStore {
                     l
                 }
             };
-            self.texture.upload(queue, layer, chunk);
+            self.texture.upload(queue, layer, &texels(world, coord, chunk));
         }
 
         self.instances.clear();
@@ -364,5 +448,93 @@ impl ChunkStore {
         }
 
         queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.instances));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::PlayerId;
+
+    fn alive(world: &mut World, cells: &[(i32, i32)], who: u8) {
+        for &(r, c) in cells {
+            world.set_cell_at(r, c, Cell::alive(PlayerId(who)));
+        }
+    }
+
+    /// North, east, south, west, in that order, and only where the neighbour
+    /// would draw the same sprite.
+    #[test]
+    fn a_side_is_set_when_the_same_thing_is_on_it() {
+        let mut world = World::infinite_empty();
+        alive(&mut world, &[(5, 5), (4, 5), (5, 6)], 1);
+        let cell = world.cell_at(5, 5).unwrap();
+
+        // North and east are like it; south and west are empty ground.
+        assert_eq!(neighbours(&world, cell, (5, 5)), 0b0011);
+        // The neighbour to the north sees it back, and nothing else.
+        let north = world.cell_at(4, 5).unwrap();
+        assert_eq!(neighbours(&world, north, (4, 5)), 0b0100);
+    }
+
+    /// A cell with nothing round it is an island on every side, which is what
+    /// makes a single cell draw a full outline rather than none.
+    #[test]
+    fn a_cell_on_its_own_is_open_on_all_four_sides() {
+        let mut world = World::infinite_empty();
+        alive(&mut world, &[(0, 0)], 1);
+        assert_eq!(neighbours(&world, world.cell_at(0, 0).unwrap(), (0, 0)), 0);
+    }
+
+    /// **The relation is "would draw the same sprite"**, not "is alive": a
+    /// mass of cells is one shape only where it looks like one, so somebody
+    /// else's cell next to yours is an edge and so is a mine next to life.
+    #[test]
+    fn a_different_owner_or_a_different_kind_is_an_edge() {
+        let mut world = World::infinite_empty();
+        alive(&mut world, &[(0, 0)], 1);
+        alive(&mut world, &[(0, 1)], 2);
+        world.set_cell_at(1, 0, Cell::alive(PlayerId(1)).with_kind(crate::sim::Kind::MINE));
+        let mine = world.cell_at(0, 0).unwrap();
+        assert_eq!(neighbours(&world, mine, (0, 0)), 0, "an edge was missed");
+    }
+
+    /// A torus has no edge, so a cell against the seam is joined to whatever
+    /// is on the other side of it -- `cell_at` folds the coordinate, so this
+    /// needs no help here and is worth a test to keep it that way.
+    #[test]
+    fn a_torus_joins_across_its_seam() {
+        let mut world = World::toroidal(1, 1);
+        let n = CHUNK_N as i32;
+        alive(&mut world, &[(0, 0), (n - 1, 0)], 1);
+        let cell = world.cell_at(0, 0).unwrap();
+        assert_eq!(neighbours(&world, cell, (0, 0)) & 1, 1, "the seam was an edge");
+    }
+
+    /// Ground this client has not been sent reads as unlike, which is the same
+    /// answer the backdrop gives: an edge against ground that is not there is
+    /// honest, and a border that appeared when a chunk loaded would not be.
+    #[test]
+    fn an_unheld_chunk_is_not_a_neighbour() {
+        let mut world = World::infinite_empty();
+        alive(&mut world, &[(0, 0)], 1);
+        assert!(world.cell_at(-1, 0).is_none(), "the test needs an unheld chunk");
+        assert_eq!(neighbours(&world, world.cell_at(0, 0).unwrap(), (0, 0)) & 1, 0);
+    }
+
+    /// Four bytes a cell, and the first two are still the cell's own -- the
+    /// shader reads them by name and a swap here would be silent.
+    #[test]
+    fn a_chunk_becomes_four_bytes_a_cell_with_the_cell_first() {
+        let mut world = World::infinite_empty();
+        alive(&mut world, &[(0, 0), (0, 1)], 3);
+        let chunk = world.chunk_at((0, 0)).unwrap().clone();
+        let texels = texels(&world, (0, 0), &chunk);
+
+        assert_eq!(texels.len(), CHUNK_CELLS * ChunkTexture::STRIDE);
+        let cell = world.cell_at(0, 0).unwrap();
+        assert_eq!(&texels[..2], bytemuck::bytes_of(&cell));
+        assert_eq!(texels[2], neighbours(&world, cell, (0, 0)), "the mask is the third byte");
+        assert_eq!(texels[3], 0, "the fourth is spare");
     }
 }

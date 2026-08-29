@@ -11,6 +11,14 @@ pass.draw(0..4, 0..instance_count);
 
 A pipeline is the compiled shader plus fixed-function state; textures live in bind groups. Binding a different chunk costs nothing at all, because every chunk is a layer of the same array texture.
 
+**That array texture is no longer a copy of the world.** It was `Rg8Uint` and a memcpy — `bytemuck::bytes_of` over a `Chunk`, which is why the shader pins its byte layout to `sim::cell::bits` with a comment. It is `Rgba8Uint` now: the first two bytes are still the cell's own, the third is a **neighbour mask**, and the fourth is spare.
+
+The mask is which of a cell's four sides have something on them that would draw the same sprite, and it exists because a fragment cannot work that out. A fragment knows only its own array layer, and the chunk-to-layer map is a `HashMap` on the CPU, so a cell on a chunk edge has no way to reach the layer its neighbour is in. `render::chunks::texels` computes it on the way to the GPU, where the whole world is in hand and the coordinates are already folded for a torus — a kilobyte per chunk across the fifty or so on screen, once per sync.
+
+It is **derived and it is not in `sim::Cell`**, which is the part worth stating. `Cell` goes over the wire and into the desync digest, so putting appearance in it would make how the world looks something two clients can argue about and resync over. A texture is a client-side view of state; the state is what the mask is computed *from*.
+
+What the shader does with it today is draw a region's outline: a side with nothing like the cell on it gets a line, a side that continues into a neighbour does not, so a block of ice reads as one slab rather than as sixteen tiles that happen to touch. The usual answer is a sheet of sixteen variants per material with the mask choosing between them, and that is a question of art rather than of arithmetic — the byte holds the mask and the sheet has two hundred and forty free tiles, so the day those variants are drawn it becomes `tile + variant[mask]` and nothing else changes.
+
 ## The chunk store
 
 A `texture_2d_array<u32>` in `Rgba8Uint`, one chunk per layer. R and G are the cell's sixteen bits, B and A its tile UV.

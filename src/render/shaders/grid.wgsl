@@ -10,6 +10,15 @@
 // | player |level|H|       |    kind     |I |A |
 //  7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
 //
+// Byte 2 (B) is **not** a cell byte. It is the neighbour mask -- which of the
+// four sides have a cell that would draw the same sprite -- computed on the
+// way to the GPU by `render::chunks::neighbours`, because a fragment knows
+// only its own array layer and a cell on a chunk edge cannot reach the layer
+// its neighbour is in. It is derived and it is not in `sim::Cell`: appearance
+// must not be a thing two clients can disagree about and desync over.
+//
+// Byte 3 (A) is spare.
+//
 // Only the player is read here. The level decides where a border ends up, and
 // it is not drawn: ground fading with it made every claim look like a
 // different kind of cell, and a strength nobody can act on separately is one
@@ -22,6 +31,13 @@ const PLAYER_SHIFT: u32 = 4u;   // top of its byte, so no mask is needed
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
+
+// How much of a cell the outline takes, as a fraction of its width, and how
+// far down it takes the colour there. An eighth is one texel at this tile
+// size, which is what makes it read as a line drawn on the art rather than as
+// a border added around it.
+const EDGE: f32 = 0.0625;
+const EDGE_SHADE: f32 = 0.55;
 
 struct Camera {
     origin:   vec2<f32>,   // world position, in cells, of the top-left pixel
@@ -38,7 +54,7 @@ struct Camera {
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
-@group(0) @binding(1) var chunks: texture_2d_array<u32>;   // r = owner, g = tile
+@group(0) @binding(1) var chunks: texture_2d_array<u32>;   // r = owner, g = tile, b = sides
 @group(0) @binding(2) var sprites: texture_2d<f32>;
 @group(0) @binding(3) var sprite_sampler: sampler;
 
@@ -247,6 +263,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         shade(sprite.g, sprite.r * player_saturation(player), player_hue(player)),
         sprite.a,
     );
+
+    // **The edge of a region, drawn from the neighbour mask.**
+    //
+    // What autotiling is for in a game like this is making a mass of cells
+    // read as one shape, and the usual way there is a sheet of sixteen
+    // variants per material with the mask choosing between them. That is a
+    // question of art rather than of arithmetic: the byte holds the mask and
+    // the sheet has two hundred and forty free tiles, so the day those
+    // variants exist this becomes `tile + variant[mask]` and nothing else
+    // changes.
+    //
+    // Until then the same mask draws the same information without any: a side
+    // with nothing like this cell on it gets a line, and a side that continues
+    // into a neighbour does not. A block of ice becomes one slab with an
+    // outline instead of sixteen tiles that happen to touch, which is the
+    // whole of what the mask was wanted for.
+    //
+    // Nothing at all on a dead, ice-free cell -- empty ground has no shape to
+    // outline, and the backdrop is exactly that, so the mask is ignored there
+    // rather than ringing every square of nothing.
+    if sprite.a > 0.0 {
+        let sides = texel.b;
+        let edge = f32(TILE_N) * EDGE;
+        let open =
+            (f32((sides & 1u) == 0u) * step(within.y, edge))
+            + (f32((sides & 2u) == 0u) * step(f32(TILE_N) - edge, within.x))
+            + (f32((sides & 4u) == 0u) * step(f32(TILE_N) - edge, within.y))
+            + (f32((sides & 8u) == 0u) * step(within.x, edge));
+        colour = mix(colour, colour * EDGE_SHADE, min(open, 1.0) * sprite.a);
+    }
 
     // Encoded here only when the surface will not do it. On an sRGB surface
     // this is skipped and the hardware converts; on a plain Unorm one the
