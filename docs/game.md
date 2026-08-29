@@ -251,6 +251,10 @@ Binding is by *physical* key, so it is the same key on every layout and only the
 
 Guessed rather than asked because there is no portable way to ask: `navigator.keyboard.getLayoutMap()` would answer properly on the web and is Chrome-only and asynchronous, and natively there is nothing.
 
+**The help screen learns too.** It is the one list that exists to be read by somebody who does not know the keys, so a row that says the wrong ones is worse than no row — and it said `WASD` to everybody, which is a name for a shape on the board and only spells itself on one layout. It shows what those four keys actually print, learned as they are pressed, and says `arrows` alone until it has anything to report rather than guessing. Nothing else on the list asks: every other row is either a key bound by *character*, which is the same label everywhere by construction, or a key with a name rather than a print.
+
+And `?` has a square. A key nobody knows about is not a key, and `?` was discoverable only by pressing `?` — while the one place a player already looks to find out what something does is the bar, where every square teaches its own keystroke in the corner.
+
 ## Stamps
 
 A pattern captured once and placed again. Nothing on the wire is a stamp: placing one is a `Paint` over the cells it covers, judged against territory and value like anything else.

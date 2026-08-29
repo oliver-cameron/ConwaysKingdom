@@ -71,38 +71,52 @@ pub struct Views {
     /// the digits are shifted to begin with, so shift and `1` is not `!` — is
     /// only shown the wrong one until they use it.
     ///
-    /// Guessed rather than asked, because there is no portable way to ask. On
-    /// the web `navigator.keyboard.getLayoutMap()` would answer properly and is
-    /// Chrome-only and asynchronous; natively there is nothing. What is *not*
-    /// guessed is the binding: keys are bound by physical position, so every
-    /// layout has the same key in the same place and only the label is ever in
-    /// question.
-    shifted_digits: [Option<String>; 9],
+    /// What each physical key **prints on the keyboard in front of the
+    /// player**, learned as they press them.
+    ///
+    /// Guessed rather than asked, because there is no portable way to ask: on
+    /// the web `navigator.keyboard.getLayoutMap()` would answer properly and
+    /// is Chrome-only and asynchronous, and natively there is nothing.
+    ///
+    /// What is *not* guessed is the binding. A key bound by position is the
+    /// same key everywhere and only its **label** is in question — which is
+    /// the whole reason this exists, and why a key bound by character needs no
+    /// entry here at all: `R` is `R` wherever it is, so the label is right by
+    /// construction.
+    ///
+    /// Keyed on the shift state as well as the position, because one key
+    /// prints two things.
+    learned: std::collections::HashMap<(winit::keyboard::KeyCode, bool), String>,
     pub theme: theme::Theme,
     renderer: egui_wgpu::Renderer,
 }
 
-/// What shift and the digits type on the layout most people have. A starting
-/// guess, corrected by [`Views::shifted_digits`] as soon as a key disagrees.
-const COMMON_SHIFTED_DIGITS: [&str; 9] = ["!", "@", "#", "$", "%", "^", "&", "*", "("];
-
-/// Which of the nine shift-keyed squares a physical key is, if any. By
-/// position on the board, not by what it prints, so it is the same key on
-/// every layout.
-fn digit_index(code: winit::keyboard::KeyCode) -> Option<usize> {
+/// What these keys print on the layout most people have, so the great majority
+/// see the right thing on the first frame. Every one of them is corrected by
+/// [`Views::learned`] the moment a key disagrees.
+///
+/// Only the keys something on screen names. A label nobody is shown is a guess
+/// nobody can be wrong about.
+fn common_labels() -> std::collections::HashMap<(winit::keyboard::KeyCode, bool), String> {
     use winit::keyboard::KeyCode as K;
-    Some(match code {
-        K::Digit1 => 0,
-        K::Digit2 => 1,
-        K::Digit3 => 2,
-        K::Digit4 => 3,
-        K::Digit5 => 4,
-        K::Digit6 => 5,
-        K::Digit7 => 6,
-        K::Digit8 => 7,
-        K::Digit9 => 8,
-        _ => return None,
-    })
+    const SHIFTED_DIGITS: [(K, &str); 9] = [
+        (K::Digit1, "!"),
+        (K::Digit2, "@"),
+        (K::Digit3, "#"),
+        (K::Digit4, "$"),
+        (K::Digit5, "%"),
+        (K::Digit6, "^"),
+        (K::Digit7, "&"),
+        (K::Digit8, "*"),
+        (K::Digit9, "("),
+    ];
+    const WALKING: [(K, &str); 4] =
+        [(K::KeyW, "W"), (K::KeyA, "A"), (K::KeyS, "S"), (K::KeyD, "D")];
+    SHIFTED_DIGITS
+        .into_iter()
+        .map(|(code, label)| ((code, true), label.to_string()))
+        .chain(WALKING.into_iter().map(|(code, label)| ((code, false), label.to_string())))
+        .collect()
 }
 
 /// Borrowed out so the match arm above reads as one thing. `KeyEvent::state`
@@ -209,7 +223,7 @@ impl Views {
             finger: None,
             dragging_widget: false,
             start: 0.0,
-            shifted_digits: COMMON_SHIFTED_DIGITS.map(|c| Some(c.to_string())),
+            learned: common_labels(),
             // No depth buffer and one sample, matching the world's pipeline;
             // egui has to agree with it because they share a pass.
             renderer: egui_wgpu::Renderer::new(
@@ -235,11 +249,31 @@ impl Views {
         self.dragging_widget || claims(&self.claimed, self.pointer)
     }
 
-    /// What shift and this digit type on the keyboard in front of the player,
-    /// once they have pressed it. `None` until then.
+    /// What this key prints on the keyboard in front of the player.
+    ///
+    /// `None` for a key nobody has pressed and nothing guessed at, which is
+    /// the honest answer: better a label that is missing than one that is
+    /// wrong, since the whole point of showing it is that somebody who does
+    /// not know the key is reading it.
+    pub fn label(&self, code: winit::keyboard::KeyCode, shift: bool) -> Option<&str> {
+        self.learned.get(&(code, shift)).map(String::as_str)
+    }
+
+    /// What shift and this digit type here, for the squares on the hotbar.
     pub fn shifted_digit(&self, digit: u32) -> Option<&str> {
-        let index = (digit as usize).checked_sub(1)?;
-        self.shifted_digits.get(index)?.as_deref()
+        use winit::keyboard::KeyCode as K;
+        const DIGITS: [K; 9] = [
+            K::Digit1,
+            K::Digit2,
+            K::Digit3,
+            K::Digit4,
+            K::Digit5,
+            K::Digit6,
+            K::Digit7,
+            K::Digit8,
+            K::Digit9,
+        ];
+        self.label(*DIGITS.get((digit as usize).checked_sub(1)?)?, true)
     }
 
     /// Whether the interface, rather than the world, should get the keyboard.
@@ -405,16 +439,19 @@ impl Views {
                 // Watch what shift and a digit actually types, so the hotbar
                 // can label its keys with what is on the keyboard rather than
                 // with what a US layout would have printed.
-                if pressed && self.modifiers.shift {
-                    if let (winit::keyboard::PhysicalKey::Code(code), Some(text)) =
+                // **Every key, not just the ones on the bar.** It used to
+                // learn the nine shifted digits and nothing else, so the help
+                // screen went on saying WASD to somebody on Dvorak whose pan
+                // keys are `,aoe` — a list of keys that is wrong is worse than
+                // no list, and this is the list that exists to be read by
+                // somebody who does not know the keys yet.
+                if pressed
+                    && let (winit::keyboard::PhysicalKey::Code(code), Some(text)) =
                         (event.physical_key, event.text.as_ref())
-                    {
-                        if let Some(index) = digit_index(code) {
-                            let typed: String = text.chars().filter(|c| !c.is_control()).collect();
-                            if !typed.is_empty() {
-                                self.shifted_digits[index] = Some(typed);
-                            }
-                        }
+                {
+                    let typed: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !typed.is_empty() {
+                        self.learned.insert((code, self.modifiers.shift), typed);
                     }
                 }
                 // Only on the way down, and never while a command modifier is

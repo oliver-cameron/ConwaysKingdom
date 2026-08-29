@@ -1475,6 +1475,7 @@ impl GameApp {
             }
             Key::Kind(kind) => self.held.kind = kind,
             Key::More => self.picking_stamp = !self.picking_stamp,
+            Key::Help => self.helping = !self.helping,
         }
     }
 
@@ -2220,6 +2221,18 @@ impl App for GameApp {
             geiger: self.geiger,
             watching: self.watching,
         };
+        // What the pan cluster prints here, read before the frame because the
+        // closure below holds `views` for the whole of it. Four keys by
+        // position; the label is whatever they type on this layout.
+        let pan_cluster: Option<String> = {
+            use winit::keyboard::KeyCode as K;
+            let views = self.views.borrow();
+            let letters: Vec<&str> = [K::KeyW, K::KeyA, K::KeyS, K::KeyD]
+                .into_iter()
+                .filter_map(|code| views.label(code, false))
+                .collect();
+            (letters.len() == 4).then(|| letters.concat())
+        };
         let (held, theme, shifted) = {
             let views = self.views.borrow();
             let learned: Vec<Option<String>> =
@@ -2367,7 +2380,7 @@ impl App for GameApp {
             // screen asked for it. Its rectangle joins the list the client
             // uses to keep a press off the world behind.
             if helping {
-                let (rect, closed) = help::show(ctx, &theme);
+                let (rect, closed) = help::show(ctx, &theme, pan_cluster.as_deref());
                 help_closed = closed;
                 rects.extend(rect);
             }

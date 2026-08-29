@@ -207,6 +207,14 @@ impl Held {
 /// Something on the bar that a key can pick.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
+    /// Open the list of every key.
+    ///
+    /// **A square, because a key nobody knows about is not a key.** `?` was
+    /// discoverable only by pressing `?`, and the one place a player already
+    /// looks to find out what something does is the bar — every other square
+    /// on it teaches its own keystroke in the corner, and this one teaches the
+    /// square that teaches the rest.
+    Help,
     /// Pick a shape, leaving what it is made of alone.
     Shape(Shape),
     /// Pick a kind, leaving the shape alone. **That is the whole point of two
@@ -415,6 +423,20 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
                         picked = Some(Key::More);
                     }
                     shift += 1;
+
+                    // Last, and outside the rule with the library: it is not
+                    // about stamps, it is about the bar.
+                    rule(ui, theme);
+                    if square(
+                        ui,
+                        look,
+                        Face::Text(words::HELP),
+                        words::HELP_HINT,
+                        Some(words::HELP.to_string()),
+                        false,
+                    ) {
+                        picked = Some(Key::Help);
+                    }
                 });
             });
         });

@@ -318,6 +318,10 @@ pub mod hotbar {
     pub const CAPTURE: &str = "Grab";
     /// The square that opens the library.
     pub const LIBRARY: &str = "Stamps";
+    /// The character, not the chord, for the reason `FLIP_KEY` is: it is bound
+    /// by what it types, so the label is right on every layout.
+    pub const HELP: &str = "?";
+    pub const HELP_HINT: &str = "Every key, on one screen";
 }
 
 /// The library of captured patterns.
@@ -517,7 +521,19 @@ pub mod help {
     /// The keycaps themselves. Spelled the way a keyboard is read rather than
     /// the way winit names them — nobody has a key called `ArrowLeft`.
     pub mod keys {
-        pub const PAN_KEYS: &str = "WASD / arrows";
+        /// The pan cluster as it prints on *this* keyboard, plus the arrows.
+        ///
+        /// Four letters rather than the word "WASD", which is a name for a
+        /// shape on the board and only spells itself on one layout — on Dvorak
+        /// the same four keys print `,aoe`.
+        pub fn pan(cluster: &str) -> String {
+            format!("{cluster} / arrows")
+        }
+
+        /// What to say before anybody has pressed one of them and there is
+        /// nothing to report: the arrows do the same job and are the same
+        /// everywhere, so they are the honest half of the answer.
+        pub const PAN_ARROWS: &str = "arrows";
         pub const PAN_FAST: &str = "shift";
         pub const PAN_DRAG: &str = "space or middle drag";
         pub const ZOOM: &str = "wheel / pinch";

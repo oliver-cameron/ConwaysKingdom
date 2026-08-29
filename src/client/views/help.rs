@@ -25,51 +25,78 @@ use super::words::help as words;
 /// One group of keys, and what they are for.
 struct Group {
     heading: &'static str,
-    keys: &'static [(&'static str, &'static str)],
+    keys: Vec<(String, &'static str)>,
 }
 
+/// **The one label here that is not the same on every keyboard.**
+///
+/// Pan is bound by *position* — the cluster under a left hand — so what it
+/// prints depends on the layout: on Dvorak those four keys are `,aoe`. A list
+/// of keys that is wrong is worse than no list, and this is the list that
+/// exists to be read by somebody who does not know the keys yet.
+///
+/// Nothing else here asks. Every other row is either a key bound by
+/// *character*, which is the same label everywhere by construction, or a key
+/// with a name rather than a print — space, tab, escape, the arrows.
+///
+/// `None` until somebody has pressed one of them, which is answered with the
+/// arrows alone rather than with a guess.
+///
+/// ---
+///
 /// What the client can be told to do, by what it is being told to do it to.
 ///
 /// Here rather than beside the handlers that read them, for the reason
 /// [`super::words`] exists at all: what the game *says* is a decision, and a
 /// list of keys that drifts out of step with the keys is worse than no list.
 /// Anything added to `on_key` belongs here in the same commit.
-const GROUPS: &[Group] = &[
-    Group {
-        heading: words::LOOKING,
-        keys: &[
-            (words::keys::PAN_KEYS, words::PAN),
-            (words::keys::PAN_FAST, words::PAN_FASTER),
-            (words::keys::PAN_DRAG, words::PAN_BY_HAND),
-            (words::keys::ZOOM, words::ZOOM),
-        ],
-    },
-    Group {
-        heading: words::BUILDING,
-        keys: &[
-            (words::keys::TOOLS, words::TOOLS),
-            (words::keys::STAMPS, words::STAMPS),
-            (words::keys::SHAPE, words::SHAPE),
-            (words::keys::TURN, words::TURN),
-            (words::keys::MIRROR, words::MIRROR),
-            (words::keys::DRAG, words::DRAG),
-        ],
-    },
-    Group {
-        heading: words::GETTING_ABOUT,
-        keys: &[
-            (words::keys::WALK, words::WALK),
-            (words::keys::CHOOSE, words::CHOOSE),
-            (words::keys::MOVE_ON, words::MOVE_ON),
-            (words::keys::BACK, words::BACK),
-            (words::keys::HELP, words::HELP),
-        ],
-    },
-];
+fn groups(pan_cluster: Option<&str>) -> Vec<Group> {
+    let pan = match pan_cluster {
+        Some(cluster) => words::keys::pan(cluster),
+        None => words::keys::PAN_ARROWS.to_string(),
+    };
+
+    vec![
+        Group {
+            heading: words::LOOKING,
+            keys: vec![
+                (pan, words::PAN),
+                (words::keys::PAN_FAST.into(), words::PAN_FASTER),
+                (words::keys::PAN_DRAG.into(), words::PAN_BY_HAND),
+                (words::keys::ZOOM.into(), words::ZOOM),
+            ],
+        },
+        Group {
+            heading: words::BUILDING,
+            keys: vec![
+                (words::keys::TOOLS.into(), words::TOOLS),
+                (words::keys::STAMPS.into(), words::STAMPS),
+                (words::keys::SHAPE.into(), words::SHAPE),
+                (words::keys::TURN.into(), words::TURN),
+                (words::keys::MIRROR.into(), words::MIRROR),
+                (words::keys::DRAG.into(), words::DRAG),
+            ],
+        },
+        Group {
+            heading: words::GETTING_ABOUT,
+            keys: vec![
+                (words::keys::WALK.into(), words::WALK),
+                (words::keys::CHOOSE.into(), words::CHOOSE),
+                (words::keys::MOVE_ON.into(), words::MOVE_ON),
+                (words::keys::BACK.into(), words::BACK),
+                (words::keys::HELP.into(), words::HELP),
+            ],
+        },
+    ]
+}
 
 /// Draw it. Returns the rectangle covered, so a click on it does not also
 /// reach the world, and whether it was dismissed.
-pub fn show(ctx: &egui::Context, theme: &Theme) -> (Option<egui::Rect>, bool) {
+pub fn show(
+    ctx: &egui::Context,
+    theme: &Theme,
+    pan_cluster: Option<&str>,
+) -> (Option<egui::Rect>, bool) {
     let p = theme.palette;
     let m = theme.metrics;
     let mut close = false;
@@ -78,7 +105,8 @@ pub fn show(ctx: &egui::Context, theme: &Theme) -> (Option<egui::Rect>, bool) {
     // the whole panel rather than per group — measured rather than guessed,
     // because a hard-coded width is a width that is wrong on the next key
     // somebody adds.
-    let widest = GROUPS
+    let groups = groups(pan_cluster);
+    let widest = groups
         .iter()
         .flat_map(|g| g.keys.iter())
         .map(|(key, _)| key.chars().count())
@@ -104,13 +132,13 @@ pub fn show(ctx: &egui::Context, theme: &Theme) -> (Option<egui::Rect>, bool) {
                         });
                     });
 
-                    for group in GROUPS {
+                    for group in &groups {
                         ui.add_space(m.item_spacing * 1.5);
                         ui.colored_label(
                             p.text_dim,
                             egui::RichText::new(group.heading).size(m.text_small),
                         );
-                        for (key, what) in group.keys {
+                        for (key, what) in &group.keys {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new(format!("{key:widest$}"))
@@ -142,20 +170,50 @@ pub fn show(ctx: &egui::Context, theme: &Theme) -> (Option<egui::Rect>, bool) {
 mod tests {
     use super::*;
 
+    /// The list as somebody who has pressed nothing sees it, which is the
+    /// worst case for every assertion below.
+    fn cold() -> Vec<Group> {
+        groups(None)
+    }
+
     /// The list is the documentation, so an empty group or a blank key is a
     /// row that says nothing — and this file is the one place a key gets
     /// written down, so a mistake here is a key nobody finds.
     #[test]
     fn every_row_says_something() {
-        assert!(!GROUPS.is_empty());
-        for group in GROUPS {
+        let groups = cold();
+        assert!(!groups.is_empty());
+        for group in &groups {
             assert!(!group.heading.is_empty());
             assert!(!group.keys.is_empty(), "{} has no keys", group.heading);
-            for (key, what) in group.keys {
+            for (key, what) in &group.keys {
                 assert!(!key.is_empty(), "a blank keycap under {}", group.heading);
                 assert!(!what.is_empty(), "{key} does not say what it does");
             }
         }
+    }
+
+    /// **The pan row says what the keys actually print.** It said "WASD" to
+    /// everybody, which is a name for a shape on the board and only spells
+    /// itself on one layout: on Dvorak those four keys type `,aoe`, so the one
+    /// list that exists to be read by somebody who does not know the keys was
+    /// telling them the wrong ones.
+    #[test]
+    fn the_pan_row_follows_the_keyboard() {
+        let row = |cluster| {
+            groups(cluster)
+                .into_iter()
+                .flat_map(|g| g.keys)
+                .map(|(key, _)| key)
+                .find(|key| key.contains("arrows"))
+                .expect("the pan row went missing")
+        };
+        assert!(row(Some("wasd")).starts_with("wasd"));
+        assert!(row(Some(",aoe")).starts_with(",aoe"), "a Dvorak board was told WASD");
+        // And before anybody has pressed one of them there is nothing to
+        // report, which is answered with the half that is the same everywhere
+        // rather than with a guess.
+        assert_eq!(row(None), "arrows");
     }
 
     /// Grouped by what a key acts on, so one key belongs in one place. The
@@ -163,8 +221,9 @@ mod tests {
     #[test]
     fn no_key_is_listed_twice() {
         let mut seen = Vec::new();
-        for (key, _) in GROUPS.iter().flat_map(|g| g.keys.iter()) {
-            assert!(!seen.contains(key), "{key} is listed twice");
+        let groups = cold();
+        for (key, _) in groups.iter().flat_map(|g| g.keys.iter()) {
+            assert!(!seen.contains(&key), "{key} is listed twice");
             seen.push(key);
         }
     }
@@ -174,13 +233,14 @@ mod tests {
     /// somebody adds a longer key.
     #[test]
     fn the_keycap_column_is_as_wide_as_its_widest_key() {
-        let widest = GROUPS
+        let groups = cold();
+        let widest = groups
             .iter()
             .flat_map(|g| g.keys.iter())
             .map(|(key, _)| key.chars().count())
             .max()
             .unwrap();
-        for (key, _) in GROUPS.iter().flat_map(|g| g.keys.iter()) {
+        for (key, _) in groups.iter().flat_map(|g| g.keys.iter()) {
             assert!(
                 format!("{key:widest$}").chars().count() >= widest,
                 "{key} would not fill the column"
