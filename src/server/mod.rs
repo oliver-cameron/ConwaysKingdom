@@ -15,6 +15,7 @@
 pub mod console;
 pub mod matches;
 pub mod persist;
+pub mod rating;
 pub mod rooms;
 #[cfg(feature = "server")]
 pub mod ws;

@@ -21,7 +21,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Designed | more than one player to a side |
-| [Rating](#rating) | Decided | an Elo-shaped number, and what it would have to survive |
+| [Rating](#rating) | Being built | the arithmetic is in; what to key it by is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Decided | decentralise discovery and identity; never a world |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
@@ -117,9 +117,15 @@ What is left of it is a **measurement**. The arc is a twelfth of the circle and 
 
 ## Rating
 
-**Decided, not costed.** A number that says how good somebody is, updated by results, in the shape of Elo.
+**Being built.** A number that says how good somebody is, updated by results, in the shape of Elo.
 
-Most of what it needs exists. A match already has a winner, `Victory` already says how it was decided, and `client::record` already keeps what this client has played — so the *client* half of showing a rating is nearly free. Elo itself is a dozen lines: expected score from the rating difference, and a K-factor times the surprise.
+The arithmetic is in, as [`server::rating`](../src/server/rating.rs): expected score from a rating difference, a K-factor times the surprise, and the reduction that turns a match of up to fifteen into something a two-player formula can eat. It reads and writes nothing and is keyed by nobody — it takes numbers and returns numbers — which is the half that can be correct before the question below is answered.
+
+The reduction is the part that was a choice rather than a formula, and it is written up at `deltas`: **every pairwise outcome**, so a fifteen-player match is a hundred and five little games and coming second in a field of experts is not the same result as coming second in a field of beginners. The surprise is divided by the number of opponents, so K stays the most a *match* can move a rating rather than the most a pairing can — otherwise entering a crowded game would be worth more than being good at one. Allies are never rated against each other, since there is no result between two people who won the same match, which is what makes a team result fall out as one pairwise outcome per opposing pair.
+
+What is left is the sentence below, and it is all of what is left.
+
+Most of the rest exists. A match already has a winner, `Victory` already says how it was decided, and `client::record` already keeps what this client has played — so the *client* half of showing a rating is nearly free.
 
 What it runs into is that **a rating is a fact about a person, and this game has no people.** It has `PlayerId`, which is a seat in one room and is reused; and a rejoin token, which is a secret filed per room and is the closest thing to an identity there is. So a rating cannot be stored until there is something to store it against, and that is the same missing piece as [fifteen slots and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients): a person becomes a UUID, and a seat becomes a thing that person holds.
 
