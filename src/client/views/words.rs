@@ -26,10 +26,15 @@ pub mod menu {
     /// is not silent.
     pub const REACHED: &str = "connected";
     pub const RETRY: &str = "try again";
-    /// One glyph. Reaching a server and asking it again are the same act
-    /// from where the player stands, so they are one control whose meaning
-    /// follows the state — which the hover text says.
-    pub const REFRESH: &str = "\u{21bb}";
+    /// Reaching a server and asking it again are the same act from where the
+    /// player stands, so they are one control whose meaning follows the state
+    /// — which the hover text says.
+    ///
+    /// **Drawn rather than written**: it was `\u{21bb}` and rendered as a box,
+    /// because no font is loaded anywhere in this client. See
+    /// [`crate::client::views::icons::refresh`], and the same for the back
+    /// arrow. A control that is one symbol has nothing left when the symbol is
+    /// missing.
     pub const REFRESH_ASK: &str = "See what is on that server";
     pub const REFRESH_AGAIN: &str = "Ask that server again";
     /// The column of what is already here. "Worlds" rather than "Rooms",
@@ -420,6 +425,13 @@ pub mod hud {
     pub const HOLDING: &str = "ground held";
     /// The arrow out. A glyph rather than the word, because it sits beside a
     /// player's name in a row that is already full.
+    /// **Drawn rather than written.** This was the arrow itself and came out
+    /// as a box: no font is loaded anywhere in this client, so a glyph outside
+    /// what egui bundles is tofu — and the one control whose whole job is to
+    /// be recognised at a glance was a square. See
+    /// [`crate::client::views::icons::back`]. Kept as a constant because the
+    /// help screen still spells it in a line of text, where it is surrounded
+    /// by words and reads.
     pub const BACK: &str = "\u{2190}";
     pub const BACK_HINT: &str = "back to the menu";
     pub const BOUNDLESS: &str = "boundless world";

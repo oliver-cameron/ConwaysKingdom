@@ -63,6 +63,74 @@ fn tint(player: PlayerId) -> Option<egui::ColorImage> {
     })
 }
 
+/// A left-pointing arrow, drawn rather than typed.
+///
+/// **It was `\u{2190}` and it came out as a box.** No font is loaded anywhere
+/// in this client — `Views::new` never touches `FontDefinitions` — so the
+/// glyphs available are whatever egui bundles, and a character outside that
+/// coverage renders as tofu. Which is a fair description of the back button:
+/// the one control on the screen whose whole job is to be recognised at a
+/// glance, drawn as a square.
+///
+/// A font would fix it and is a bigger decision; this is the fix that is
+/// correct whatever font is chosen later. It is also the pattern already here
+/// — see [`camera`] — and it scales with the button rather than with a point
+/// size, which matters on a control that is twenty-two pixels wide.
+pub fn back(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) {
+    let width = rect.width().min(rect.height());
+    let stroke = egui::Stroke::new((width * 0.11).max(1.2), colour);
+    let mid = rect.center();
+    // The shaft, across the middle two thirds, so the head has somewhere to
+    // sit without touching the edge.
+    let (left, right) = (mid.x - width * 0.30, mid.x + width * 0.30);
+    painter.line_segment([egui::pos2(left, mid.y), egui::pos2(right, mid.y)], stroke);
+    // And the head: two strokes rather than a filled triangle, so it reads the
+    // same weight as the shaft at every size.
+    let reach = width * 0.22;
+    for up in [-1.0, 1.0] {
+        painter.line_segment(
+            [egui::pos2(left, mid.y), egui::pos2(left + reach, mid.y + reach * up)],
+            stroke,
+        );
+    }
+}
+
+/// A circular arrow, for asking again.
+///
+/// Drawn for the reason [`back`] is: it was `\u{21bb}` and no font this client
+/// loads has it, because this client loads none.
+///
+/// An arc rather than a ring, so the gap and the head say which way it goes —
+/// a closed circle with a triangle on it reads as a target.
+pub fn refresh(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) {
+    let radius = rect.width().min(rect.height()) * 0.36;
+    let stroke = egui::Stroke::new((radius * 0.30).max(1.2), colour);
+    let centre = rect.center();
+
+    // Three quarters of a turn, from just past the top round to the left,
+    // leaving the corner the head goes in.
+    const STEPS: usize = 18;
+    let angle = |t: f32| std::f32::consts::TAU * (-0.20 + t * 0.78);
+    let arc: Vec<egui::Pos2> = (0..=STEPS)
+        .map(|i| {
+            let a = angle(i as f32 / STEPS as f32);
+            centre + egui::vec2(a.cos(), a.sin()) * radius
+        })
+        .collect();
+    painter.add(egui::Shape::line(arc, stroke));
+
+    // The head, on the end the arc starts at, pointing the way it travels.
+    let a = angle(0.0);
+    let tip = centre + egui::vec2(a.cos(), a.sin()) * radius;
+    let along = egui::vec2(-a.sin(), a.cos()) * radius * 0.55;
+    let across = egui::vec2(a.cos(), a.sin()) * radius * 0.45;
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip + across, tip - across, tip - along],
+        colour,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// A camera, drawn rather than sampled, because capturing is not a cell and
 /// the sheet has no picture of it.
 ///

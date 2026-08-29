@@ -85,11 +85,29 @@ pub fn show(
                 // The way out, in the row that is already about who you are
                 // and where. A floating button would have to sit somewhere,
                 // and everywhere it could sit is over the world.
-                if ui
-                    .add(egui::Button::new(words::BACK).min_size(egui::vec2(22.0, 20.0)))
-                    .on_hover_text(words::BACK_HINT)
-                    .clicked()
-                {
+                // Painted rather than typed: the arrow it used to be is not in
+                // any font this client loads, because this client loads none,
+                // so the one control whose job is to be recognised at a glance
+                // was a square. See `icons::back`.
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
+                let palette = theme.palette;
+                let ink = if response.hovered() { palette.text } else { palette.text_dim };
+                ui.painter().rect_stroke(
+                    rect,
+                    theme.metrics.rounding,
+                    egui::Stroke::new(
+                        1.0,
+                        if response.hovered() {
+                            palette.line
+                        } else {
+                            palette.line.gamma_multiply(0.6)
+                        },
+                    ),
+                    egui::StrokeKind::Inside,
+                );
+                crate::client::views::icons::back(ui.painter(), rect.shrink(5.0), ink);
+                if response.on_hover_text(words::BACK_HINT).clicked() {
                     back = true;
                 }
                 // The same colour the shader gives this player's cells, so the

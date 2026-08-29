@@ -126,12 +126,27 @@ fn server_field(
         // and asking it again are the same act from where a player stands —
         // tell me what is on there, now — so the meaning follows the state and
         // the hover text says which it is.
-        let go = ui
-            .add_sized(
-                [m.button_height, m.button_height],
-                egui::Button::new(egui::RichText::new(words::REFRESH).size(m.text_action)),
-            )
-            .on_hover_text(if reached { words::REFRESH_AGAIN } else { words::REFRESH_ASK });
+        // Painted rather than typed, for the reason the back arrow is: the
+        // glyph it used to be is in no font this client loads, because this
+        // client loads none, and a control that is one symbol has nothing left
+        // when the symbol is a box.
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(m.button_height, m.button_height),
+            egui::Sense::click(),
+        );
+        ui.painter().rect_stroke(
+            rect,
+            m.rounding,
+            egui::Stroke::new(1.0, if response.hovered() { p.text_dim } else { p.line }),
+            egui::StrokeKind::Inside,
+        );
+        crate::client::views::icons::refresh(
+            ui.painter(),
+            rect,
+            if response.hovered() { p.text } else { p.text_dim },
+        );
+        let go =
+            response.on_hover_text(if reached { words::REFRESH_AGAIN } else { words::REFRESH_ASK });
 
         let entered = if at.on_web {
             // Not a field. The socket is derived from the page's origin, so a
