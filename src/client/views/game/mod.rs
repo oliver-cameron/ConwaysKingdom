@@ -783,6 +783,18 @@ impl GameApp {
                         log::info!("{who} is now rated {rating} ({change:+})");
                     }
                 }
+                // Somebody was given their opening ground. Ours moves the
+                // camera, because a match lays everybody out at the whistle
+                // and the spawn in our `Welcome` was worked out before any of
+                // it existed -- it is stale by the time it matters, which is
+                // why this used to need a reload.
+                ServerMessage::Spawned { player, at } => {
+                    if Some(player) == self.me {
+                        log::info!("granted ground at {at:?}");
+                        self.camera.centre = middle_of(at);
+                        self.camera.dirty = true;
+                    }
+                }
                 ServerMessage::Rejected { reason } => {
                     log::error!("server refused the connection: {reason}");
                     // Shown rather than logged and dropped. The refusal names

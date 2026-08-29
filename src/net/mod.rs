@@ -838,6 +838,23 @@ pub enum ServerMessage {
         tick: Tick,
         actions: Vec<Stamped>,
     },
+    /// Where a player's opening ground was laid, and whose it is.
+    ///
+    /// **Because a grant is a change to the world that nobody was told about.**
+    /// `Welcome` carries a spawn, which is right for somebody arriving — and a
+    /// match grants everybody at the whistle instead, long after every client
+    /// has joined and subscribed. Their chunks do not change hands, so nothing
+    /// re-fetches them, and the ground appeared for the server and for nobody
+    /// else. A reload fixed it, which is what made it look like a client bug.
+    ///
+    /// To the whole room rather than to its subject, because knowing where
+    /// everybody started is worth having and because a per-player message
+    /// would need routing this does not have. A `Resync` naming the same
+    /// chunks goes out beside it: this says where, and that says fetch it.
+    Spawned {
+        player: PlayerId,
+        at: (i32, i32),
+    },
     /// Somebody's rating here, and what the match just finished moved it by.
     ///
     /// Broadcast to the room rather than sent to its owner alone, because a
@@ -1202,22 +1219,36 @@ pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
             // which means widening the gap above does nothing here, and a
             // small torus puts players close together however it is set.
             //
-            // Never closer together than the patch is wide, or grants would
-            // overlap before they even wrapped. On a world too small for even
-            // that they do overlap, and `grant` leaves claimed ground alone,
-            // so the earlier players simply keep theirs.
-            let pitch = |extent: i32| (extent / SPAWN_ACROSS).max(SPAWN_N);
-            let (row, col) = (n / SPAWN_ACROSS, n % SPAWN_ACROSS);
-            (row * pitch(height), col * pitch(width))
+            // **The grid is sized to the world, not the roster.** It used to
+            // be six across whatever the world was, with the pitch floored at
+            // the width of a *patch* — so any torus from seventy-two cells up
+            // passed the cramped check and then seated everybody edge to edge,
+            // with no ground between them at all. Neighbours, literally: two
+            // grants sharing a border on the generation the match started.
+            //
+            // So the number across comes from how many pitches fit. Where
+            // there is room for six, this is what it always was; where there
+            // is not, players are seated further apart in a smaller grid
+            // rather than packed into a bigger one. The floor is
+            // `SPAWN_PITCH`, which is a patch *and the ground around it*,
+            // because the gap is the point — see [`SPAWN_GAP`].
+            //
+            // A world too small even for a two-by-two grid cannot give anybody
+            // room and `too_cramped_for_grants` says so on the way in; the
+            // grants overlap, `grant` leaves claimed ground alone, and the
+            // earlier players simply keep theirs.
+            let across = |extent: i32| (extent / SPAWN_PITCH).clamp(1, SPAWN_ACROSS);
+            let (down, along) = (across(height), across(width));
+            let pitch = |extent: i32, across: i32| (extent / across).max(SPAWN_PITCH);
+            let (row, col) = (n / along, n % along);
+            (row % down * pitch(height, down), col * pitch(width, along))
         }
     }
 }
 
 /// Whether a world is too small to give every player a square of their own.
 pub fn too_cramped_for_grants(world: &World) -> bool {
-    world
-        .size_in_cells()
-        .is_some_and(|(h, w)| h < SPAWN_N * SPAWN_ACROSS || w < SPAWN_N * SPAWN_ACROSS)
+    world.size_in_cells().is_some_and(|(h, w)| h < SPAWN_PITCH * 2 || w < SPAWN_PITCH * 2)
 }
 
 /// Claim a player's starting ground, with a block standing on it.
@@ -1232,6 +1263,23 @@ pub fn too_cramped_for_grants(world: &World) -> bool {
 /// you decide what to build. It is also what keeps the ground: territory
 /// spreads from living cells, so a grant with nothing alive on it would never
 /// grow past the patch it was given.
+/// Every chunk a grant at this position touches, folded onto the chunks the
+/// world actually has.
+///
+/// A patch is [`SPAWN_N`] cells and a chunk is sixteen, so a grant spans one
+/// chunk at best and four at worst — and on a torus it may span four that are
+/// nowhere near each other, which is why the folding is not optional.
+pub fn grant_chunks(world: &World, (row, col): (i32, i32)) -> Vec<ChunkId> {
+    let mut out: Vec<ChunkId> =
+        World::chunks_covering((row, col), (row + SPAWN_N - 1, col + SPAWN_N - 1))
+            .into_iter()
+            .map(|c| world.canonical(c))
+            .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 pub fn grant(world: &mut World, player: PlayerId) {
     let (row, col) = spawn_for(player, world);
 
@@ -2232,6 +2280,53 @@ mod tests {
     /// spawn stays put however the world around it changes — `grant` runs
     /// again on every rejoin, and a seat that wandered would hand a returning
     /// player a second patch every time.
+    #[test]
+    fn no_two_grants_on_a_torus_are_neighbours() {
+        // How far apart two positions are on a ring, which is the only measure
+        // that means anything on a world you can walk off the edge of.
+        let apart = |a: i32, b: i32, extent: i32| {
+            let d = (a - b).abs();
+            d.min(extent - d)
+        };
+        for chunks in [8, 12, 16, 24, 40] {
+            let extent = chunks * CHUNK_N as i32;
+            let world = World::toroidal(chunks, chunks);
+            assert!(!too_cramped_for_grants(&world), "{chunks} chunks was called cramped");
+
+            // As many players as the grid actually seats. Beyond that they
+            // share seats, which is a shortage of world rather than a bug.
+            let seats = ((extent / SPAWN_PITCH).min(6)).pow(2);
+            let spawns: Vec<(i32, i32)> = (1..=seats.min(PlayerId::MAX as i32))
+                .map(|n| spawn_for(PlayerId(n as u8), &world))
+                .collect();
+            for (i, a) in spawns.iter().enumerate() {
+                for b in &spawns[i + 1..] {
+                    let (down, along) = (apart(a.0, b.0, extent), apart(a.1, b.1, extent));
+                    assert!(
+                        down.max(along) >= SPAWN_PITCH,
+                        "on a {chunks}-chunk torus {a:?} and {b:?} are {down} and {along} apart, \
+                         and a patch is {SPAWN_N} wide"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The specific shape of the bug this replaced: the pitch was floored at
+    /// the width of a *patch* rather than at a patch and the ground around it,
+    /// so any torus that passed the cramped check could still seat two players
+    /// with their borders touching on the generation the match began.
+    #[test]
+    fn a_small_torus_seats_fewer_players_rather_than_closer_ones() {
+        let world = World::toroidal(8, 8);
+        let extent = 8 * CHUNK_N as i32;
+        let first = spawn_for(PlayerId(1), &world);
+        let second = spawn_for(PlayerId(2), &world);
+        let along = (first.1 - second.1).abs().min(extent - (first.1 - second.1).abs());
+        let down = (first.0 - second.0).abs().min(extent - (first.0 - second.0).abs());
+        assert!(down.max(along) >= SPAWN_PITCH, "{first:?} and {second:?} on a 128-cell torus");
+    }
+
     #[test]
     fn a_granted_seat_does_not_wander() {
         let mut world = World::infinite_empty();

@@ -79,6 +79,8 @@ pub struct Server {
     /// step** — there is no tick to hang "every so often" from, and a lobby
     /// that only refreshed when the world moved would never refresh at all.
     lobby_changed: bool,
+    /// Grants made since the last step, waiting to be announced.
+    granted: Vec<(PlayerId, (i32, i32))>,
 }
 
 /// How often the standings go out, in generations.
@@ -123,6 +125,7 @@ impl Server {
             asleep: false,
             started_by: None,
             lobby_changed: false,
+            granted: Vec::new(),
         }
     }
 
@@ -649,6 +652,13 @@ impl Server {
         crate::net::grant(&mut self.world, id);
         let (row, col) = crate::net::spawn_for(id, &self.world);
         log::info!("{id:?} granted ground at ({row}, {col})");
+        // **Written down, because a grant changes the world and no client is
+        // watching for it.** A player arriving is told their spawn in the
+        // `Welcome` and rebuilds their world from it; a match grants everybody
+        // at the whistle, when every client has long since joined and
+        // subscribed, so their chunks do not change hands and nothing goes
+        // back for them. Drained by `step`.
+        self.granted.push((id, (row, col)));
     }
 
     /// Restore from a save, or start a fresh world if there is no file yet.
@@ -959,8 +969,28 @@ impl Server {
         if self.asleep {
             return Vec::new();
         }
-        let lobby: Vec<ServerMessage> =
+        let mut lobby: Vec<ServerMessage> =
             if std::mem::take(&mut self.lobby_changed) { vec![self.lobby()] } else { Vec::new() };
+
+        // Where anybody was just put, and the ground to go and fetch. Both,
+        // and in that order: the first is what a camera needs and the second
+        // is what a world needs, and a client that got only the first would
+        // look at ground it still believes is empty.
+        let granted = std::mem::take(&mut self.granted);
+        if !granted.is_empty() {
+            let mut chunks: Vec<crate::net::ChunkId> = granted
+                .iter()
+                .flat_map(|(_, at)| crate::net::grant_chunks(&self.world, *at))
+                .collect();
+            chunks.sort_unstable();
+            chunks.dedup();
+            lobby.extend(
+                granted
+                    .iter()
+                    .map(|(player, at)| ServerMessage::Spawned { player: *player, at: *at }),
+            );
+            lobby.push(ServerMessage::Resync { tick: self.tick(), chunks });
+        }
 
         if !self.phase.stepping() {
             self.pending.clear();
@@ -1496,6 +1526,56 @@ mod tests {
         );
         s.step();
         assert_eq!(s.world().live_cells().len(), before);
+    }
+
+    /// **The whistle says where everybody landed, and what to go and fetch.**
+    ///
+    /// A match grants at the whistle rather than on arrival, by which time
+    /// every client has joined and subscribed -- so the chunks the grants
+    /// landed in do not change hands, nothing re-fetches them, and the ground
+    /// appeared for the server and for nobody else. Reloading the page fixed
+    /// it, which is what made it look like a bug in the client.
+    #[test]
+    fn a_whistle_says_where_everybody_landed() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 100 });
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        // Nothing is laid out while gathering, so nothing is announced either.
+        assert!(!s.step().iter().any(|m| matches!(m, ServerMessage::Spawned { .. })));
+
+        s.start_match(None).unwrap();
+        let out = s.step();
+
+        let spawned: Vec<_> = out
+            .iter()
+            .filter_map(|m| match m {
+                ServerMessage::Spawned { player, at } => Some((*player, *at)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(spawned.len(), 2, "the whistle told nobody where they were: {out:?}");
+        assert!(spawned.iter().any(|(p, _)| *p == alice));
+        assert!(spawned.iter().any(|(p, _)| *p == bob));
+
+        // And the ground itself, named so a client that already holds those
+        // chunks knows they are wrong now.
+        let resynced: Vec<_> = out
+            .iter()
+            .filter_map(|m| match m {
+                ServerMessage::Resync { chunks, .. } => Some(chunks.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        for (_, at) in &spawned {
+            for chunk in crate::net::grant_chunks(s.world(), *at) {
+                assert!(resynced.contains(&chunk), "{chunk:?} was granted and not resynced");
+            }
+        }
+        // Once. A grant that announced itself every step would be a resync
+        // storm for as long as the match ran.
+        assert!(!s.step().iter().any(|m| matches!(m, ServerMessage::Spawned { .. })));
     }
 
     /// The other condition: first to a count rather than most at a whistle.
