@@ -217,14 +217,31 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 Two segments, and one thing selected across both:
 
 ```
-    [ Life  Mine  Turret │ Ice ]   [ Grab  stamps … +7 ]
+    [ Life  Mine  Turret  Ice ]   [ Draw  Pane │ Grab  stamps … +7 ]
 ```
+
+**Two axes: what a cell is, and how the cells are chosen.** It was one — a row
+of tools and stamps where picking any of them replaced everything about the
+last — so a mine was always a pencil, ice was always a pane, and a stamp was
+always whatever it had been captured as. A line of ice and a pane of mines were
+not unimplemented, they were *unsayable*, because the stroke came attached to
+the material. The left segment is the material and the right is the shape, and
+picking one never disturbs the other.
+
+Ice is among the kinds now rather than behind a rule. It used to sit apart
+because it was the one that walls people off and because it came with a
+different stroke; the stroke is the other axis, so what is left is a material
+like the others.
 
 **Every square shows a picture rather than a word.** Life, Mine, Turret and Ice are drawn from the same sprite sheet the world is drawn from, tinted with the same hue, so what you are choosing is what will be on the board — which is where you are looking. Grab is a camera, painted rather than sampled, because capturing is not a cell and the sheet has no picture of one. A stamp shows **the pattern it holds, drawn from the same sheet**: `2x2` said nothing about what was about to be placed, and at button size a glider is a glider and a block is a block. It is drawn in whatever the kind axis is holding, because a stamp is a shape and not a material — the same glider reads as life, as mines or as ice depending on what would come out of it, which is more useful than a fixed picture of how it happened to be captured. The names are still there, on hover.
 
-The tools are the game's own vocabulary and never change; the stamps are whatever you happened to capture, and there may be none or thirty. Run together, the Ice key would move every time you saved a pattern. Ice sits with the tools but behind a rule, because it is the one that walls people off and should not be a neighbour of the one you draw with.
+The kinds are the game's own vocabulary and never change; the stamps are whatever you happened to capture, and there may be none or thirty. Run together, the Ice key would move every time you saved a pattern, which is why they are two segments.
 
-**The digits are the stamps** — `1` to `9` then `0`, which is ten and is why the bar holds ten — and **shift and a digit is a tool**. The stamps get the bare keys because they are what you hold ten of and swap between without looking; the tools are the game's own vocabulary and grow only when the game does, so they can afford a modifier. Adding the turret moved Ice from shift-3 to shift-4, which is the cost of that arrangement and is paid once per new tool rather than every time a pattern is captured.
+**The digits are the stamps** — `1` to `9` then `0`, which is ten and is why the bar holds ten — and **shift and a digit is a kind**. The stamps get the bare keys because they are what you hold ten of and swap between without looking; the kinds are the game's own vocabulary and grow only when the game does, so they can afford a modifier. Adding the turret moved Ice from shift-3 to shift-4, which is the cost of that arrangement and is paid once per new kind rather than every time a pattern is captured.
+
+**One key on the shape axis, and it goes to the default.** `~` puts the shape back to whatever the held material is usually wanted in: a pencil for life, mines and turrets, a pane for ice. Not a toggle — a toggle's meaning depends on what was pressed last, so using it means remembering where you are, where this always lands in the same place and is therefore also a reliable way out of a stamp or a capture without looking at the bar first. The other shape is one click away, which is the right home for the choice you make occasionally. The square shows `~` rather than the chord that produces it, because shift and backtick *is* tilde on every layout this is bound for.
+
+**Writing on the bar has a shadow under it.** Every square has a picture behind its text — a sprite, a captured pattern, the world through a gap — and thin light glyphs over a busy one are a smear rather than a word. A shadow rather than a panel, which would cover the picture the square exists to show, and rather than an outline, which at this size turns a glyph into a blob.
 
 Binding is by *physical* key, so it is the same key on every layout and only the **label** is ever in question. The label starts as what the common layout types — `!` `@` `#` `$` — and is corrected the moment a key says otherwise, so the great majority see the right thing on the first frame and somebody on Programmer Dvorak, where the digits are shifted to begin with, is only shown the wrong one until they use it.
 

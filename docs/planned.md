@@ -19,6 +19,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
 | [Spectating](#spectating) | Built | a room with no seat in it |
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
+| [Ice anywhere, at a price](#ice-anywhere-at-a-price) | Decided | a wall you can build on somebody else's doorstep |
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Built | one seat, one platform and one purse to a side |
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
@@ -69,6 +70,22 @@ What is left: a watcher cannot follow a particular player's ground, which is wha
 The alphabet leaves out `0`, `o`, `1`, `i` and `l` — 31⁶ is 887 million codes, or 29.7 bits, against 36⁶ and 31.0 bits for the full alphanumeric set. That trade is deliberate: those five characters are the whole of why a code gets mistyped when it is read off one screen and typed into another, and the keyspace is not what protects a private room anyway. With the room cap where it is a random guess finds one in about twenty-eight million, so the defence is that guessing is not worth anybody's time — and if it ever became worth somebody's time the answer is a limit on how fast a connection may guess, not a longer code.
 
 What is left: **`?code=` in a URL**, which is the whole point of a code being short. `?room=` already skips the menu and `resolve` already takes a code wherever it takes a name, so this is a query-string parameter and nothing else.
+
+## Ice anywhere, at a price
+
+**Decided, not costed.** Ice may be placed outside your own territory, for a great deal more money, and laying it takes no ground.
+
+Everything else is confined to your own reach, and that rule is what makes the map mean anything: territory is the resource, spreading is how you get it, and a player who could build anywhere would have no reason to hold anything. Ice is the one placement where the confinement is doing something different, and worse. **A wall you can only build inside your own country is a wall against nothing.** What ice is for is stopping something — a glider run, a spread you cannot outpace, a corridor between two of somebody's holdings — and every one of those is a thing happening *outside* your border by the time it is worth stopping. So the one defensive tool in the game can only be used where you are already safe.
+
+Two conditions, and the second is the one that keeps it honest.
+
+**It costs a great deal more.** Not a little more: enough that walling somebody in is a decision about the whole of your purse rather than a thing you do while doing something else. The number is the part that is not costed — it wants playing with, and it is a multiple of the ordinary price rather than a separate figure, so a change to what ice costs at home moves both.
+
+**It takes no ground.** Placing ordinarily claims the square, which is how territory grows; ice placed abroad must not, or the price becomes irrelevant and the rule becomes "buy land anywhere", which is precisely the rule this game does not have. A pane laid on somebody else's ground is somebody else's ground with a pane on it — it freezes what is under it, which is what ice does, and changes nothing about whose it is.
+
+What it runs into is that `net::may_place` asks one question for every placement and would have to ask two, and that `net::price` is per-cell and per-placement and would need to know *whose ground it is on* rather than only what is being put there. Both are small; the second is the one to be careful with, because the client prices a drag before it sends it and the two must agree to the penny or every wall becomes a resync.
+
+It also wants a word on the screen. A price that changes depending on where the pointer is, with no explanation, reads as a bug — the drag preview already says what a gesture costs, so the label is where this is explained rather than in a help screen.
 
 ## The mercy rule
 
