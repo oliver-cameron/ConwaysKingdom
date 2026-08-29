@@ -1249,6 +1249,12 @@ impl GameApp {
         if matches!(&self.gesture, Gesture::Drawing(drag) if drag.moved) {
             return None;
         }
+        // Nor under a stamp's ghost, for the same reason a swept rectangle
+        // hides it: the thing about to be laid is already drawn, and a box
+        // round one cell of it says something less true.
+        if matches!(self.held, Held::Stamp(_)) {
+            return None;
+        }
         let at = self.cell_under_cursor(self.cursor);
         Some(self.camera.cell_rect(at, at))
     }
@@ -1261,9 +1267,9 @@ impl GameApp {
     /// and needed no preview, because the cells were their own; holding it
     /// back is what makes one necessary.
     fn selection_mark(&self) -> Option<overlay::Selection> {
-        let Gesture::Drawing(drag) = &self.gesture else { return None };
+        let Gesture::Drawing(drag) = &self.gesture else { return self.stamp_preview() };
         if !drag.moved {
-            return None;
+            return self.stamp_preview();
         }
         let to = self.cell_under_cursor(self.cursor);
 
@@ -1296,6 +1302,66 @@ impl GameApp {
             outlined: drag.stroke == hotbar::Stroke::Rectangle,
             tint: egui::Color32::from_rgb(r, g, b),
             hatched: self.held == Held::Ice,
+            label,
+            allowed,
+        })
+    }
+
+    /// What a stamp would lay, before it is laid.
+    ///
+    /// **A stamp is the one thing here placed by a click**, so there is no
+    /// drag to watch it grow during — every other gesture answers "what am I
+    /// about to do" by drawing itself while the button is down, and a stamp
+    /// simply happened. It went down somewhere you had guessed at, sometimes
+    /// off the ground you own, and the refusal arrived after the commitment.
+    ///
+    /// Drawn as a selection rather than as a thing of its own, because it is
+    /// one: the same cells, the same tint, the same refusal in red, the same
+    /// label saying what it costs. What the drag preview does for a rectangle,
+    /// this does for a pattern.
+    fn stamp_preview(&self) -> Option<overlay::Selection> {
+        let Held::Stamp(index) = self.held else { return None };
+        if !self.hovering || self.is_panning() || self.camera.zoom < HOVER_MIN_ZOOM {
+            return None;
+        }
+        let stamp = self.stamps.get(index)?;
+        let corner = stamp.centred_on(self.cell_under_cursor(self.cursor));
+        let laid = stamp.at(corner);
+
+        // Priced by the same call the placement itself makes, so what the
+        // preview says and what the click charges cannot drift apart.
+        let delta: i32 = stamp
+            .placements()
+            .into_iter()
+            .map(|placement| self.quote_as(stamp.of(corner, placement), false, placement).1)
+            .sum();
+        let stray = laid
+            .iter()
+            .filter(|&&((r, c), _)| {
+                !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
+            })
+            .count();
+
+        let allowed = stray == 0 && self.value + delta >= 0;
+        let label = if stray > 0 {
+            words::refused::cells_not_yours(stray)
+        } else if self.value + delta < 0 {
+            format!("{}   costs {}, you have {}", stamp.name, -delta, self.value)
+        } else {
+            format!("{}   {}x{}   {delta:+}", stamp.name, stamp.size.0, stamp.size.1)
+        };
+
+        let (r, g, b) = hud::player_colour(self.player());
+        let far = (corner.0 + stamp.size.0 - 1, corner.1 + stamp.size.1 - 1);
+        Some(overlay::Selection {
+            bounds: self.camera.cell_rect(corner, far),
+            // Cell by cell rather than one rectangle over the extent: a
+            // pattern is mostly holes, and a wash over its bounding box would
+            // say it fills them.
+            cells: laid.iter().map(|&(at, _)| self.camera.cell_rect(at, at)).collect(),
+            outlined: false,
+            tint: egui::Color32::from_rgb(r, g, b),
+            hatched: false,
             label,
             allowed,
         })
