@@ -66,7 +66,18 @@ pub trait App: 'static {
     ) {
     }
 
-    fn on_key(&mut self, _code: winit::keyboard::KeyCode, _pressed: bool) {}
+    /// A key went down or came up.
+    ///
+    /// **Both halves, because a keyboard answers two different questions.**
+    /// `code` is a *position* — winit names it after the US keycap that sits
+    /// there, and it is the same physical key on every layout. `typed` is what
+    /// that key actually produces here, with the current layout and modifiers
+    /// applied, or `None` for a key that produces no character at all.
+    ///
+    /// Which one a binding wants is a question about what the binding means,
+    /// and getting it wrong is invisible on the layout it was written on. See
+    /// `client::views::game::on_key`, where the rule is written down.
+    fn on_key(&mut self, _code: winit::keyboard::KeyCode, _typed: Option<&str>, _pressed: bool) {}
     /// A wheel or trackpad scroll. `zoom_gesture` is set when the platform
     /// reports it as a pinch rather than a scroll — browsers and most desktop
     /// environments send a trackpad pinch as ctrl+wheel.
@@ -453,11 +464,18 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 event:
                     winit::event::KeyEvent {
                         physical_key: winit::keyboard::PhysicalKey::Code(code),
+                        ref logical_key,
                         state,
                         ..
                     },
                 ..
-            } if !consumed => r.app.on_key(code, state == ElementState::Pressed),
+            } if !consumed => {
+                // The character this key produces *on this keyboard*, which is
+                // the only way to bind a mnemonic. `to_text` is `None` for a
+                // key that types nothing -- shift, escape, the arrows.
+                let typed = logical_key.to_text();
+                r.app.on_key(code, typed, state == ElementState::Pressed);
+            }
             WindowEvent::ModifiersChanged(state) => r.ctrl = state.state().control_key(),
             WindowEvent::MouseWheel { delta, .. } if !consumed => {
                 r.app.on_scroll(delta, r.ctrl || zoom_gesture::last())

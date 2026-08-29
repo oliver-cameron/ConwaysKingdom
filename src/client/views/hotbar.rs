@@ -635,6 +635,20 @@ mod tests {
         assert!(shifted(&library(0)).contains(&Key::Shape(Shape::Capture)));
     }
 
+    /// One square for two shapes, and it says which is current rather than
+    /// offering both: a click gives the other one, and from a stamp gives
+    /// drawing back.
+    #[test]
+    fn the_shape_square_offers_the_other_one() {
+        assert_eq!(Shape::Draw.other(), Shape::Rect);
+        assert_eq!(Shape::Rect.other(), Shape::Draw);
+        // From anything on the shape axis that is not one of the two, the way
+        // out is drawing -- the same place the key goes for a material that
+        // draws, and never a dead end.
+        assert_eq!(Shape::Stamp(3).other(), Shape::Draw);
+        assert_eq!(Shape::Capture.other(), Shape::Draw);
+    }
+
     /// **The one key lands in one place**, which is what makes it usable
     /// without looking: a toggle's meaning depends on what was pressed last,
     /// and this always puts the shape back to whatever the held material is

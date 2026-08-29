@@ -2493,7 +2493,29 @@ impl App for GameApp {
         }
     }
 
-    fn on_key(&mut self, code: winit::keyboard::KeyCode, pressed: bool) {
+    /// **Two kinds of binding, and which one a key wants is a question about
+    /// what it means.**
+    ///
+    /// `code` is a *position*: winit names it after the US keycap that sits
+    /// there, so `KeyCode::KeyD` is the third key of the home row wherever you
+    /// are. `typed` is what that key actually produces on this layout.
+    ///
+    /// **A shape on the keyboard binds by position.** WASD is not the letters
+    /// W, A, S and D, it is the cluster under a left hand — on Dvorak it is
+    /// `,aoe` and it is still the same four keys in the same diamond, which is
+    /// the whole of what makes it work. Space, escape, tab, the arrows and the
+    /// digit row are the same argument: their meaning is where they are.
+    ///
+    /// **A mnemonic binds by character.** `R` for rotate and `F` for flip mean
+    /// nothing as positions — on Dvorak the R position types `p`, so a
+    /// positional binding would put rotate under `p` and leave `r` doing
+    /// nothing, which is the letter the help screen is telling you to press.
+    /// The same goes for `~` and `?`: both are *shown as the character*, so
+    /// the label is a lie on any layout where that character is elsewhere.
+    ///
+    /// This was all positional, which is invisible on the layout it was
+    /// written on and wrong on every other.
+    fn on_key(&mut self, code: winit::keyboard::KeyCode, typed: Option<&str>, pressed: bool) {
         use winit::keyboard::KeyCode as K;
         // **Every screen has a key that leaves it**, which is the habit taken
         // from chess-tui — `b` for the menu there, escape here because that is
@@ -2504,12 +2526,12 @@ impl App for GameApp {
         // One step at a time, innermost first: a form shuts before a world
         // does. Escape that skipped a level would take somebody out of a game
         // because they wanted to close a panel.
-        // `?` is shift and the slash key, which is the one keycap winit will
-        // not name for us: it reports the physical key, and what that key
-        // prints depends on the layout. Slash-with-shift is right on every
-        // layout this has been tried on and wrong on some it has not, which is
-        // why the pointer has a way to this too.
-        if pressed && code == K::Slash && self.shift {
+        // `?` and `~` are bound to the characters they are *drawn as*, not to
+        // the keys that type them on a US board. The help screen says `?` and
+        // the hotbar square says `~`; a positional binding would make both
+        // labels wrong on any layout that puts those characters elsewhere,
+        // and a label that lies is worse than no label.
+        if pressed && typed == Some("?") {
             self.helping = !self.helping;
             return;
         }
@@ -2519,7 +2541,7 @@ impl App for GameApp {
         // rather than toggling, so its meaning does not depend on what was
         // pressed last. That also makes it the way out of a stamp or a
         // capture without looking at the bar to see what it will do.
-        if pressed && code == K::Backquote && self.shift {
+        if pressed && typed == Some("~") {
             self.held = self.held.defaulted();
             self.picking_stamp = false;
             return;
@@ -2534,10 +2556,16 @@ impl App for GameApp {
         // than taking a key of its own: three presses and one press are the
         // same place, so the second binding is a convenience and should read
         // as one.
-        if pressed && matches!(code, K::KeyR | K::KeyF) {
-            self.held.turn = match (code, self.shift) {
-                (K::KeyR, false) => self.held.turn.right(),
-                (K::KeyR, true) => self.held.turn.left(),
+        //
+        // **By character**, because these are the letters and not the places:
+        // the R position types `p` on Dvorak, so a positional binding would
+        // hide rotate under a key nothing tells you about and leave `r` inert.
+        // Matched case-insensitively, since shift is one of the meanings.
+        let letter = typed.map(str::to_ascii_lowercase);
+        if pressed && matches!(letter.as_deref(), Some("r") | Some("f")) {
+            self.held.turn = match (letter.as_deref(), self.shift) {
+                (Some("r"), false) => self.held.turn.right(),
+                (Some("r"), true) => self.held.turn.left(),
                 _ => self.held.turn.mirror(),
             };
             // Said out loud, because a rotation with nothing held changes

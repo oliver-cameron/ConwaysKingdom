@@ -302,6 +302,9 @@ pub mod hotbar {
     /// rather than what ends up in them.
     pub const DRAW: &str = "Draw";
     pub const PANE: &str = "Pane";
+    /// What the shape square says while a stamp is held: the axis is the same
+    /// one, so it shows what is on it rather than going blank.
+    pub const PATTERN: &str = "Stamp";
     /// The key that puts the shape back to whatever the held material is
     /// usually wanted in, shown on the square rather than in a help screen —
     /// it is the one key on the bar that does something rather than selecting
