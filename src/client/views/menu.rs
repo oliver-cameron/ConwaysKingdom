@@ -116,6 +116,15 @@ pub struct Menu {
     /// ends.
     pub games: Vec<crate::client::record::Game>,
     pub record: crate::client::record::Summary,
+    /// This client's key on this server, shown so it can be copied and
+    /// editable so another one can be pasted over it.
+    ///
+    /// **One field for both jobs**, because they are one question — who is
+    /// this browser — and two fields side by side, one showing a key and one
+    /// taking one, would be two answers to it. Read once when the menu opens,
+    /// like the record beside it: it changes when a server says so, and not
+    /// sixty times a second.
+    pub key: String,
     /// The world being described, if the form is open.
     ///
     /// On the menu rather than inside [`Stage::Choosing`] because the room
@@ -303,6 +312,13 @@ pub enum Chose {
     Clear,
     /// Back into the world already behind this menu, without joining anything.
     Resume,
+    /// Be the person this key names, from the next join onwards.
+    ///
+    /// Raw rather than parsed, unlike [`Self::Create`] — the menu checks that
+    /// it *reads* as a key before offering the press, and what happens to a
+    /// key that reads but is not this server's is a refusal from the server,
+    /// which is not a thing a view can find out.
+    UseKey(String),
     /// Make this world on the server already reached, then join it. Parsed
     /// rather than raw: what the player typed became what they chose in
     /// [`Draft::parse`], which is the menu's whole job.
@@ -330,6 +346,7 @@ impl Menu {
         } else {
             crate::net::keep::server().unwrap_or(default_address)
         };
+        let key = crate::net::keep::person(&address).map(|p| p.key()).unwrap_or_default();
         Self {
             name: crate::net::keep::name().unwrap_or_else(|| "player".to_string()),
             address,
@@ -342,6 +359,7 @@ impl Menu {
             code: String::new(),
             games: crate::client::record::games(),
             record: crate::client::record::Summary::of(&crate::client::record::games()),
+            key,
             draft: None,
         }
     }
@@ -591,6 +609,32 @@ fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     }
     if let Some(note) = note {
         ui.small(note);
+    }
+
+    // **At the foot, because it is maintenance and not a way to play.**
+    // Everything above it is what somebody came here to do; this is what they
+    // came here to do once, on the day they moved to another browser.
+    ui.add_space(m.item_spacing * 3.0);
+    ui.label(egui::RichText::new(words::home::KEY).size(m.text_small));
+    if menu.key.is_empty() && crate::net::keep::person(&menu.address).is_none() {
+        // Nothing to show and nothing to paste over: a key is something a
+        // server hands out, and this client has not been handed one.
+        ui.small(words::home::KEY_NONE);
+        return chose;
+    }
+    ui.add(egui::TextEdit::singleline(&mut menu.key).desired_width(f32::INFINITY));
+    ui.small(words::home::KEY_NOTE);
+    // Offered only when the field says something else and that something else
+    // reads as a key. A button that is always pressable, for a press that
+    // usually means "adopt what I already am", is a button that only ever
+    // gets pressed by accident.
+    let typed = crate::net::Person::parse(&menu.key).ok();
+    let mine = crate::net::keep::person(&menu.address);
+    if let Some(typed) = typed.filter(|t| Some(t) != mine.as_ref()) {
+        ui.add_space(m.item_spacing);
+        if ui.button(words::home::KEY_TAKE).clicked() {
+            chose = Chose::UseKey(typed.key());
+        }
     }
 
     chose

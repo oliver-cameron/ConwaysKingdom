@@ -1792,6 +1792,29 @@ impl BattleApp {
             menu::Chose::Resume => {
                 self.screen = Screen::Playing;
             }
+            // **Kept, and not proved.** A key is checked by the server on the
+            // next `Join` and nowhere else -- a client cannot know whether one
+            // is this server's, and pretending to check it here would be a
+            // second answer that has to agree with the real one. So this
+            // writes it down; a key that reads but is not ours comes back as a
+            // refusal that says so.
+            //
+            // No reconnect. A person is settled per join rather than per
+            // socket, so the next join carries this one and the open socket
+            // needs nothing done to it.
+            menu::Chose::UseKey(key) => match crate::net::Person::parse(&key) {
+                Ok(person) => {
+                    let address = self.address_hint();
+                    log::info!("this client will join {address} as {}", person.id);
+                    crate::net::keep::remember_person(&address, &person);
+                    if let Screen::Menu(m) = &mut self.screen {
+                        // Normalised, so the field shows what was actually
+                        // kept rather than whatever spacing it was pasted in.
+                        m.key = person.key();
+                    }
+                }
+                Err(why) => self.show_menu(menu::Stage::Failed(why)),
+            },
             // The form is a column now rather than something opened, so there
             // is nothing to shut: a press here puts it back to its defaults.
             menu::Chose::Clear => {

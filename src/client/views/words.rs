@@ -80,6 +80,15 @@ pub mod menu {
         pub const PLAY: &str = "Play";
         pub const WHO: &str = "You are";
         pub const RECORD: &str = "So far";
+        pub const KEY: &str = "Your key on this server";
+        /// Said plainly, because it is the whole bargain and it is not the one
+        /// people expect from something called a key. There is no account
+        /// behind it and no address to send a reset to.
+        pub const KEY_NOTE: &str =
+            "Copy it to play as yourself on another browser. Whoever has it is you.";
+        pub const KEY_TAKE: &str = "Use this key";
+        pub const KEY_NONE: &str =
+            "Reach a server and this fills in: a key is something a server gives you.";
         /// A first visit has nothing to show, and five zeroes would say only
         /// that the game keeps score.
         pub const NOTHING_YET: &str = "Nothing played yet. That is what Play is for.";
