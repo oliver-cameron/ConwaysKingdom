@@ -27,6 +27,46 @@ use crate::sim::{Cell, PlayerId, World};
 /// library stops being useful.
 pub const ON_THE_BAR: usize = 10;
 
+/// How a stamp is turned before it is laid.
+///
+/// **So a glider is one stamp and not four.** A pattern and the same pattern
+/// rotated are the same pattern; keeping both is the library filling up with
+/// its own reflections, and the four gliders are only the beginning — every
+/// spaceship, every gun, every corner of a wall has the same four or eight.
+///
+/// Held rather than stored: this is part of what you are *about to place*, not
+/// part of what you saved, so rotating changes nothing in the library and
+/// there is nothing to save, migrate or forget.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Turn {
+    /// Quarter turns clockwise, nought to three.
+    pub quarters: u8,
+    /// Mirrored left to right, applied **before** the rotation.
+    ///
+    /// Both, because a rotation cannot produce a reflection: a glider has four
+    /// rotations and four more that are its mirror image, and a pattern that
+    /// is not symmetric needs the second set to be reachable at all.
+    pub mirrored: bool,
+}
+
+impl Turn {
+    pub fn right(self) -> Self {
+        Self { quarters: (self.quarters + 1) % 4, ..self }
+    }
+
+    pub fn left(self) -> Self {
+        Self { quarters: (self.quarters + 3) % 4, ..self }
+    }
+
+    pub fn mirror(self) -> Self {
+        Self { mirrored: !self.mirrored, ..self }
+    }
+
+    pub fn is_default(self) -> bool {
+        self == Self::default()
+    }
+}
+
 /// One captured pattern.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stamp {
@@ -94,6 +134,41 @@ impl Stamp {
             cells: found.into_iter().map(|(r, c)| (r - top, c - left)).collect(),
             size: (bottom - top + 1, right - left + 1),
         }
+    }
+
+    /// The same pattern, turned.
+    ///
+    /// A whole `Stamp` rather than a turned view, so everything that already
+    /// works on one — placing, pricing, the preview, the thumbnail — goes on
+    /// working with no second path to keep in step. It is a handful of cells
+    /// and a `Vec`, rebuilt when the pointer moves; the pattern that would
+    /// make this worth caching does not exist.
+    ///
+    /// Trimmed on the way out, which is what keeps a turned stamp's corner in
+    /// the same relation to its cells as an unturned one's.
+    pub fn turned(&self, turn: Turn) -> Self {
+        if turn.is_default() {
+            return self.clone();
+        }
+        let (rows, cols) = self.size;
+        let cells = self
+            .cells
+            .iter()
+            .map(|&(r, c)| {
+                // Mirrored first, then rotated, because the other order is a
+                // different transform and one of the two has to be named.
+                let (r, c) = if turn.mirrored { (r, cols - 1 - c) } else { (r, c) };
+                match turn.quarters {
+                    1 => (c, rows - 1 - r),
+                    2 => (rows - 1 - r, cols - 1 - c),
+                    3 => (cols - 1 - c, r),
+                    _ => (r, c),
+                }
+            })
+            .collect();
+        // The name is the size and the size may have swapped, so it is rebuilt
+        // rather than carried: a 3x5 turned is a 5x3 and should say so.
+        Self::trimmed(cells)
     }
 
     /// Where this stamp's cells land if its top-left is put at `at`.
@@ -591,6 +666,105 @@ mod tests {
             assert!(!pad.at(r, c));
         }
         assert!(pad.is_empty());
+    }
+
+    /// **A glider is one stamp and not four.** Four quarter turns come back
+    /// to where they started, and each one is the pattern rather than a
+    /// pattern beside it.
+    #[test]
+    fn four_quarter_turns_come_back() {
+        let mut pad = Sketch::default();
+        // A glider, which is the whole reason this exists: asymmetric under
+        // both rotation and reflection, so nothing here can pass by accident.
+        for (r, c) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
+            pad.lay(r, c);
+        }
+        let glider = pad.to_stamp().unwrap();
+
+        let mut turn = Turn::default();
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            turn = turn.right();
+            let turned = glider.turned(turn);
+            assert_eq!(turned.cells.len(), glider.cells.len(), "a turn lost a cell");
+            let mut cells = turned.cells.clone();
+            cells.sort_unstable();
+            seen.push(cells);
+        }
+        let mut original = glider.cells.clone();
+        original.sort_unstable();
+        assert_eq!(seen[3], original, "four quarters did not come home");
+        assert_ne!(seen[0], original, "a quarter turn changed nothing");
+        assert_ne!(seen[0], seen[1]);
+        assert_ne!(seen[0], seen[2]);
+    }
+
+    /// Turning the other way three times is turning this way once, so the
+    /// second binding is a convenience rather than a second transform.
+    #[test]
+    fn left_is_three_rights() {
+        let mut pad = Sketch::default();
+        for (r, c) in [(0, 0), (0, 1), (0, 2), (1, 0)] {
+            pad.lay(r, c);
+        }
+        let stamp = pad.to_stamp().unwrap();
+        let left = stamp.turned(Turn::default().left());
+        let thrice = stamp.turned(Turn::default().right().right().right());
+        assert_eq!(left.cells, thrice.cells);
+    }
+
+    /// **A rotation cannot produce a reflection**, which is why there are two
+    /// keys: a glider has four turns and four more that are its mirror image,
+    /// and without the second set half of them are unreachable.
+    #[test]
+    fn mirroring_is_not_any_rotation() {
+        let mut pad = Sketch::default();
+        for (r, c) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
+            pad.lay(r, c);
+        }
+        let glider = pad.to_stamp().unwrap();
+        let sorted = |s: &Stamp| {
+            let mut c = s.cells.clone();
+            c.sort_unstable();
+            c
+        };
+
+        let mirrored = sorted(&glider.turned(Turn::default().mirror()));
+        for quarters in 0..4 {
+            let mut turn = Turn::default();
+            for _ in 0..quarters {
+                turn = turn.right();
+            }
+            assert_ne!(mirrored, sorted(&glider.turned(turn)), "{quarters} quarters");
+        }
+    }
+
+    /// A tall pattern turned is a wide one, and it says so: the name is the
+    /// size and the size has swapped.
+    #[test]
+    fn a_turn_swaps_the_size_and_the_name_follows() {
+        let mut pad = Sketch::default();
+        for r in 0..4 {
+            pad.lay(r, 0);
+        }
+        let tall = pad.to_stamp().unwrap();
+        assert_eq!((tall.size, tall.name.as_str()), ((4, 1), "4x1"));
+        let wide = tall.turned(Turn::default().right());
+        assert_eq!((wide.size, wide.name.as_str()), ((1, 4), "1x4"));
+    }
+
+    /// Doing nothing is doing nothing, and it is the common case -- a stamp is
+    /// turned once and placed many times.
+    #[test]
+    fn an_untouched_turn_changes_nothing() {
+        let mut pad = Sketch::default();
+        pad.lay(0, 0);
+        pad.lay(2, 3);
+        let stamp = pad.to_stamp().unwrap();
+        assert!(Turn::default().is_default());
+        assert_eq!(stamp.turned(Turn::default()), stamp);
+        assert!(!Turn::default().right().is_default());
+        assert!(!Turn::default().mirror().is_default());
     }
 
     /// A stamp is a stamp however it was made: what is drawn goes on the wire

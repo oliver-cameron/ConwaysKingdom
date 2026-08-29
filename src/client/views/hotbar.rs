@@ -126,6 +126,10 @@ pub enum Shape {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Held {
     pub shape: Shape,
+    /// How the held pattern is turned. Nothing but a stamp has an orientation,
+    /// and a stamp keeps this across a change of material — turning a glider
+    /// and then deciding it should be ice is two decisions, not one undone.
+    pub turn: crate::client::views::stamp::Turn,
     /// Which of [`KINDS`]. An index rather than the `Placement`, so a square
     /// on the bar and the thing it lays cannot come apart.
     pub kind: usize,
@@ -171,7 +175,9 @@ impl Held {
     /// the choice you make occasionally.
     pub fn defaulted(self) -> Self {
         let shape = self.tool().map(|k| k.usually).unwrap_or_default();
-        Self { shape, ..self }
+        // The turn goes too. "Put me back to normal" that left a pattern
+        // rotated would be a reset somebody has to reset after.
+        Self { shape, turn: Default::default(), ..self }
     }
 }
 
@@ -339,6 +345,17 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
                     shift += 1;
                     for i in 0..library.on_the_bar() {
                         let Some(stamp) = library.get(i) else { continue };
+                        // The held square shows the pattern **as it would be
+                        // laid**, turn and all. A thumbnail that stayed upright
+                        // while the preview under the pointer rotated would be
+                        // two answers to what is about to happen.
+                        let turned;
+                        let stamp = if held.shape == Shape::Stamp(i) && !held.turn.is_default() {
+                            turned = stamp.turned(held.turn);
+                            &turned
+                        } else {
+                            stamp
+                        };
                         if square(
                             ui,
                             look,
@@ -583,13 +600,14 @@ mod tests {
     #[test]
     fn a_shape_and_a_kind_are_chosen_separately() {
         let ice = KINDS.iter().position(|k| k.placement == Placement::Ice).unwrap();
-        let drawn_ice = Held { shape: Shape::Draw, kind: ice };
+        let drawn_ice = Held { shape: Shape::Draw, kind: ice, turn: Default::default() };
         assert_eq!(drawn_ice.stroke(), Stroke::Pencil, "a line of ice was unsayable");
         assert_eq!(drawn_ice.placement(), Some(Placement::Ice));
 
         let panes_of_mine = Held {
             shape: Shape::Rect,
             kind: KINDS.iter().position(|k| k.placement == Placement::Mine).unwrap(),
+            turn: Default::default(),
         };
         assert_eq!(panes_of_mine.stroke(), Stroke::Rectangle, "a pane of mines was unsayable");
         assert_eq!(panes_of_mine.placement(), Some(Placement::Mine));
@@ -597,7 +615,7 @@ mod tests {
         // A stamp is a shape, so it keeps whatever it is being made of --
         // which is what "remove the stamps know what they are made of" means
         // at the point of placing one.
-        let stamped = Held { shape: Shape::Stamp(0), kind: ice };
+        let stamped = Held { shape: Shape::Stamp(0), kind: ice, turn: Default::default() };
         assert_eq!(stamped.placement(), Some(Placement::Ice), "a stamp lost the held kind");
         assert_eq!(stamped.stroke(), Stroke::Rectangle, "a drag with a stamp still captures");
     }
@@ -607,10 +625,13 @@ mod tests {
     /// one when you have none.
     #[test]
     fn capturing_is_reachable_with_nothing_captured() {
-        assert!(Held { shape: Shape::Capture, kind: 0 }.captures());
-        assert!(Held { shape: Shape::Stamp(3), kind: 0 }.captures(), "a stamp takes the next one");
-        assert!(!Held { shape: Shape::Draw, kind: 0 }.captures());
-        assert!(!Held { shape: Shape::Rect, kind: 0 }.captures());
+        assert!(Held { shape: Shape::Capture, kind: 0, turn: Default::default() }.captures());
+        assert!(
+            Held { shape: Shape::Stamp(3), kind: 0, turn: Default::default() }.captures(),
+            "a stamp takes the next one"
+        );
+        assert!(!Held { shape: Shape::Draw, kind: 0, turn: Default::default() }.captures());
+        assert!(!Held { shape: Shape::Rect, kind: 0, turn: Default::default() }.captures());
         assert!(shifted(&library(0)).contains(&Key::Shape(Shape::Capture)));
     }
 
@@ -628,7 +649,7 @@ mod tests {
             (Placement::Turret, Shape::Draw),
             (Placement::Ice, Shape::Rect),
         ] {
-            let held = Held { shape: Shape::Capture, kind: kind(what) };
+            let held = Held { shape: Shape::Capture, kind: kind(what), turn: Default::default() };
             assert_eq!(held.defaulted().shape, expected, "{what:?}");
             // Twice is the same place, which a toggle could not promise.
             assert_eq!(
@@ -640,7 +661,8 @@ mod tests {
         }
 
         // And it is the way out of a stamp, whatever is held.
-        let stamped = Held { shape: Shape::Stamp(4), kind: kind(Placement::Ice) };
+        let stamped =
+            Held { shape: Shape::Stamp(4), kind: kind(Placement::Ice), turn: Default::default() };
         assert_eq!(stamped.defaulted().shape, Shape::Rect);
     }
 }

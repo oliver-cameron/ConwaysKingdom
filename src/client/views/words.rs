@@ -320,6 +320,10 @@ pub mod hotbar {
 /// The library of captured patterns.
 pub mod stamps {
     pub const TITLE: &str = "Stamps";
+    /// Turning is a thing you do to a pattern, so with none held the key
+    /// changes nothing on the screen — which looks like a key that does not
+    /// work rather than one that had nothing to act on.
+    pub const NOTHING_TO_TURN: &str = "Hold a stamp to turn one";
     pub const CLOSE: &str = "Close";
     pub const FORGET: &str = "forget";
     pub const NONE_YET: &str = "Nothing kept yet.";
@@ -487,6 +491,13 @@ pub mod help {
     pub const PAN_BY_HAND: &str = "Drag the world";
     pub const ZOOM: &str = "Zoom in and out";
     pub const TOOLS: &str = "Pick a tool: life, mine, turret, ice";
+    /// The shape axis has one key and it goes to the default; the other shape
+    /// is a click away on the bar. See `hotbar::Held::defaulted`.
+    pub const SHAPE: &str = "back to the usual shape";
+    /// **So a glider is one stamp and not four.** Turning is held rather than
+    /// saved, so it changes nothing in the library.
+    pub const TURN: &str = "turn what you are holding";
+    pub const MIRROR: &str = "mirror it, which no rotation can do";
     pub const STAMPS: &str = "Pick a stamp you have kept";
     pub const DRAG: &str = "Lay a run of cells, or a rectangle";
 
@@ -509,6 +520,9 @@ pub mod help {
         pub const ZOOM: &str = "wheel / pinch";
         pub const TOOLS: &str = "shift + 1-4";
         pub const STAMPS: &str = "1-9";
+        pub const SHAPE: &str = "~";
+        pub const TURN: &str = "R / shift + R";
+        pub const MIRROR: &str = "F";
         pub const DRAG: &str = "drag";
         pub const WALK: &str = "up / down";
         pub const CHOOSE: &str = "enter";

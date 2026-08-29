@@ -49,6 +49,9 @@ const GROUPS: &[Group] = &[
         keys: &[
             (words::keys::TOOLS, words::TOOLS),
             (words::keys::STAMPS, words::STAMPS),
+            (words::keys::SHAPE, words::SHAPE),
+            (words::keys::TURN, words::TURN),
+            (words::keys::MIRROR, words::MIRROR),
             (words::keys::DRAG, words::DRAG),
         ],
     },

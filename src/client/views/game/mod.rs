@@ -1324,7 +1324,7 @@ impl GameApp {
         if !self.hovering || self.is_panning() || self.camera.zoom < HOVER_MIN_ZOOM {
             return None;
         }
-        let stamp = self.stamps.get(index)?;
+        let stamp = self.stamps.get(index)?.turned(self.held.turn);
         let corner = stamp.centred_on(self.cell_under_cursor(self.cursor));
         let laid = stamp.at(corner);
 
@@ -1492,7 +1492,7 @@ impl GameApp {
             });
             return;
         }
-        let Some(stamp) = self.stamps.get(index).cloned() else {
+        let Some(stamp) = self.stamps.get(index).map(|s| s.turned(self.held.turn)) else {
             self.notice = Some(words::stamps::GONE.into());
             return;
         };
@@ -2522,6 +2522,29 @@ impl App for GameApp {
         if pressed && code == K::Backquote && self.shift {
             self.held = self.held.defaulted();
             self.picking_stamp = false;
+            return;
+        }
+        // **A pattern and the same pattern turned are one pattern.** Without
+        // this the library fills up with its own reflections — four gliders,
+        // and four more that are their mirror image, and the same again for
+        // every spaceship and every corner of a wall.
+        //
+        // `R` and `F` because that is what a builder game binds them to, and
+        // both are clear of the pan keys. Shift turns the other way rather
+        // than taking a key of its own: three presses and one press are the
+        // same place, so the second binding is a convenience and should read
+        // as one.
+        if pressed && matches!(code, K::KeyR | K::KeyF) {
+            self.held.turn = match (code, self.shift) {
+                (K::KeyR, false) => self.held.turn.right(),
+                (K::KeyR, true) => self.held.turn.left(),
+                _ => self.held.turn.mirror(),
+            };
+            // Said out loud, because a rotation with nothing held changes
+            // nothing on the screen and looks like a key that does not work.
+            if !matches!(self.held.shape, hotbar::Shape::Stamp(_)) {
+                self.notice = Some(words::stamps::NOTHING_TO_TURN.into());
+            }
             return;
         }
         if pressed && code == K::Escape && self.helping {
