@@ -16,17 +16,17 @@
 //!
 //! Nothing here may depend on [`crate::render`].
 
+pub mod auth;
 pub mod codec;
 pub mod keep;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
 #[cfg(target_arch = "wasm32")]
 pub mod link_web;
-pub mod person;
 #[cfg(target_arch = "wasm32")]
 pub use link_web as link;
 
-pub use person::{Person, PersonId};
+pub use auth::{Person, PersonId};
 
 use serde::{Deserialize, Serialize};
 
