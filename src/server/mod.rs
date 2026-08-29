@@ -606,6 +606,21 @@ impl Server {
         Ok((id, token))
     }
 
+    /// Whether this token brings somebody back to a seat that is already here.
+    ///
+    /// Empty is not a token: `Player::new` starts with one and it is filled in
+    /// after, so a seat with nothing in that field is one that has never been
+    /// issued a secret rather than one whose secret is "".
+    fn returning(&self, token: Option<&str>) -> bool {
+        let Some(token) = token.filter(|t| !t.is_empty()) else { return false };
+        // **And not using it**, which is `join_with`'s own rule. A token whose
+        // player is still online does not come back to them -- it joins as
+        // somebody new, by design, since nobody gets to be one person twice.
+        // So a second tab holding a genuine token walked through this door and
+        // was handed a fresh seat four hundred generations into a race.
+        self.players.values().any(|p| p.token == token && !p.online)
+    }
+
     pub fn join(&mut self, name: impl Into<String>) -> Result<PlayerId, String> {
         let Some(id) = self.next_player_id() else {
             let name = name.into();
@@ -730,11 +745,18 @@ impl Server {
             // everybody else has four hundred generations of ground and they
             // have a block. A player already seated here is unaffected — this
             // is the door, not the room.
-            ClientMessage::Join { .. }
-                if !self.phase.open_to_newcomers()
-                    && !self.players.values().any(|p| {
-                        matches!(&msg, ClientMessage::Join { token: Some(t), .. } if &p.token == t)
-                    }) =>
+            ClientMessage::Join { token, .. }
+                if !self.phase.open_to_newcomers() && {
+                    // **The same rule `join_with` uses, and it has to be.** This
+                    // asked whether the token matched anybody's, and a `Player`
+                    // starts with an empty one -- so a client that sent an empty
+                    // token matched the first seat that had never been issued one,
+                    // walked through the door, and then had `join_with` ignore the
+                    // empty token and hand it a brand new player. A gate that
+                    // admits on a weaker test than the one behind it is a gate
+                    // with a hole in it.
+                    !self.returning(token.as_deref())
+                } =>
             {
                 vec![ServerMessage::Rejected {
                     reason: format!("\"{}\" is a match already under way", self.room),
@@ -748,29 +770,29 @@ impl Server {
                 // own idea of who somebody is.
                 let who = person.as_ref().map(|p| p.id.clone());
                 match self.join_with(name, token.as_deref(), who.as_ref()) {
-                Ok((you, token)) => {
-                    let spawn = crate::net::spawn_for(you, &self.world);
-                    let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
-                    vec![ServerMessage::Welcome {
-                        you,
-                        tick: self.tick(),
-                        spawn,
-                        token,
-                        // Filled in by `rooms::Rooms`, which holds the table:
-                        // a rating outlives every room here, so a room does
-                        // not get to keep one.
-                        rating: crate::server::rating::START,
-                        value,
-                        room: crate::net::RoomId(self.room.clone()),
-                        name: self.room.clone(),
-                        // Sent rather than left to be derived: nothing a client
-                        // can see says whether the ground ends, so a client
-                        // told nothing builds an infinite world and disagrees
-                        // with a wrapping server about where everything is.
-                        world: self.world.kind(),
-                    }]
-                }
-                Err(reason) => vec![ServerMessage::Rejected { reason }],
+                    Ok((you, token)) => {
+                        let spawn = crate::net::spawn_for(you, &self.world);
+                        let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
+                        vec![ServerMessage::Welcome {
+                            you,
+                            tick: self.tick(),
+                            spawn,
+                            token,
+                            // Filled in by `rooms::Rooms`, which holds the table:
+                            // a rating outlives every room here, so a room does
+                            // not get to keep one.
+                            rating: crate::server::rating::START,
+                            value,
+                            room: crate::net::RoomId(self.room.clone()),
+                            name: self.room.clone(),
+                            // Sent rather than left to be derived: nothing a client
+                            // can see says whether the ground ends, so a client
+                            // told nothing builds an infinite world and disagrees
+                            // with a wrapping server about where everything is.
+                            world: self.world.kind(),
+                        }]
+                    }
+                    Err(reason) => vec![ServerMessage::Rejected { reason }],
                 }
             }
             ClientMessage::Act(stamped) => {
@@ -825,12 +847,9 @@ impl Server {
                 // client prices and previews it: a paint half applied is a
                 // shape nobody drew.
                 if let crate::net::Action::Paint { cells, .. } = &stamped.action {
-                    if let Some(&(row, col)) = cells
-                        .iter()
-                        .find(|&&(r, c)| {
-                            !crate::net::may_place(&self.world, stamped.player, &self.sides, r, c)
-                        })
-                    {
+                    if let Some(&(row, col)) = cells.iter().find(|&&(r, c)| {
+                        !crate::net::may_place(&self.world, stamped.player, &self.sides, r, c)
+                    }) {
                         log::info!(
                             "refused {:?}: nothing of theirs reaches ({row}, {col})",
                             stamped.player
@@ -861,10 +880,8 @@ impl Server {
                 Vec::new()
             }
             ClientMessage::Subscribe { chunks } => {
-                let out: Vec<_> = chunks
-                    .iter()
-                    .filter_map(|&chunk| self.chunk_message(chunk))
-                    .collect();
+                let out: Vec<_> =
+                    chunks.iter().filter_map(|&chunk| self.chunk_message(chunk)).collect();
                 log::info!(
                     "subscribe: {:?} asked for {} chunks, sending {} the world holds",
                     from,
@@ -886,9 +903,9 @@ impl Server {
             // of no others to list, cannot make one, and cannot admit a
             // watcher to somewhere that is not itself. `Rooms::handle`
             // answers all three before it routes anything here.
-            ClientMessage::Rooms
-            | ClientMessage::Create { .. }
-            | ClientMessage::Watch { .. } => Vec::new(),
+            ClientMessage::Rooms | ClientMessage::Create { .. } | ClientMessage::Watch { .. } => {
+                Vec::new()
+            }
             // Answered by `Rooms::handle`, which is the only thing that knows
             // who made a room and so the only thing that can judge this.
             ClientMessage::Start => Vec::new(),
@@ -939,7 +956,11 @@ impl Server {
                     out.push(ServerMessage::Purse { value });
                 }
                 if !wrong.is_empty() {
-                    log::warn!("desync: {:?} disagrees on {} chunks at tick {tick}", from, wrong.len());
+                    log::warn!(
+                        "desync: {:?} disagrees on {} chunks at tick {tick}",
+                        from,
+                        wrong.len()
+                    );
                     out.push(ServerMessage::Resync { tick, chunks: wrong });
                 }
                 out
@@ -1526,6 +1547,54 @@ mod tests {
         );
         s.step();
         assert_eq!(s.world().live_cells().len(), before);
+    }
+
+    /// **The door is shut once a match is running**, and it was ajar.
+    ///
+    /// The gate asked whether the offered token matched anybody's. A `Player`
+    /// starts with an empty token and has one filled in after, so a client
+    /// sending an empty one matched the first seat that had never been issued
+    /// a secret -- and `join_with`, which *does* ignore an empty token, then
+    /// handed it a brand new player. Four hundred generations into a race.
+    #[test]
+    fn a_match_under_way_lets_nobody_new_in() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 100 });
+        let (_, token) = s.join_with("alice", None, None).unwrap();
+        s.start_match(None).unwrap();
+        let before = s.players().count();
+
+        let door = |token: Option<String>| ClientMessage::Join {
+            name: "latecomer".into(),
+            token,
+            room: None,
+            person: None,
+        };
+        for offered in [None, Some(String::new()), Some("not a token here".into())] {
+            let out = s.handle(None, door(offered.clone()));
+            assert!(
+                matches!(&out[..], [ServerMessage::Rejected { .. }]),
+                "{offered:?} got in: {out:?}"
+            );
+        }
+        assert_eq!(s.players().count(), before, "a refusal seated somebody anyway");
+
+        // A genuine token whose player is still connected is a second tab, not
+        // a reconnection: `join_with` would seat it as somebody new, so the
+        // door has to refuse it too.
+        let out = s.handle(None, door(Some(token.clone())));
+        assert!(
+            matches!(&out[..], [ServerMessage::Rejected { .. }]),
+            "a second tab got in: {out:?}"
+        );
+
+        // But a player who actually dropped comes back, because this is the
+        // door and not the room.
+        let who = s.players().next().map(|p| p.id).unwrap();
+        s.leave(who);
+        let out = s.handle(None, door(Some(token)));
+        assert!(matches!(&out[..], [ServerMessage::Welcome { .. }]), "{out:?}");
+        assert_eq!(s.players().count(), before, "coming back made a second player");
     }
 
     /// **The whistle says where everybody landed, and what to go and fetch.**

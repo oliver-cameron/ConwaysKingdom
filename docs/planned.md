@@ -24,6 +24,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | identity is in; discovery is not |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
+| [Experiments](#experiments) | Decided | a laboratory rather than a match: pause, step, save, reset |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
@@ -211,6 +212,24 @@ What is still worth suspecting, in order:
 **The menu's own geometry.** It is the one panel that places and sizes itself by hand — an `Area` at `ctx.content_rect().min` sized by `set_min_size`, at `Order::Background` — where every panel that *does* appear for them lets egui place it. A panel at the wrong place is a panel that is not there, and that is precisely a background colour with nothing on it. Replacing it was attempted and abandoned: `CentralPanel::show` takes a `&mut Ui` rather than a `Context` in egui 0.36, and the client only has a `Context`; the intermediate arrangement clipped the form's action button behind a scroll region. **The next attempt should start by measuring `ctx.content_rect()` on the machine that fails**, because every hypothesis here turns on whether it is the screen.
 
 What would end it in one step is the browser console on a failing load, or the same for native with `RUST_LOG=debug`.
+
+## Experiments
+
+**Decided, not costed.** A mode for using this as a laboratory rather than playing it: pause, step one generation, save what is on screen, reset it, and more than one world side by side. Somewhat replacing Golly.
+
+The argument for it is that **the simulation is already the hard part and it is already done.** `sim` is a deterministic cellular automaton with a rule table, chunked storage that only holds what life has reached, and a step that is a pure function of state and tick. What Golly is for — draw a pattern, watch it, step it a generation at a time, save it, come back to it — is that plus an interface, and everything in the way of it today is a *game* decision rather than a simulation one: the server is the clock, a player may only build where their influence reaches, and placing costs money.
+
+So the shape of the work is mostly subtraction, and it lands in three places.
+
+**The clock becomes the player's.** [networking.md](networking.md#the-server-is-the-clock) is emphatic that a connected client advances when told and never on its own, and that is right for a shared world and exactly wrong here. An experiment is offline by construction — one authority, which is you — so pausing and stepping is `World::step` behind a button rather than anything on a wire. The existing offline path already does this; what it lacks is a pause and a single step.
+
+**The rules come off.** Placing is confined to a player's own territory and is priced, both of which are the game. A laboratory wants neither, and the honest way to get there is a flag on the world rather than a second `sim` — the moment there are two simulations they diverge, and the whole value of experimenting here is that what you see is what a match would do. `net::price` and `net::grant` are the two places that would have to ask.
+
+**A pattern becomes a file.** `client::views::stamp` is most of this already — a captured rectangle of cells, kept between visits — and what it is missing is a *format*. Golly reads and writes RLE and `.cells`, which is how every pattern anybody has ever published is written down, and reading RLE is an afternoon. That is the single highest-value piece here and it is worth doing whether or not the rest happens: it turns the stamp library from a scratchpad into a way in to fifty years of other people's work.
+
+Two things it is not. It is not a second renderer: split panes are several viewports onto several worlds, and `render::app` holds one surface and one camera, so the cost is a camera and a viewport per pane rather than a second pipeline. And it is not multiplayer — a shared laboratory is a shared world with the rules off, which is a room anybody can edit anywhere, and that is a different feature with a different argument behind it.
+
+The order that makes sense is RLE first, since it stands alone; then pause and step, which is a button and a flag; then the rules flag; then panes, which is the only part that is real work.
 
 ## Better interfaces
 
