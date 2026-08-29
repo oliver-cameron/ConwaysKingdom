@@ -131,6 +131,17 @@ pub struct Menu {
     /// Shut every time the menu is built, because it is not a preference: it
     /// is a drawer somebody opened once to do a thing, and a client that
     /// remembered it open would put the key back where it used to be.
+    /// What this client is rated on the server it last reached, and what the
+    /// last result moved it by.
+    ///
+    /// `None` until a server has said. That is not the same as the starting
+    /// number: somebody who has never connected has no rating rather than an
+    /// average one, and showing them 1200 would be inventing it.
+    ///
+    /// Passed in rather than read, like everything else on this screen: the
+    /// menu holds what it was told and what was typed, and a rating is neither
+    /// of this client's business to work out nor kept anywhere it could look.
+    pub rating: Option<(i32, Option<i32>)>,
     pub advanced: bool,
     /// Whether the secret half is on screen. Shut on every build of the menu,
     /// because a secret nobody is looking at should not be one anybody can
@@ -235,6 +246,7 @@ impl Menu {
             games: crate::client::record::games(),
             record: crate::client::record::Summary::of(&crate::client::record::games()),
             key,
+            rating: None,
             advanced: false,
             revealed: false,
             asking: None,

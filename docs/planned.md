@@ -21,7 +21,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Designed | more than one player to a side |
-| [Rating](#rating) | Being built | the arithmetic is in, and so is what to key it by |
+| [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | identity is in; discovery is not |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
@@ -117,7 +117,11 @@ What is left of it is a **measurement**. The arc is a twelfth of the circle and 
 
 ## Rating
 
-**Being built.** A number that says how good somebody is, updated by results, in the shape of Elo.
+**Built.** A number that says how good somebody is, updated by results, in the shape of Elo. It is on the home screen, above the record and deliberately not inside it: what `views::record` shows is what this *client* has done out of its own store, and a rating is what a *server* thinks of you against everybody else there. Folding one into the other would suggest the client had worked it out, which it must never look like it can.
+
+`server::ratings` is the table, keyed by `PersonId`, saved to `ratings.tsv` beside `people.tsv`. `Rooms::step` settles a match on the generation it is decided — not the room that ended, because a rating outlives every world here and a match's world is about to stop existing — and broadcasts `ServerMessage::Rated` to everybody who was in it, so the number moves on the screen somebody is looking at rather than on their next join. A `Welcome` carries it too, for arriving.
+
+What is **not** built is [a leaderboard](#a-leaderboard), and it is not an oversight: a table of who is best is a reason to cheat, and this game has never had one. Per server the only lever is who you play and how often, which is a question about what results count rather than about who recorded them.
 
 The arithmetic is in, as [`server::rating`](../src/server/rating.rs): expected score from a rating difference, a K-factor times the surprise, and the reduction that turns a match of up to fifteen into something a two-player formula can eat. It reads and writes nothing and is keyed by nobody — it takes numbers and returns numbers — which is the half that can be correct before the question below is answered.
 

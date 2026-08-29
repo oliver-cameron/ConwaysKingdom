@@ -748,6 +748,12 @@ pub enum ServerMessage {
         /// Keep this. Presenting it on a later `Join` asks for this player
         /// back — the same number, the same value, the same ground.
         token: String,
+        /// What this client is rated on this server.
+        ///
+        /// Everybody starts on the same number, so this is a figure rather
+        /// than an option: a client that has never been rated here is not a
+        /// special case, it is somebody at the start.
+        rating: i32,
         /// What this player has to spend.
         ///
         /// Sent, because a returning player has a value already and the client
@@ -831,6 +837,18 @@ pub enum ServerMessage {
     Step {
         tick: Tick,
         actions: Vec<Stamped>,
+    },
+    /// Somebody's rating here, and what the match just finished moved it by.
+    ///
+    /// Broadcast to the room rather than sent to its owner alone, because a
+    /// result is a comparison and the interesting half of it is what happened
+    /// to everybody else. Sent at the moment the match ends rather than left
+    /// to be found on the next join: the screen somebody is looking at when it
+    /// ends is the one this belongs on.
+    Rated {
+        who: PersonId,
+        rating: i32,
+        change: i32,
     },
     /// Something to sign, so a join can say who it is from.
     ///

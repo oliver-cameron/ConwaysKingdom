@@ -17,6 +17,7 @@ pub mod matches;
 pub mod people;
 pub mod persist;
 pub mod rating;
+pub mod ratings;
 pub mod rooms;
 #[cfg(feature = "server")]
 pub mod ws;
@@ -486,6 +487,41 @@ impl Server {
         self.players.len()
     }
 
+    /// Who finished this match, for whatever wants to rate it.
+    ///
+    /// Only players with a person: somebody who joined without a key is not
+    /// somebody this server can remember, so there is nowhere to put a result
+    /// for them. The rest are still rated against each other — see
+    /// [`ratings::Ratings::settle`].
+    ///
+    /// A **side's** score rather than a player's, because that is what a
+    /// result is between: two allies win or lose the same match, and
+    /// [`matches::leader_of`] already sums a side for the same reason.
+    pub fn finishers(&self) -> Vec<crate::server::ratings::Finisher> {
+        let held = self.territory();
+        let solo = !self.sides.any();
+        let mut by_side = [0usize; PlayerId::COUNT];
+        for id in (1..PlayerId::COUNT).map(|i| PlayerId(i as u8)) {
+            let side = if solo { id.0 } else { self.sides.team_of(id).0 };
+            by_side[side as usize] += held[id.0 as usize];
+        }
+        self.players()
+            .filter_map(|p| {
+                let side = if solo { p.id.0 } else { self.sides.team_of(p.id).0 };
+                Some(crate::server::ratings::Finisher {
+                    who: crate::net::PersonId(p.person.clone()?),
+                    side,
+                    score: by_side[side as usize],
+                })
+            })
+            .collect()
+    }
+
+    /// Whether this match was decided on the generation just stepped.
+    pub fn just_decided(&self) -> bool {
+        matches!(self.phase, Phase::Over { at, .. } if at == self.tick())
+    }
+
     pub fn players(&self) -> impl Iterator<Item = &Player> {
         self.players.values()
     }
@@ -710,6 +746,10 @@ impl Server {
                         tick: self.tick(),
                         spawn,
                         token,
+                        // Filled in by `rooms::Rooms`, which holds the table:
+                        // a rating outlives every room here, so a room does
+                        // not get to keep one.
+                        rating: crate::server::rating::START,
                         value,
                         room: crate::net::RoomId(self.room.clone()),
                         name: self.room.clone(),

@@ -28,6 +28,29 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
 
     ui.add_space(m.item_spacing * 2.0);
     ui.label(egui::RichText::new(words::home::RECORD).size(m.text_small));
+    // **Above the record rather than inside it**, because they answer
+    // different questions and only one of them is comparable. What is in
+    // `views::record` is what this client has done — its own history, kept in
+    // its own store — and a rating is what a *server* thinks of you against
+    // everybody else there. Folding the second into the first would suggest
+    // the client had worked it out, which it must never look like it can.
+    if let Some((rating, change)) = menu.rating {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(words::home::rating(rating)).size(m.text_action).color(p.text),
+            );
+            // Said once, after the match that caused it. A number that moves
+            // with no account of why is one people stop reading.
+            if let Some(change) = change.filter(|c| *c != 0) {
+                ui.label(
+                    egui::RichText::new(words::home::rating_change(change))
+                        .size(m.text_small)
+                        .color(if change > 0 { p.good } else { p.bad }),
+                );
+            }
+        });
+        ui.add_space(m.item_spacing);
+    }
     crate::client::views::record::show(ui, theme, &menu.games, &menu.record);
 
     ui.add_space(m.item_spacing * 2.0);

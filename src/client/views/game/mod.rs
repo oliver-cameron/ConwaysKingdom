@@ -286,6 +286,15 @@ pub struct GameApp {
     /// belongs to the server that set it, and signing one server's question
     /// for another is exactly what having a challenge at all prevents.
     challenge: Option<String>,
+    /// What this client is rated on the server it is talking to.
+    ///
+    /// `None` until a server has said, which is a different thing from the
+    /// starting number: a client that has reached nobody has no rating rather
+    /// than an average one, and a dashboard that showed 1200 to somebody who
+    /// has never connected would be inventing it.
+    rating: Option<i32>,
+    /// What the last result moved it by, so the dashboard can say so once.
+    rating_change: Option<i32>,
     /// A join waiting for something to sign.
     ///
     /// **A join says who it is from**, and who it is from is a signature over
@@ -637,7 +646,18 @@ impl GameApp {
 
         for msg in messages {
             match msg {
-                ServerMessage::Welcome { you, tick, spawn, token, value, room, name, world } => {
+                ServerMessage::Welcome {
+                    you,
+                    tick,
+                    spawn,
+                    token,
+                    rating,
+                    value,
+                    room,
+                    name,
+                    world,
+                } => {
+                    self.rating = Some(rating);
                     // Kept first, before anything else can go wrong: the whole
                     // value of it is being able to come back, and a client that
                     // crashes on its first frame is exactly the case that needs
@@ -743,6 +763,25 @@ impl GameApp {
                 ServerMessage::Challenge { nonce } => {
                     self.challenge = Some(nonce);
                     self.send_pending_join();
+                }
+                // A result, and what it did to somebody's number. Ours moves
+                // the dashboard; everybody else's is the half of a rating that
+                // makes it a comparison rather than a score, and is worth a
+                // line in the log until there is a screen for it.
+                ServerMessage::Rated { who, rating, change } => {
+                    let mine = crate::net::keep::key().map(|k| k.id());
+                    if mine.as_ref() == Some(&who) {
+                        log::info!("rated {rating} ({change:+})");
+                        self.rating = Some(rating);
+                        self.rating_change = Some(change);
+                        // The home screen reads this when it is built, and it
+                        // is already built if we are looking at it.
+                        if let Screen::Menu(m) = &mut self.screen {
+                            m.rating = Some((rating, Some(change)));
+                        }
+                    } else {
+                        log::info!("{who} is now rated {rating} ({change:+})");
+                    }
                 }
                 ServerMessage::Rejected { reason } => {
                     log::error!("server refused the connection: {reason}");
@@ -1605,11 +1644,16 @@ impl GameApp {
                 // here and a home screen showing the count from before it
                 // would say the last game did not happen.
                 m.record = crate::client::record::Summary::of(&crate::client::record::games());
+                m.rating = self.rating.map(|r| (r, self.rating_change));
             }
             Screen::Playing => {
                 let address = self.address_hint();
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
                 m.stage = stage;
+                // Carried over, because the menu is where a rating is read and
+                // the app is the only thing that has been told one. A match
+                // that has just ended is the commonest way to arrive here.
+                m.rating = self.rating.map(|r| (r, self.rating_change));
                 self.screen = Screen::Menu(m);
             }
         }
@@ -1986,6 +2030,8 @@ impl App for GameApp {
             room_name: None,
             subscribed: std::collections::HashSet::new(),
             challenge: None,
+            rating: None,
+            rating_change: None,
             joining: pending,
             cursor: (0.0, 0.0),
             pending: None,

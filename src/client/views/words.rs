@@ -80,6 +80,18 @@ pub mod menu {
         pub const PLAY: &str = "Play";
         pub const WHO: &str = "You are";
         pub const RECORD: &str = "So far";
+
+        /// A rating, said as a rating rather than as a bare number: five
+        /// figures on a screen of other figures is one nobody can place.
+        pub fn rating(rating: i32) -> String {
+            format!("Rated {rating}")
+        }
+
+        /// The sign is the whole message, so it is always there -- `+0` never
+        /// appears, because a result that moved nothing is not shown at all.
+        pub fn rating_change(change: i32) -> String {
+            format!("{change:+} from your last match")
+        }
         pub const SETTINGS: &str = "Settings";
         pub const SETTINGS_HIDE: &str = "Close settings";
 

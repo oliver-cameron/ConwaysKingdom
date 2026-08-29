@@ -174,6 +174,10 @@ pub struct Rooms {
     /// about a room. A person outlives the room they were last seen in, and a
     /// seat does not -- see [`crate::server::people`].
     people: crate::server::people::People,
+    /// What each of them is rated here. Beside `people` and for the same
+    /// reason: a person outlives every world on this server, and so does their
+    /// number.
+    ratings: crate::server::ratings::Ratings,
     /// The code that reaches each private room.
     ///
     /// A credential, not an identity: it is separate from the id so that a
@@ -279,6 +283,7 @@ impl Rooms {
         }
 
         let people = crate::server::people::People::load(&people_path(&dir))?;
+        let ratings = crate::server::ratings::Ratings::load(&ratings_path(&dir))?;
         if !people.is_empty() {
             log::info!("{} player key(s) known", people.len());
         }
@@ -289,6 +294,7 @@ impl Rooms {
             default_room,
             names,
             people,
+            ratings,
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -307,6 +313,7 @@ impl Rooms {
             default_room: id.clone(),
             names: BTreeMap::from([(id, name)]),
             people: crate::server::people::People::new(),
+            ratings: crate::server::ratings::Ratings::new(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -579,9 +586,12 @@ impl Rooms {
                     let owner = self.owner.get(&name).copied();
                     let code = self.codes.get(&name).cloned();
                     for reply in &mut out {
-                        if let ServerMessage::Welcome { room, name: called, .. } = reply {
+                        if let ServerMessage::Welcome { room, name: called, rating, .. } = reply {
                             *room = name.clone();
                             *called = room_name.clone();
+                            if let Some(who) = &who {
+                                *rating = self.ratings.of(who);
+                            }
                         }
                         stamp(reply, owner, code.clone());
                     }
@@ -625,7 +635,8 @@ impl Rooms {
         // mutably. Sixteen bytes and a short string per room, once a tick.
         let owners = self.owner.clone();
         let codes = self.codes.clone();
-        self.rooms
+        let mut out: Vec<(RoomId, ServerMessage)> = self
+            .rooms
             .iter_mut()
             .flat_map(|(id, server)| {
                 let (owner, code) = (owners.get(id).copied(), codes.get(id).cloned());
@@ -634,7 +645,45 @@ impl Rooms {
                     (id.clone(), m)
                 })
             })
-            .collect()
+            .collect();
+
+        // **Rated here rather than in the room that ended.** A rating is a
+        // fact about a person and a person outlives every world on this
+        // server, so the table belongs beside `people` and not inside a
+        // `Server` -- which is one room and, in the case of a match, one that
+        // is about to stop existing.
+        //
+        // On the generation it was decided, once: `just_decided` is true only
+        // while the tick that ended it is the current one, so a match cannot
+        // be rated twice by sitting there over.
+        for (id, server) in &self.rooms {
+            if !server.just_decided() {
+                continue;
+            }
+            let finishers = server.finishers();
+            let moved = self.ratings.settle(&finishers);
+            if moved.is_empty() {
+                continue;
+            }
+            for (who, change) in &moved {
+                log::info!("{who} is now rated {} ({change:+})", self.ratings.of(who));
+            }
+            // Told, not left to be found on the next join: the screen somebody
+            // is looking at when a match ends is the one this belongs on.
+            out.extend(finishers.iter().filter_map(|f| {
+                let change = moved.iter().find(|(who, _)| *who == f.who)?.1;
+                Some((
+                    id.clone(),
+                    ServerMessage::Rated {
+                        who: f.who.clone(),
+                        rating: self.ratings.of(&f.who),
+                        change,
+                    },
+                ))
+            }));
+            self.save_ratings();
+        }
+        out
     }
 
     pub fn leave(&mut self, (room, id): &Seat) {
@@ -662,11 +711,30 @@ impl Rooms {
         }
     }
 
+    /// Write the ratings table, and say so if it will not go. Not fatal, for
+    /// the reason `save_people` is not: a server that cannot write a number is
+    /// a bad day rather than a reason to refuse everybody entry.
+    fn save_ratings(&self) {
+        if self.dir.as_os_str().is_empty() {
+            return;
+        }
+        let path = ratings_path(&self.dir);
+        if let Err(e) = self.ratings.save(&path) {
+            log::error!("saving the ratings to {}: {e}", path.display());
+        }
+    }
+
+    /// What somebody is rated here, which is what a `Welcome` carries.
+    pub fn rating_of(&self, who: &crate::net::PersonId) -> i32 {
+        self.ratings.of(who)
+    }
+
     pub fn save(&self) -> std::io::Result<()> {
         if self.dir.as_os_str().is_empty() {
             return Ok(());
         }
         self.save_people();
+        self.save_ratings();
         let mut first_error = None;
         for (id, server) in &self.rooms {
             // A match is an event rather than a world to keep: it has an end,
@@ -1101,6 +1169,10 @@ fn code() -> Code {
 /// `saved_in` -- which looks for `.ckw` -- never mistakes it for a world.
 fn people_path(dir: &Path) -> PathBuf {
     dir.join("people.tsv")
+}
+
+fn ratings_path(dir: &Path) -> PathBuf {
+    dir.join("ratings.tsv")
 }
 
 fn save_path(dir: &Path, room: &RoomId) -> PathBuf {
