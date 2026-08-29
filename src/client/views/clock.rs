@@ -20,7 +20,7 @@ use crate::sim::PlayerId;
 /// is right unless somebody has started a server with a different `--span` —
 /// and then the *bar* is still right, since a bar is a fraction rather than a
 /// duration.
-const PER_SECOND: f64 = 1.0 / crate::client::views::battle::GENERATION_SPAN as f64;
+const PER_SECOND: f64 = 1.0 / crate::client::views::game::GENERATION_SPAN as f64;
 
 /// Draw it, if there is a match running. Returns what it covered.
 pub fn show(

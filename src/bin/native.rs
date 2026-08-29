@@ -77,6 +77,6 @@ fn main() {
             name,
             room,
         });
-        pollster::block_on(conwayskingdom::run::<conwayskingdom::BattleApp>());
+        pollster::block_on(conwayskingdom::run::<conwayskingdom::GameApp>());
     }
 }

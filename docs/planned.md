@@ -27,7 +27,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
-| [The session comes out of the battle view](#the-session-comes-out-of-the-battle-view) | Designed | the one place the architecture does not hold |
+| [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Designed | the one place the architecture does not hold |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
 | [Auto-mining](#auto-mining) | Built | |
 | [Turrets](#turrets) | Built | |
@@ -161,7 +161,7 @@ What it costs is a signature scheme in a crate that builds for wasm32 — ed2551
 
 ### Multi-homing the client
 
-`BattleApp` holds one `Link`. Knowing several servers does not mean holding several sockets — you are in one world at a time, so one socket is right — it means the **store** holds a list of servers rather than the last one, and the Play screen lists rooms from more than one.
+`GameApp` holds one `Link`. Knowing several servers does not mean holding several sockets — you are in one world at a time, so one socket is right — it means the **store** holds a list of servers rather than the last one, and the Play screen lists rooms from more than one.
 
 Small, and mostly already there: `net::keep` is a string store that would gain a list, the room list is already a message rather than a guess, and `RoomId` is already distinct from a room's name, so a room from one server and a room from another never collide. What is genuinely new is that a `RoomInfo` in a merged listing has to carry **which server it is on**, and the client has to hold that beside it — which is one field and one column in the list.
 
@@ -256,9 +256,11 @@ Three decisions taken from [MCSR Ranked](inspiration.md#the-dashboard-and-a-rati
 
 What it runs into is that **a leaderboard is a reason to cheat**, and this game has never had one before. Per server it is manageable: the server is authoritative over its own world, so the only lever is who you play and how often. Across servers it is not — a server can say whatever it likes about its own results — which is why [rating](#rating) stays per-server until there is a reason to solve that properly.
 
-## The session comes out of the battle view
+## The session comes out of the game view
 
-**Designed.** `client::views::battle` is the one place the architecture in [architecture.md](architecture.md) does not hold, and the largest file in the crate by a factor of two.
+**Designed.** `client::views::game` is the one place the architecture in [architecture.md](architecture.md) does not hold, and the largest file in the crate by a factor of two.
+
+It is a folder now — `start` is where the client is told where to go and what to look at until it gets there, and `input` is the gesture arithmetic, which was already tested without a window and now says so by living apart from everything that needs one. Neither of those is the thing below, and splitting them out has not made it smaller: `mod.rs` is still two and a half thousand lines and still holds the world, the link and the pipeline in one struct.
 
 It is a *view* by where it lives, and it is not one by what it does. It holds the world, the link and the GPU pipeline, and it executes logic: `pump_link` folds server messages into the world, `lay` and `click` price and send actions, `advance_to` steps the simulation. Data, logic and interface in one struct with forty fields — which is exactly the arrangement the [Data / Logic / Interface](inspiration.md#the-architecture) rule names, and which every other view already avoids through the `Chose`/`Picked` return-value convention.
 
@@ -517,5 +519,5 @@ What is left is the layout rather than the plumbing. The HUD is a desktop panel:
 - **Thirty-one players is a ceiling on players a world has ever seen**, not on players connected at once, because a number is written into every cell its owner claimed and so can never be reused. Reclaiming numbers whose territory has gone would lift it; widening the field costs a bit from the kind. Rooms make this less pressing than it was — thirty-one is per room now — and no easier to fix.
 - **Territory creeps and decays now**, so ground is traded and lost as well as won, with granted ground exempt as the floor. What is unsettled is the floor: "your home patch is permanent" is a strong promise, and it also means an opponent who grows over it keeps a square that will never decay for them either.
 - **Building large structures** is still done by freezing ground with ice, which works but is not what ice is for. Deferred deliberately — schematics, a blueprint region, or players simply learning to work within the rules.
-- **`client::views::battle` is 1900 lines doing five jobs.** The camera came out of it because it was pure arithmetic that could not be tested without a window; the same argument now applies twice over. The gesture machine — `Gesture`, `Drag`, `Pending`, the stroke and rectangle arithmetic — is already tested without a GPU at the bottom of that file. The session — `pump_link`, `advance_to`, `send_checkpoint`, `subscribe_to_view`, `chose`, `to_menu`, and the `me`, `room`, `value`, `screen` and `subscribed` fields — is everything about talking to a server and nothing about drawing. The menu made that worse rather than better: the screen the client is on and the connection it is holding are the same state machine, and it now lives in the same struct as the sprite atlas.
+- **`client::views::game` is 1900 lines doing five jobs.** The camera came out of it because it was pure arithmetic that could not be tested without a window; the same argument now applies twice over. The gesture machine — `Gesture`, `Drag`, `Pending`, the stroke and rectangle arithmetic — is already tested without a GPU at the bottom of that file. The session — `pump_link`, `advance_to`, `send_checkpoint`, `subscribe_to_view`, `chose`, `to_menu`, and the `me`, `room`, `value`, `screen` and `subscribed` fields — is everything about talking to a server and nothing about drawing. The menu made that worse rather than better: the screen the client is on and the connection it is holding are the same state machine, and it now lives in the same struct as the sprite atlas.
 

@@ -18,7 +18,7 @@ pub mod sim;
 pub mod client;
 
 #[cfg(feature = "render")]
-pub use client::BattleApp;
+pub use client::GameApp;
 #[cfg(feature = "render")]
 pub use render::run;
 
@@ -43,5 +43,5 @@ use wasm_bindgen::prelude::*;
 pub fn wasm_main() {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Info).expect("could not init logger");
-    wasm_bindgen_futures::spawn_local(run::<BattleApp>());
+    wasm_bindgen_futures::spawn_local(run::<GameApp>());
 }

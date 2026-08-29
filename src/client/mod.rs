@@ -9,9 +9,9 @@ pub mod record;
 pub mod route;
 pub mod views;
 
-pub use views::battle::{BattleApp, GENERATION_SPAN};
+pub use views::game::{GameApp, GENERATION_SPAN};
 
 /// Native only: the browser client learns its server from the page it came
 /// from, so there is nothing to tell it.
 #[cfg(not(target_arch = "wasm32"))]
-pub use views::battle::{set_connection, set_world, Connection};
+pub use views::game::{set_connection, set_world, Connection};

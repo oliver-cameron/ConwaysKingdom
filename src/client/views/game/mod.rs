@@ -3,6 +3,17 @@
 //! A view rather than the application, so a menu or a lobby can be another one
 //! beside it without this having to know they exist.
 
+pub mod input;
+pub mod start;
+
+use input::{cell_under, centroid, digit, pinch_span, span, Drag, Gesture};
+use start::{dial, middle_of, solo_world, startup, Start};
+
+/// Native only, like the things themselves: a browser client learns its server
+/// from the page it came from and has no command line to be told anything on.
+#[cfg(not(target_arch = "wasm32"))]
+pub use start::{default_address, set_connection, set_world, Connection};
+
 use std::cell::RefCell;
 
 use super::words;
@@ -80,59 +91,6 @@ const MAX_DRAG_CELLS: i64 = 4096;
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
 const VIEW_MARGIN: i32 = CHUNK_N as i32;
-
-/// Set before the event loop starts, like the connection and for the same
-/// reason: `App::init` takes no arguments of its own.
-#[cfg(not(target_arch = "wasm32"))]
-static WORLD: std::sync::Mutex<WorldKind> = std::sync::Mutex::new(WorldKind::Infinite);
-
-/// Choose the world before launching. Native only — a browser has no command
-/// line, and its world comes from the server anyway.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn set_world(mode: WorldKind) {
-    *WORLD.lock().unwrap() = mode;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn chosen_world() -> WorldKind {
-    *WORLD.lock().unwrap()
-}
-
-/// A browser gets the infinite world, and then the server's if it connects.
-#[cfg(target_arch = "wasm32")]
-fn chosen_world() -> WorldKind {
-    WorldKind::Infinite
-}
-
-/// Where to connect, as whom, and to which room. Set before the event loop
-/// starts, because `App::init` takes no arguments of its own. A one-shot
-/// rather than a config store: it is read once.
-#[cfg(not(target_arch = "wasm32"))]
-static CONNECTION: std::sync::Mutex<Option<Connection>> = std::sync::Mutex::new(None);
-
-/// What a client needs to reach a server: an address, a name, and a room.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct Connection {
-    /// `None` runs offline.
-    pub url: Option<String>,
-    pub name: String,
-    /// Which world on that server. `None` takes whatever the server calls its
-    /// default, so a player with nothing to say about rooms still lands
-    /// somewhere.
-    pub room: Option<String>,
-}
-
-/// Point the client at a server before launching it.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn set_connection(connection: Connection) {
-    *CONNECTION.lock().unwrap() = Some(connection);
-}
-
-/// Which screen the client is on.
-///
-/// Not two `App`s. The event loop calls one, and the world, the pipeline and
-/// the atlas belong to the game whether or not it is being looked at — so the
-/// menu is a state the app is in rather than a second app with its own copy
 /// of the GPU.
 enum Screen {
     /// Choosing a server and a room, or choosing to play alone.
@@ -152,159 +110,6 @@ const ROOM_LIST_TIMEOUT: f64 = 8.0;
 
 /// What the pointer is doing.
 ///
-/// One thing at a time by construction. Drawing and panning were two
-/// independent flags, so a press could be both at once and the release of
-/// either ended neither cleanly.
-enum Gesture {
-    None,
-    /// The left button, or one finger, over the world: a click if it never
-    /// travels, a rectangle to fill if it does.
-    Drawing(Drag),
-    /// The view follows the pointer. `button` is what has to come up again to
-    /// end it, and is `None` for fingers.
-    Panning {
-        button: Option<winit::event::MouseButton>,
-    },
-}
-
-/// A press that may yet become a drag.
-struct Drag {
-    /// Where the press landed, in cells, as (row, col).
-    from: (i32, i32),
-    /// And in pixels, which is what decides a drag from a click.
-    from_px: (f64, f64),
-    moved: bool,
-    /// What this drag lays, taken from the slot held when it began. Fixed at
-    /// the press rather than read each frame, so changing slot mid-stroke does
-    /// not change the shape of a line already half drawn.
-    stroke: hotbar::Stroke,
-    /// Every cell the pointer has crossed, in order. A pencil only.
-    path: Vec<(i32, i32)>,
-    /// The same cells as a set. A stroke that crosses itself would otherwise
-    /// list a cell twice, and the pricing compares each entry against the
-    /// world rather than against the entries before it — so the crossing
-    /// would be charged for twice and paid for once.
-    seen: std::collections::HashSet<(i32, i32)>,
-}
-
-impl Drag {
-    fn begin(px: (f64, f64), cell: (i32, i32), stroke: hotbar::Stroke) -> Self {
-        let mut drag = Self {
-            from: cell,
-            from_px: px,
-            moved: false,
-            stroke,
-            path: Vec::new(),
-            seen: std::collections::HashSet::new(),
-        };
-        if stroke == hotbar::Stroke::Pencil {
-            // The press marks where it landed whatever part of the cell it hit:
-            // you aimed at it. Everything after has to pass through a middle.
-            drag.mark(cell);
-        }
-        drag
-    }
-
-    /// Note where the press has got to. `slop` is in the same physical pixels
-    /// the positions are.
-    fn reached(&mut self, px: (f64, f64), slop: f64) {
-        self.moved |= travelled(self.from_px, px, slop);
-    }
-
-    fn mark(&mut self, cell: (i32, i32)) {
-        if self.seen.insert(cell) {
-            self.path.push(cell);
-        }
-    }
-
-    /// Whether the stroke has reached its limit and stopped growing.
-    fn full(&self) -> bool {
-        self.path.len() as i64 >= MAX_DRAG_CELLS
-    }
-
-    /// How many cells this drag covers, without listing them. More than one is
-    /// what makes it a drag rather than a click, and that has to be decided
-    /// before the cells are priced -- otherwise a click that lands somewhere
-    /// it may not build is refused in a drag's words.
-    fn cell_count(&self, to: (i32, i32)) -> i64 {
-        match self.stroke {
-            hotbar::Stroke::Pencil => self.path.len() as i64,
-            hotbar::Stroke::Rectangle => {
-                let (rows, cols) = span(self.from, to);
-                rows * cols
-            }
-        }
-    }
-}
-
-/// How much of a cell counts as being on it, across the middle.
-///
-/// The rest is a gap, and **the gap is the point**. Filling in every cell the
-/// pointer passes over draws a solid line, and a solid line is not what you
-/// want to draw: the patterns worth placing have holes in them. A glider is
-/// five cells with gaps between them, and it should be one motion of the hand
-/// rather than five clicks.
-///
-/// So a cell counts only if the pointer went through the middle of it, and
-/// this is how much of the middle. What that buys is that a stroke passing
-/// diagonally between two cells does not catch the two beside the corner —
-/// which is what makes a diagonal a diagonal, and a glider a glider.
-///
-/// **Measured against drawing a glider in one motion**, with a hand that
-/// wobbles a quarter of a cell and cuts its corners:
-///
-/// ```text
-///   0.35    2% land it exactly, 2.4 of the five cells missed
-///   0.55   57%                  0.4 missed
-///   0.70   96%                  none missed, and none extra
-///   0.80   64%                  none missed, 0.35 cells extra
-/// ```
-///
-/// Below 0.7 the misses are the problem: you have to pass nearer the centre
-/// of every cell than a hand reliably can, and the shape comes out with holes
-/// in the wrong places. Above it the extras are, because the band grows wide
-/// enough to catch the cells beside a corner and the gaps close up.
-///
-/// A 45° stroke is one cell thick and unbroken at every value in that range,
-/// so it is not what this number is for. Angled strokes **do** break here, and
-/// that is wanted rather than tolerated — an unbroken angled line is a thing
-/// you can draw with two strokes, and a shape with holes is not.
-///
-/// Not every pattern is one motion. A lightweight spaceship has nine cells,
-/// one of them not touching the other eight and three of them with a single
-/// neighbour, so no tolerance makes it a single stroke: a stroke is a path,
-/// and a path has two ends.
-const CELL_COLLIDER: f32 = 0.7;
-
-/// The cell a world position is on, if it is far enough inside one to count.
-///
-/// Fractional cell coordinates in, so it is the same arithmetic at every zoom
-/// and can be tested without a camera to point at anything.
-fn cell_under((x, y): (f32, f32)) -> Option<(i32, i32)> {
-    let edge = (1.0 - CELL_COLLIDER) / 2.0;
-    let inside = |v: f32| {
-        let fraction = v - v.floor();
-        fraction >= edge && fraction <= 1.0 - edge
-    };
-    (inside(x) && inside(y)).then(|| (y.floor() as i32, x.floor() as i32))
-}
-
-/// Whether a press that landed at `from` and has reached `to` is a drag.
-///
-/// Measured from where the press landed, not between one pointer event and the
-/// next. That was the bug: a slow, deliberate sweep arrives as a stream of
-/// one-pixel moves, no single one of them clears any threshold worth setting,
-/// and the whole gesture collapsed into a click at the release point — so a
-/// dragged pane came out as a single cell.
-fn travelled(from: (f64, f64), to: (f64, f64), slop: f64) -> bool {
-    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    dx * dx + dy * dy > slop * slop
-}
-
-/// What the match in this room is doing, once the server has said.
-///
-/// A struct rather than a tuple, which it outgrew the moment it carried more
-/// than three things — and every one of them is read by name at the far end.
 #[derive(Clone)]
 struct Lobby {
     phase: crate::net::MatchPhase,
@@ -357,7 +162,7 @@ struct Pending {
     to_px: (f64, f64),
 }
 
-pub struct BattleApp {
+pub struct GameApp {
     /// The interface, and the shapes it produced this frame.
     ///
     /// Behind a cell because the overlay is recorded while the frame holds an
@@ -524,7 +329,7 @@ pub struct BattleApp {
     sketch: stamp::Sketch,
 }
 
-impl BattleApp {
+impl GameApp {
     /// A fixed camera. Autoscrolling is gone: the view no longer chases the
     /// live pattern, so what is on screen is whatever `VIEW_CENTRE` and
     /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
@@ -572,7 +377,7 @@ impl BattleApp {
     }
 }
 
-impl BattleApp {
+impl GameApp {
     fn zoom_about_cursor(&mut self, factor: f32) {
         self.camera.zoom_about(factor, self.cursor);
     }
@@ -1749,7 +1554,7 @@ impl BattleApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn address_hint(&self) -> String {
-        crate::net::keep::server().unwrap_or_else(|| DEFAULT_ADDRESS.into())
+        crate::net::keep::server().unwrap_or_else(|| start::DEFAULT_ADDRESS.into())
     }
 
     /// Act on what the menu was clicked for.
@@ -1931,7 +1736,7 @@ impl BattleApp {
     }
 }
 
-impl App for BattleApp {
+impl App for GameApp {
     fn init(gpu: &GpuState) -> Self {
         // Where to go, or whether to ask. A destination stated on a command
         // line or in a link is a choice already made; anything else opens the
@@ -2748,112 +2553,6 @@ impl App for BattleApp {
     }
 }
 
-/// What the client does before the first frame: go somewhere, or ask.
-enum Start {
-    /// Straight into a game, because something said where to go — `--ws` on a
-    /// command line, or `?room=` on a page. A stated destination is a choice
-    /// already made, and asking again would be the menu getting in the way.
-    Join {
-        url: String,
-        name: String,
-        room: Option<String>,
-        /// Watch it rather than play in it. A link that says watch is a
-        /// different invitation from one that says come and play, and the two
-        /// are answered by different messages.
-        watch: bool,
-    },
-    /// Show the menu, with this address filled in and on this page.
-    Menu { address: String, page: menu::Page },
-}
-
-/// Connect, and ask nothing yet.
-///
-/// Two shapes because the two links differ: a browser's socket may fail to be
-/// constructed at all, and a native one is a thread that starts and may then
-/// find nothing there.
-#[cfg(target_arch = "wasm32")]
-fn dial(url: &str) -> Option<Link> {
-    Link::connect(url)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn dial(url: &str) -> Option<Link> {
-    Some(Link::connect(url.to_string()))
-}
-
-/// On the web nothing needs configuring: the page came from the server, so the
-/// server is wherever the page came from. `wss` when the page is `https`, or
-/// the browser blocks it as mixed content.
-///
-/// The room comes from the query string — `?room=lobby` — because that is the
-/// one part a page cannot derive from where it was served, and naming it is
-/// how a link takes somebody straight to a world. With none, the menu asks.
-#[cfg(target_arch = "wasm32")]
-fn startup() -> Start {
-    use crate::client::route::Route;
-    let url = Link::origin_url("/ws").unwrap_or_else(|| "ws://localhost:8080/ws".into());
-    let name = crate::net::keep::name().unwrap_or_else(|| "web".into());
-    // The address bar is where a browser client is told to go: a link into a
-    // match, a link to watch one, or the page on its own.
-    match Route::of(&path_name(), &query_string()) {
-        Some(Route::Watch(room)) => Start::Join { url, name, room: Some(room.0), watch: true },
-        // A lobby and a room are one request: join it, and what comes back is
-        // whichever screen the match's phase calls for.
-        Some(route) if route.to_join().is_some() => {
-            Start::Join { url, name, room: route.to_join().map(|r| r.0.clone()), watch: false }
-        }
-        Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play },
-        _ => Start::Menu { address: url, page: menu::Page::Home },
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-/// The path the page was opened at, which is where the client is told to go.
-#[cfg(target_arch = "wasm32")]
-fn path_name() -> String {
-    web_sys::window().and_then(|w| w.location().pathname().ok()).unwrap_or_default()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn query_string() -> String {
-    web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
-}
-
-/// On native there is no page to have come from, so the URL is an argument —
-/// and without one, the menu asks for it.
-#[cfg(not(target_arch = "wasm32"))]
-fn startup() -> Start {
-    let taken = CONNECTION.lock().unwrap().take();
-    let Some(Connection { url, name, room }) = taken else {
-        return Start::Menu { address: DEFAULT_ADDRESS.into(), page: menu::Page::Home };
-    };
-    crate::net::keep::remember_name(&name);
-    match url {
-        // `--ws` is a command line, which has no way to say "watch" yet and
-        // does not need one: somebody at a terminal can pass `--room`.
-        Some(url) => Start::Join { url, name, room, watch: false },
-        None => Start::Menu { address: DEFAULT_ADDRESS.into(), page: menu::Page::Home },
-    }
-}
-
-/// What the native menu offers when nothing has been typed before. The server
-/// this repository tells you to run, on the port it tells you to run it on.
-#[cfg(not(target_arch = "wasm32"))]
-const DEFAULT_ADDRESS: &str = "ws://127.0.0.1:8080/ws";
-
-/// An address that works, for a field that would otherwise be blank.
-///
-/// A hint is a shape; this is a thing you can press enter on. Somebody who has
-/// never seen the game should be editing a number rather than inventing a URL.
-///
-/// Native only, because a browser has no field to fill: its socket comes from
-/// the page's own origin, and an address typed there would be a promise the
-/// client cannot keep.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn default_address() -> &'static str {
-    DEFAULT_ADDRESS
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3043,73 +2742,4 @@ mod tests {
         assert_eq!(pinch_span(&one), None);
         assert_eq!(pinch_span(&[]), None);
     }
-}
-
-/// A world of one: granted, and where the camera should be pointing at it.
-///
-/// Shared by [`App::init`] and by pressing play alone, because the two have to
-/// produce the same thing and did not. See [`BattleApp::play_alone`].
-fn solo_world() -> (World, (f32, f32)) {
-    let mut world = chosen_world().build();
-    if crate::net::too_cramped_for_grants(&world) {
-        log::warn!("this world is too small for every player to get a square of their own");
-    }
-    // Placing is confined to a player's own territory, so an offline game
-    // needs the grant a server would have made. Without it there is no
-    // opening move: nothing is owned, so nothing may be placed, so nothing
-    // ever comes to own anything.
-    crate::net::grant(&mut world, PlayerId(1));
-    // And look at it. Where a grant lands depends on the shape of the world,
-    // so this is read back rather than assumed -- the same reason `Welcome`
-    // carries the spawn for a connected client.
-    let home = middle_of(crate::net::spawn_for(PlayerId(1), &world));
-    (world, home)
-}
-
-/// The middle of a granted patch, as the camera wants it: (x, y), which is
-/// (col, row) the other way round.
-fn middle_of((row, col): (i32, i32)) -> (f32, f32) {
-    let half = crate::net::SPAWN_N as f32 / 2.0;
-    (col as f32 + half, row as f32 + half)
-}
-
-/// How many rows and columns a rectangle covers, both ends included.
-///
-/// In `i64` because a drag at one pixel per cell can span most of an `i32`,
-/// and the product of two of those still has to be a number the cap can be
-/// compared against rather than an overflow.
-fn span(from: (i32, i32), to: (i32, i32)) -> (i64, i64) {
-    ((from.0 as i64 - to.0 as i64).abs() + 1, (from.1 as i64 - to.1 as i64).abs() + 1)
-}
-
-/// The middle of however many fingers are down. One finger's middle is itself,
-/// which is what lets a pinch that has lost a finger carry on panning.
-fn centroid(touches: &[(u64, (f64, f64))]) -> (f64, f64) {
-    let n = touches.len().max(1) as f64;
-    let sum = touches.iter().fold((0.0, 0.0), |a, t| (a.0 + t.1 .0, a.1 + t.1 .1));
-    (sum.0 / n, sum.1 / n)
-}
-
-/// The gap between exactly two fingers. One has no span to measure, and three
-/// or more is not a pinch anybody means.
-fn pinch_span(touches: &[(u64, (f64, f64))]) -> Option<f64> {
-    let [(_, a), (_, b)] = touches else { return None };
-    Some(((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
-}
-
-/// The digit a key stands for, if it is one.
-fn digit(code: winit::keyboard::KeyCode) -> Option<u32> {
-    use winit::keyboard::KeyCode as K;
-    Some(match code {
-        K::Digit1 | K::Numpad1 => 1,
-        K::Digit2 | K::Numpad2 => 2,
-        K::Digit3 | K::Numpad3 => 3,
-        K::Digit4 | K::Numpad4 => 4,
-        K::Digit5 | K::Numpad5 => 5,
-        K::Digit6 | K::Numpad6 => 6,
-        K::Digit7 | K::Numpad7 => 7,
-        K::Digit8 | K::Numpad8 => 8,
-        K::Digit9 | K::Numpad9 => 9,
-        _ => return None,
-    })
 }

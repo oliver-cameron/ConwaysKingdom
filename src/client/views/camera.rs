@@ -1,6 +1,6 @@
 //! Where the world is being looked at from, and how that moves.
 //!
-//! Split out of the battle view because it is the one part of it that is pure
+//! Split out of the game view because it is the one part of it that is pure
 //! arithmetic: a position, a scale, and the mapping between the screen and the
 //! world. That mapping was written out at each of its four call sites, which
 //! is four places for the camera to be understood differently, and none of it

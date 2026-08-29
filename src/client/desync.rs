@@ -17,7 +17,7 @@
 //! Pure arithmetic, no egui and no socket: the client feeds it and the HUD
 //! reads it, which is what lets it be tested without either.
 //!
-//! [`CHECKPOINT_EVERY`]: crate::client::views::battle
+//! [`CHECKPOINT_EVERY`]: crate::client::views::game
 //! [docs/networking.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/networking.md
 
 /// How long a click takes to fall to half its weight, in seconds.

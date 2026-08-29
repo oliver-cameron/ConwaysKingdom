@@ -49,7 +49,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         // wanted.
         #[cfg(not(target_arch = "wasm32"))]
         if menu.address.trim().is_empty() {
-            menu.address = crate::client::views::battle::default_address().to_string();
+            menu.address = crate::client::views::game::default_address().to_string();
         }
         // Ask straight away rather than waiting for somebody to touch a field
         // they have no reason to touch: the address is remembered, or it is an

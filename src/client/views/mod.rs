@@ -1,6 +1,6 @@
 //! The views, and the interface they are drawn with.
 //!
-//! A view is a screen: [`battle`] is the game, and a menu or a lobby would sit
+//! A view is a screen: [`game`] is the game, and a menu or a lobby would sit
 //! beside it. [`Views`] is the egui plumbing they share.
 //!
 //! Lives under `client` rather than `render` because what to show is policy,
@@ -17,9 +17,9 @@
 //! targets, and a HUD needs only pointer, wheel and modifiers — the IME and
 //! clipboard handling that egui-winit exists for is not in play.
 
-pub mod battle;
 pub mod camera;
 pub mod clock;
+pub mod game;
 pub mod help;
 pub mod hotbar;
 pub mod hud;

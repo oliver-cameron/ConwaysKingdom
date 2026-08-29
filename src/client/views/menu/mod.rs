@@ -310,7 +310,7 @@ pub fn show(
     //
     // **Not at `Order::Background`, which it used to be and which bought
     // nothing.** There is nothing behind the menu to be behind: the world is
-    // not drawn on this screen at all — `BattleApp::showing_world` is false
+    // not drawn on this screen at all — `GameApp::showing_world` is false
     // for `Screen::Menu`, so `draw_calls` returns an empty list and the frame
     // is a clear and this panel. Background was the one attribute separating
     // the single panel that has been reported blank from the several that are
@@ -1000,7 +1000,7 @@ mod tests {
         #[cfg(target_arch = "wasm32")]
         let example = "ws://127.0.0.1:8080/ws";
         #[cfg(not(target_arch = "wasm32"))]
-        let example = crate::client::views::battle::default_address();
+        let example = crate::client::views::game::default_address();
         assert!(example.starts_with("ws://"), "{example}");
         assert!(example.contains(':'), "an example needs a port to edit: {example}");
 
