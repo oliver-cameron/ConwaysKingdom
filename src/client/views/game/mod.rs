@@ -49,10 +49,30 @@ const CHECKPOINT_EVERY: u64 = 12;
 /// cannot send an enormous one.
 const MAX_CHECKPOINT_CHUNKS: usize = 512;
 
-/// The most generations a client will step at once to catch up before giving
-/// up and taking the server's number. A stall long enough to exceed this has
-/// already cost more than the catching up would fix.
-const CATCH_UP: u64 = 32;
+/// What a `Step` at this tick means for a client sitting at that generation.
+///
+/// Pure arithmetic, and a free function so it can be tested without a GPU —
+/// the same argument that took the camera out of this file. Everything
+/// interesting about recovering from a lost message is the decision, and the
+/// decision is one comparison.
+#[derive(Debug, PartialEq, Eq)]
+enum Advance {
+    /// The next generation, which is the only thing that ever ought to arrive.
+    Step,
+    /// Something was lost. Not "we are behind by n" — a `Step` carries the
+    /// actions applied at its tick, so a gap is n generations whose *contents*
+    /// this client was never told, and there is nothing it can compute that
+    /// would fill them in.
+    Lost,
+}
+
+fn advance(here: u64, tick: crate::net::Tick) -> Advance {
+    if tick == here + 1 {
+        Advance::Step
+    } else {
+        Advance::Lost
+    }
+}
 
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
@@ -513,29 +533,68 @@ impl GameApp {
     /// Step the world up to the generation the server is on.
     ///
     /// Normally exactly one step: the server sends one of these per
-    /// generation, and a websocket does not lose or reorder them. Anything
-    /// else means this client and the server disagree about where in the
-    /// sequence they are, which is not something to paper over quietly — the
-    /// worlds have already diverged, and the honest thing is to say so and
-    /// take the server's number, because it is the one everybody else has.
+    /// generation. Anything else means this client and the server disagree
+    /// about where in the sequence they are, which is not something to paper
+    /// over quietly — the worlds have already diverged, and the honest thing
+    /// is to say so, take the server's number, and ask for the world again.
     fn advance_to(&mut self, tick: crate::net::Tick) {
         let here = self.world.generation;
-        if tick == here + 1 {
+        if let Advance::Step = advance(here, tick) {
             let mined = self.world.step();
             self.bank(&mined);
             return;
         }
-        if tick > here && tick - here <= CATCH_UP {
-            log::debug!("{} generations behind; catching up", tick - here);
-            for _ in here..tick {
-                let mined = self.world.step();
-                self.bank(&mined);
-            }
-            return;
-        }
-        log::warn!("out of step: the server is at {tick} and this client at {here}");
+        // **Anything else means messages were lost, so nothing is stepped.**
+        //
+        // Catching up is what this used to do, and it is the bug rather than
+        // the recovery. A `Step` carries the actions applied at its tick, so a
+        // gap is not "we are behind by n generations", it is "n generations
+        // happened here that we were not told the contents of" — and stepping
+        // to close it runs those generations *empty*. The world that comes out
+        // is one nobody else has, and Life makes a handful of missing cells a
+        // different pattern within a minute. Which is exactly what a branched
+        // world looks like from the inside.
+        //
+        // A websocket does not lose or reorder, which is what made this look
+        // safe. The broadcast channel in front of it does: `server::ws` logs
+        // `connection lagged n messages` and carries on, and a client whose
+        // socket is slow to drain — a backgrounded tab throttles exactly that
+        // — is the ordinary case rather than an exotic one.
+        //
+        // So: take the server's number, throw away the world built on the
+        // missing steps, and ask for it again. It self-limits, because the
+        // generation is the server's afterwards and the next `Step` is one
+        // past it.
+        log::warn!(
+            "out of step: the server is at {tick} and this client at {here}; \
+             discarding {} generation(s) and asking again",
+            tick.saturating_sub(here)
+        );
+        self.resync_everything(tick);
+    }
+
+    /// Throw away what this client holds and fetch it from the server.
+    ///
+    /// **The whole world, not the chunks that look wrong.** Every chunk here
+    /// was stepped alongside every other, so one that missed an action has
+    /// been feeding wrong cells across its edges into its neighbours ever
+    /// since; and a chunk outside the viewport is never checkpointed at all,
+    /// so "the ones we know are wrong" is a set this client cannot compute.
+    /// Rebuilding to the world's own shape and re-asking is the only answer
+    /// that does not leave some of the divergence in place.
+    ///
+    /// It looks like a join, because it is one: `Welcome` does this same thing
+    /// for the same reason, and the blank moment before the chunks land is the
+    /// one that path already has.
+    fn resync_everything(&mut self, tick: crate::net::Tick) {
+        self.world = self.world.kind().build();
         self.world.set_generation(tick);
         self.world.dirty = true;
+        // Cleared, or `subscribe_to_view` would take this client's word for
+        // what it already holds and ask for none of it.
+        self.subscribed.clear();
+        self.geiger.reset();
+        self.subscribe_to_view();
     }
 
     /// Fold a generation's mining into the predicted purse, floored at zero
@@ -2559,6 +2618,33 @@ mod tests {
 
     /// How a browser client says which world it wants. There is no command
     /// line on a page, and the socket comes from the origin, so the query
+
+    /// **Only the next generation is a step; everything else is a loss.**
+    ///
+    /// This used to step forward to close a gap of up to thirty-two, which is
+    /// the branching bug rather than the recovery from it: those generations
+    /// carried actions, stepping runs them empty, and the world that comes out
+    /// is one nobody else has. There is no arithmetic that recovers a message
+    /// that never arrived, so the only honest answers are "step" and "ask
+    /// again".
+    #[test]
+    fn a_step_is_the_next_generation_and_nothing_else_is() {
+        assert_eq!(advance(0, 1), Advance::Step);
+        assert_eq!(advance(400, 401), Advance::Step);
+
+        // Behind, by one message and by many. Both used to be caught up
+        // locally and both are worlds this client would be inventing.
+        assert_eq!(advance(400, 402), Advance::Lost, "one dropped step is still a loss");
+        assert_eq!(advance(400, 432), Advance::Lost);
+        assert_eq!(advance(400, 100_000), Advance::Lost);
+
+        // Ahead, or the same tick twice: a websocket does not reorder, so
+        // either means something upstream is not what it is thought to be, and
+        // the answer is the same one.
+        assert_eq!(advance(400, 400), Advance::Lost);
+        assert_eq!(advance(400, 399), Advance::Lost);
+        assert_eq!(advance(400, 0), Advance::Lost);
+    }
 
     /// The HUD swatch and the cells on the board must agree about a player's
     /// colour, so this reproduces the shader's arithmetic and checks the result

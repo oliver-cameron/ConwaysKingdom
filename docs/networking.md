@@ -80,7 +80,13 @@ It digests **the chunks the client has asked for**, which is not the same as the
 
 That is not a refinement, it is the whole of whether multiplayer works. A step is a pure function of state and tick, and every seed is derived from the generation, so two peers stay identical only while they step at the same ticks. A client that kept its own timer drifted immediately: same nominal rate, different phase, nothing correcting it. Measured at four generations apart within a minute, and growing. Births then chose different owners on each side and territory spread differently, so the two worlds separated while both looked plausible. Late joining still worked, because that is a snapshot — everything after it was one world each.
 
-A client that finds itself somewhere other than one step behind says so and takes the server's number. Papering over it quietly would hide exactly the case worth knowing about, since by then the worlds have already diverged.
+A client that finds itself somewhere other than one step behind **throws away its world and asks for it again.** It used to step forward to close a gap of up to thirty-two generations, which reads as recovery and is the opposite: a `Step` carries the actions applied at its tick, so a gap is not "we are behind by n", it is "n generations happened that we were never told the contents of" — and stepping to close it runs those generations empty. The world that comes out is one nobody else has, and Life turns a handful of missing cells into a different pattern within a minute.
+
+The gap is real and not hypothetical. A websocket does not lose or reorder, which is what made catching up look safe, but the broadcast channel in front of it does: `server::ws` logs `connection lagged n messages` and carries on, and a client whose socket is slow to drain — a backgrounded tab throttles exactly that — is the ordinary case rather than an exotic one. So the whole world goes, not the chunks that look wrong: every chunk was stepped alongside every other, one that missed an action has been feeding wrong cells across its edges ever since, and a chunk outside the viewport is never checkpointed at all, so "the ones we know are wrong" is a set the client cannot compute.
+
+It self-limits — the generation is the server's afterwards, so the next `Step` is one past it — and it looks like a join, because it is one.
+
+What is still missing is the other half: the server knows a connection lagged and does not tell it, so the client only finds out on the next `Step` it does receive.
 
 ## Predicting, and finding out when it was wrong
 
