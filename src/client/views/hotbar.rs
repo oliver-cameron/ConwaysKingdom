@@ -301,7 +301,13 @@ pub struct Look<'a> {
     pub typed: &'a Typed<'a>,
 }
 
-pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library) -> Shown {
+pub fn show(
+    ctx: &egui::Context,
+    look: &Look<'_>,
+    held: Held,
+    library: &Library,
+    status: &crate::client::views::hud::Status,
+) -> Shown {
     let theme = look.theme;
     let typed = look.typed;
     let m = theme.metrics;
@@ -322,10 +328,20 @@ pub fn show(ctx: &egui::Context, look: &Look<'_>, held: Held, library: &Library)
                 ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
                 ui.set_min_height(m.slot + m.panel_padding * 1.2 + 2.0);
 
+                // Add player colour, show stats for total territory and $. Also show generation number.
+                let painter = ui.painter();
+                segment(ui, theme, |ui| {
+                    ui.vertical(|ui| {
+                        let value = status.value;
+                        ui.label(format!("${value}"));
+                    });
+                });
+
                 // **What it is made of.** One segment, four kinds, and ice
                 // among them: it used to sit behind a rule because it came
                 // with a different stroke, and the stroke is the other axis
                 // now.
+                // Life, mine, turret and ice
                 segment(ui, theme, |ui| {
                     for (i, tool) in KINDS.iter().enumerate() {
                         if square(

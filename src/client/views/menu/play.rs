@@ -649,6 +649,9 @@ fn toggle(theme: &Theme, label: &str, on: bool) -> egui::Button<'static> {
     .fill(if on { p.accent } else { p.surface })
 }
 
+// Add a type of button which can have the number inputs inside.
+// fn toggle_inset(theme: &Theme, label: &str, on: bool, )
+
 /// One decision as a row of buttons, the chosen one wearing the accent.
 ///
 /// The whole choice on screen at once, which is the argument against a

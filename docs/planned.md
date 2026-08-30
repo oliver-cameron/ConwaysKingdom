@@ -16,6 +16,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 | | status | |
 |---|---|---|
+| [Payloads](#Payoloads) | decided | A type of cell that explodes after a certain amount of time | 
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
 | [Spectating](#spectating) | Built | a room with no seat in it |
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
@@ -41,6 +42,20 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Mobile](#mobile) | Designed | |
 | [Known, and left alone](#known-and-left-alone) | — | |
 
+## Payloads
+
+Payload cells will utilise the new age flag in the cell. While it is alive, a payload will have a chance to increase it's timer, with this chance at 100% in the state right before detonation.
+
+### Detonation
+The goal of detonation is to make the surrounding area look like random noise. On detonation, a payload can do a certain number of actions, in order of precedence. These actions are given a score, weighted by distance, and selecting the greatest scoring action, recalculating each time.
+1. Setting nearby cells to detonate the next generation:
+> Payloads with a fuse of less than 14 will be set to 14, with a score of 20.
+2. Reducing "randomness cost"
+> The randomness cost of a cell is a sum of the life of cells in a kernel around it, where alive is 1 and dead is zero, balanced by a density constant, squared. The score given to a particular cell to flip is the total cost decrease over the kernels that that cell lives in. This can be negative.
+
+*Closeness* is of the form $\frac{1}{\delta x ^ 2 | \delta y ^ 2 + D}$, where `D` is some constant. Score is multiplied by this.
+
+This makes the surrounding area more random.
 ## Making rooms from the client
 
 **Built** — see [game.md](game.md#the-menu) for the form and [server.md](server.md#made-by-a-client) for the wire, the cap and the owner. A world, a match or a private game, from the menu, on a phone.

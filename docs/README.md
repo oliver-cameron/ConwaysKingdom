@@ -97,6 +97,8 @@ The `--profiling` profile is release codegen with the second optimiser switched 
 cargo fmt --check
 ```
 
+Keep all comments concise, replace 5 lines of comments with well-labeled code and links to the documentation where possible.
+
 ## Testing
 
 ```

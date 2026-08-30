@@ -2393,7 +2393,7 @@ impl App for GameApp {
                         let what = held.placement().unwrap_or(crate::net::Placement::Life);
                         let look =
                             hotbar::Look { theme: &theme, what, sheet, player: me, typed: &typed };
-                        let bar = hotbar::show(ctx, &look, held, &self.stamps);
+                        let bar = hotbar::show(ctx, &look, held, &self.stamps, &status);
                         picked = bar.picked;
                         // Over the world rather than instead of it: a match that has
                         // not started looks exactly like a game that is broken, since

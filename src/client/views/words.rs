@@ -46,7 +46,7 @@ pub mod menu {
     /// Waiting is a different thing from a server with nothing on it, and
     /// reads differently: one is a pause, the other is an invitation.
     pub const NOT_ASKED: &str = "No answer from that server yet.";
-    pub const ALONE: &str = "Play alone";
+    pub const ALONE: &str = "Play Solo";
     /// Out of a screen, by pointer. Escape does the same, and both exist
     /// because a phone has no escape key and a keyboard user should not have
     /// to reach for the mouse.
