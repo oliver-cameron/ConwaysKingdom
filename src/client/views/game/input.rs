@@ -160,11 +160,6 @@ pub(crate) fn travelled(from: (f64, f64), to: (f64, f64), slop: f64) -> bool {
     dx * dx + dy * dy > slop * slop
 }
 
-/// What the match in this room is doing, once the server has said.
-///
-/// A struct rather than a tuple, which it outgrew the moment it carried more
-/// than three things — and every one of them is read by name at the far end.
-
 /// How many rows and columns a rectangle covers, both ends included.
 ///
 /// In `i64` because a drag at one pixel per cell can span most of an `i32`,

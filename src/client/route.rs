@@ -63,10 +63,14 @@ pub enum Route {
 impl Route {
     /// The query string this route is, without the leading `?`.
     ///
-    /// Not what the client writes any more — it writes a path — but still what
-    /// a link made before paths existed says, and so still something to be
-    /// able to produce and compare against.
-    pub fn query(&self) -> String {
+    /// **A test fixture, not client API.** The client writes a path; what is
+    /// live is [`Self::read`], because a `?room=` link made before paths
+    /// existed still has to go where it always did. This is how the tests
+    /// produce one of those to read back, and it was `pub` on a public type —
+    /// a promise to callers that the query form is something to *write*, which
+    /// nothing has meant since paths arrived.
+    #[cfg(test)]
+    fn query(&self) -> String {
         match self {
             Self::Home => format!("{SCREEN}=home"),
             Self::Play => format!("{SCREEN}=play"),

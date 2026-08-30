@@ -57,12 +57,6 @@ pub fn set_connection(connection: Connection) {
     *CONNECTION.lock().unwrap() = Some(connection);
 }
 
-/// Which screen the client is on.
-///
-/// Not two `App`s. The event loop calls one, and the world, the pipeline and
-/// the atlas belong to the game whether or not it is being looked at — so the
-/// menu is a state the app is in rather than a second app with its own copy
-
 /// What the client does before the first frame: go somewhere, or ask.
 pub(crate) enum Start {
     /// Straight into a game, because something said where to go — `--ws` on a

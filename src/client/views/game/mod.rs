@@ -2936,9 +2936,6 @@ impl App for GameApp {
 mod tests {
     use super::*;
 
-    /// How a browser client says which world it wants. There is no command
-    /// line on a page, and the socket comes from the origin, so the query
-
     /// **Only the next generation is a step; everything else is a loss.**
     ///
     /// This used to step forward to close a gap of up to thirty-two, which is

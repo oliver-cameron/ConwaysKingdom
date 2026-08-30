@@ -47,11 +47,6 @@ impl Link {
         Some(format!("{scheme}://{host}{path}"))
     }
 
-    /// Connect back to the origin this page came from.
-    pub fn connect_to_origin(path: &str) -> Option<Self> {
-        Self::connect(&Self::origin_url(path)?)
-    }
-
     pub fn connect(url: &str) -> Option<Self> {
         let socket = web_sys::WebSocket::new(url).ok()?;
         // Frames are binary; without this they arrive as Blobs, which can only
