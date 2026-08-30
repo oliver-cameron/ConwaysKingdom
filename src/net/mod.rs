@@ -647,6 +647,20 @@ pub enum ClientMessage {
     /// room name is: this is a game people play together, and a naming fight
     /// is a smaller problem than a permission system.
     NameTeam { team: PlayerId, name: String },
+    /// Call the match off early, with the score as it stands.
+    ///
+    /// **Whoever started it**, which is the same person and the same reasoning
+    /// as `Start`: they arranged the match, so they are the one who can say it
+    /// has stopped being worth playing. The result is real and is rated —
+    /// a match that ends with no result is one nobody can be held to.
+    EndMatch,
+    /// Give up, for this seat.
+    ///
+    /// A **seat** and not a number, which is the distinction a team needs: one
+    /// of three walking away leaves two pairs of hands on the team. A number
+    /// is out when nobody is left playing it, and a match with one number left
+    /// is over.
+    Forfeit,
     /// Blow the whistle on a match this connection made.
     ///
     /// Sent with no room, because it names one: the match you are **in**. A

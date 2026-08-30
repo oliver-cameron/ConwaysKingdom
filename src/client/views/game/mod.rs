@@ -357,6 +357,11 @@ pub struct GameApp {
     /// frame, and a name half-typed would vanish between two of them — the
     /// same reason `sketch` lives here.
     naming_team: Option<(PlayerId, String)>,
+    /// Whether this seat has given up, as the server last said.
+    ///
+    /// Held so the control can say so rather than offer to concede twice, and
+    /// cleared on a `Welcome`, which is a different match or none.
+    forfeited: bool,
     /// Why the last attempt to start or leave a match was refused.
     ///
     /// Beside the lobby rather than in [`Self::notice`], which is drawn in the
@@ -712,6 +717,7 @@ impl GameApp {
                     self.me = Some(you);
                     self.plays_as = Some(you);
                     self.watching = false;
+                    self.forfeited = false;
                     self.room = Some(room);
                     self.room_name = Some(name);
                     // Into the game. Not before: until a Welcome arrives there
@@ -2219,6 +2225,7 @@ impl App for GameApp {
             helping: false,
             naming_team: None,
             refused_start: None,
+            forfeited: false,
             in_play: None,
             geiger: Default::default(),
             sketch: stamp::Sketch::default(),
@@ -2311,6 +2318,13 @@ impl App for GameApp {
             standing: &self.standing,
             geiger: self.geiger,
             watching: self.watching,
+            rating: self.rating.map(|r| (r, self.rating_change)),
+            in_a_match: matches!(
+                self.lobby.as_ref().map(|l| &l.phase),
+                Some(crate::net::MatchPhase::Running { .. })
+            ),
+            started_it: self.lobby.as_ref().and_then(|l| l.owner) == self.me && self.me.is_some(),
+            forfeited: self.forfeited,
         };
         // What the keys bound by *position* print here, read before the frame
         // because the closure below holds `views` for the whole of it. Three
@@ -2374,6 +2388,7 @@ impl App for GameApp {
         // `self` is already borrowed by `views`. Put back below, whatever the
         // menu did with it.
         let mut leaving = false;
+        let mut in_hud = hud::Did::Nothing;
         // What a press in the lobby meant, acted on after the frame is built
         // because both answers change the screen the frame was drawn from.
         let mut in_lobby = lobby_view::Did::Nothing;
@@ -2439,8 +2454,8 @@ impl App for GameApp {
                         }
 
                         overlay::show(ctx, &theme, &marks);
-                        let (hud_rect, back) = hud::show(ctx, &theme, &status);
-                        leaving = back;
+                        let (hud_rect, pressed) = hud::show(ctx, &theme, &status);
+                        in_hud = pressed;
                         // How much of the match is left, which is the one thing on
                         // screen that is about the room rather than about a player.
                         let clock_rect = lobby.as_ref().and_then(|l| {
@@ -2533,6 +2548,31 @@ impl App for GameApp {
         self.sketch = sketch;
         // Acted on after the frame is built, because it changes the screen and
         // the screen is what the frame was drawn from.
+        //
+        // Both answers come back as a broadcast phase change, or as
+        // `NotStarted` with a reason, so there is nothing to do here but ask.
+        match in_hud {
+            hud::Did::Nothing => {}
+            hud::Did::Back => leaving = true,
+            hud::Did::Forfeit => {
+                if let Some(link) = &self.link {
+                    log::info!("giving up this match");
+                    link.send(ClientMessage::Forfeit);
+                    // Marked here rather than waiting for the server to say
+                    // so: there is no message that answers a forfeit, only a
+                    // lobby that changes, and a button that stays pressable
+                    // for a quarter of a second is a button people press
+                    // twice.
+                    self.forfeited = true;
+                }
+            }
+            hud::Did::EndMatch => {
+                if let Some(link) = &self.link {
+                    log::info!("asking to end the match");
+                    link.send(ClientMessage::EndMatch);
+                }
+            }
+        }
         match in_lobby {
             lobby_view::Did::Nothing => {}
             lobby_view::Did::Leave => leaving = true,

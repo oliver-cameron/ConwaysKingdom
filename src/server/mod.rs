@@ -443,6 +443,98 @@ impl Server {
         held
     }
 
+    /// Whether this number still has anybody playing it.
+    ///
+    /// **The question a forfeit asks**, and it composes with teams for free: a
+    /// seat plays a number, so a number is in the match while at least one
+    /// seat playing it is here and has not given up. A lone player is their
+    /// own number, so giving up puts them out; a team is out when everybody at
+    /// its controls has gone or conceded, and one of three walking away leaves
+    /// two hands on it.
+    ///
+    /// **Not `online`.** A connection that dropped is a player who can come
+    /// back with their token — that is what the token is for — so being away
+    /// is not being out. Only giving up is.
+    pub fn still_in(&self, player: PlayerId) -> bool {
+        self.seats().any(|p| p.plays_as == player && !p.forfeited)
+    }
+
+    /// Every row somebody sits in, which is every row that is not a team.
+    ///
+    /// A team has a `Player` row like anybody else — that is what makes it a
+    /// player — so anything counting *people* has to leave them out, or a team
+    /// counts as one of its own members.
+    fn seats(&self) -> impl Iterator<Item = &Player> {
+        self.players.values().filter(|p| !self.sides.contains(&p.id))
+    }
+
+    /// Every number still playing, in order.
+    fn survivors(&self) -> Vec<PlayerId> {
+        let mut left: Vec<PlayerId> =
+            self.seats().filter(|p| !p.forfeited).map(|p| p.plays_as).collect();
+        left.sort_unstable();
+        left.dedup();
+        left
+    }
+
+    /// Give up, for this seat.
+    ///
+    /// Only while a match is running. A world has nothing to concede — there
+    /// is no result — and a gathering match is one you leave rather than lose.
+    pub fn forfeit(&mut self, seat: PlayerId) -> Result<(), String> {
+        if !matches!(self.phase, Phase::Running { .. }) {
+            return Err("no match is running here".into());
+        }
+        let Some(player) = self.players.get_mut(&seat) else {
+            return Err("you are not in this match".into());
+        };
+        if player.forfeited {
+            return Err("you have already given up".into());
+        }
+        player.forfeited = true;
+        let (name, plays) = (player.name.clone(), player.plays_as);
+        log::info!("{seat:?} \"{name}\" gave up");
+        self.lobby_changed = true;
+        // Said out loud when it takes a whole number out, because that is the
+        // moment it changes the match rather than one player's evening.
+        if !self.still_in(plays) {
+            log::info!("{plays:?} is out of match \"{}\"", self.room);
+        }
+        // **And a match with one number left is over.** Checked here rather
+        // than in `decide`, because "one player remains" is only a result when
+        // the others *conceded*: a match that simply started with one player
+        // in it has not been won by anybody, and putting this in `decide`
+        // ended every such match on its first generation.
+        let left = self.survivors();
+        if left.len() <= 1 {
+            let held = self.territory();
+            let winner = left.first().copied();
+            let count = winner.map_or(0, |w| held[w.0 as usize]);
+            self.phase = Phase::Over { winner, held: count, at: self.tick() };
+            log::info!("match \"{}\" ended with everybody else out: {winner:?}", self.room);
+        }
+        Ok(())
+    }
+
+    /// Call it off early, with the score as it stands.
+    ///
+    /// Whoever started the match may end it, which is the same person and the
+    /// same reasoning: they arranged it, so they are the one who can say it is
+    /// over when it has stopped being worth playing. The result is real —
+    /// whoever leads at that moment wins, and it is rated — because a match
+    /// that ends with no result is one nobody can be held to.
+    pub fn end_match(&mut self) -> Result<(), String> {
+        if !matches!(self.phase, Phase::Running { .. }) {
+            return Err("no match is running here".into());
+        }
+        let held = self.territory();
+        let (winner, count) = matches::leader(&held);
+        self.phase = Phase::Over { winner, held: count, at: self.tick() };
+        self.lobby_changed = true;
+        log::info!("match \"{}\" was called off at tick {}", self.room, self.tick());
+        Ok(())
+    }
+
     /// Has this match been decided, and by whom.
     ///
     /// Checked after a step rather than before, so the generation that met the
@@ -876,6 +968,12 @@ impl Server {
                     );
                     return Vec::new();
                 }
+                // And nothing from somebody who has given up: a forfeit is a
+                // seat leaving the match, so it must not go on placing.
+                if from.is_some_and(|seat| self.players.get(&seat).is_some_and(|p| p.forfeited)) {
+                    log::debug!("dropped an action from {from:?}, who gave up");
+                    return Vec::new();
+                }
                 // Nothing happens before the whistle, and nothing after it.
                 // Dropped rather than answered, which is what an action the
                 // server will not take already does -- the client predicted it
@@ -967,8 +1065,17 @@ impl Server {
                 Vec::new()
             }
             // Answered by `Rooms::handle`, which is the only thing that knows
-            // who made a room and so the only thing that can judge this.
-            ClientMessage::Start => Vec::new(),
+            // who made a room and so the only thing that can judge these.
+            ClientMessage::Start | ClientMessage::EndMatch => Vec::new(),
+            // Answered here, because giving up is a thing a seat does to the
+            // room it is in and needs nobody's permission.
+            ClientMessage::Forfeit => {
+                let Some(seat) = from else { return Vec::new() };
+                match self.forfeit(seat) {
+                    Ok(()) => Vec::new(),
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
             // Answered by `Rooms::handle`, which owns the seat this gives up.
             ClientMessage::Leave => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
@@ -1683,6 +1790,108 @@ mod tests {
         assert_eq!(s.value_of(alice), Some(25), "an ally's spending did not come out of the purse");
         assert_eq!(s.value_of(bob), Some(25));
         assert_eq!(s.value_of(carol), Some(0));
+    }
+
+    /// **Giving up is a seat's decision and being out is a player's**, which
+    /// is the distinction a team needs: one of two walking away leaves one
+    /// pair of hands on the team, and the team plays on.
+    #[test]
+    fn one_of_a_team_giving_up_does_not_concede_for_the_team() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 10_000 });
+        s.make_teams(2).unwrap();
+        let teams: Vec<PlayerId> = s.teams().iter().map(|t| t.id).collect();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let (carol, _) = s.join_with("carol", None, None).unwrap();
+        s.join_team(alice, teams[0]).unwrap();
+        s.join_team(bob, teams[0]).unwrap();
+        s.join_team(carol, teams[1]).unwrap();
+        s.start_match(None).unwrap();
+
+        s.forfeit(alice).unwrap();
+        assert!(s.still_in(teams[0]), "a team conceded when one of two gave up");
+        assert!(matches!(s.phase(), Phase::Running { .. }), "and the match stopped");
+        // Twice is not a thing to do, and says so rather than doing nothing.
+        assert!(s.forfeit(alice).is_err());
+
+        // The second of them takes the team out, and with one number left the
+        // match is over and the survivor has won it.
+        s.forfeit(bob).unwrap();
+        assert!(!s.still_in(teams[0]), "a team with nobody on it is still in");
+        assert!(
+            matches!(s.phase(), Phase::Over { winner: Some(w), .. } if *w == teams[1]),
+            "the last team standing did not win: {:?}",
+            s.phase()
+        );
+    }
+
+    /// A match that simply *has* one player in it has not been won by them.
+    /// Putting the survivor check in `decide` ended every such match on its
+    /// first generation.
+    #[test]
+    fn a_match_with_one_player_is_not_over_before_it_begins() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 50 });
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        s.start_match(None).unwrap();
+        s.step();
+        assert!(matches!(s.phase(), Phase::Running { .. }), "{:?}", s.phase());
+        // And giving up when you are the only one there ends it with nobody.
+        s.forfeit(alice).unwrap();
+        assert!(matches!(s.phase(), Phase::Over { winner: None, .. }), "{:?}", s.phase());
+    }
+
+    /// **A seat that gave up stops placing.** A forfeit that left somebody
+    /// able to act would be a concession in the scoreboard and nowhere else.
+    #[test]
+    fn a_seat_that_gave_up_cannot_act() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 10_000 });
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (_bob, _) = s.join_with("bob", None, None).unwrap();
+        s.start_match(None).unwrap();
+        s.credit(alice, 100);
+        let at = crate::net::spawn_for(alice, s.world());
+        let act = || {
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: alice,
+                seat: alice,
+                action: crate::net::Action::Paint {
+                    cells: vec![at],
+                    placement: crate::net::Placement::Life,
+                },
+            })
+        };
+        s.handle(Some(alice), act());
+        assert_eq!(s.pending.len(), 1);
+        s.forfeit(alice).unwrap();
+        s.handle(Some(alice), act());
+        assert_eq!(s.pending.len(), 1, "somebody who gave up went on placing");
+    }
+
+    /// Calling it off is a real result: whoever leads wins it, and it is over
+    /// rather than abandoned. A match nobody can be held to is not one worth
+    /// rating.
+    #[test]
+    fn ending_a_match_early_names_whoever_is_ahead() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 10_000 });
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        s.start_match(None).unwrap();
+        stake(&mut s, alice, (5_000, 5_000), 6);
+        stake(&mut s, bob, (9_000, 9_000), 2);
+
+        s.end_match().unwrap();
+        assert!(
+            matches!(s.phase(), Phase::Over { winner: Some(w), held, .. } if *w == alice && *held == 36),
+            "{:?}",
+            s.phase()
+        );
+        // And only while one is running.
+        assert!(s.end_match().is_err(), "a decided match was ended again");
     }
 
     /// **An action says who sent it as well as what number it carries**, and

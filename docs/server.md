@@ -54,6 +54,18 @@ One purse, and it is the team's own row. `Server::value_of` and `credit` both re
 
 `start_match` refuses a match nobody would want to play: somebody unplaced, or a team with nobody on it. Sizes beyond that are not checked.
 
+### Ending one
+
+Three ways a match finishes, and the phase is the same `Over` for all of them.
+
+Its own condition, which `decide` checks after each step so the generation that met it is the one the score is read from.
+
+**Whoever started it calls it off**, with `ClientMessage::EndMatch` — the same person and the same reasoning as the whistle: they arranged it, so they are the one who can say it has stopped being worth playing. The result is real and is rated, because a match that ends with no result is one nobody can be held to.
+
+**Everybody else gives up.** `ClientMessage::Forfeit` concedes for a **seat**, which is the distinction a team needs — one of three walking away leaves two pairs of hands on the team, and `Server::still_in` says a number is in the match while at least one seat playing it has not conceded. Being *offline* is not being out: a dropped connection is a player who can come back with their token, which is what the token is for. A seat that has given up stops placing, or a concession would show in the scoreboard and nowhere else.
+
+The check for "one number left" lives in `forfeit` and not in `decide`, and that is not tidiness: a match that simply *has* one player in it has not been won by them, and putting it in `decide` ended every such match on its first generation.
+
 ### Watching
 
 `ClientMessage::Watch` takes a room and no seat. `ServerMessage::Watching` answers with the room, its name, its tick and its shape — a `Welcome` without a player, because a spectator has no number, no token, no purse and no spawn, and sending zeroes would have the client draw a purse belonging to nobody.

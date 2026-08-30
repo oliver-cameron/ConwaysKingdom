@@ -510,6 +510,37 @@ impl Rooms {
                 Err(reason) => vec![ServerMessage::NotStarted { reason }],
             };
         }
+        // Calling it off. Judged here for the same reason `Start` is: this is
+        // the only thing that knows who made a room.
+        if let ClientMessage::EndMatch = msg {
+            let Some((room, player)) = caller.seat.as_ref() else {
+                return vec![ServerMessage::NotStarted { reason: "you are not in a match".into() }];
+            };
+            if self.owner.get(room) != Some(player) {
+                return vec![ServerMessage::NotStarted {
+                    reason: match self.owner.get(room) {
+                        Some(_) => "only whoever started this match can end it".into(),
+                        None => "this match is the server's; it ends at the console".into(),
+                    },
+                }];
+            }
+            let room = room.clone();
+            let server = self.rooms.get_mut(&room).expect("a seat names a room that is here");
+            return match server.end_match() {
+                // Nothing to reply: `end_match` sets `lobby_changed`, so the
+                // next step broadcasts the result to everybody in the room,
+                // including whoever pressed it.
+                Ok(()) => {
+                    log::info!(
+                        "connection {} ended match \"{}\"",
+                        caller.connection,
+                        self.name_of(&room)
+                    );
+                    Vec::new()
+                }
+                Err(reason) => vec![ServerMessage::NotStarted { reason }],
+            };
+        }
         // Giving up a seat without closing the socket. Handled here because a
         // seat is this map's business — a `Server` is told who left, it does
         // not find out.

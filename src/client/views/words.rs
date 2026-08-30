@@ -435,6 +435,41 @@ pub mod lobby {
 pub mod hud {
     pub const CONNECTED: &str = "connected";
     pub const OFFLINE: &str = "offline";
+
+    /// The rating, on the HUD, always. It used to appear on the home screen
+    /// and nowhere else, so the number a match is played *for* was the one
+    /// thing you could not see while playing one.
+    ///
+    /// Short, because it sits in a corner beside everything else: "Elo" rather
+    /// than "Rated", which is the word the rest of the screen uses and is two
+    /// characters longer than the space this has.
+    pub fn rating(rating: i32) -> String {
+        format!("Elo {rating}")
+    }
+
+    /// What the last match did to it, kept beside the number for as long as
+    /// the number is on screen. A rating is a comparison, and a comparison
+    /// with nothing to compare against is a score.
+    pub fn rating_change(change: i32) -> String {
+        format!("{change:+}")
+    }
+
+    /// Before there is one. A client that has reached no server has no rating
+    /// rather than a starting number, and saying so is better than showing a
+    /// figure nobody has earned.
+    pub const UNRATED: &str = "Elo --";
+
+    /// Giving up, which is not the same as leaving: the back arrow beside this
+    /// walks out of the room and gives up the seat, and somebody losing a
+    /// match should be able to concede it rather than vanish from it.
+    pub const FORFEIT: &str = "Give up";
+    pub const FORFEIT_HINT: &str =
+        "Concede this match. Your team plays on if anyone is left on it.";
+    pub const GAVE_UP: &str = "you gave up";
+    /// Only for whoever started it, which is the same person and the same
+    /// reasoning as the whistle.
+    pub const END_MATCH: &str = "End match";
+    pub const END_MATCH_HINT: &str = "Call it off now. Whoever leads wins, and it is rated.";
     pub const HOLDING: &str = "ground held";
     /// The arrow out. A glyph rather than the word, because it sits beside a
     /// player's name in a row that is already full.

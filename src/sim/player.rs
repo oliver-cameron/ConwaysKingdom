@@ -108,6 +108,16 @@ pub struct Player {
     /// still a player: it plays, it holds ground, it comes back with its
     /// token. What it cannot do is carry anything that outlives the room.
     pub person: Option<String>,
+    /// Whether this seat has given up.
+    ///
+    /// **A seat, not a player**, which is the distinction a team needs: one
+    /// person walking away from a two-person team does not concede for the
+    /// team, it leaves one pair of hands on it. A number is out of the match
+    /// when nobody is left playing it — see `Server::still_in`.
+    ///
+    /// Not saved, like the phase and the teams: a match is an event rather
+    /// than a world to keep, and `Rooms::save` skips one.
+    pub forfeited: bool,
 }
 
 impl Player {
@@ -126,6 +136,7 @@ impl Player {
             token: String::new(),
             online: true,
             person: None,
+            forfeited: false,
         }
     }
 }

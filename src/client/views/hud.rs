@@ -52,6 +52,39 @@ pub struct Status<'a> {
     /// than once: a spectator whose clicks do nothing needs to know why the
     /// first time and not the fifth.
     pub watching: bool,
+    /// This player's rating, and what the last match did to it.
+    ///
+    /// **Always on screen**, which it was not: it lived on the home screen, so
+    /// the number a match is played *for* was the one thing you could not see
+    /// while playing one. `None` until a server has said — a client that has
+    /// reached nobody has no rating rather than a starting figure.
+    pub rating: Option<(i32, Option<i32>)>,
+    /// Whether a match is running here, which is what makes giving up and
+    /// calling it off mean anything.
+    pub in_a_match: bool,
+    /// Whether this client may call the match off: it started it.
+    pub started_it: bool,
+    /// Whether this seat has already given up, so the control says so rather
+    /// than offering to do it twice.
+    pub forfeited: bool,
+}
+
+/// What a press on the HUD meant.
+///
+/// **The HUD and not a panel**, because there is nowhere else during a running
+/// match: the lobby draws for `Gathering` and `Over` only — a panel over a
+/// live game is the thing it exists to avoid — and the back arrow beside these
+/// *leaves the room*, giving up the seat. Somebody who wants out of a match
+/// they are losing should be able to concede it rather than walk out of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Did {
+    Nothing,
+    /// Leave the room entirely.
+    Back,
+    /// Give up, for this seat.
+    Forfeit,
+    /// Call the whole match off, with the score as it stands.
+    EndMatch,
 }
 
 /// Whether the panel shows what it shows for a developer rather than a player.
@@ -71,8 +104,8 @@ pub fn show(
     ctx: &egui::Context,
     theme: &crate::client::views::theme::Theme,
     status: &Status<'_>,
-) -> (Option<egui::Rect>, bool) {
-    let mut back = false;
+) -> (Option<egui::Rect>, Did) {
+    let mut did = Did::Nothing;
     let response = egui::Window::new("kingdom")
         .title_bar(false)
         .resizable(false)
@@ -108,7 +141,7 @@ pub fn show(
                 );
                 crate::client::views::icons::back(ui.painter(), rect.shrink(5.0), ink);
                 if response.on_hover_text(words::BACK_HINT).clicked() {
-                    back = true;
+                    did = Did::Back;
                 }
                 // The same colour the shader gives this player's cells, so the
                 // swatch and the board cannot disagree about who is who.
@@ -165,6 +198,22 @@ pub fn show(
                     );
                 }
             });
+            // The rating, on its own line and always. A change rides beside it
+            // in the colour of its sign, because a rating is a comparison and
+            // the direction is the half people actually read.
+            ui.horizontal(|ui| match status.rating {
+                Some((rating, change)) => {
+                    ui.label(words::rating(rating));
+                    if let Some(change) = change.filter(|&c| c != 0) {
+                        let colour =
+                            if change > 0 { theme.palette.good } else { theme.palette.bad };
+                        ui.colored_label(colour, words::rating_change(change));
+                    }
+                }
+                None => {
+                    ui.colored_label(theme.palette.text_dim, words::UNRATED);
+                }
+            });
             ui.small(match status.world {
                 WorldKind::Infinite => words::BOUNDLESS.to_string(),
                 WorldKind::Toroidal { rows, cols } => {
@@ -173,6 +222,33 @@ pub fn show(
             });
             if let Some(notice) = status.notice {
                 ui.colored_label(theme.palette.bad, notice);
+            }
+
+            // **Getting out of a match, as against getting out of the room.**
+            // The arrow at the top leaves entirely, giving up the seat; these
+            // two say how the match itself ends. Only while one is running,
+            // because neither means anything otherwise.
+            if status.in_a_match {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if status.forfeited {
+                        ui.colored_label(theme.palette.text_dim, words::GAVE_UP);
+                    } else if ui
+                        .small_button(words::FORFEIT)
+                        .on_hover_text(words::FORFEIT_HINT)
+                        .clicked()
+                    {
+                        did = Did::Forfeit;
+                    }
+                    if status.started_it
+                        && ui
+                            .small_button(words::END_MATCH)
+                            .on_hover_text(words::END_MATCH_HINT)
+                            .clicked()
+                    {
+                        did = Did::EndMatch;
+                    }
+                });
             }
 
             if DEBUG {
@@ -196,7 +272,7 @@ pub fn show(
                 }
             }
         });
-    (response.map(|r| r.response.rect), back)
+    (response.map(|r| r.response.rect), did)
 }
 
 /// Who is winning, as bars.
