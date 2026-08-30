@@ -773,7 +773,7 @@ impl Server {
     pub(crate) fn credit(&mut self, player: PlayerId, delta: i32) {
         let purse = self.plays_as(player);
         if let Some(row) = self.players.get_mut(&purse) {
-            row.value += delta;
+            row.value = (row.value + delta).clamp(0, Player::MAX_VALUE);
         }
     }
 
@@ -1229,7 +1229,10 @@ impl Server {
                 // when it cannot be paid; a drain arrives whether or not there
                 // is anything to take it from, and a player in debt would be a
                 // player who cannot act and has no way to stop owing.
-                player.value = (player.value + earned).max(0);
+                // And capped, which is a rule rather than a display: income
+                // runs away from a big player, so `Player::MAX_VALUE` is a
+                // ceiling on hoarding while there is nothing better.
+                player.value = (player.value + earned).clamp(0, Player::MAX_VALUE);
             }
         }
 

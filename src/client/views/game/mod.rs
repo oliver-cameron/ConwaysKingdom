@@ -696,7 +696,8 @@ impl GameApp {
     /// A prediction, and a low one: only the mines in chunks this client holds
     /// are counted. `Purse` is what makes it right again.
     fn bank(&mut self, mined: &crate::sim::Mined) {
-        self.value = (self.value + crate::net::earnings(mined, self.player())).max(0);
+        self.value =
+            (self.value + crate::net::earnings(mined, self.player())).clamp(0, Player::MAX_VALUE);
     }
 
     /// Drain the socket and fold what arrived into the local world.
@@ -1069,7 +1070,7 @@ impl GameApp {
                         // it against.
                         if Some(stamped.player) == self.plays_as {
                             let delta = crate::net::value_delta(&self.world, stamped);
-                            self.value = (self.value + delta).max(0);
+                            self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
                         }
                         crate::net::apply(&mut self.world, stamped);
                     }
@@ -1104,7 +1105,7 @@ impl GameApp {
                         crate::net::apply(&mut self.world, &stamped);
                         if Some(stamped.player) == self.plays_as {
                             let delta = crate::net::value_delta(&self.world, &stamped);
-                            self.value = (self.value + delta).max(0);
+                            self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
                         }
                         self.applied_early.push(stamped);
                     }
@@ -1193,7 +1194,7 @@ impl GameApp {
             return;
         }
         self.notice = None;
-        self.value += delta;
+        self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
         self.commit(&stamped);
         self.last_action = Some(format!("{shape}, {delta:+}"));
     }

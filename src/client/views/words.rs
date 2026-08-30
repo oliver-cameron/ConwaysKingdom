@@ -297,7 +297,9 @@ pub mod hotbar {
     /// number rather than heading a section, and a capital would make each of
     /// them look like the start of something.
     pub const PURSE: &str = "purse";
-    pub const HELD: &str = "held";
+    /// What you hold, which is territory. "held" was the field's own name and
+    /// said nothing about what was being held.
+    pub const GROUND: &str = "ground";
     pub const TICK: &str = "tick";
     pub const RATING: &str = "elo";
 

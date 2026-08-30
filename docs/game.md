@@ -53,6 +53,8 @@ A corpse whose ground decays away is never charged at all, because nobody owns i
 
 Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_UPKEEP` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
 
+Value is capped at **`Player::MAX_VALUE`**, six figures, and floored at zero. The ceiling is a rule rather than a display: mining pays on birth and births scale with a growing pattern, so income runs away from a big player and nothing in the rules pushes back — see [depleted mines](planned.md#depleted-mines), which is the shape of a proper answer. This is the blunt half of it, and it does the second job of making the figure a fixed six columns on the bar.
+
 Value is floored at zero. A cost that comes from an action is refused when it cannot be paid; a drain arrives whether or not there is anything to take it from, and a player in debt would be one who cannot act and has no way to stop owing.
 
 A mine's corpse keeps its kind, as any cell does — so ground a mine died on shows the mine sprite, and life born there from an ordinary parent is ordinary. Placing plain Life over it explicitly sets the kind back to normal, or drawing over a mine's corpse would hand you a free mine.
@@ -396,6 +398,8 @@ The address is **replaced, not pushed**. A client that pushed every screen chang
 Two places, split by whether you **watch** it.
 
 The four figures that change while you play — your purse, the ground you hold, the tick and your rating — are a segment at the left end of the **hotbar**, beside a stripe in the colour the shader gives your cells. They were in the HUD, in the opposite corner from the squares and the pointer, which put the numbers you read most furthest from where you play. Each is the figure first and bigger with a quiet word under it: at a glance the number is what is being read and the word is what makes it mean something.
+
+**Monospaced, and padded to their width.** These change every generation, and a proportional digit is a different width from its neighbour — so the figure grew and shrank, the label under it slid about, and the eye re-found both every time. Leading zeroes rather than spaces, because a leading space reads as the number having moved. A word each for now; [icons](planned.md#icons-on-the-bar) would be better and are what they are waiting for.
 
 The **HUD** keeps what is about the connection and the room: whether the link is up and how well it is keeping up, which room, whether the world wraps, what the last match did to your rating, **who is winning**, and why the last action was refused. None of that is watched, which is what makes a corner the right place for it.
 

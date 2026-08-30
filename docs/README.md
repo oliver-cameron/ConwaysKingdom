@@ -11,6 +11,7 @@
 | [planned.md](planned.md) | What is not built yet, and what is left of what is — a status per entry |
 | [inspiration.md](inspiration.md) | Where the design is borrowed from, and which problem each source solved |
 | [gotchas.md](gotchas.md) | Things that cost a day, so they only cost one |
+| [../design-notes/](../design-notes/) | The working behind the decisions: cell layout, residency, topology, compute |
 | [known-bugs.md](known-bugs.md) | What is wrong and not fixed, with what you would see |
 
 ## Running it

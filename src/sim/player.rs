@@ -125,6 +125,9 @@ impl Player {
     /// in [`crate::sim::rule`], which is where anybody balancing the game
     /// looks.
     pub const STARTING_VALUE: i32 = super::rule::STARTING_VALUE;
+    /// The most anybody may hold, which is a rule and also what makes the
+    /// figure a fixed six columns on the bar. See `rule::MAX_VALUE`.
+    pub const MAX_VALUE: i32 = super::rule::MAX_VALUE;
 
     pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
         Self {

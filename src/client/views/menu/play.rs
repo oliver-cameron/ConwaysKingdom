@@ -598,39 +598,64 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
             }
         });
 
+        // **The size lives inside the button, not under it.** A world that
+        // wraps has a shape and a world that does not has none, so the two
+        // fields belong to the *option* rather than to the row — under it they
+        // read as another question, and which of the two buttons they belonged
+        // to was a matter of guessing from how far left they started.
+        //
+        // So the chosen option is a panel in the accent and the fields sit on
+        // it. Pressing anywhere on the panel that is not a field chooses it,
+        // which is what makes it still a button.
         ui.vertical(|ui| {
             ui.set_width(each);
-            if ui
-                .add_sized([each, m.button_height], toggle(theme, words::make::WRAPPING, wrapping))
-                .clicked()
-            {
-                draft.shape = Shape::Wrapping;
-            }
-            if wrapping {
-                ui.add_space(m.item_spacing);
-                ui.horizontal_top(|ui| {
-                    let half = (ui.available_width() - m.item_spacing) / 2.0;
-                    for (label, field) in
-                        [(words::make::ROWS, &mut draft.rows), (words::make::COLS, &mut draft.cols)]
-                    {
-                        ui.vertical(|ui| {
-                            ui.set_width(half);
-                            ui.colored_label(
-                                p.text_dim,
-                                egui::RichText::new(label).size(m.text_small),
-                            );
-                            ui.add(
-                                egui::TextEdit::singleline(field)
-                                    .desired_width(f32::INFINITY)
-                                    .horizontal_align(egui::Align::Center),
-                            );
+            let chosen = egui::Frame::new()
+                .fill(if wrapping { p.accent } else { p.surface })
+                .stroke(egui::Stroke::new(1.0, p.line))
+                .corner_radius(m.rounding)
+                .inner_margin(m.panel_padding * 0.5)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.vertical_centered(|ui| {
+                        ui.colored_label(
+                            if wrapping { p.ground } else { p.text },
+                            egui::RichText::new(words::make::WRAPPING).size(m.text_small),
+                        );
+                    });
+                    if wrapping {
+                        ui.add_space(m.item_spacing * 0.5);
+                        ui.horizontal_top(|ui| {
+                            let half = (ui.available_width() - m.item_spacing) / 2.0;
+                            for (label, field) in [
+                                (words::make::ROWS, &mut draft.rows),
+                                (words::make::COLS, &mut draft.cols),
+                            ] {
+                                ui.vertical(|ui| {
+                                    ui.set_width(half);
+                                    // On the accent, so the quiet colour the
+                                    // label wears elsewhere would be unreadable.
+                                    ui.colored_label(
+                                        p.ground,
+                                        egui::RichText::new(label).size(m.text_small),
+                                    );
+                                    ui.add(
+                                        egui::TextEdit::singleline(field)
+                                            .desired_width(f32::INFINITY)
+                                            .horizontal_align(egui::Align::Center),
+                                    );
+                                });
+                            }
                         });
+                        ui.colored_label(
+                            p.ground,
+                            egui::RichText::new(words::make::SIZE_NOTE).size(m.text_small),
+                        );
                     }
                 });
-                ui.colored_label(
-                    p.text_dim,
-                    egui::RichText::new(words::make::SIZE_NOTE).size(m.text_small),
-                );
+            // The panel itself, minus whatever a field claimed: clicking a
+            // number must edit it rather than re-choose the option it is on.
+            if chosen.response.interact(egui::Sense::click()).clicked() {
+                draft.shape = Shape::Wrapping;
             }
         });
     });

@@ -82,6 +82,18 @@ pub const DEFAULT_TORUS: (i32, i32) = (12, 12);
 
 /// What a player joins with. Zero in a match; see `server::matches`.
 pub const STARTING_VALUE: i32 = 100;
+/// The most anybody may hold: six figures.
+///
+/// **A ceiling on hoarding, not on earning.** Mining pays on birth and births
+/// scale with a growing pattern, so income runs away from a big player and
+/// there is nothing in the rules pushing back — see [depleted mines], which is
+/// the shape of a proper answer. This is the blunt half of it, and it does two
+/// things at once: it stops a purse nobody could ever spend, and it makes the
+/// figure a fixed six columns wide, which is what lets the bar draw it without
+/// the number changing size under the reader's eye.
+///
+/// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
+pub const MAX_VALUE: i32 = 999_999;
 /// One cell of life.
 pub const LIFE_COST: i32 = 1;
 /// One mine.

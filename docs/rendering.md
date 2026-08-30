@@ -51,6 +51,10 @@ It used to be a quad per chunk, and the visible chunk count grows as the square 
 
 ## Sprites
 
+**Two typefaces**, `assets/fonts/`: IBM Plex Sans for everything and IBM Plex Mono for the figures on the bar and the key list, under the SIL Open Font License in `LICENSE.txt` beside them. Bundled rather than asked of the system — a browser has no font to lend, and a client that looked different on every machine would make every screenshot of a bug a screenshot of a different client. They go in *front* of the faces egui ships rather than instead of them, because the fallbacks are what draw a character Plex does not have and a missing-glyph box is worse than a glyph in the wrong face.
+
+The monospace is doing work rather than decoration. A number that changes every generation in a proportional face is a number whose width changes with it, so the label under it slides about and the eye re-finds it every time; in a monospaced one the digits sit in columns and only the digits move.
+
 **One sheet**, `assets/sprites/sheet.png`: 256×256, a 16×16 grid of 16×16 tiles. A cell's tile byte is the index into it — low nibble across, high nibble down — and that byte already carries alive, ice, kind and age, so there is nothing to look up.
 
 The fields are placed so the sheet reads as a grid rather than as a list. Alive and ice are the bottom two bits, so a kind's **four states are four columns**; age is the low three bits of the high nibble, so its **eight ages are eight rows** under them. The kind's third bit is the top bit of the byte, which splits the sheet in half: kinds 0–3 above, 4–7 below.

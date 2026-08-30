@@ -200,6 +200,36 @@ fn claims(panels: &[egui::Rect], pointer: egui::Pos2) -> bool {
     panels.iter().any(|panel| panel.contains(pointer))
 }
 
+/// **IBM Plex, both faces**, in place of the two egui ships with.
+///
+/// Sans for everything and Mono for the figures on the bar — and the mono is
+/// the reason there is a decision here at all. A number that changes every
+/// generation in a proportional face is a number whose width changes with it,
+/// so the label under it slides about and the eye re-finds it every time; in a
+/// monospaced one the digits sit in columns and only the digits move. The same
+/// argument is why the key list is monospaced.
+///
+/// Bundled rather than asked of the system: a browser has no font to lend, and
+/// a client that looked different on every machine would make every screenshot
+/// of a bug a screenshot of a different client. They are `assets/fonts/`, under
+/// the SIL Open Font License in `LICENSE.txt` beside them.
+fn install_fonts(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions, FontFamily};
+    let mut fonts = FontDefinitions::default();
+    for (name, bytes) in [
+        ("plex", &include_bytes!("../../../assets/fonts/IBMPlexSans-Regular.ttf")[..]),
+        ("plex-mono", &include_bytes!("../../../assets/fonts/IBMPlexMono-Regular.ttf")[..]),
+    ] {
+        fonts.font_data.insert(name.into(), std::sync::Arc::new(FontData::from_static(bytes)));
+    }
+    // In front of what egui ships, rather than instead of it: the fallbacks
+    // are what draw a character Plex does not have, and a missing glyph box is
+    // worse than a glyph in the wrong face.
+    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "plex".into());
+    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "plex-mono".into());
+    ctx.set_fonts(fonts);
+}
+
 /// What a view drew, and what it was told while drawing it.
 ///
 /// **One shape for every view**, because they all answer the same two
@@ -250,6 +280,7 @@ impl Views {
         let ctx = egui::Context::default();
         let theme = theme::Theme::default();
         // Once, not per frame: egui keeps its style between passes.
+        install_fonts(&ctx);
         theme.apply(&ctx);
         Self {
             ctx,

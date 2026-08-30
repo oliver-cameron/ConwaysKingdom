@@ -16,6 +16,9 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 | | status | |
 |---|---|---|
+| [What to do next](#what-to-do-next) | — | a reading of this list, in order |
+| [Player profiles](#player-profiles) | Decided | a person, rather than a seat in one room |
+| [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Payloads](#payloads) | Decided | a cell that explodes after a while |
 | [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
@@ -58,6 +61,51 @@ The goal of detonation is to make the surrounding area look like random noise. O
 *Closeness* is of the form $\frac{1}{\delta x ^ 2 | \delta y ^ 2 + D}$, where `D` is some constant. Score is multiplied by this.
 
 This makes the surrounding area more random.
+## What to do next
+
+A reading of the rest of this file, in the order the things depend on each other rather than in the order they were thought of. Nothing here is new; what it adds is which one unblocks the most.
+
+**1. [Player profiles](#player-profiles).** Three separate entries are waiting on the same missing idea — a person who is not a seat. [Rating](#rating) has nowhere to key a leaderboard; the rejoin token is filed per room and per client, so two servers with a room called `main` share one secret; the stamp library is per browser, so playing on a laptop and a phone is two libraries. `net::auth` already mints a keypair and `server::people` is already a table to key by. This is the one that turns three half-features into one.
+
+**2. [The session comes out of the game view](#the-session-comes-out-of-the-game-view).** `client::views::game` is the largest file in the crate and none of the part that talks to a server is testable, because it shares a struct with the sprite atlas. `Ui` came out of it recently and that was the easy half. Everything else on this list that touches the client is harder for as long as this is undone.
+
+**3. [Depleted mines](#depleted-mines).** The economy has no ceiling that is not the blunt one — `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. This is a small change with a real effect on how the game plays, and it needs nothing else first.
+
+**4. [Payloads](#payloads).** The age field exists for this and nothing uses it. It is the first *new* thing the cell can do since ice, and unlike most of this list it is a rule rather than plumbing.
+
+**5. [The mercy rule](#the-mercy-rule).** Now cheaper than it was: forfeiting already turns a seat off, `Server::still_in` already asks whether a number has anybody playing it, and what is left is noticing that somebody *cannot* act rather than waiting for them to say so.
+
+Not next, and worth saying why. [The simulation on the GPU](#the-simulation-on-the-gpu) is a large piece of work whose benefit begins at a world size nobody has run. [A leaderboard](#rating) is behind profiles. [Mobile](#mobile) is a layout problem that wants the interface to stop moving first, and it has been moving all week.
+
+## Player profiles
+
+**A person, rather than a seat in one room.** Everything a player accumulates is currently filed somewhere that does not survive the thing it should: a `PlayerId` is a seat in one world, a rejoin token is per room, a rating is per server, and a stamp library is per browser. Somebody who plays two games on two machines is four different people to this code.
+
+The identity exists already: `net::auth` mints an ed25519 keypair, the client keeps it, and `Join` carries a signature over the server's challenge — so a server can already say *which person* is asking. `server::people` is the table. What is missing is everything that should be filed against it.
+
+**What moves onto a profile**
+
+- The **rating**, which is [already keyed by person](#rating) on one server and has nowhere to live across several.
+- The **record** — games played, largest territory, matches won — which `client::record` keeps per client and files under a room's display name, so two servers' `arena` are one line of history.
+- The **stamp library**, which is per browser today: a laptop and a phone are two libraries, and pinning is a fact about a machine rather than about a player.
+- The **rejoin token**, or rather its replacement: if the server knows who you are from your key, a per-room secret is a second answer to a question already answered.
+
+**What does not**
+
+The `PlayerId` in a cell. That is four bits and a seat in one world, and it must stay that: a profile is a fact about a person and a cell's owner is a fact about a square, and the whole reason territory works is that the second is small enough to sit in a byte. A profile is looked up *from* a seat, never stored in one.
+
+**What it runs into**
+
+Where a profile lives. On the server it is one more table beside `people` and `ratings`, and it is per server — which is most of what is wrong today, just moved. Across servers it is a distributed identity problem, and [many servers](#many-servers-and-what-must-not-be-decentralised) already says what must not be attempted. The honest first step is per server and keyed by person, which fixes the rating and the record and leaves the stamp library where it is.
+
+## Icons on the bar
+
+The four figures on the hotbar are labelled with a word each — `purse`, `ground`, `tick`, `elo`. A picture would be better: the words are read once and then ignored, they take a line of height that a picture would not, and three of the four are already drawn somewhere in the game.
+
+`views::icons` already tints the sprite sheet on the CPU the way the shader tints it on the GPU, so a cell can be drawn on a button; a purse and a clock are not cells and would be the first art in the client that is not a cell. That is the decision this is waiting on — a second sheet, or a handful of shapes painted with `egui::Painter` the way `icons::back` is.
+
+`icons::back` is the precedent and the argument for painting them: the arrow it replaced was a character in a font this client does not load, and the one control whose job is to be recognised at a glance was drawn as a square until somebody painted it.
+
 ## Depleted mines
 
 **The problem is that mine income scales faster than size.** A mine pays when one of its kind is *born*, and births scale with the perimeter of a growing pattern — so a player with four times the territory does not earn four times as much, they earn more than that, and they can spend it on more territory. Nothing in the rules pushes back.
@@ -80,7 +128,7 @@ How much is "past some point", and whether depletion is a count of births or of 
 
 ## The simulation on the GPU
 
-**Costed, not started.** The full working is in `design-notes/05-compute-feasibility.md`, which sits beside this repository rather than in it; the parts that decide anything are here.
+**Costed, not started.** The full working is in [design-notes/05-compute-feasibility.md](../design-notes/05-compute-feasibility.md); the parts that decide anything are here.
 
 `Rg8Uint` **cannot be a compute shader's output.** wgpu's guaranteed format features give it `msaa | attachment` and no `STORAGE_BINDING`, and a compute shader can only write to a storage texture. So moving the simulation onto the GPU means changing the cell's texture format first: `Rgba8Uint` is the natural one — storage-capable, and four independent `u8`s where the cell already wants fields — or `R32Uint`, which is fully read-write and has atomics at the cost of packing by hand.
 

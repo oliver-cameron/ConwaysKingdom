@@ -486,11 +486,19 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
     // A number and what it is, the number first and bigger: at a glance the
     // figure is what is being read and the word is what makes it mean
     // something, so the word is the quiet half.
-    let stat = |ui: &mut egui::Ui, what: &str, value: String, ink: egui::Color32| {
+    //
+    // **Monospaced and padded to its width.** These change every generation,
+    // and a proportional digit is a different width from its neighbour — so
+    // the figure grew and shrank, the label under it slid about, and the eye
+    // re-found both every time. Padded with leading zeroes rather than spaces
+    // because the column has to be the same width whatever is in it and a
+    // leading space reads as the number having moved.
+    let stat = |ui: &mut egui::Ui, what: &str, value: u64, digits: usize, ink: egui::Color32| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.colored_label(ink, egui::RichText::new(value).size(m.text_body).strong());
-            ui.colored_label(p.text_dim, egui::RichText::new(what).size(m.text_small));
+            let text = format!("{value:0>digits$}");
+            ui.colored_label(ink, egui::RichText::new(text).monospace().size(m.text_body).strong());
+            ui.colored_label(p.text_dim, egui::RichText::new(what).monospace().size(m.text_small));
         });
     };
     segment(ui, theme, |ui| {
@@ -499,15 +507,17 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
         ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(r, g, b));
         ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
 
-        stat(ui, words::PURSE, format!("{}", status.value), p.accent);
-        let held: u32 = status
+        // Six figures, which is what `Player::MAX_VALUE` allows and therefore
+        // what the column has to be wide enough for.
+        stat(ui, words::PURSE, status.value.max(0) as u64, 6, p.accent);
+        let ground: u32 = status
             .standing
             .iter()
             .find(|(id, _)| *id == status.player)
             .map(|(_, n)| *n)
             .unwrap_or(0);
-        stat(ui, words::HELD, format!("{held}"), p.text);
-        stat(ui, words::TICK, format!("{}", status.generation), p.text);
+        stat(ui, words::GROUND, ground as u64, 6, p.text);
+        stat(ui, words::TICK, status.generation, 6, p.text);
         // Silent when there is none: a client that has reached no server has
         // no rating rather than a starting figure, and a dash where a number
         // goes is one more thing to read.
@@ -517,7 +527,7 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
                 Some(c) if c < 0 => p.bad,
                 _ => p.text,
             };
-            stat(ui, words::RATING, format!("{rating}"), ink);
+            stat(ui, words::RATING, rating.max(0) as u64, 4, ink);
         }
     });
 }
