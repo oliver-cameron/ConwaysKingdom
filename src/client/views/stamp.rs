@@ -245,6 +245,9 @@ impl Stamp {
 ///
 /// Returns what the player asked for, if anything.
 fn pad(
+    // Which library entry the pad is redrawing, so `keep` can say it replaces
+    // rather than adds. See [`Editing`].
+    editing: Editing,
     ui: &mut egui::Ui,
     theme: &Theme,
     sketch: &mut Sketch,
@@ -325,7 +328,10 @@ fn pad(
                 sketch.clear();
             }
         });
-        ui.small(words::DRAW_HOW);
+        // Which of the two this is. Keeping while editing replaces the stamp
+        // that was opened, and that is worth saying before the press rather
+        // than being noticed afterwards.
+        ui.small(if editing.is_some() { words::EDITING } else { words::DRAW_HOW });
     });
 
     asked
@@ -426,6 +432,20 @@ impl Sketch {
         }
     }
 
+    /// A stamp on the pad, centred, so editing one starts from what it is.
+    ///
+    /// Centred rather than at the origin because the pad is a fixed square and
+    /// a pattern drawn against its top-left has nowhere to grow up or left.
+    pub fn of(stamp: &Stamp) -> Self {
+        let mut pad = Self::default();
+        let (top, left) =
+            ((SKETCH_N - stamp.size.0).max(0) / 2, (SKETCH_N - stamp.size.1).max(0) / 2);
+        for &(r, c) in &stamp.cells {
+            pad.lay(r + top, c + left);
+        }
+        pad
+    }
+
     pub fn clear(&mut self) {
         self.cells.fill(false);
     }
@@ -467,6 +487,18 @@ pub struct Library {
 const SAVED: &str = "ck-stamps-1";
 
 impl Library {
+    /// What was kept last time, or an empty library.
+    pub fn remembered() -> Self {
+        Self::read(&crate::net::keep::stamps())
+    }
+
+    /// Write it down. Called after every change rather than on the way out: a
+    /// browser gives no reliable moment to save at, which is the same reason
+    /// `client::record` writes when a game ends.
+    pub fn remember(&self) {
+        crate::net::keep::remember_stamps(&self.written());
+    }
+
     pub fn keep(&mut self, stamp: Stamp) {
         self.stamps.insert(0, stamp);
     }
@@ -623,8 +655,21 @@ pub enum Picked {
     Forget(usize),
     /// A pattern drawn on the pad rather than taken off the board.
     Keep(Stamp),
+    /// Put this one on the hotbar, or take it off.
+    Pin(usize, bool),
+    /// Call it something.
+    Rename(usize, String),
+    /// Load it into the pad to be redrawn. Kept in place when it comes back.
+    Edit(usize),
     Close,
 }
+
+/// The pad's contents, and which library entry they came from.
+///
+/// `Some` means the next `Keep` replaces that entry rather than adding one, so
+/// correcting a cell does not leave the old version behind and does not send
+/// the corrected one to the top of the library and off the bar.
+pub type Editing = Option<usize>;
 
 /// The whole library, for when there are more stamps than the bar can hold.
 ///
@@ -641,6 +686,11 @@ pub fn show(
     what: Placement,
     player: PlayerId,
     sheet: Option<egui::TextureId>,
+    // What is being typed into a name box. Held by the client because this
+    // panel is rebuilt every frame and a half-typed name would vanish between
+    // two of them — the same reason a team's name is.
+    naming: &mut Option<(usize, String)>,
+    editing: Editing,
 ) -> (Picked, Option<egui::Rect>) {
     let p = theme.palette;
     let m = theme.metrics;
@@ -683,15 +733,62 @@ pub fn show(
                                 if response.clicked() {
                                     picked = Picked::Hold(i);
                                 }
-                                ui.colored_label(
-                                    p.text_dim,
-                                    format!("{}  ·  {} cells", stamp.name, stamp.cells.len()),
-                                );
+                                match naming {
+                                    // Being renamed: the field replaces the
+                                    // label, so the row keeps its height and
+                                    // nothing below it moves while somebody
+                                    // types.
+                                    Some((at, text)) if *at == i => {
+                                        let field = ui.add_sized(
+                                            [110.0, m.button_height],
+                                            egui::TextEdit::singleline(text),
+                                        );
+                                        let done = field.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                        if done || ui.small_button(words::KEEP_NAME).clicked() {
+                                            picked = Picked::Rename(i, text.clone());
+                                        }
+                                    }
+                                    _ => {
+                                        if ui
+                                            .selectable_label(
+                                                false,
+                                                format!(
+                                                    "{}  ·  {} cells",
+                                                    stamp.name,
+                                                    stamp.cells.len()
+                                                ),
+                                            )
+                                            .on_hover_text(words::RENAME_HINT)
+                                            .clicked()
+                                        {
+                                            *naming = Some((i, stamp.name.clone()));
+                                        }
+                                    }
+                                }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         if ui.small_button(words::FORGET).clicked() {
                                             picked = Picked::Forget(i);
+                                        }
+                                        if ui
+                                            .small_button(words::EDIT)
+                                            .on_hover_text(words::EDIT_HINT)
+                                            .clicked()
+                                        {
+                                            picked = Picked::Edit(i);
+                                        }
+                                        // The bar has ten squares, so the
+                                        // eleventh pin is refused rather than
+                                        // silently doing nothing.
+                                        let mut on = stamp.on_bar;
+                                        if ui
+                                            .checkbox(&mut on, words::ON_BAR)
+                                            .on_hover_text(words::ON_BAR_HINT)
+                                            .changed()
+                                        {
+                                            picked = Picked::Pin(i, on);
                                         }
                                     },
                                 );
@@ -701,7 +798,7 @@ pub fn show(
 
                     ui.separator();
                     ui.label(words::DRAW);
-                    if let Some(drawn) = pad(ui, theme, sketch, what, player, sheet) {
+                    if let Some(drawn) = pad(editing, ui, theme, sketch, what, player, sheet) {
                         picked = drawn;
                     }
 
@@ -721,6 +818,129 @@ pub fn show(
 
 #[cfg(test)]
 mod tests {
+
+    fn stamp(name: &str, cells: &[(i32, i32)]) -> Stamp {
+        let mut s = Stamp::trimmed(cells.to_vec());
+        s.name = name.into();
+        s
+    }
+
+    /// A library survives a session, so what is written has to read back as
+    /// what was written — names, shapes and which are on the bar.
+    #[test]
+    fn a_library_survives_being_written_down() {
+        let mut library = Library::default();
+        library.keep(stamp("glider", &[(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)]));
+        library.keep(stamp("block", &[(0, 0), (0, 1), (1, 0), (1, 1)]));
+        assert!(library.pin(0, true));
+
+        let back = Library::read(&library.written());
+        assert_eq!(back.len(), 2);
+        for i in 0..2 {
+            let (a, b) = (library.get(i).unwrap(), back.get(i).unwrap());
+            assert_eq!(
+                (&a.name, &a.cells, a.size, a.on_bar),
+                (&b.name, &b.cells, b.size, b.on_bar)
+            );
+        }
+        assert_eq!(back.bar(), vec![0], "the pin did not survive");
+    }
+
+    /// Nothing to read is an empty library rather than a panic, and so is
+    /// anything this does not recognise — a file written by a later build, or
+    /// one somebody edited.
+    #[test]
+    fn an_unreadable_library_is_an_empty_one() {
+        for text in ["", "ck-stamps-99\nglider\t-\t0,0", "nonsense", "ck-stamps-1"] {
+            assert!(Library::read(text).is_empty(), "{text:?}");
+        }
+        // A bad line is skipped and the rest is kept, because losing a whole
+        // library to one malformed row is the wrong trade.
+        let mixed = "ck-stamps-1\nbad\n-\nfine\tbar\t0,0 1,1";
+        let back = Library::read(mixed);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back.get(0).unwrap().name, "fine");
+    }
+
+    /// **Nothing pinned is the newest ten**, which is what the bar always
+    /// showed; pin one and the bar is exactly what is pinned. Half a rule —
+    /// pins first, then the newest of the rest — would reshuffle the bar under
+    /// somebody's fingers every time they captured something.
+    #[test]
+    fn the_bar_is_what_is_pinned_or_the_newest_ten() {
+        let mut library = Library::default();
+        for i in 0..12 {
+            library.keep(stamp(&format!("s{i}"), &[(0, 0)]));
+        }
+        assert_eq!(library.bar(), (0..ON_THE_BAR).collect::<Vec<_>>());
+
+        assert!(library.pin(11, true));
+        assert!(library.pin(4, true));
+        assert_eq!(library.bar(), vec![4, 11], "a pinned bar is only what is pinned");
+
+        assert!(library.pin(4, false));
+        assert_eq!(library.bar(), vec![11]);
+        assert!(library.pin(11, false));
+        assert_eq!(library.bar(), (0..ON_THE_BAR).collect::<Vec<_>>(), "back to the newest ten");
+    }
+
+    /// The bar has ten squares, so the eleventh pin is refused rather than
+    /// silently doing nothing.
+    #[test]
+    fn the_bar_holds_ten_and_says_so() {
+        let mut library = Library::default();
+        for i in 0..12 {
+            library.keep(stamp(&format!("s{i}"), &[(0, 0)]));
+        }
+        for i in 0..ON_THE_BAR {
+            assert!(library.pin(i, true), "pin {i} was refused");
+        }
+        assert!(!library.pin(ON_THE_BAR, true), "an eleventh pin was accepted");
+        assert_eq!(library.bar().len(), ON_THE_BAR);
+    }
+
+    /// **Editing keeps its place and its pin.** A stamp that jumped to the top
+    /// of the library and off the bar every time its owner corrected a cell is
+    /// a stamp nobody corrects twice.
+    #[test]
+    fn editing_a_stamp_leaves_it_where_it_was() {
+        let mut library = Library::default();
+        library.keep(stamp("old", &[(0, 0)]));
+        library.keep(stamp("first", &[(0, 0)]));
+        assert!(library.pin(1, true));
+
+        library.replace(1, stamp("ignored", &[(0, 0), (0, 1), (1, 0)]));
+        let edited = library.get(1).unwrap();
+        assert_eq!(edited.cells.len(), 3, "the new shape was not taken");
+        assert_eq!(edited.name, "old", "editing renamed it");
+        assert!(edited.on_bar, "editing knocked it off the bar");
+        assert_eq!(library.len(), 2, "editing added a second copy");
+    }
+
+    /// A name reaches a file and a row of a list, so what cannot go in either
+    /// is taken out rather than written and read back differently.
+    #[test]
+    fn a_name_is_tidied_before_it_is_kept() {
+        let mut library = Library::default();
+        library.keep(stamp("x", &[(0, 0)]));
+        library.rename(0, "  a\tname\nwith\tjunk  ");
+        assert!(!library.get(0).unwrap().name.contains('\t'));
+        library.rename(0, "   ");
+        assert_eq!(library.get(0).unwrap().name, "unnamed", "a blank name is not a name");
+        // And it survives the round trip it was tidied for.
+        library.rename(0, "glider gun");
+        assert_eq!(Library::read(&library.written()).get(0).unwrap().name, "glider gun");
+    }
+
+    /// The pad opens on what a stamp is, so editing starts from the pattern
+    /// rather than from nothing.
+    #[test]
+    fn the_pad_opens_on_the_stamp_being_edited() {
+        let glider = stamp("glider", &[(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)]);
+        let pad = Sketch::of(&glider);
+        let back = pad.to_stamp().expect("the pad was empty");
+        assert_eq!(back.cells, glider.cells, "the shape changed on the way to the pad");
+    }
     use super::*;
     use crate::sim::Kind;
 

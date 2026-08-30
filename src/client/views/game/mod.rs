@@ -357,6 +357,12 @@ pub struct GameApp {
     /// frame, and a name half-typed would vanish between two of them — the
     /// same reason `sketch` lives here.
     naming_team: Option<(PlayerId, String)>,
+    /// What is being typed into a stamp's name box, held here for the reason
+    /// [`Self::naming_team`] is.
+    naming_stamp: Option<(usize, String)>,
+    /// Which stamp the pad is editing, so keeping replaces it rather than
+    /// adding a second copy. See [`stamp::Editing`].
+    editing_stamp: stamp::Editing,
     /// Whether this seat has given up, as the server last said.
     ///
     /// Held so the control can say so rather than offer to concede twice, and
@@ -2216,7 +2222,7 @@ impl App for GameApp {
             cursor: (0.0, 0.0),
             pending: None,
             held: Held::default(),
-            stamps: stamp::Library::default(),
+            stamps: stamp::Library::remembered(),
             icons: icons::Icons::default(),
             picking_stamp: false,
             standing: Vec::new(),
@@ -2224,6 +2230,8 @@ impl App for GameApp {
             said_where: None,
             helping: false,
             naming_team: None,
+            naming_stamp: None,
+            editing_stamp: None,
             refused_start: None,
             forfeited: false,
             in_play: None,
@@ -2397,6 +2405,8 @@ impl App for GameApp {
         // `views`. A half-typed side name has to survive the frame it is being
         // typed in, so it cannot live in the panel that is rebuilt each time.
         let mut naming = std::mem::take(&mut self.naming_team);
+        let mut naming_stamp = std::mem::take(&mut self.naming_stamp);
+        let editing = self.editing_stamp;
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
         // Taken out for the frame for the same reason the screen is: the
         // closure needs `&mut` on it while `self` is already borrowed by
@@ -2492,6 +2502,8 @@ impl App for GameApp {
                                 what,
                                 me,
                                 sheet,
+                                &mut naming_stamp,
+                                editing,
                             );
                             from_library = chose;
                             return [hud_rect, bar.rect, rect, waiting, clock_rect]
@@ -2518,6 +2530,7 @@ impl App for GameApp {
         });
         self.screen = screen;
         self.naming_team = naming;
+        self.naming_stamp = naming_stamp;
         self.chose(chose);
         if let Some(key) = picked {
             self.pick(key);
@@ -2533,14 +2546,47 @@ impl App for GameApp {
             // pattern than the one that was on screen a moment ago.
             stamp::Picked::Forget(i) => {
                 self.stamps.forget(i);
+                self.stamps.remember();
+                self.naming_stamp = None;
+                self.editing_stamp = None;
                 self.held.shape = hotbar::Shape::default();
+            }
+            stamp::Picked::Pin(i, on) => {
+                if self.stamps.pin(i, on) {
+                    self.stamps.remember();
+                } else {
+                    self.notice = Some(words::stamps::BAR_FULL.into());
+                }
+            }
+            stamp::Picked::Rename(i, name) => {
+                self.stamps.rename(i, &name);
+                self.stamps.remember();
+                self.naming_stamp = None;
+            }
+            // Onto the pad, and remembered as the one being edited so that
+            // keeping puts it back rather than leaving the old one beside it.
+            stamp::Picked::Edit(i) => {
+                if let Some(stamp) = self.stamps.get(i) {
+                    self.sketch = stamp::Sketch::of(stamp);
+                    self.editing_stamp = Some(i);
+                }
             }
             // Kept where a captured one is kept, and held straight away: you
             // drew it because you meant to place it.
             stamp::Picked::Keep(stamp) => {
                 let (name, cells) = (stamp.name.clone(), stamp.cells.len());
-                self.stamps.keep(stamp);
-                self.held.shape = hotbar::Shape::Stamp(0);
+                let held = match self.editing_stamp.take() {
+                    Some(i) => {
+                        self.stamps.replace(i, stamp);
+                        i
+                    }
+                    None => {
+                        self.stamps.keep(stamp);
+                        0
+                    }
+                };
+                self.stamps.remember();
+                self.held.shape = hotbar::Shape::Stamp(held);
                 self.notice = Some(words::stamps::captured(&name, cells));
             }
             stamp::Picked::Close => self.picking_stamp = false,

@@ -340,6 +340,16 @@ pub mod stamps {
     pub const DRAW: &str = "Draw one";
     pub const KEEP: &str = "keep";
     pub const CLEAR: &str = "clear";
+    /// The library survives a session, so a stamp is worth naming.
+    pub const KEEP_NAME: &str = "ok";
+    pub const RENAME_HINT: &str = "Click to rename";
+    pub const EDIT: &str = "edit";
+    pub const EDIT_HINT: &str = "Open it on the pad. Keeping puts it back where it was.";
+    pub const ON_BAR: &str = "bar";
+    pub const ON_BAR_HINT: &str = "Show it on the hotbar. Pin none and the bar is the newest ten.";
+    pub const BAR_FULL: &str = "the bar holds ten";
+    /// Editing one rather than drawing a new one, so `keep` means replace.
+    pub const EDITING: &str = "editing";
     pub const DRAW_HOW: &str = "Click to lay a cell or lift it, drag to lay a run.";
 
     pub fn captured(name: &str, cells: usize) -> String {

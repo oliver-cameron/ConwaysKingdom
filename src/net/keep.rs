@@ -203,7 +203,7 @@ pub fn forget_key() {
 /// directory somebody may have pointed elsewhere with [`keep_in`]. Removing
 /// what is ours is the only thing that is ours to do.
 pub fn forget_everything() {
-    for field in [KEY_FIELD, "name", "server", "games", "last-room"] {
+    for field in [KEY_FIELD, "name", "server", "games", "stamps", "last-room"] {
         set(field, "");
     }
     imp::forget_tokens();
@@ -232,6 +232,19 @@ pub fn games() -> String {
 
 pub fn remember_games(lines: &str) {
     set("games", lines);
+}
+
+/// The stamp library, as `client::views::stamp::Library` writes it.
+///
+/// Same untrimmed read as [`games`] and for the same reason: the format is the
+/// library's business, and a blank one and an unreadable one both mean an
+/// empty library.
+pub fn stamps() -> String {
+    imp::get(&field("stamps")).unwrap_or_default()
+}
+
+pub fn remember_stamps(text: &str) {
+    set("stamps", text);
 }
 
 /// The field name, so the one caller that needs an untrimmed value can ask for

@@ -333,7 +333,6 @@ pub fn show(
                 ui.set_min_height(m.slot + m.panel_padding * 1.2 + 2.0);
 
                 // Add player colour, show stats for total territory and $. Also show generation number.
-                let painter = ui.painter();
                 segment(ui, theme, |ui| {
                     ui.vertical(|ui| {
                         let value = status.value;
