@@ -127,8 +127,12 @@ pub mod menu {
                  become somebody else. Whoever has it is you, on every server, \
                  and nobody can give it back.";
             pub const KEY_TAKE: &str = "Use this key";
+            /// A key is made at startup, so this is the store refusing it or
+            /// there being no entropy to make one from — and the consequence
+            /// is worth stating rather than the absence.
             pub const KEY_NONE: &str =
-                "No key yet. One is made for you the first time you reach a server.";
+                "No key could be made or kept here, so this client is somebody new \
+                 everywhere it goes.";
 
             pub const FORGET: &str = "Forget everything";
             pub const FORGET_NOTE: &str =

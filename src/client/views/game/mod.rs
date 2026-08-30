@@ -2123,6 +2123,17 @@ impl GameApp {
 
 impl App for GameApp {
     fn init(gpu: &GpuState) -> Self {
+        // **Who this client is, before it is anything else.** Minted here
+        // rather than on the first join, because the key is what a record and
+        // a stamp library are filed against and both of those exist before a
+        // server has been reached — and because the settings screen had
+        // nothing to show until somebody had already played somewhere, which
+        // is exactly when carrying an identity to another machine stops being
+        // possible and starts being a repair job.
+        match crate::net::keep::key_or_new() {
+            Some(key) => log::info!("this client is {}", key.id()),
+            None => log::warn!("no key: this client will be somebody new everywhere it goes"),
+        }
         // Where to go, or whether to ask. A destination stated on a command
         // line or in a link is a choice already made; anything else opens the
         // menu, which is the only way a room can be chosen without a terminal.

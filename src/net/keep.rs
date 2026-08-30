@@ -159,12 +159,21 @@ pub fn key() -> Option<Key> {
 
 /// The key this client will use, making one if it has none.
 ///
-/// **Made on first use rather than at startup**, because a client that never
-/// reaches a server never needs one and a key made in a browser that cannot
-/// store it is a new person every visit. Returns `None` where there is no
-/// entropy to make one from, which on the web means a page with no `crypto` —
-/// and a client with no key still plays, it is just nobody the server will
-/// remember.
+/// **Made at startup, not on the first join.** It used to be made on first
+/// use, on the reasoning that a client which never reaches a server never
+/// needs one — and that stopped being true when the key became the thing
+/// everything is filed against. A record of games played and a library of
+/// stamps both exist without a server ever being reached, and both want an
+/// owner; see [profiles]. Until this ran at startup there was also nothing for
+/// the settings screen to show, so the one control that lets somebody carry
+/// their identity to another machine was blank until they had already played
+/// somewhere.
+///
+/// Returns `None` where there is no entropy to make one from, which on the web
+/// means a page with no `crypto`. A client with no key still plays; it is just
+/// nobody a server will remember.
+///
+/// [profiles]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#player-profiles
 pub fn key_or_new() -> Option<Key> {
     if let Some(key) = key() {
         return Some(key);

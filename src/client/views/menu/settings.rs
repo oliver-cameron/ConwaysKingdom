@@ -21,9 +21,11 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     ui.add_space(m.item_spacing * 2.0);
     ui.label(egui::RichText::new(words::home::settings::KEY).size(m.text_small));
     let Some(mine) = crate::net::keep::key() else {
-        // A key is made on the first join rather than at startup, so a client
-        // that has never reached a server has none and saying so is the whole
-        // answer.
+        // A key is made at startup now, so reaching this means the store
+        // refused it or there was no entropy to make one from — a browser with
+        // no `crypto`, or one with storage switched off. Rare, and worth saying
+        // rather than showing a blank panel: the consequence is that this
+        // client is somebody new everywhere it goes.
         ui.small(words::home::settings::KEY_NONE);
         return Chose::Nothing;
     };
