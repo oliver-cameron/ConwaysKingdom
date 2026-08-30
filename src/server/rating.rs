@@ -91,7 +91,7 @@ pub struct Entrant {
     ///
     /// Two entrants sharing a side are never rated against each other. There
     /// is no result between them to rate: they won or lost the same match.
-    pub side: u8,
+    pub team: u8,
     /// What that **side** scored. Compared between sides and never within one,
     /// so two allies with wildly different ground still take the same result,
     /// which is what being on a side means.
@@ -144,7 +144,7 @@ pub fn deltas(entrants: &[Entrant]) -> Vec<i32> {
     entrants
         .iter()
         .map(|me| {
-            let opponents = entrants.iter().filter(|them| them.side != me.side);
+            let opponents = entrants.iter().filter(|them| them.team != me.team);
             let (mut expectation, mut actual, mut count) = (0.0, 0.0, 0usize);
             for them in opponents {
                 expectation += expected(me.rating, them.rating);
@@ -180,7 +180,7 @@ mod tests {
         ratings_and_scores
             .iter()
             .enumerate()
-            .map(|(i, &(rating, score))| Entrant { rating, side: i as u8, score })
+            .map(|(i, &(rating, score))| Entrant { rating, team: i as u8, score })
             .collect()
     }
 
@@ -279,10 +279,10 @@ mod tests {
         // Two on a side. The winning side scored more ground; both of its
         // members beat both of the other side's.
         let match_ = [
-            Entrant { rating: 1200, side: 1, score: 40 },
-            Entrant { rating: 1200, side: 1, score: 40 },
-            Entrant { rating: 1200, side: 2, score: 10 },
-            Entrant { rating: 1200, side: 2, score: 10 },
+            Entrant { rating: 1200, team: 1, score: 40 },
+            Entrant { rating: 1200, team: 1, score: 40 },
+            Entrant { rating: 1200, team: 2, score: 10 },
+            Entrant { rating: 1200, team: 2, score: 10 },
         ];
         let d = deltas(&match_);
         assert_eq!(d[0], d[1], "allies on equal ratings took different results");
@@ -294,10 +294,10 @@ mod tests {
         // side's score is what is compared, so the two differ only by what
         // their own ratings predicted.
         let mixed = [
-            Entrant { rating: 1000, side: 1, score: 40 },
-            Entrant { rating: 1400, side: 1, score: 40 },
-            Entrant { rating: 1200, side: 2, score: 10 },
-            Entrant { rating: 1200, side: 2, score: 10 },
+            Entrant { rating: 1000, team: 1, score: 40 },
+            Entrant { rating: 1400, team: 1, score: 40 },
+            Entrant { rating: 1200, team: 2, score: 10 },
+            Entrant { rating: 1200, team: 2, score: 10 },
         ];
         let d = deltas(&mixed);
         assert!(d[0] > d[1], "the underrated ally should gain more for the same win: {d:?}");
@@ -310,8 +310,8 @@ mod tests {
         assert_eq!(deltas(&ffa(&[(1200, 9)])), vec![0]);
         assert_eq!(deltas(&[]), Vec::<i32>::new());
         let one_side = [
-            Entrant { rating: 1200, side: 1, score: 9 },
-            Entrant { rating: 1400, side: 1, score: 4 },
+            Entrant { rating: 1200, team: 1, score: 9 },
+            Entrant { rating: 1400, team: 1, score: 4 },
         ];
         assert_eq!(deltas(&one_side), vec![0, 0]);
     }
@@ -323,7 +323,7 @@ mod tests {
         // Against an equal, so there is a full loss to take: nobody loses much
         // to somebody they were never expected to beat.
         let hopeless =
-            [Entrant { rating: 3, side: 1, score: 0 }, Entrant { rating: 3, side: 2, score: 500 }];
+            [Entrant { rating: 3, team: 1, score: 0 }, Entrant { rating: 3, team: 2, score: 500 }];
         assert_eq!(after(&hopeless)[0], 0, "a rating went below nought");
         assert_eq!(after(&hopeless)[1], 19);
     }
@@ -338,8 +338,8 @@ mod tests {
             // Two wins in three, for ever.
             let (mine, theirs) = if game % 3 == 2 { (4, 9) } else { (9, 4) };
             let after = after(&[
-                Entrant { rating: me, side: 1, score: mine },
-                Entrant { rating: them, side: 2, score: theirs },
+                Entrant { rating: me, team: 1, score: mine },
+                Entrant { rating: them, team: 2, score: theirs },
             ]);
             (me, them) = (after[0], after[1]);
         }

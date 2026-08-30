@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(cup.parse().unwrap().2, Some(Victory::Territory { squares: 500 }));
         assert_eq!(cup.parse().unwrap().3, None, "a match is solo unless asked otherwise");
 
-        // Sides, and only on a match: a world has no result for a side to win.
+        // Teams, and only on a match: a world has no result for a team to win.
         let sided = Draft {
             name: "cup".into(),
             ends: Ends::Timer,

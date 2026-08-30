@@ -31,50 +31,16 @@ impl Victory {
 
 /// Who is holding the most, and how much. `None` when nobody holds anything.
 ///
+/// **A side counts as one because a side is one**: everybody on it places
+/// cells carrying its number, so the count under that number is already the
+/// side's total. There used to be a `leader_of` beside this that took the
+/// roster's allegiances and summed each side by hand; the two answers are the
+/// same answer now.
+///
 /// Ties go to the **lower player number**, which is arbitrary and has to be
 /// something: two players on exactly the same count is a real possibility on a
 /// small world, and a winner picked by iteration order would differ between
 /// runs of the same match.
-/// Who is winning, with a side counted as one.
-///
-/// In a free-for-all this is [`leader`] exactly. In a team match every ally's
-/// ground is summed, and the winner named is the **highest-scoring member of
-/// the winning side** — because everything downstream, from `Phase::Over` to
-/// the result panel, is written in terms of a player, and a side has a name
-/// the client can look up from that player's team.
-///
-/// Ties go to the lower player number for the same reason [`leader`] does:
-/// two sides on exactly the same count is a real possibility on a small world,
-/// and a winner picked by iteration order would differ between runs.
-pub fn leader_of(
-    held: &[usize; PlayerId::COUNT],
-    sides: &crate::net::Sides,
-) -> (Option<PlayerId>, usize) {
-    if !sides.any() {
-        return leader(held);
-    }
-    let mut best: (Option<PlayerId>, usize) = (None, 0);
-    for id in (1..PlayerId::COUNT).map(|i| PlayerId(i as u8)) {
-        let team = sides.team_of(id);
-        if team.is_none() {
-            continue;
-        }
-        let total: usize = sides.members(team).iter().map(|&p| held[p.0 as usize]).sum();
-        if total > best.1 {
-            // The side's best-held player stands for the side, so that a
-            // result written in terms of one player names somebody who
-            // actually did something.
-            let face = sides
-                .members(team)
-                .into_iter()
-                .max_by_key(|&p| (held[p.0 as usize], std::cmp::Reverse(p.0)))
-                .unwrap_or(id);
-            best = (Some(face), total);
-        }
-    }
-    best
-}
-
 pub fn leader(held: &[usize; PlayerId::COUNT]) -> (Option<PlayerId>, usize) {
     let mut best = (None, 0);
     for (id, &count) in held.iter().enumerate().skip(1) {

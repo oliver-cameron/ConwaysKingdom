@@ -36,12 +36,12 @@ pub struct Ratings {
 
 /// One person's result out of a finished match, before their rating is known.
 ///
-/// The server holds the seat, the side and the ground; the rating is this
+/// The server holds the seat, the team and the ground; the rating is this
 /// table's business, which is why the two are put together here rather than by
 /// whatever noticed the match was over.
 pub struct Finisher {
     pub who: PersonId,
-    pub side: u8,
+    pub team: u8,
     pub score: usize,
 }
 
@@ -79,7 +79,7 @@ impl Ratings {
     pub fn settle(&mut self, finishers: &[Finisher]) -> Vec<(PersonId, i32)> {
         let entrants: Vec<Entrant> = finishers
             .iter()
-            .map(|f| Entrant { rating: self.of(&f.who), side: f.side, score: f.score })
+            .map(|f| Entrant { rating: self.of(&f.who), team: f.team, score: f.score })
             .collect();
         let mut moved = Vec::new();
         for (finisher, delta) in finishers.iter().zip(rating::deltas(&entrants)) {
@@ -148,8 +148,8 @@ mod tests {
         PersonId(format!("{n}{}", "0".repeat(64 - n.len())))
     }
 
-    fn solo(name: &str, side: u8, score: usize) -> Finisher {
-        Finisher { who: who(name), side, score }
+    fn solo(name: &str, team: u8, score: usize) -> Finisher {
+        Finisher { who: who(name), team, score }
     }
 
     /// Somebody this server has never rated is on the starting number rather

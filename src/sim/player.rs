@@ -50,6 +50,24 @@ impl PlayerId {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Player {
     pub id: PlayerId,
+    /// **The number this seat's cells carry.** The same as [`Self::id`] in a
+    /// free-for-all, where a seat and the player it plays as are one thing.
+    ///
+    /// In a match with sides they are not, because **a side is a player**: it
+    /// has a number of its own, cells carrying that number, one purse and one
+    /// patch of granted ground, and everybody on it places as that number. So
+    /// two allies are not two players who may build on each other's squares —
+    /// they are one player with two people at the controls, and every rule
+    /// that used to ask "are these two allied" is a `==` again.
+    ///
+    /// A seat keeps everything else that is its own: its name, its token, its
+    /// record, and the person sitting in it. What it lends to the side is only
+    /// the cells.
+    ///
+    /// Not saved. A match is never written to disk — see `Rooms::save` — so a
+    /// player read back from a file plays as themselves, which is what a
+    /// player in a world does anyway.
+    pub plays_as: PlayerId,
     pub name: String,
     /// Tick this player was last heard from, for timing out a dead
     /// connection. A plain counter here so `sim` owes `net` nothing.
@@ -101,6 +119,7 @@ impl Player {
     pub fn new(id: PlayerId, name: impl Into<String>) -> Self {
         Self {
             id,
+            plays_as: id,
             name: name.into(),
             last_seen: 0,
             value: Self::STARTING_VALUE,

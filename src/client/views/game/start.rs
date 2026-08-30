@@ -182,12 +182,12 @@ pub(crate) fn solo_world() -> (World, (f32, f32)) {
     // needs the grant a server would have made. Without it there is no
     // opening move: nothing is owned, so nothing may be placed, so nothing
     // ever comes to own anything.
-    // Offline is a game of one, so there are no sides to seat by.
-    crate::net::grant(&mut world, PlayerId(1), &crate::net::Sides::SOLO);
+    // Offline is a game of one, and a game of one has no teams to seat by.
+    crate::net::grant(&mut world, PlayerId(1));
     // And look at it. Where a grant lands depends on the shape of the world,
     // so this is read back rather than assumed -- the same reason `Welcome`
     // carries the spawn for a connected client.
-    let home = middle_of(crate::net::spawn_for(PlayerId(1), &world, &crate::net::Sides::SOLO));
+    let home = middle_of(crate::net::spawn_for(PlayerId(1), &world));
     (world, home)
 }
 

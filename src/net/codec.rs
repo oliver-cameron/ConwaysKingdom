@@ -103,8 +103,8 @@ mod tests {
             ClientMessage::Leave,
             ClientMessage::Start,
             ClientMessage::Watch { room: "r-abc234".into() },
-            ClientMessage::TakeSide { team: crate::net::TeamId(2) },
-            ClientMessage::NameSide { team: crate::net::TeamId(1), name: "Reds".into() },
+            ClientMessage::JoinTeam { team: PlayerId(2) },
+            ClientMessage::NameTeam { team: PlayerId(1), name: "Reds".into() },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -118,7 +118,6 @@ mod tests {
             // Most first, and a player holding nothing is simply absent.
             // A decided match, which is the shape with the most in it.
             ServerMessage::Match {
-                sides: crate::net::Sides::SOLO,
                 teams: Vec::new(),
                 started_by: None,
                 owner: None,
@@ -132,7 +131,6 @@ mod tests {
                 players: vec![(PlayerId(1), "alice".into()), (PlayerId(4), "bob".into())],
             },
             ServerMessage::Match {
-                sides: crate::net::Sides::SOLO,
                 teams: Vec::new(),
                 started_by: None,
                 owner: None,

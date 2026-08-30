@@ -144,9 +144,8 @@ struct Lobby {
     phase: crate::net::MatchPhase,
     victory: Option<crate::net::Victory>,
     players: Vec<(PlayerId, String)>,
-    /// Who is on whose side.
-    sides: crate::net::Sides,
-    /// The sides, their names and who is on them. Empty in a free-for-all.
+    /// The teams, their names and who is at each one's controls. Empty in a
+    /// free-for-all.
     teams: Vec<crate::net::Team>,
     /// Whose match it is: the player who may start it. `None` for one the
     /// console made, which starts at the console.
@@ -160,11 +159,12 @@ struct Lobby {
 }
 
 impl Lobby {
-    /// The hue table, worked out once when the lobby arrives rather than every
-    /// frame: a member's place in their team's family depends on who else is
-    /// on it, so it is a pass over the roster and not a lookup.
+    /// The hue table. A constant now — a team is a player and therefore one
+    /// colour, so nothing about it depends on who else is in the room. It used
+    /// to be a pass over the roster, because a member's place inside its
+    /// team's family of hue depended on how many members there were.
     fn hues(&self) -> [f32; PlayerId::COUNT] {
-        crate::client::views::hue::table(&self.sides)
+        crate::client::views::hue::table()
     }
 
     fn look<'a>(&'a self, me: PlayerId, hues: &'a [f32; PlayerId::COUNT]) -> lobby_view::Look<'a> {
@@ -175,7 +175,6 @@ impl Lobby {
             players: &self.players,
             owner: self.owner,
             started_by: self.started_by,
-            sides: self.sides,
             teams: &self.teams,
             code: self.code.as_deref(),
             hues,
@@ -351,15 +350,21 @@ pub struct GameApp {
     /// Here rather than in the lobby panel because that panel is rebuilt every
     /// frame, and a name half-typed would vanish between two of them — the
     /// same reason `sketch` lives here.
-    naming_side: Option<(crate::net::TeamId, String)>,
-    /// Who is on whose side, as the server last said.
+    naming_team: Option<(PlayerId, String)>,
+    /// **The number this client's cells carry**, which in a team match is the
+    /// team's and not this seat's.
     ///
-    /// Every placement is priced and refused against this, so a client without
-    /// it would disagree with the server on every square near a teammate.
-    /// `Sides::SOLO` offline and in a free-for-all, where it says exactly what
-    /// it did before teams existed: you are allied with yourself and nobody
-    /// else.
-    sides: crate::net::Sides,
+    /// A team is a player and several clients are connected to it, so this is
+    /// the whole of what a client has to know about teams: who it is playing
+    /// as. Everything downstream — what it may place, what that costs, which
+    /// of the actions coming back are its own — asks this and never asks who
+    /// is allied with whom, because there is nobody to be allied with.
+    ///
+    /// Equal to [`Self::me`] offline, in a free-for-all, and in a match nobody
+    /// has picked teams in. What used to be here was the whole roster's
+    /// allegiances, copied off the wire so the client could price a placement
+    /// beside a teammate the way the server would.
+    plays_as: Option<PlayerId>,
     /// The game being played, if there is one, waiting to be filed.
     ///
     /// Committed when the room ends for this client — a different `Welcome`, a
@@ -394,9 +399,8 @@ impl GameApp {
         // Recomputed here rather than cached, because `write_camera` runs
         // only when the camera has moved -- not every frame -- and a pass over
         // sixteen players is nothing beside the buffer write it rides on.
-        let uniform = self
-            .camera
-            .uniform(!gpu.config.format.is_srgb(), &crate::client::views::hue::table(&self.sides));
+        let uniform =
+            self.camera.uniform(!gpu.config.format.is_srgb(), &crate::client::views::hue::table());
         gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
@@ -424,8 +428,10 @@ impl GameApp {
 
     /// Who we are. Before the server has said, we are player one — offline is
     /// a game of one rather than a game of nobody.
+    /// The number this client places under: its team's in a match, its own
+    /// otherwise. Every rule takes this and knows nothing about teams.
     fn player(&self) -> PlayerId {
-        self.me.unwrap_or(PlayerId(1))
+        self.plays_as.or(self.me).unwrap_or(PlayerId(1))
     }
 }
 
@@ -688,6 +694,7 @@ impl GameApp {
                     // the server knows is gone.
                     self.value = value;
                     self.me = Some(you);
+                    self.plays_as = Some(you);
                     self.watching = false;
                     self.room = Some(room);
                     self.room_name = Some(name);
@@ -789,7 +796,7 @@ impl GameApp {
                 // it existed -- it is stale by the time it matters, which is
                 // why this used to need a reload.
                 ServerMessage::Spawned { player, at } => {
-                    if Some(player) == self.me {
+                    if Some(player) == self.plays_as {
                         log::info!("granted ground at {at:?}");
                         self.camera.centre = middle_of(at);
                         self.camera.dirty = true;
@@ -811,7 +818,6 @@ impl GameApp {
                 // player who has lost every square drops out of the list and a
                 // merge would leave their last bar standing forever.
                 ServerMessage::Match {
-                    sides,
                     teams,
                     started_by,
                     owner,
@@ -827,34 +833,30 @@ impl GameApp {
                     if let (crate::net::MatchPhase::Over { winner, .. }, Some(live)) =
                         (&phase, self.in_play.as_mut())
                     {
-                        live.decided(*winner == self.me && self.me.is_some());
+                        live.decided(*winner == self.plays_as && self.plays_as.is_some());
                     }
-                    // Kept on the app as well as in the lobby, because every
-                    // placement is priced against it -- the lobby is where it
-                    // is *shown*, and prediction is where it is *used*.
+                    // **Which player this client is now.** Joining a team is
+                    // taking the controls of the team's player, so from here
+                    // on this client's cells carry the team's number: what it
+                    // may place, what that costs and which of the actions
+                    // coming back are its own all follow from this one line.
                     //
-                    // A change of teams is a change of colour for everybody on
-                    // the board, and the colours ride in the camera uniform,
-                    // so the camera is written again. `dirty` is how that is
-                    // asked for; it costs one buffer write on a frame where
-                    // somebody in the lobby pressed a button.
-                    if self.sides != sides {
-                        self.camera.dirty = true;
-                    }
-                    self.sides = sides;
-                    self.lobby = Some(Lobby {
-                        sides,
-                        teams,
-                        phase,
-                        victory,
-                        players,
-                        owner,
-                        started_by,
-                        code,
-                    });
+                    // Read out of the roster rather than sent per connection,
+                    // because `Match` is broadcast to the whole room and a
+                    // field naming one recipient would be wrong for the rest.
+                    // A seat on no team plays as itself, which is what a
+                    // free-for-all is.
+                    self.plays_as = self
+                        .me
+                        .map(|me| {
+                            teams.iter().find(|t| t.players.contains(&me)).map_or(me, |t| t.id)
+                        })
+                        .or(self.plays_as);
+                    self.lobby =
+                        Some(Lobby { teams, phase, victory, players, owner, started_by, code });
                 }
                 ServerMessage::Standing { held, .. } => {
-                    if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.me) {
+                    if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.plays_as) {
                         live.holding(
                             held.iter().find(|(id, _)| *id == me).map(|(_, n)| *n).unwrap_or(0),
                         );
@@ -973,7 +975,7 @@ impl GameApp {
                     // always had -- the same cells, a generation out, which the
                     // checkpoint puts right -- instead of a different pattern
                     // that the rules then build on.
-                    for stamped in actions.iter().filter(|s| Some(s.player) != self.me) {
+                    for stamped in actions.iter().filter(|s| Some(s.player) != self.plays_as) {
                         crate::net::apply(&mut self.world, stamped);
                     }
                     self.advance_to(tick);
@@ -1079,9 +1081,7 @@ impl GameApp {
         let outside = |cells: &[(i32, i32)]| {
             cells
                 .iter()
-                .filter(|&&(r, c)| {
-                    !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
-                })
+                .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
                 .count()
         };
         match drag.stroke {
@@ -1233,7 +1233,7 @@ impl GameApp {
             Action::Paint { cells, placement }
         };
         let stamped = Stamped { tick: self.world.generation, player: self.player(), action };
-        let delta = crate::net::value_delta(&self.world, &self.sides, &stamped);
+        let delta = crate::net::value_delta(&self.world, &stamped);
         (stamped, delta)
     }
 
@@ -1334,9 +1334,7 @@ impl GameApp {
         let delta = self.quote_as(laid.clone(), false, what).1;
         let stray = laid
             .iter()
-            .filter(|&&(r, c)| {
-                !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
-            })
+            .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
             .count();
 
         let allowed = stray == 0 && self.value + delta >= 0;
@@ -1410,7 +1408,7 @@ impl GameApp {
         // the same terms the server refuses it, so the answer is instant
         // rather than a round trip away. Taking back what is already there is
         // not placing and is not confined.
-        if !already_there && !crate::net::may_place(&self.world, player, &self.sides, row, col) {
+        if !already_there && !crate::net::may_place(&self.world, player, row, col) {
             self.notice = Some(words::refused::not_your_territory(row, col));
             self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
             return;
@@ -1509,9 +1507,7 @@ impl GameApp {
         let cells: usize = stamp.cells.len();
         let stray = laid
             .iter()
-            .filter(|&&(r, c)| {
-                !crate::net::may_place(&self.world, self.player(), &self.sides, r, c)
-            })
+            .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
             .count();
         if stray > 0 {
             self.notice = Some(words::refused::cells_not_yours(stray));
@@ -2124,10 +2120,10 @@ impl App for GameApp {
             icons: icons::Icons::default(),
             picking_stamp: false,
             standing: Vec::new(),
-            sides: crate::net::Sides::SOLO,
+            plays_as: None,
             said_where: None,
             helping: false,
-            naming_side: None,
+            naming_team: None,
             in_play: None,
             geiger: Default::default(),
             sketch: stamp::Sketch::default(),
@@ -2270,7 +2266,7 @@ impl App for GameApp {
         // are: the closure needs `&mut` on it while `self` is borrowed by
         // `views`. A half-typed side name has to survive the frame it is being
         // typed in, so it cannot live in the panel that is rebuilt each time.
-        let mut naming = std::mem::take(&mut self.naming_side);
+        let mut naming = std::mem::take(&mut self.naming_team);
         let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
         // Taken out for the frame for the same reason the screen is: the
         // closure needs `&mut` on it while `self` is already borrowed by
@@ -2387,7 +2383,7 @@ impl App for GameApp {
             rects
         });
         self.screen = screen;
-        self.naming_side = naming;
+        self.naming_team = naming;
         self.chose(chose);
         if let Some(key) = picked {
             self.pick(key);
@@ -2433,14 +2429,14 @@ impl App for GameApp {
             // Both answer by broadcast: the server changes who is on what and
             // the next lobby message says so, to everybody at once, which is
             // what a lobby full of people all changing sides needs.
-            lobby_view::Did::TakeSide(team) => {
+            lobby_view::Did::JoinTeam(team) => {
                 if let Some(link) = &self.link {
-                    link.send(ClientMessage::TakeSide { team });
+                    link.send(ClientMessage::JoinTeam { team });
                 }
             }
-            lobby_view::Did::NameSide(team, name) => {
+            lobby_view::Did::NameTeam(team, name) => {
                 if let Some(link) = &self.link {
-                    link.send(ClientMessage::NameSide { team, name });
+                    link.send(ClientMessage::NameTeam { team, name });
                 }
             }
         }

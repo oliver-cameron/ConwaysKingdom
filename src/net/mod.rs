@@ -131,39 +131,20 @@ pub fn room_name(raw: &str) -> Result<RoomName, String> {
     Ok(name)
 }
 
-/// Which side a player is on.
-///
-/// **Nought is nobody's**, which is both a solo match and a player in a team
-/// match who has not picked a side yet. That one value doing both jobs is what
-/// keeps the rest simple: `Sides::allied` says two players build on each
-/// other's ground only if their team is the same *and* not nought, so a solo
-/// match and an unpicked player fall out of the same line without either being
-/// a special case.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
-pub struct TeamId(pub u8);
-
-impl TeamId {
-    /// Nobody's side.
-    pub const NONE: Self = Self(0);
-
-    pub fn is_none(self) -> bool {
-        self.0 == 0
-    }
-}
-
 /// The most sides a match may have.
 ///
-/// Eight, against fifteen seats — so the smallest interesting team match is
-/// eight of one, which is not a team match, and the cap is really about the
-/// **colour**: allies have to read as allies at a glance across a screen of
-/// cells, which means a family of hue per side, and eight families is already
-/// crowding a wheel that holds sixteen distinct hues with difficulty. See
-/// [planned.md].
+/// **A side is a player, so it costs a number**, and there are fifteen of them
+/// — see [`PlayerId::MAX`]. Every side needs at least one seat to sit on it,
+/// so the most sides a match can actually fill is half the numbers, and that
+/// is the cap: seven sides of one, which is a free-for-all with extra words,
+/// and anything more useful leaves room to spare.
 ///
-/// [planned.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#teams
-pub const MAX_TEAMS: u8 = 8;
+/// It used to be eight, and the reason given was **colour** — allies having to
+/// read as allies meant a family of hue per side, and eight families crowd a
+/// wheel that holds sixteen hues with difficulty. That argument is gone with
+/// the families: a side is one number and therefore one hue, exactly as a
+/// player always was.
+pub const MAX_TEAMS: u8 = PlayerId::MAX / 2;
 
 /// The fewest. One side is a solo match with extra words.
 pub const MIN_TEAMS: u8 = 2;
@@ -172,78 +153,11 @@ pub const MIN_TEAMS: u8 = 2;
 /// bounded: it has to fit in a lobby row and in a log line.
 pub const TEAM_NAME_MAX: usize = 16;
 
-/// Who is allied with whom.
-///
-/// Indexed by [`PlayerId`], so it is a fixed sixteen bytes and copies freely —
-/// which matters because both sides need it: the server judges an action
-/// against it, and the **client predicts against it**, so a client that did
-/// not have it would price and refuse differently from the server on every
-/// placement near a teammate.
-///
-/// Deliberately not a map from side to members. The question every caller asks
-/// is "are these two on the same side", which this answers with two array
-/// reads; the other direction is wanted once, in the lobby, and is a scan of
-/// sixteen entries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Sides([u8; PlayerId::COUNT]);
-
-impl Default for Sides {
-    fn default() -> Self {
-        Self::SOLO
-    }
-}
-
-impl Sides {
-    /// Nobody is on anybody's side, which is a free-for-all.
-    pub const SOLO: Self = Self([0; PlayerId::COUNT]);
-
-    /// **Bounds-safe, because a `PlayerId` arrives over a wire.** Its inner
-    /// byte can be anything a client cares to send, and an index straight into
-    /// the array is a panic the server takes from whoever asks for one.
-    /// Nobody out of range is on anybody's side, which is also the right
-    /// answer for a number that names no seat.
-    pub fn team_of(&self, player: PlayerId) -> TeamId {
-        TeamId(self.0.get(player.0 as usize).copied().unwrap_or(0))
-    }
-
-    pub fn put(&mut self, player: PlayerId, team: TeamId) {
-        if let Some(slot) = self.0.get_mut(player.0 as usize) {
-            *slot = team.0;
-        }
-    }
-
-    /// Whether these two build on each other's ground and score together.
-    ///
-    /// A player is always allied with themselves, which is what makes this a
-    /// drop-in for the `==` it replaces. Two players on **nobody's** side are
-    /// not allies: nought is not a team, it is the absence of one.
-    pub fn allied(&self, a: PlayerId, b: PlayerId) -> bool {
-        a == b || (!self.team_of(a).is_none() && self.team_of(a) == self.team_of(b))
-    }
-
-    /// Everybody on this side, in player order.
-    pub fn members(&self, team: TeamId) -> Vec<PlayerId> {
-        if team.is_none() {
-            return Vec::new();
-        }
-        (1..PlayerId::COUNT)
-            .map(|i| PlayerId(i as u8))
-            .filter(|&p| self.team_of(p) == team)
-            .collect()
-    }
-
-    /// Whether anybody is on a side at all. A team match nobody has picked in
-    /// is still a free-for-all until somebody does.
-    pub fn any(&self) -> bool {
-        self.0.iter().skip(1).any(|&t| t != 0)
-    }
-}
-
-/// What a team is called before anybody names it. Numbered rather than given
+/// What a side is called before anybody names it. Numbered rather than given
 /// colours as names, because the colour is already on screen beside it and a
 /// team called "Blue" that is drawn green is worse than one called "Team 2".
-pub fn default_team_name(team: TeamId) -> String {
-    format!("Team {}", team.0)
+pub fn default_team_name(ordinal: u8) -> String {
+    format!("Team {ordinal}")
 }
 
 /// Normalise a side's name, or say why it is not one.
@@ -259,11 +173,28 @@ pub fn team_name(raw: &str) -> Result<String, String> {
     Ok(name)
 }
 
-/// What a side is called and who is on it, as a lobby needs to show it.
+/// A side, as a lobby needs to show it.
+///
+/// **The id is a [`PlayerId`] because a side is one.** Everybody on a side
+/// places cells carrying that number, spends that number's purse and stands on
+/// that number's ground, so "who is allied with whom" is not a question the
+/// rules ever have to ask: two allies *are* the same player, and `==` answers
+/// it the way it did before there were sides at all.
+///
+/// What used to be here was a `Sides` array mapping every player to a team
+/// number, copied onto the wire, and an `allied()` call threaded through
+/// placement, pricing, spawning, scoring and colour. Every one of those is a
+/// plain comparison again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Team {
-    pub id: TeamId,
+    pub id: PlayerId,
     pub name: String,
+    /// **Who is at its controls**, by their own number rather than the team's.
+    ///
+    /// A client that joins a team keeps its own identity — its name, its
+    /// token, its record — and only its *cells* become the team's. So these
+    /// are the people the lobby lists under the team, and `id` is the player
+    /// all of them are playing.
     pub players: Vec<PlayerId>,
 }
 
@@ -681,13 +612,13 @@ pub enum ClientMessage {
     /// — see `Start`, which is where a lopsided match is refused. A lobby that
     /// stops you joining your friend because the sides would be uneven is a
     /// lobby that makes you argue about the order you clicked in.
-    TakeSide { team: TeamId },
+    JoinTeam { team: PlayerId },
     /// Call a side something.
     ///
     /// Anybody in the match may name any side, which is the same decision the
     /// room name is: this is a game people play together, and a naming fight
     /// is a smaller problem than a permission system.
-    NameSide { team: TeamId, name: String },
+    NameTeam { team: PlayerId, name: String },
     /// Blow the whistle on a match this connection made.
     ///
     /// Sent with no room, because it names one: the match you are **in**. A
@@ -912,16 +843,15 @@ pub enum ServerMessage {
         /// and for a match the console started — which is the operator rather
         /// than anybody in the room.
         started_by: Option<PlayerId>,
-        /// Who is on whose side. `Sides::SOLO` in a free-for-all.
+        /// The sides this match has, what they are called, and who sits on
+        /// them. Empty in a free-for-all.
         ///
-        /// Sent to every client because the **client predicts against it**:
-        /// whether a placement is allowed and what it costs both turn on who
-        /// is allied with whom, so a client without this would price and
-        /// refuse differently from the server on every square near a
-        /// teammate.
-        sides: Sides,
-        /// The sides this match has, what they are called, and who is on them.
-        /// Empty in a free-for-all.
+        /// This is also how a client learns **which number its own cells
+        /// carry**: it finds its seat in a side's `seats` and plays as that
+        /// side's id. A separate map of who is allied with whom used to ride
+        /// here so the client could price a placement beside a teammate the
+        /// way the server would; there is nothing to price differently now,
+        /// because a teammate's cells are the client's own.
         teams: Vec<Team>,
         /// Whose match this is: the player who may start it.
         ///
@@ -1003,7 +933,7 @@ pub const SPAWN_N: i32 = 12;
 /// hopeful one: a client cannot know what it does not hold, and guessing would
 /// let it predict a cheaper price than the server charges.
 pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
-    reach(world, player, &Sides::SOLO, row, col)
+    reach(world, player, row, col)
 }
 
 /// The same question with allies counted: how much influence **this player's
@@ -1013,12 +943,8 @@ pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
 /// their ground, and the rule in `sim` knows nothing about teams — so this is
 /// a lookup plus one comparison rather than a sum. What a team changes is not
 /// what a square holds; it is who that counts for.
-pub fn reach(world: &World, player: PlayerId, sides: &Sides, row: i32, col: i32) -> u8 {
-    world
-        .cell_at(row, col)
-        .filter(|c| sides.allied(player, c.player()))
-        .map(|c| c.influence())
-        .unwrap_or(0)
+pub fn reach(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
+    world.cell_at(row, col).filter(|c| c.player() == player).map(|c| c.influence()).unwrap_or(0)
 }
 
 /// Whether `player` may put something down here.
@@ -1037,8 +963,8 @@ pub fn reach(world: &World, player: PlayerId, sides: &Sides, row: i32, col: i32)
 /// from living ones, so a player's ground grows where their life goes.
 ///
 /// [docs/game.md#where-you-may-build]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
-pub fn may_place(world: &World, player: PlayerId, sides: &Sides, row: i32, col: i32) -> bool {
-    reach(world, player, sides, row, col) > 0
+pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
+    reach(world, player, row, col) > 0
 }
 
 /// How many grants sit along one edge of a **torus's** grid. Six covers all 31
@@ -1122,27 +1048,12 @@ fn patch_at(seat: (i32, i32)) -> (i32, i32) {
 /// again on every rejoin, and a spawn that moved would hand a returning player
 /// a second patch somewhere else every time the world around their first one
 /// changed.
-fn already_granted(world: &World, (row, col): (i32, i32), player: PlayerId, sides: &Sides) -> bool {
+fn already_granted(world: &World, (row, col): (i32, i32), player: PlayerId) -> bool {
     (row..row + SPAWN_N).any(|r| {
         (col..col + SPAWN_N).any(|c| {
-            world.cell_at(r, c).is_some_and(|cell| {
-                cell.is_home() && (cell.player() == player || sides.allied(cell.player(), player))
-            })
+            world.cell_at(r, c).is_some_and(|cell| cell.is_home() && cell.player() == player)
         })
     })
-}
-
-/// Which seat on the grid somebody occupies: their side's, or their own when
-/// there are no sides.
-///
-/// Nought is nobody's team — a solo match, and a player in a team match who
-/// has not picked — so anybody unaligned falls back to their player number and
-/// gets a seat of their own, which is what an unaligned player is.
-pub fn seat_number(player: PlayerId, sides: &Sides) -> u8 {
-    match sides.team_of(player) {
-        team if team.0 != 0 => team.0,
-        _ => player.0,
-    }
 }
 
 /// How much of a patch, and the ground just around it, is somebody else's.
@@ -1150,19 +1061,17 @@ pub fn seat_number(player: PlayerId, sides: &Sides) -> u8 {
 /// The margin is there because a seat whose own squares are free but which
 /// backs onto a neighbour's border is not somewhere to start. Counted rather
 /// than tested, so "emptier" can be compared when nowhere is empty.
-/// An **ally's** ground is not a crowd, for the same reason it is not a
-/// neighbour: a side shares a seat, so a patch already held by the team is the
-/// patch this player is meant to be standing on.
-fn crowding(world: &World, (row, col): (i32, i32), player: PlayerId, sides: &Sides) -> usize {
+/// A teammate's ground is not a crowd and needs no rule saying so: a side is
+/// one player, so a patch the side already holds *is* this player's.
+fn crowding(world: &World, (row, col): (i32, i32), player: PlayerId) -> usize {
     let margin = SPAWN_N / 2;
     let mut taken = 0;
     for r in row - margin..row + SPAWN_N + margin {
         for c in col - margin..col + SPAWN_N + margin {
-            if world.cell_at(r, c).is_some_and(|cell| {
-                cell.player().is_owned()
-                    && cell.player() != player
-                    && !sides.allied(cell.player(), player)
-            }) {
+            if world
+                .cell_at(r, c)
+                .is_some_and(|cell| cell.player().is_owned() && cell.player() != player)
+            {
                 taken += 1;
             }
         }
@@ -1192,6 +1101,13 @@ const SPAWN_PITCH: i32 = SPAWN_N + SPAWN_GAP;
 /// The ground a player is granted on joining: a square of claimed but empty
 /// cells, far enough from everyone else's to be their own.
 ///
+/// **One seat per number, and a side is a number**, so this takes a
+/// [`PlayerId`] and nothing else. It used to take the whole roster's
+/// allegiances as well, and map a player to their side's seat through
+/// `seat_number` — which drew team ids and player numbers out of one 1..15
+/// space and so seated an unaligned player 3 on top of team 3. There is no
+/// mapping left to get wrong: everybody on a side already *is* that number.
+///
 /// Laid out in a **square** rather than a line. A line puts the last player
 /// thirty patches from the first, so the two could never reach each other and
 /// the map is a corridor; a square keeps every player within a few patches of
@@ -1201,22 +1117,16 @@ const SPAWN_PITCH: i32 = SPAWN_N + SPAWN_GAP;
 /// The world decides the spacing. An infinite one has room, so the grid sits
 /// at a fixed pitch centred on the origin, and the world then grows in every
 /// direction rather than off into one quadrant. A torus does not: its ground
-/// is finite and has to be shared out, so the same grid is spread over
-/// whatever there is and **every player still gets their square**, on a small
-/// world as much as a large one.
+/// is finite and has to be shared out, so the grid is spread over whatever
+/// there is and **every number still gets its own square**, on a small world
+/// as much as a large one.
 ///
 /// Computed rather than searched for, so the answer never depends on what a
 /// peer happens to hold. It does depend on the world's shape, which a client
 /// cannot know until it is told — and that is why `Welcome` carries the spawn
 /// rather than leaving the client to work it out and be wrong.
-pub fn spawn_for(player: PlayerId, world: &World, sides: &Sides) -> (i32, i32) {
-    // **A side's place on the grid, not a player's.** Allies build on each
-    // other's ground and cannot hurt each other, so seating them a full pitch
-    // apart hands one team two opening positions where a solo player gets one
-    // — twice the frontage, twice the room, and a border between them that no
-    // rule will ever contest. One seat per side, and the size of a side is the
-    // advantage rather than where it starts.
-    let n = seat_number(player, sides) as i32;
+pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
+    let n = player.0 as i32;
 
     match world.size_in_cells() {
         None => {
@@ -1224,7 +1134,7 @@ pub fn spawn_for(player: PlayerId, world: &World, sides: &Sides) -> (i32, i32) {
             // put it last time -- a granted patch keeps its `HOME` marks, and
             // a spawn that moved would hand a returning player a second patch.
             let seats = || (0..SPAWN_SEARCH).map(|k| patch_at(seat(n - 1 + k)));
-            if let Some(mine) = seats().find(|&at| already_granted(world, at, player, sides)) {
+            if let Some(mine) = seats().find(|&at| already_granted(world, at, player)) {
                 return mine;
             }
 
@@ -1235,7 +1145,7 @@ pub fn spawn_for(player: PlayerId, world: &World, sides: &Sides) -> (i32, i32) {
             let mut best = patch_at(seat(n - 1));
             let mut fewest = usize::MAX;
             for at in seats() {
-                let crowd = crowding(world, at, player, sides);
+                let crowd = crowding(world, at, player);
                 if crowd <= SPAWN_CROWDED {
                     return at;
                 }
@@ -1246,55 +1156,71 @@ pub fn spawn_for(player: PlayerId, world: &World, sides: &Sides) -> (i32, i32) {
             best
         }
         Some((height, width)) => {
-            // A torus has finite ground and has to share it out, so the
-            // spacing comes from the world rather than from `SPAWN_PITCH` --
-            // which means widening the gap above does nothing here, and a
-            // small torus puts players close together however it is set.
-            //
-            // **The grid is sized to the world, not the roster.** It used to
-            // be six across whatever the world was, with the pitch floored at
-            // the width of a *patch* — so any torus from seventy-two cells up
-            // passed the cramped check and then seated everybody edge to edge,
-            // with no ground between them at all. Neighbours, literally: two
-            // grants sharing a border on the generation the match started.
-            //
-            // So the number across comes from how many pitches fit. Where
-            // there is room for six, this is what it always was; where there
-            // is not, players are seated further apart in a smaller grid
-            // rather than packed into a bigger one. The floor is
-            // `SPAWN_PITCH`, which is a patch *and the ground around it*,
-            // because the gap is the point — see [`SPAWN_GAP`].
-            //
-            // A world too small even for a two-by-two grid cannot give anybody
-            // room and `too_cramped_for_grants` says so on the way in; the
-            // grants overlap, `grant` leaves claimed ground alone, and the
-            // earlier players simply keep theirs.
-            let across = |extent: i32| (extent / SPAWN_PITCH).clamp(1, SPAWN_ACROSS);
-            let (down, along) = (across(height), across(width));
-            let pitch = |extent: i32, across: i32| (extent / across).max(SPAWN_PITCH);
-            let (row, col) = (n / along, n % along);
-            (row % down * pitch(height, down), col * pitch(width, along))
+            let (down, along) = torus_grid(height, width);
+            // From nought, so a torus and a plane agree that the first number
+            // sits in the corner they both start from. It used to index from
+            // `n`, leaving seat nought empty and every player one place along
+            // from where the infinite branch put them.
+            let (row, col) = ((n - 1) / along, (n - 1) % along);
+            let pitch = |extent: i32, across: i32| extent / across;
+            (row * pitch(height, down), col * pitch(width, along))
         }
     }
 }
 
-/// Whether a world is too small to give every player a square of their own.
-pub fn too_cramped_for_grants(world: &World) -> bool {
-    world.size_in_cells().is_some_and(|(h, w)| h < SPAWN_PITCH * 2 || w < SPAWN_PITCH * 2)
+/// How many seats across and down a torus is divided into.
+///
+/// **Sized by the roster first and the world second**, which is the fix for a
+/// bug rather than a preference. It used to be sized by how many comfortable
+/// pitches fit, and then the seat index was folded into that with `%` — so a
+/// 128x128 world had four seats for fifteen numbers, players 1, 5, 9 and 13
+/// all stood on one patch, and each new arrival claimed the last one's ground
+/// out from under them. (`grant` claims dead ground whoever held it, and for
+/// a good reason; see there. The two together meant a player could be left
+/// holding the four squares under their own block.)
+///
+/// So this is the smallest grid that holds every number, never finer than the
+/// world has whole patches for. Where there is room it is exactly what it
+/// always was, because [`SPAWN_ACROSS`] still caps it; where there is not,
+/// players are seated closer together rather than on top of each other. A
+/// world with fewer patches than numbers cannot do even that, and
+/// [`too_cramped_for_grants`] is what says so on the way in.
+fn torus_grid(height: i32, width: i32) -> (i32, i32) {
+    // How many whole patches fit at all: the hard limit, since two patches
+    // that overlap are not two patches.
+    let room = |extent: i32| (extent / SPAWN_N).max(1);
+    // And what the world would like, given room to spare.
+    let want = |extent: i32| (extent / SPAWN_PITCH).clamp(1, SPAWN_ACROSS);
+    let (mut down, mut along) = (want(height), want(width));
+    // Widen until it holds every number, the shorter side first so the grid
+    // stays near square. At most a few dozen turns: both are bounded by
+    // `room`, and `room` is bounded by the world.
+    while down * along < PlayerId::MAX as i32 {
+        if along <= down && along < room(width) {
+            along += 1;
+        } else if down < room(height) {
+            down += 1;
+        } else if along < room(width) {
+            along += 1;
+        } else {
+            break;
+        }
+    }
+    (down, along)
 }
 
-/// Claim a player's starting ground, with a block standing on it.
+/// Whether a world is too small to give every number a square of its own.
 ///
-/// Here rather than on the server because an offline client needs the same
-/// grant — placing is confined to territory, so a player who owns nothing can
-/// place nothing, and a game of one would have no opening move at all.
-///
-/// The block is a 2x2 still life: four cells that hold their shape forever
-/// under Conway's rules. Everyone starts with the same one, so nobody begins
-/// ahead, and because it never changes it costs nothing to leave alone while
-/// you decide what to build. It is also what keeps the ground: territory
-/// spreads from living cells, so a grant with nothing alive on it would never
-/// grow past the patch it was given.
+/// Asked of the grid rather than of a fixed size, so it answers the question
+/// it is named for. It used to test for two pitches each way — which is a
+/// four-seat grid, declared roomy enough for fifteen players.
+pub fn too_cramped_for_grants(world: &World) -> bool {
+    world.size_in_cells().is_some_and(|(h, w)| {
+        let (down, along) = torus_grid(h, w);
+        down * along < PlayerId::MAX as i32
+    })
+}
+
 /// Every chunk a grant at this position touches, folded onto the chunks the
 /// world actually has.
 ///
@@ -1312,8 +1238,20 @@ pub fn grant_chunks(world: &World, (row, col): (i32, i32)) -> Vec<ChunkId> {
     out
 }
 
-pub fn grant(world: &mut World, player: PlayerId, sides: &Sides) {
-    let (row, col) = spawn_for(player, world, sides);
+/// Claim a player's starting ground, with a block standing on it.
+///
+/// Here rather than on the server because an offline client needs the same
+/// grant — placing is confined to territory, so a player who owns nothing can
+/// place nothing, and a game of one would have no opening move at all.
+///
+/// The block is a 2x2 still life: four cells that hold their shape forever
+/// under Conway's rules. Everyone starts with the same one, so nobody begins
+/// ahead, and because it never changes it costs nothing to leave alone while
+/// you decide what to build. It is also what keeps the ground: territory
+/// spreads from living cells, so a grant with nothing alive on it would never
+/// grow past the patch it was given.
+pub fn grant(world: &mut World, player: PlayerId) {
+    let (row, col) = spawn_for(player, world);
 
     // **Once each.** A player coming back with a token is granted again by
     // `join_with`, and without this that hands them a fresh 12×12 patch and a
@@ -1327,12 +1265,10 @@ pub fn grant(world: &mut World, player: PlayerId, sides: &Sides) {
     // the save. A flag on the player would be a second copy of the same fact,
     // and one that a save from an older build would not have.
     //
-    // **Or an ally has**, which is what makes a side share one platform. Two
-    // allies granted separately on one seat is two blocks and two patches of
-    // claimed ground for one team, and the second one lands on top of the
-    // first — so whoever joined later would begin by overwriting their own
-    // team's opening.
-    if already_granted(world, (row, col), player, sides) {
+    // **Which is also what makes a side share one platform**, and it costs
+    // nothing to say so: a side is one number, so the second ally to arrive
+    // asks about the ground the first was given and finds it already theirs.
+    if already_granted(world, (row, col), player) {
         log::debug!("{player:?} is already granted at ({row}, {col}); not granting again");
         return;
     }
@@ -1444,7 +1380,7 @@ pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
 /// Reclaiming your own living cell earns one. Placing costs one, and so does
 /// destroying someone else's cell — taking ground is not free. Erasing empty
 /// space is neither earned nor spent.
-pub fn value_delta(world: &World, sides: &Sides, stamped: &Stamped) -> i32 {
+pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
     match &stamped.action {
         // Only the cells a placement actually changes are charged for.
         // Charging for the rest made extending a pane cost as much as laying
@@ -1478,10 +1414,10 @@ pub fn value_delta(world: &World, sides: &Sides, stamped: &Stamped) -> i32 {
             .iter()
             .map(|&(row, col)| match world.cell_at(row, col) {
                 Some(cell) if placement.remove_from(cell) == cell => 0,
-                // An ally's cell is yours to clear at your own rate. Charging
-                // a raid's price to tidy up beside a teammate would make a
-                // team something you pay to co-operate with.
-                Some(cell) if sides.allied(stamped.player, cell.player()) => RECLAIM,
+                // A teammate's cell *is* your cell — one side, one number —
+                // so tidying up beside an ally reclaims at your own rate
+                // without anything here having to know a side exists.
+                Some(cell) if cell.player() == stamped.player => RECLAIM,
                 Some(_) => -RECLAIM,
                 None => 0,
             })
@@ -1600,14 +1536,14 @@ mod tests {
         let cells = vec![(0, 0), (0, 1), (0, 2)];
 
         let first = paint(cells.clone(), Placement::Ice);
-        assert_eq!(value_delta(&world, &Sides::SOLO, &first), -3 * Placement::Ice.cost());
+        assert_eq!(value_delta(&world, &first), -3 * Placement::Ice.cost());
         apply(&mut world, &first);
 
         // The same rectangle again, plus one cell it did not cover.
         let mut wider = cells.clone();
         wider.push((0, 3));
         assert_eq!(
-            value_delta(&world, &Sides::SOLO, &paint(wider, Placement::Ice)),
+            value_delta(&world, &paint(wider, Placement::Ice)),
             -Placement::Ice.cost(),
             "only the cell that changed should be charged for"
         );
@@ -1632,7 +1568,7 @@ mod tests {
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
         assert_eq!(
-            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Mine)),
+            value_delta(&world, &paint(vec![(0, 0)], Placement::Mine)),
             -Placement::Mine.cost(),
             "converting life to a mine costs what a mine costs"
         );
@@ -1653,7 +1589,7 @@ mod tests {
         let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
         hold(&mut world, &block, PlayerId(1));
         assert_eq!(
-            value_delta(&world, &Sides::SOLO, &paint(block.clone(), Placement::Turret)),
+            value_delta(&world, &paint(block.clone(), Placement::Turret)),
             -4 * TURRET_COST,
             "an emplacement is four of them"
         );
@@ -1712,10 +1648,10 @@ mod tests {
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
         assert_eq!(
-            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Ice)),
+            value_delta(&world, &paint(vec![(0, 0)], Placement::Ice)),
             -Placement::Ice.cost()
         );
-        assert_eq!(value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Life)), 0);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), 0);
     }
 
     /// A pane belongs to whoever laid it, and there is one owner field per
@@ -1732,7 +1668,7 @@ mod tests {
         apply(&mut world, &theirs);
         // Their pane, so their ground: laying over it is a change, and one
         // nobody else may make, since no influence of theirs reaches it.
-        assert!(!may_place(&world, PlayerId(1), &Sides::SOLO, 0, 0), "not yours to build on");
+        assert!(!may_place(&world, PlayerId(1), 0, 0), "not yours to build on");
     }
 
     /// The reason `Erase` carries a placement at all. Life and ice are
@@ -1750,7 +1686,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
-        assert_eq!(value_delta(&world, &Sides::SOLO, &take), 1, "reclaiming your own pays one");
+        assert_eq!(value_delta(&world, &take), 1, "reclaiming your own pays one");
         apply(&mut world, &take);
 
         let cell = world.cell_at(0, 0).unwrap();
@@ -1793,7 +1729,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
-        assert_eq!(value_delta(&world, &Sides::SOLO, &no_pane), 0);
+        assert_eq!(value_delta(&world, &no_pane), 0);
         apply(&mut world, &no_pane);
         assert_eq!(
             world.cell_at(0, 0).unwrap(),
@@ -1819,7 +1755,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
-        assert_eq!(value_delta(&world, &Sides::SOLO, &mine), -1);
+        assert_eq!(value_delta(&world, &mine), -1);
     }
 
     /// Life is drawn by the stroke and ice is placed as a wall, so they are
@@ -1833,8 +1769,8 @@ mod tests {
         let mut world = World::infinite_empty();
         let five: Vec<_> = (0..5).map(|c| (0, c)).collect();
         hold(&mut world, &five, PlayerId(1));
-        assert_eq!(value_delta(&world, &Sides::SOLO, &paint(five.clone(), Placement::Life)), -5);
-        assert_eq!(value_delta(&world, &Sides::SOLO, &paint(five, Placement::Ice)), -25);
+        assert_eq!(value_delta(&world, &paint(five.clone(), Placement::Life)), -5);
+        assert_eq!(value_delta(&world, &paint(five, Placement::Ice)), -25);
     }
 
     /// **Placing is confined to ground your own influence reaches**, at the
@@ -1851,20 +1787,12 @@ mod tests {
 
         // The middle of your ground and the thinnest edge of it: one price.
         world.set_cell_at(0, 1, Cell::DEAD.with_player(me).with_level(1));
-        assert_eq!(
-            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 0)], Placement::Life)),
-            -LIFE_COST
-        );
-        assert_eq!(
-            value_delta(&world, &Sides::SOLO, &paint(vec![(0, 1)], Placement::Life)),
-            -LIFE_COST
-        );
-        assert!(
-            may_place(&world, me, &Sides::SOLO, 0, 0) && may_place(&world, me, &Sides::SOLO, 0, 1)
-        );
+        assert_eq!(value_delta(&world, &paint(vec![(0, 0)], Placement::Life)), -LIFE_COST);
+        assert_eq!(value_delta(&world, &paint(vec![(0, 1)], Placement::Life)), -LIFE_COST);
+        assert!(may_place(&world, me, 0, 0) && may_place(&world, me, 0, 1));
 
         // And a square nothing of yours reaches is not for sale at any price.
-        assert!(!may_place(&world, me, &Sides::SOLO, 0, 5));
+        assert!(!may_place(&world, me, 0, 5));
         assert_eq!(influence(&world, me, 0, 5), 0);
     }
 
@@ -1878,7 +1806,7 @@ mod tests {
         hold(&mut world, &[(0, 0)], them);
         assert_eq!(influence(&world, them, 0, 0), crate::sim::bits::MAX_LEVEL);
         assert_eq!(influence(&world, me, 0, 0), 0);
-        assert!(!may_place(&world, me, &Sides::SOLO, 0, 0));
+        assert!(!may_place(&world, me, 0, 0));
     }
 
     /// Taking is not what changed. Erasing is priced on whose it is, at the
@@ -1900,7 +1828,7 @@ mod tests {
             player: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
-        assert_eq!(value_delta(&world, &Sides::SOLO, &mine), -RECLAIM);
+        assert_eq!(value_delta(&world, &mine), -RECLAIM);
     }
 
     /// The grant is still what a player starts from — not because it is the
@@ -1910,12 +1838,12 @@ mod tests {
     fn a_grant_is_ground_at_the_base_rate() {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(1), PlayerId(2));
-        let (row, col) = spawn_for(me, &world, &Sides::SOLO);
+        let (row, col) = spawn_for(me, &world);
 
-        assert!(!may_place(&world, me, &Sides::SOLO, row, col), "nothing is owned yet");
-        grant(&mut world, me, &Sides::SOLO);
-        assert!(may_place(&world, me, &Sides::SOLO, row, col), "granted ground is buildable");
-        assert!(!may_place(&world, them, &Sides::SOLO, row, col), "and only by its owner");
+        assert!(!may_place(&world, me, row, col), "nothing is owned yet");
+        grant(&mut world, me);
+        assert!(may_place(&world, me, row, col), "granted ground is buildable");
+        assert!(!may_place(&world, them, row, col), "and only by its owner");
 
         // Ground at the edges, and a block standing in the middle of it.
         assert!(!world.cell_at(row, col).unwrap().is_alive(), "the corner is bare");
@@ -1927,8 +1855,8 @@ mod tests {
         assert!(block.iter().all(|c| c.is_alive() && c.player() == me), "a 2x2 block");
 
         // Beyond the patch is nobody's, and nobody's is closed to everyone.
-        assert!(!may_place(&world, me, &Sides::SOLO, row, col + SPAWN_N));
-        assert!(!may_place(&world, me, &Sides::SOLO, 10_000, 10_000));
+        assert!(!may_place(&world, me, row, col + SPAWN_N));
+        assert!(!may_place(&world, me, 10_000, 10_000));
     }
 
     /// Every player is within reach of several others. A line put the last
@@ -1938,7 +1866,7 @@ mod tests {
     fn grants_are_laid_out_in_a_square() {
         let world = World::infinite_empty();
         let spots: Vec<(i32, i32)> =
-            (1..=PlayerId::MAX).map(|p| spawn_for(PlayerId(p), &world, &Sides::SOLO)).collect();
+            (1..=PlayerId::MAX).map(|p| spawn_for(PlayerId(p), &world)).collect();
         let rows: Vec<i32> = spots.iter().map(|s| s.0).collect();
         let cols: Vec<i32> = spots.iter().map(|s| s.1).collect();
 
@@ -1991,9 +1919,9 @@ mod tests {
         }
 
         let second = PlayerId(2);
-        grant(&mut world, second, &Sides::SOLO);
+        grant(&mut world, second);
 
-        let (row, col) = spawn_for(second, &world, &Sides::SOLO);
+        let (row, col) = spawn_for(second, &world);
         let mine = (row..row + SPAWN_N)
             .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
             .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == second)
@@ -2011,7 +1939,7 @@ mod tests {
         );
 
         // And they can actually place, which is the whole point.
-        assert!(may_place(&world, second, &Sides::SOLO, row, col));
+        assert!(may_place(&world, second, row, col));
     }
 
     /// A grant takes ground and never anybody's life or panes -- those are
@@ -2020,7 +1948,7 @@ mod tests {
     fn a_grant_steps_around_life_and_ice() {
         let mut world = World::infinite_empty();
         let second = PlayerId(2);
-        let (row, col) = spawn_for(second, &world, &Sides::SOLO);
+        let (row, col) = spawn_for(second, &world);
 
         // Somebody else's living cell and pane, right in the middle where the
         // block wants to go.
@@ -2032,7 +1960,7 @@ mod tests {
             Cell::DEAD.with_ice(true).with_player(PlayerId(1)),
         );
 
-        grant(&mut world, second, &Sides::SOLO);
+        grant(&mut world, second);
 
         let theirs = world.cell_at(middle.0, middle.1).unwrap();
         assert!(theirs.is_alive() && theirs.player() == PlayerId(1), "their life is untouched");
@@ -2059,7 +1987,7 @@ mod tests {
             for r in 0..40 {
                 world.set_cell_at(r, r, Cell::alive(PlayerId(1)));
             }
-            grant(&mut world, PlayerId(3), &Sides::SOLO);
+            grant(&mut world, PlayerId(3));
             world.live_cells()
         };
         let first = build();
@@ -2074,11 +2002,11 @@ mod tests {
         let mut world = World::toroidal_empty(24, 24);
         assert!(!too_cramped_for_grants(&world));
         for id in 1..=PlayerId::MAX {
-            grant(&mut world, PlayerId(id), &Sides::SOLO);
+            grant(&mut world, PlayerId(id));
         }
 
         for id in 1..=PlayerId::MAX {
-            let (row, col) = spawn_for(PlayerId(id), &world, &Sides::SOLO);
+            let (row, col) = spawn_for(PlayerId(id), &world);
             let mine = (row..row + SPAWN_N)
                 .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
                 .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == PlayerId(id))
@@ -2108,10 +2036,10 @@ mod tests {
     fn grants_do_not_overlap() {
         let mut world = World::infinite_empty();
         for id in 1..=PlayerId::MAX {
-            grant(&mut world, PlayerId(id), &Sides::SOLO);
+            grant(&mut world, PlayerId(id));
         }
         for id in 1..=PlayerId::MAX {
-            let (row, col) = spawn_for(PlayerId(id), &world, &Sides::SOLO);
+            let (row, col) = spawn_for(PlayerId(id), &world);
             for r in row..row + SPAWN_N {
                 for c in col..col + SPAWN_N {
                     assert_eq!(
@@ -2132,8 +2060,8 @@ mod tests {
     fn the_block_stands_on_home_ground_like_the_rest_of_the_patch() {
         let mut world = World::infinite_empty();
         let me = PlayerId(1);
-        grant(&mut world, me, &Sides::SOLO);
-        let (row, col) = spawn_for(me, &world, &Sides::SOLO);
+        grant(&mut world, me);
+        let (row, col) = spawn_for(me, &world);
 
         let mut live = 0;
         for r in row..row + SPAWN_N {
@@ -2153,8 +2081,8 @@ mod tests {
     #[test]
     fn neighbouring_grants_are_a_gap_apart() {
         let world = World::infinite_empty();
-        let (row, col) = spawn_for(PlayerId(1), &world, &Sides::SOLO);
-        let (next_row, next_col) = spawn_for(PlayerId(2), &world, &Sides::SOLO);
+        let (row, col) = spawn_for(PlayerId(1), &world);
+        let (next_row, next_col) = spawn_for(PlayerId(2), &world);
         assert_eq!(next_row, row, "the first two are side by side");
         assert_eq!(next_col - col, SPAWN_PITCH);
 
@@ -2174,7 +2102,7 @@ mod tests {
     fn the_grid_is_a_square_at_every_size() {
         let world = World::infinite_empty();
         let seats = |n: u8| -> Vec<(i32, i32)> {
-            (1..=n).map(|p| spawn_for(PlayerId(p), &world, &Sides::SOLO)).collect()
+            (1..=n).map(|p| spawn_for(PlayerId(p), &world)).collect()
         };
 
         for (players, side) in [(4u8, 2), (9, 3), (16, 4), (25, 5)] {
@@ -2200,7 +2128,7 @@ mod tests {
     fn a_seat_inside_somebody_elses_country_is_given_up() {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(2), PlayerId(1));
-        let wanted = spawn_for(me, &world, &Sides::SOLO);
+        let wanted = spawn_for(me, &world);
 
         // Their ground over the whole of it and well past its edges.
         for r in wanted.0 - SPAWN_N..wanted.0 + 2 * SPAWN_N {
@@ -2209,22 +2137,18 @@ mod tests {
             }
         }
 
-        let moved = spawn_for(me, &world, &Sides::SOLO);
+        let moved = spawn_for(me, &world);
         assert_ne!(moved, wanted, "a seat buried in their country should be given up");
-        assert_eq!(
-            crowding(&world, moved, me, &Sides::SOLO),
-            0,
-            "and the one taken instead should be nobody's"
-        );
+        assert_eq!(crowding(&world, moved, me), 0, "and the one taken instead should be nobody's");
 
         // But a couple of stray cells is not a country: `grant` claims dead
         // ground whoever held it and steps the block around anything alive, so
         // a seat with a few of somebody's squares in it is still a seat.
         let mut sparse = World::infinite_empty();
-        let spot = spawn_for(me, &sparse, &Sides::SOLO);
+        let spot = spawn_for(me, &sparse);
         sparse.set_cell_at(spot.0 + 1, spot.1 + 1, Cell::alive(them));
         sparse.set_cell_at(spot.0 + 2, spot.1 + 2, Cell::DEAD.with_player(them));
-        assert_eq!(spawn_for(me, &sparse, &Sides::SOLO), spot, "two cells should not move anybody");
+        assert_eq!(spawn_for(me, &sparse), spot, "two cells should not move anybody");
     }
 
     /// **Crowded means held, not inhabited.**
@@ -2240,7 +2164,7 @@ mod tests {
     fn a_seat_is_crowded_by_ground_even_with_nothing_alive_on_it() {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(2), PlayerId(1));
-        let at = spawn_for(me, &world, &Sides::SOLO);
+        let at = spawn_for(me, &world);
 
         // Their ground, at full influence, and **nothing alive anywhere**.
         for r in at.0..at.0 + SPAWN_N {
@@ -2255,16 +2179,16 @@ mod tests {
         assert!(world.live_cells().is_empty(), "the test is about ground, not life");
 
         assert!(
-            crowding(&world, at, me, &Sides::SOLO) > SPAWN_CROWDED,
+            crowding(&world, at, me) > SPAWN_CROWDED,
             "a seat full of somebody's territory read as empty because nothing stood on it"
         );
-        assert_ne!(spawn_for(me, &world, &Sides::SOLO), at, "and so nobody was moved off it");
+        assert_ne!(spawn_for(me, &world), at, "and so nobody was moved off it");
 
         // The converse, so this is a test about the owner field rather than
         // about any ground at all: the player's *own* territory does not
         // crowd them out of their own seat.
         let mut mine = World::infinite_empty();
-        let seat = spawn_for(me, &mine, &Sides::SOLO);
+        let seat = spawn_for(me, &mine);
         for r in seat.0..seat.0 + SPAWN_N {
             for c in seat.1..seat.1 + SPAWN_N {
                 mine.set_cell_at(
@@ -2274,8 +2198,8 @@ mod tests {
                 );
             }
         }
-        assert_eq!(crowding(&mine, seat, me, &Sides::SOLO), 0, "your own ground is not a crowd");
-        assert_eq!(spawn_for(me, &mine, &Sides::SOLO), seat);
+        assert_eq!(crowding(&mine, seat, me), 0, "your own ground is not a crowd");
+        assert_eq!(spawn_for(me, &mine), seat);
     }
 
     /// The other half of giving a crowded seat up: the cure must not be worse.
@@ -2302,7 +2226,7 @@ mod tests {
             }
         }
 
-        let at = spawn_for(me, &world, &Sides::SOLO);
+        let at = spawn_for(me, &world);
         let bound = SPAWN_PITCH * SPAWN_SEARCH;
         assert!(
             at.0.abs() <= bound && at.1.abs() <= bound,
@@ -2311,11 +2235,8 @@ mod tests {
         // And it is still a seat somebody could be granted: `grant` claims
         // dead ground whoever held it, so a crowded patch is buildable even
         // though it was not empty.
-        grant(&mut world, me, &Sides::SOLO);
-        assert!(
-            may_place(&world, me, &Sides::SOLO, at.0, at.1),
-            "granted ground nobody can build on"
-        );
+        grant(&mut world, me);
+        assert!(may_place(&world, me, at.0, at.1), "granted ground nobody can build on");
     }
 
     /// A granted patch keeps its `HOME` marks and they never decay, so a
@@ -2335,17 +2256,20 @@ mod tests {
             let world = World::toroidal(chunks, chunks);
             assert!(!too_cramped_for_grants(&world), "{chunks} chunks was called cramped");
 
-            // As many players as the grid actually seats. Beyond that they
-            // share seats, which is a shortage of world rather than a bug.
-            let seats = ((extent / SPAWN_PITCH).min(6)).pow(2);
-            let spawns: Vec<(i32, i32)> = (1..=seats.min(PlayerId::MAX as i32))
-                .map(|n| spawn_for(PlayerId(n as u8), &world, &Sides::SOLO))
-                .collect();
+            // **Every number, not as many as the grid felt like seating.**
+            // This used to ask only about the seats a comfortable pitch fit,
+            // and quietly accept that the numbers past that shared a patch.
+            let spawns: Vec<(i32, i32)> =
+                (1..=PlayerId::MAX).map(|n| spawn_for(PlayerId(n), &world)).collect();
             for (i, a) in spawns.iter().enumerate() {
                 for b in &spawns[i + 1..] {
                     let (down, along) = (apart(a.0, b.0, extent), apart(a.1, b.1, extent));
+                    // **Patches never overlap.** Two of them do overlap only
+                    // if they are close on *both* axes, so one axis clearing a
+                    // patch's width is the whole of it -- neighbours in a row
+                    // share a row by construction.
                     assert!(
-                        down.max(along) >= SPAWN_PITCH,
+                        down >= SPAWN_N || along >= SPAWN_N,
                         "on a {chunks}-chunk torus {a:?} and {b:?} are {down} and {along} apart, \
                          and a patch is {SPAWN_N} wide"
                     );
@@ -2354,27 +2278,39 @@ mod tests {
         }
     }
 
-    /// The specific shape of the bug this replaced: the pitch was floored at
-    /// the width of a *patch* rather than at a patch and the ground around it,
-    /// so any torus that passed the cramped check could still seat two players
-    /// with their borders touching on the generation the match began.
+    /// **A small torus seats everybody closer together rather than seating
+    /// some of them on top of each other**, which is the trade this makes and
+    /// the reverse of the one it used to.
+    ///
+    /// A 128-cell torus passes the cramped check and has room for four seats
+    /// at a comfortable pitch and fifteen at a tight one. It used to take the
+    /// four, fold the other eleven numbers onto them with `%`, and hand each
+    /// new arrival a patch somebody was already standing on — and because
+    /// `grant` claims dead ground whoever held it, the newcomer took all but
+    /// the four squares under the last one's block. Players 1, 5, 9 and 13 all
+    /// sat at (0, 64).
     #[test]
-    fn a_small_torus_seats_fewer_players_rather_than_closer_ones() {
+    fn a_small_torus_seats_everybody_closer_rather_than_twice_over() {
         let world = World::toroidal(8, 8);
-        let extent = 8 * CHUNK_N as i32;
-        let first = spawn_for(PlayerId(1), &world, &Sides::SOLO);
-        let second = spawn_for(PlayerId(2), &world, &Sides::SOLO);
+        let seats: std::collections::HashSet<(i32, i32)> =
+            (1..=PlayerId::MAX).map(|n| spawn_for(PlayerId(n), &world)).collect();
+        assert_eq!(seats.len(), PlayerId::MAX as usize, "two numbers shared a patch");
+
+        // And where there *is* room, the comfortable spacing is untouched.
+        let roomy = World::toroidal(40, 40);
+        let extent = 40 * CHUNK_N as i32;
+        let (first, second) = (spawn_for(PlayerId(1), &roomy), spawn_for(PlayerId(2), &roomy));
         let along = (first.1 - second.1).abs().min(extent - (first.1 - second.1).abs());
         let down = (first.0 - second.0).abs().min(extent - (first.0 - second.0).abs());
-        assert!(down.max(along) >= SPAWN_PITCH, "{first:?} and {second:?} on a 128-cell torus");
+        assert!(down.max(along) >= SPAWN_PITCH, "{first:?} and {second:?} on a roomy torus");
     }
 
     #[test]
     fn a_granted_seat_does_not_wander() {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(2), PlayerId(1));
-        let home = spawn_for(me, &world, &Sides::SOLO);
-        grant(&mut world, me, &Sides::SOLO);
+        let home = spawn_for(me, &world);
+        grant(&mut world, me);
 
         // Their country arrives afterwards, all around and over the top of it.
         for r in home.0 - SPAWN_N..home.0 + 2 * SPAWN_N {
@@ -2386,7 +2322,7 @@ mod tests {
             }
         }
 
-        assert_eq!(spawn_for(me, &world, &Sides::SOLO), home, "their home is where it was granted");
+        assert_eq!(spawn_for(me, &world), home, "their home is where it was granted");
     }
 
     /// Ground nobody holds prices as empty, which is what `apply` writes into
@@ -2400,7 +2336,7 @@ mod tests {
         // Nothing of anybody's reaches it, so nobody may build there. A
         // client cannot know what it does not hold, and reading unheld ground
         // as its own would predict a placement the server refuses.
-        assert!(!may_place(&world, PlayerId(1), &Sides::SOLO, far[0].0, far[0].1));
+        assert!(!may_place(&world, PlayerId(1), far[0].0, far[0].1));
         assert_eq!(influence(&world, PlayerId(1), far[0].0, far[0].1), 0);
     }
 }

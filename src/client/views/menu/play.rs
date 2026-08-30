@@ -410,7 +410,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // one that holds it.
             shape_row(ui, theme, draft);
 
-            // Sides, and only on a match: a team is a way of deciding a
+            // Teams, and only on a match: a team is a way of deciding a
             // result and a world has none, so this row appears with the same
             // rule every other conditional row here follows.
             if draft.ends != Ends::Never {

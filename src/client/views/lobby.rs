@@ -14,7 +14,7 @@ use crate::client::views::hud::team_colour;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
-use crate::net::{MatchPhase, Sides, Team, TeamId, Victory};
+use crate::net::{MatchPhase, Team, Victory};
 use crate::sim::PlayerId;
 
 /// Draw it, if this room is a match with something to say. Returns the
@@ -26,10 +26,11 @@ pub enum Did {
     Leave,
     /// Blow the whistle. Only offered to whoever made the match.
     Start,
-    /// Take this side, or step off one by taking [`TeamId::NONE`].
-    TakeSide(TeamId),
-    /// Call this side something.
-    NameSide(TeamId, String),
+    /// Take the controls of this team's player, or step off by naming your
+    /// own number.
+    JoinTeam(PlayerId),
+    /// Call this team something.
+    NameTeam(PlayerId, String),
 }
 
 /// Everything the lobby draws from.
@@ -46,15 +47,15 @@ pub struct Look<'a> {
     pub owner: Option<PlayerId>,
     /// Who blew the whistle, once somebody has.
     pub started_by: Option<PlayerId>,
-    pub sides: Sides,
-    /// The teams, their names and who is on them. Empty in a free-for-all.
+    /// The teams, their names and who is at each one's controls. Empty in a
+    /// free-for-all.
     pub teams: &'a [Team],
     /// The code that reaches this room, if it is private — the thing you hand
     /// to whoever is playing, read off while you wait for them.
     pub code: Option<&'a str>,
     /// Every player's hue, so a swatch and the board agree about who is who.
-    /// In a team match this is a family per team; see
-    /// [`crate::client::views::hue`].
+    /// A team is a player, so everybody at one team's controls draws from one
+    /// swatch — there is no family of hue to sort out.
     pub hues: &'a [f32; PlayerId::COUNT],
 }
 
@@ -65,7 +66,7 @@ pub fn show(
     // What is being typed into a side's name box, if anything. Held by the
     // client rather than here, because this panel is rebuilt every frame and
     // a name half-typed would vanish between two of them.
-    naming: &mut Option<(TeamId, String)>,
+    naming: &mut Option<(PlayerId, String)>,
 ) -> (Option<egui::Rect>, Did) {
     let mut did = Did::Nothing;
     // An open room is not a match, and a running one is a game — neither wants
@@ -165,7 +166,7 @@ pub fn show(
                                         }
                                     });
                                 }
-                            } else if let Some(what) = side_picker(ui, theme, look, naming) {
+                            } else if let Some(what) = team_picker(ui, theme, look, naming) {
                                 did = what;
                             }
                             ui.add_space(m.item_spacing);
@@ -229,17 +230,20 @@ pub fn show(
 /// checked when the match is *started*, where it can be fixed and tried again.
 /// Naming is the same decision the room name already is: this is a game played
 /// together, and a naming fight is a smaller problem than a permission system.
-fn side_picker(
+fn team_picker(
     ui: &mut egui::Ui,
     theme: &Theme,
     look: &Look<'_>,
-    naming: &mut Option<(TeamId, String)>,
+    naming: &mut Option<(PlayerId, String)>,
 ) -> Option<Did> {
     let p = theme.palette;
     let m = theme.metrics;
     let mut did = None;
-    let (me, sides, teams, players) = (look.me, look.sides, look.teams, look.players);
-    let mine = sides.team_of(me);
+    let (me, teams, players) = (look.me, look.teams, look.players);
+    // Which team's controls this seat is at, if any. Read out of the roster
+    // rather than out of a map of allegiances, because the roster is what a
+    // team *is* now: the player, and who is driving it.
+    let mine = teams.iter().find(|t| t.players.contains(&me)).map(|t| t.id);
     let name_of = |id: PlayerId| {
         players
             .iter()
@@ -249,7 +253,7 @@ fn side_picker(
     };
 
     for team in teams {
-        let ours = team.id == mine;
+        let ours = Some(team.id) == mine;
         egui::Frame::new()
             .fill(if ours { p.surface_lift } else { p.surface })
             .stroke(egui::Stroke::new(1.0, if ours { p.accent } else { p.line }))
@@ -270,7 +274,7 @@ fn side_picker(
                             let done =
                                 field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             if done || ui.small_button(words::KEEP_NAME).clicked() {
-                                did = Some(Did::NameSide(team.id, text.clone()));
+                                did = Some(Did::NameTeam(team.id, text.clone()));
                                 *naming = None;
                             }
                         }
@@ -320,7 +324,7 @@ fn side_picker(
                     )
                     .clicked()
                 {
-                    did = Some(Did::TakeSide(if ours { TeamId::NONE } else { team.id }));
+                    did = Some(Did::JoinTeam(if ours { me } else { team.id }));
                 }
             });
         ui.add_space(m.item_spacing);
@@ -329,8 +333,9 @@ fn side_picker(
     // Anybody who has not picked. Named rather than left off, because a match
     // will not start while somebody is unplaced and a lobby that does not say
     // who is the wrong place to find that out.
+    let on_a_team: Vec<PlayerId> = teams.iter().flat_map(|t| t.players.iter().copied()).collect();
     let stray: Vec<PlayerId> =
-        players.iter().map(|(id, _)| *id).filter(|&id| sides.team_of(id).is_none()).collect();
+        players.iter().map(|(id, _)| *id).filter(|id| !on_a_team.contains(id)).collect();
     if !stray.is_empty() {
         ui.colored_label(
             p.warn,

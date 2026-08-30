@@ -123,7 +123,7 @@ impl Draft {
             Ends::Timer => Some(Victory::Timer { generations: self.number()? }),
             Ends::Territory => Some(Victory::Territory { squares: self.number()? as usize }),
         };
-        // Sides only on a match, and only when asked for. A world with teams
+        // Teams only on a match, and only when asked for. A world with teams
         // is a world with a field nobody could ever read.
         let teams = match (victory, self.together) {
             (Some(_), Together::Teams) => Some(self.sides()?),
