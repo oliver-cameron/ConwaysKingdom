@@ -24,9 +24,11 @@ Postcard over **binary** websocket messages. Binary because a chunk is raw cell 
 enum ClientMessage {
     Join { name, token, room: Option<RoomName> },
     Act(Stamped),                              // an action, with player and tick
-    Subscribe { chunks }, Unsubscribe { chunks },
+    Subscribe { chunks },                      // send me these; a fetch, not a standing order
     Checkpoint { tick, chunks: Vec<(ChunkId, u64)> },
     Rooms,                                     // what worlds are here?
+    Create { name, shape, victory, teams, private },
+    JoinTeam { team }, NameTeam { team, name },
 }
 
 enum ServerMessage {
@@ -42,7 +44,11 @@ enum ServerMessage {
 
 `Purse` rides on every `Checkpoint` reply. Value used to be predictable from a client's own actions alone, so the number on screen was the number the server would agree with. Mining broke that: earnings depend on births *anywhere* in the world and a client holds a viewport, so its guess is always low and always getting lower, and nothing else would ever correct it. The machinery for "your copy is wrong, here is mine" already exists and runs every few seconds, so value uses it rather than growing a second one. The cost is that an action sent for the current tick and not yet applied shows for a moment as money still in hand.
 
-`Rooms` and `Join` are the only two messages a connection with **no seat** may send, and for the same reason: neither names a world. A room is a world, so a player has to see the rooms before picking one, and asking from inside one is asking too late. Everything else from an unjoined connection is dropped rather than answered out of the default room.
+**`Subscribe` is a fetch.** The server answers with the chunks it holds and forgets the request: a chunk *change* reaches a client as the `Step` for the generation it happened in, broadcast to everybody in the room, so there is no push for a subscription to select from. There was an `Unsubscribe` beside it and a per-player list on the server for it to remove from; nothing ever read the list and no client ever sent the message. The list was unbounded, undeduplicated and grown by every resync, and removing from it was an `O(n*m)` scan over attacker-sized input on the one task that owns every room. One `Subscribe` is capped at 4096 chunks, because the reply is unbounded and goes into an unbounded channel — on a torus, where every chunk exists, a few kilobytes of request was half a gigabyte of `ChunkData`.
+
+**A shape off the wire is checked before anything is built out of it.** `Create` carries a `WorldKind`, and a torus is allocated whole — so `rows: 0` reached an `assert!` and `100000x100000` overflowed the `i32` multiply that sizes the allocation, either one killing the simulation task and with it every room in the process, from one message on a connection that had not joined anything. `WorldKind::checked` is the single answer to what a torus may be, and every path from a client to `build` goes through it, including `net::sane_world` for a client being told the shape by a server it should trust about the shape and not about the size.
+
+`Rooms`, `Join` and `Create` are the messages a connection with **no seat** may send, and for the same reason: neither names a world. A room is a world, so a player has to see the rooms before picking one, and asking from inside one is asking too late. Everything else from an unjoined connection is dropped rather than answered out of the default room.
 
 A `RoomInfo` is enough to choose by and no more — the name, how many players are connected *now*, and whether the world ends. Not the tick and not the chunk count: neither says anything about what it is like to be in there. The order is the server's, so two players looking at the same menu see the same list in the same order.
 

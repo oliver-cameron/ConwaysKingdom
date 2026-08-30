@@ -107,25 +107,25 @@ The one thing to be careful of: **do not oust somebody who has just arrived.** A
 
 ## Teams
 
-**Built for matches** — see [game.md](game.md#teams) and [server.md](server.md#sides). Solo or sides is chosen on the creation form; how many sides is chosen there too; who is on which, and what each is called, is settled in the lobby.
+**Built for matches** — see [game.md](game.md#teams) and [server.md](server.md#teams). Solo or teams is chosen on the creation form; how many teams is chosen there too; who is on which, and what each is called, is settled in the lobby.
 
-It turned out as small as the design said, and for the reason it gave: the cell already carries an owner and the rules already read it, so what a side changes is not what a cell *is* but **what counts as yours**. That is `net::reach`, which is `influence` with one comparison widened from `==` to `Sides::allied`, and `net::value_delta`, where an ally's cell reclaims at your own rate rather than a raid's. `sim` learned nothing, exactly as matches did not: the `territory` rule still contests per player, so two allies keep a border between their ground and simply cannot be hurt by it.
+It turned out smaller than the design said, and then smaller again. The first version widened one comparison: the cell already carries an owner and the rules already read it, so what a team changed was not what a cell *is* but **what counts as yours** — `net::reach` with `==` widened to `Sides::allied`, and `net::value_delta` where an ally's cell reclaims at your own rate. That was the right shape and one abstraction too many.
 
-`Sides` is a fixed sixteen bytes indexed by `PlayerId` rather than a map from side to members, because the question every caller asks is "are these two allied" and the other direction is wanted once, in the lobby.
+**A team is a player.** It has a number, a purse and a patch of granted ground like anybody else; joining one takes its controls, and `Player::plays_as` is the whole of what the client and the server have to know. Every comparison went back to `==`, because two allies are not two players who may build on each other's ground — they are one player with several people at the keyboard. `Sides`, `TeamId`, `seat_number`, `leader_of` and the family-of-hue machinery all went with it, and two bugs went with them: see [server.md](server.md#teams).
 
 Three decisions worth keeping:
 
-**Scoring sums at the one place a result is decided**, `matches::leader_of`, rather than by teaching the rule about teams. The winner it names is the winning side's highest-holding member, because everything downstream — `Phase::Over`, the result panel, the record — is written in terms of a player.
+**Scoring needs no special case.** A team's cells carry its number, so `Server::territory` counts them under it and `matches::leader` is the answer. The version that summed each side by hand is what a separate team concept cost.
 
-**The balance check is at the whistle, not in the lobby.** A lobby that refuses to let you join your friend because the sides would be uneven makes people argue about the order they clicked in; one that refuses to *start* until everybody has picked and no side is empty is one where they sort it out and press it again. Sizes beyond that are not checked: three against two is a match people arrange on purpose.
+**The balance check is at the whistle, not in the lobby.** A lobby that refuses to let you join your friend because the teams would be uneven makes people argue about the order they clicked in; one that refuses to *start* until everybody has picked and no team is empty is one where they sort it out and press it again. Sizes beyond that are not checked: three against two is a match people arrange on purpose.
 
-**Sides are settled once it starts.** Changing them mid-match would hand your ground to the people you were fighting, which the scoring could not sensibly explain.
+**Teams are settled once it starts.** Changing them mid-match would hand your ground to the people you were fighting, which the scoring could not sensibly explain.
 
 ### What is left
 
-**The colour is in** — see [game.md](game.md#teams). A team takes a golden-ratio step and its members spread over a narrow arc around it, so allies read as one colour across a screen. The client works out the whole table, because where a member sits in their family depends on who else is on their team, and hands it to the shader in the camera uniform; the shader looks a hue up rather than computing one, and nothing else about a cell changes with the player.
+**The colour needed nothing** — see [game.md](game.md#teams). A team is a player, so its cells carry one number and are drawn in one colour, and the hue table went back to what it was before teams existed: a player's number stepped around the wheel by the golden ratio, a constant the client hands to the shader in the camera uniform.
 
-What is left of it is a **measurement**. The arc is a twelfth of the circle and the families provably do not overlap at `MAX_TEAMS`, which is a test; whether two allies a twelfth apart are actually distinguishable at four pixels a cell, and whether two *teams* are, has not been looked at on a screen. That is the number to revisit before anybody plays eight-a-side.
+There was a real design here and it is worth recording what it cost, because the measurement it was waiting on is exactly the measurement that says the design was unnecessary. A team took a golden-ratio step and its **members** spread over a narrow arc around it, a twelfth of the circle, so that allies read as one colour across a screen of cells and were still told apart when looked at. The arc was fixed rather than widening with the team, on the reasoning that mistaking your own two colours costs nothing and mistaking an enemy for an ally costs the game. All of it was 165 lines of arithmetic keeping two numbers *look* like one number — and the thing it never established, whether two allies a twelfth apart are distinguishable at four pixels a cell, stopped mattering the moment they were one number.
 
 **Friendly fire is on**, and that is the honest first answer rather than a decision. A glider is a weapon whoever built it, and a rule making allied life pass through allied life would be a rule in `sim` — which is what this design exists to avoid. Teams are about scoring and building, not immunity.
 

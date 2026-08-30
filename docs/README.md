@@ -11,6 +11,7 @@
 | [planned.md](planned.md) | What is not built yet, and what is left of what is — a status per entry |
 | [inspiration.md](inspiration.md) | Where the design is borrowed from, and which problem each source solved |
 | [gotchas.md](gotchas.md) | Things that cost a day, so they only cost one |
+| [known-bugs.md](known-bugs.md) | What is wrong and not fixed, with what you would see |
 
 ## Running it
 
@@ -32,6 +33,8 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--torus RxC` | a world that wraps, sized in chunks | infinite |
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.
+
+A torus is at most **512 chunks a side and 16384 in total**. It is allocated whole, so the ceiling is what a server can step four times a second rather than what it can hold — and the same limit answers a room a *client* asks for, which is the path that used to take the process down: a shape arrives over the wire and `rows: 0` reached an `assert!` while `100000x100000` overflowed the multiply that sizes the allocation. `WorldKind::checked` is the one answer, and the command line and the socket both go through it.
 
 A save is authoritative, so the shape a `--torus` asks for only applies to rooms that do not exist yet — the shape of a world is not something a flag can change after cells have been written into it. Restarting against an old world is the usual reason a change seems not to have taken; `--fresh` skips it, for every room at once. The startup log lists the rooms, their shapes and what is in them.
 

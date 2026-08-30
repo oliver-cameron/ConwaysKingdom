@@ -187,3 +187,47 @@ Two panels side by side, both exactly 56 pixels tall, sat 13 pixels apart. Not a
 ## Serving over plain HTTP costs you WebGPU
 
 `navigator.gpu` requires a secure context. `http://host:8080` is not one, so a browser falls back to WebGL2 — which works, but is a different backend with lower limits. `localhost` **is** a secure context, so an SSH tunnel gets you WebGPU without TLS.
+
+## A `%` in an address is a slice by byte offset waiting to panic
+
+`client::route::decode` walked the query string looking for `%XX`, and read the two hex digits as `&raw[i + 1..i + 3]` — a slice of a `&str` by **byte** offset. Byte `i + 3` lands in the middle of a character whenever the thing after the `%` is not ASCII, and Rust refuses that slice by panicking.
+
+```
+?room=%€   ->  end byte index 3 is not a char boundary; it is inside '€'
+```
+
+*Symptom:* the page is blank and reports **"The game did not load"** eight seconds later, which is the same sentence a missing `pkg/` and an unreachable server both produce. This runs on `location.pathname` during `startup`, before the first frame, so nothing else has happened yet to point anywhere.
+
+It works in bytes throughout now and decodes the result as UTF-8, so `%E2%82%AC` comes back as `€` rather than as the three characters it is spelled with, and what cannot be decoded is kept verbatim so a refusal names what was actually typed.
+
+The general shape is worth more than the instance: **an index computed from one string and used to slice another is only safe on ASCII**, and every string that reaches this client came out of an address bar.
+
+## One browser is six connections, and the tunnel counted players
+
+`tunnel/agent.py` kept `--pool` spare connections open through the firewall and returned a slot to the pool when the connection it carried **closed**. That is the right rule for a player and the wrong one for a browser: loading the page opens several TCP connections — the document, the module, the 7.5 MB of wasm, the art — and HTTP keep-alive holds each of them open and idle long after its response has landed.
+
+The websocket is the **last** thing the page asks for, after all of that. So one browser held all four spares through its own page load, the socket found none, and `relay.py` waited `--wait` seconds and closed the browser's connection with no response at all.
+
+*Symptom:* the page loads perfectly and only the socket fails; more often on a slow link, never on a fast one, and never at all on localhost where there is no tunnel. It reads as a game that cannot reach its server, which sends you looking at `net::link_web` and at the server's `/ws` route, both of which are fine.
+
+A spare now asks for its replacement the moment the relay wakes it, so the pool is a floor on how many are *waiting* rather than a ceiling on how many are open. Reproduced with six keep-alive requests in front of a websocket: the old agent starves at its shipped default of four and the new one does not.
+
+## A key bound to a character is a key some keyboards do not have
+
+Four of the client's keys are mnemonics — `R` to rotate, `F` to flip, `?` for help, `` ` `` for the shape reset — and binding them to the **character** rather than to the position is right: on Dvorak the `R` position types `p`, so a positional binding would hide rotate under a key nothing mentions and leave `r`, which the help screen names, doing nothing.
+
+It is only right where the character can be typed. On a Cyrillic, Greek or Hebrew layout the `R` key types a letter that is not `r`, so rotate, flip and the help screen naming them had **no key at all**. And `~`, which the shape reset used to be, is a **dead key** on the Spanish, Portuguese and Nordic layouts: it produces no text on its own, waiting for a vowel to put a tilde over, so it was unreachable even where the alphabet is Latin and every label was in place.
+
+`input::mnemonic` resolves all four in one place, tested without a window. Character first, US position as a fallback, and the fallback is narrow on purpose: `R` and `F` fall back **only when that key types something which is not a Latin letter**, so Dvorak keeps the character binding and nothing hides under an unnamed key. The shape reset moved to `` ` ``, which is the unshifted half of the same key and is never dead.
+
+*Also:* a key bound by **position** needs its label read off the keyboard. The pan cluster already did that — it is `,aoe` on Dvorak — and the digit rows did not, so the help screen said `1-9` to a French keyboard whose top row types ``&é"'(-è_ç`` and to Programmer Dvorak, which needs shift for a digit at all.
+
+*Not attempted:* input methods. Pinyin, Japanese and Korean compose text over several presses and hand it over as a finished string, so `to_text` says nothing during composition and single-key bindings are not a thing those layouts have. Direct-input layouts only.
+
+## A socket object exists long before it connects, and may never connect
+
+`web_sys::WebSocket::new` returns as soon as the URL parses. The connection is made afterwards, and if it never is, the object sits there — open to nobody, erroring never, closing never.
+
+So `link.is_some()` is not "connected", and the HUD read it as though it were. Worse, the path that arrives from a **link** — `?room=`, or `/room/x` — set no deadline at all, where the menu's own "ask a server for its rooms" has had an eight-second one for as long as it has existed. A client that could not reach its server therefore sat in `Screen::Playing` on the world every session starts with, playing alone, saying "connected", with the failure visible only in the console.
+
+*Symptom:* the game works. That is the whole problem: it is a different game from the one the link was for, and nothing on screen distinguishes them.

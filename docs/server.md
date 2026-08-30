@@ -36,15 +36,23 @@ The menu asks `ClientMessage::Rooms` and shows what comes back, so a name is nor
 
 A room name is lowercase letters, digits, `-` and `_`, at most 24 characters, and is folded to lowercase. Narrow because the name is also the save file's name: a path separator in it would escape the rooms directory, and on a case-insensitive filesystem `Lobby` and `lobby` would be two rooms on one machine and one on another. `net::room_name` is the whole rule, and the client checks `--room` against it before connecting so a bad name is a message about the argument rather than a connection that opens and is turned away.
 
-### Sides
+### Teams
 
-A match may be played in sides. `ClientMessage::Create` carries `teams: Option<u8>` — `None` is a free-for-all, `Some(n)` is n sides, and it is refused on a world, because a team is a way of deciding a result and a world has none. `TakeSide` and `NameSide` work only while a match is `Gathering`.
+**A team is a player, and several clients drive it.** That is the whole design and everything else here follows from it. `Server::make_teams` creates the teams as ordinary `Player` rows — a number, a purse, a patch of granted ground — before anybody joins, and joining one takes its controls: `Player::plays_as` says which number a client's cells carry, and it is the client's own number in a free-for-all.
 
-`Sides` is a fixed array indexed by `PlayerId` and rides on every `Match` broadcast, because the **client predicts against it**: whether a placement is allowed and what it costs both turn on who is allied with whom, so a client without it would disagree with the server on every square near a teammate.
+Nothing else in the crate learns that teams exist. `net::reach`, `may_place`, `value_delta`, `grant`, `spawn_for`, `credit`, `territory` and `matches::leader` take a `PlayerId` and compare it, exactly as they did before there were teams — because two allies *are* the same player, so "are these two on the same side" is a question with nobody left to ask it about.
 
-Scoring sums at `matches::leader_of` rather than in the rule. `Server::territory` still counts per player; a side is the sum of its members, and the winner named is the side's highest-holding member, because `Phase::Over` and everything downstream is written in terms of a player.
+What that replaced: a `Sides` array indexed by `PlayerId`, copied onto every `Match` broadcast so the client could price a placement beside a teammate the way the server would, and an `allied()` call threaded through placement, pricing, spawning, mining, scoring and colour. There is nothing to price differently now — a teammate's cells are the client's own.
 
-`start_match` refuses a match nobody would want to play: somebody unplaced, or a side with nobody on it. Sizes beyond that are not checked.
+`ClientMessage::Create` carries `teams: Option<u8>` — `None` is a free-for-all, `Some(n)` is n teams, and it is refused on a world, because a team is a way of deciding a result and a world has none. `JoinTeam` and `NameTeam` work only while a match is `Gathering`, and `JoinTeam` naming your own number is how you step off a team.
+
+**A team costs a number.** There are fifteen — `PlayerId` is four bits in the cell — and teams and seats come out of the same pool, so a match with `n` teams has `n` fewer people in it. That is the price of the two being the same kind of thing, and it is what makes it impossible for a team and a seat to be the same number: they used to be drawn from one 1..15 space by two different rules, and an unaligned player 3 was seated on top of team 3. `net::MAX_TEAMS` is seven for the same reason — a team nobody can sit on is not a team.
+
+Scoring needs no summing. A team's cells all carry its number, so `Server::territory` has already counted them under it and `matches::leader` is the answer; `matches::leader_of`, which took the roster's allegiances and added each side up by hand, is gone.
+
+One purse, and it is the team's own row. `Server::value_of` and `credit` both resolve through `plays_as`, so the `Welcome`, the `Purse` that rides on a checkpoint and the refusal in `handle` all read one number. There used to be a copy on every ally and an invariant keeping them equal.
+
+`start_match` refuses a match nobody would want to play: somebody unplaced, or a team with nobody on it. Sizes beyond that are not checked.
 
 ### Watching
 
