@@ -15,19 +15,18 @@ pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 ///
 /// ```text
 ///  byte 0 (R)                byte 1 (G)
-/// | player |level|H|       |    kind     |I |A |
-///  7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
+/// | player |level|H|       |K2| age  |K1 0|I |A |
+///  7 6 5 4  3 2 1  0        7  6 5 4  3 2  1  0
 /// ```
 ///
 /// Byte 0 holds the player at the top, so the number extracts with a shift and
 /// no mask, then how much of that player's influence reaches this square, then
 /// whether the square was granted.
 ///
-/// Byte 1 is **the tile this cell draws**. Alive and iced are its bottom two
-/// bits and the kind is the rest, so a kind's four states are four consecutive
-/// tiles — and the byte is the index straight into the sheet, low nibble
-/// across, high nibble down. That is the whole of the mapping: no layer to
-/// choose, no UV to carry, and nothing to keep in step but this diagram.
+/// Byte 1 is **the tile this cell draws**: the index straight into the sheet,
+/// low nibble across, high nibble down. The fields are placed so that reads
+/// off the sheet: a kind's four states are four consecutive tiles along a row,
+/// and its eight ages are eight rows down. See [`bits::AGE_SHIFT`].
 ///
 /// Uploaded as `Rg8Uint`. Uint rather than Unorm because these are bit fields,
 /// not colours: Unorm hands the shader floats in 0..1 and reading a field back
@@ -58,10 +57,36 @@ pub mod bits {
     /// the rule returns such a cell unchanged.
     pub const ICE: u8 = 1 << 1;
 
-    /// Byte 1, bits 2..8: what kind of cell this is. Also the top six bits of
-    /// its tile index, which is why a kind's four states are consecutive.
+    /// Byte 1, bits 4..7: **how old this cell is**, nought to seven.
+    ///
+    /// Not a count of generations — a step, and what a step means is the
+    /// kind's business. Nothing advances it yet; see [payloads], which is
+    /// what it is for.
+    ///
+    /// **Here so the sheet reads as a grid.** The high nibble of the tile byte
+    /// is the row, so age in its low three bits puts a kind's eight ages in
+    /// eight rows down, under the four states that are its four columns.
+    ///
+    /// [payloads]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#payloads
+    pub const AGE_SHIFT: u8 = 4;
+    pub const AGE_WIDTH: u8 = 3;
+    pub const AGE_MASK: u8 = (1 << AGE_WIDTH) - 1;
+    pub const MAX_AGE: u8 = AGE_MASK;
+
+    /// Byte 1, bits 2..4 and bit 7: what kind of cell this is.
+    ///
+    /// **Split, because age took the middle of the nibble.** Three bits, and
+    /// the two the sheet wants adjacent to the state bits are 2 and 3 — so the
+    /// third goes above the age, where it becomes the top half of the sheet.
+    /// Kinds 0-3 are the first eight rows and 4-7 the last eight.
+    ///
+    /// Six bits once, of which three were used. Sixty-one spare kinds is not
+    /// worth a nibble that does not line up.
     pub const KIND_SHIFT: u8 = 2;
-    pub const KIND_WIDTH: u8 = 6;
+    pub const KIND_LOW_WIDTH: u8 = 2;
+    pub const KIND_LOW_MASK: u8 = (1 << KIND_LOW_WIDTH) - 1;
+    pub const KIND_HIGH_SHIFT: u8 = 7;
+    pub const KIND_WIDTH: u8 = 3;
     pub const KIND_MASK: u8 = (1 << KIND_WIDTH) - 1;
 
     /// Byte 0, bits 4..8: the player number, at the top so it extracts with a
@@ -123,7 +148,14 @@ const _: () = {
     assert!(bits::ALIVE == 1);
     assert!(bits::ICE == 2);
     assert!(bits::KIND_SHIFT == 2);
-    assert!(bits::KIND_SHIFT as u32 + bits::KIND_WIDTH as u32 == 8);
+    // Kind low, age, kind high: bits 2..8 with no overlap and no gap.
+    assert!(bits::KIND_SHIFT + bits::KIND_LOW_WIDTH == bits::AGE_SHIFT);
+    assert!(bits::AGE_SHIFT + bits::AGE_WIDTH == bits::KIND_HIGH_SHIFT);
+    assert!(bits::KIND_HIGH_SHIFT == 7);
+    assert!(bits::KIND_LOW_WIDTH + 1 == bits::KIND_WIDTH);
+    // A kind must fit the field it is stored in, or `with_kind` truncates it
+    // into a different kind that has art of its own.
+    assert!(Kind::COUNT <= 1 << bits::KIND_WIDTH);
     // And so must the owner byte: player, level, home, with nothing spare.
     assert!(bits::PLAYER_SHIFT as u32 + bits::PLAYER_WIDTH as u32 == 8);
     assert!(bits::LEVEL_SHIFT as u32 + bits::LEVEL_WIDTH as u32 == bits::PLAYER_SHIFT as u32);
@@ -191,7 +223,22 @@ impl Cell {
     /// consecutive entries in the sheet.
     #[inline]
     pub const fn kind(self) -> Kind {
-        Kind((self.tile() >> bits::KIND_SHIFT) & bits::KIND_MASK)
+        let tile = self.tile();
+        Kind(
+            ((tile >> bits::KIND_SHIFT) & bits::KIND_LOW_MASK)
+                | ((tile >> bits::KIND_HIGH_SHIFT) << bits::KIND_LOW_WIDTH),
+        )
+    }
+
+    /// How old this cell is, nought to [`bits::MAX_AGE`]. Nothing advances it
+    /// yet — see [`bits::AGE_SHIFT`].
+    pub const fn age(self) -> u8 {
+        (self.tile() >> bits::AGE_SHIFT) & bits::AGE_MASK
+    }
+
+    pub const fn with_age(self, age: u8) -> Self {
+        let kept = self.tile() & !(bits::AGE_MASK << bits::AGE_SHIFT);
+        self.with_tile(kept | ((age & bits::AGE_MASK) << bits::AGE_SHIFT))
     }
 
     /// Under ice, and therefore not updating: a pane stops time inside
@@ -254,8 +301,13 @@ impl Cell {
 
     #[inline]
     pub const fn with_kind(self, kind: Kind) -> Self {
-        let state = self.tile() & !(bits::KIND_MASK << bits::KIND_SHIFT);
-        self.with_tile(state | ((kind.0 & bits::KIND_MASK) << bits::KIND_SHIFT))
+        let kind = kind.0 & bits::KIND_MASK;
+        let kept = self.tile()
+            & !((bits::KIND_LOW_MASK << bits::KIND_SHIFT) | (1 << bits::KIND_HIGH_SHIFT));
+        self.with_tile(
+            kept | ((kind & bits::KIND_LOW_MASK) << bits::KIND_SHIFT)
+                | ((kind >> bits::KIND_LOW_WIDTH) << bits::KIND_HIGH_SHIFT),
+        )
     }
 
     /// Granted ground: this square is somebody's home patch and its owner does
@@ -672,7 +724,7 @@ mod tests {
     fn the_bit_fields_are_independent() {
         // The kind field is six bits now: the other two carry alive and ice,
         // which is what makes the byte a tile index.
-        for kind in [0u8, 1, 37, bits::KIND_MASK] {
+        for kind in [0u8, 1, 5, bits::KIND_MASK] {
             for p in 0..=PlayerId::MAX {
                 for ice in [false, true] {
                     let c = Cell::DEAD
@@ -722,16 +774,80 @@ mod tests {
     /// are four consecutive tiles and the shader needs no table to find them.
     #[test]
     fn a_kinds_four_states_are_four_consecutive_tiles() {
-        let base = Cell::DEAD.with_kind(Kind(7));
-        let tiles: Vec<u8> = [(false, false), (true, false), (false, true), (true, true)]
-            .iter()
-            .map(|&(alive, ice)| base.with_alive(alive).with_ice(ice).tile())
-            .collect();
-        assert_eq!(tiles, vec![7 * 4, 7 * 4 + 1, 7 * 4 + 2, 7 * 4 + 3]);
+        for kind in 0..=bits::KIND_MASK {
+            let base = Cell::DEAD.with_kind(Kind(kind));
+            let tiles: Vec<u8> = [(false, false), (true, false), (false, true), (true, true)]
+                .iter()
+                .map(|&(alive, ice)| base.with_alive(alive).with_ice(ice).tile())
+                .collect();
+            let first = tiles[0];
+            assert_eq!(tiles, vec![first, first + 1, first + 2, first + 3], "kind {kind}");
+            // Four columns wide and aligned to them, so a kind's row of states
+            // never straddles the edge of the sheet.
+            assert_eq!(first % 4, 0, "kind {kind} starts mid-group");
+        }
+    }
 
-        // Low nibble across the sheet, high nibble down it.
-        let tile = tiles[3];
-        assert_eq!((tile & 15, tile >> 4), (31 % 16, 31 / 16));
+    /// **Ages are rows.** The high nibble of the tile byte is the row, and age
+    /// sits in its low three bits, so a kind's eight ages are the eight rows
+    /// under its four states. That is the whole reason age is where it is.
+    #[test]
+    fn a_kinds_ages_are_eight_rows_down_the_sheet() {
+        for kind in 0..=bits::KIND_MASK {
+            let base = Cell::DEAD.with_kind(Kind(kind)).with_alive(true);
+            let rows: Vec<u8> = (0..=bits::MAX_AGE).map(|a| base.with_age(a).tile() >> 4).collect();
+            let top = rows[0];
+            assert_eq!(rows, (top..top + 8).collect::<Vec<_>>(), "kind {kind}");
+            // And the column never moves as a cell ages.
+            let cols: Vec<u8> = (0..=bits::MAX_AGE).map(|a| base.with_age(a).tile() & 15).collect();
+            assert!(cols.iter().all(|&c| c == cols[0]), "kind {kind} changed column with age");
+        }
+    }
+
+    /// **The art that exists does not move.** Every kind in play is 0..3 and
+    /// every cell today is age nought, so all of it stays in the sheet's first
+    /// row, exactly where the old `kind * 4 + state` mapping put it.
+    #[test]
+    fn the_kinds_that_exist_are_where_they_always_were() {
+        for kind in Kind::ALL {
+            for (i, (alive, ice)) in
+                [(false, false), (true, false), (false, true), (true, true)].iter().enumerate()
+            {
+                let tile = Cell::DEAD.with_kind(kind).with_alive(*alive).with_ice(*ice).tile();
+                assert_eq!(tile, kind.0 * 4 + i as u8, "{kind:?} moved in the sheet");
+            }
+        }
+    }
+
+    /// Age and kind share a byte and must not read each other's bits.
+    #[test]
+    fn age_and_kind_do_not_collide() {
+        for kind in 0..=bits::KIND_MASK {
+            for age in 0..=bits::MAX_AGE {
+                let cell = Cell::DEAD
+                    .with_kind(Kind(kind))
+                    .with_age(age)
+                    .with_alive(true)
+                    .with_ice(true)
+                    .with_player(PlayerId(9));
+                assert_eq!(cell.kind(), Kind(kind), "age {age} ate the kind");
+                assert_eq!(cell.age(), age, "kind {kind} ate the age");
+                assert!(cell.is_alive() && cell.is_ice());
+                assert_eq!(cell.player(), PlayerId(9), "the owner byte moved");
+            }
+        }
+    }
+
+    /// Nothing counts age yet, so a step must leave it alone rather than
+    /// quietly zeroing it — see `bits::AGE_SHIFT`.
+    #[test]
+    fn nothing_advances_age_yet() {
+        let mut w = crate::sim::World::infinite_empty();
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(1)).with_age(5));
+        }
+        w.step();
+        assert_eq!(w.cell_at(0, 0).map(Cell::age), Some(5), "a step moved the age");
     }
 
     /// The player sits at the top of its byte, so extracting it is a shift

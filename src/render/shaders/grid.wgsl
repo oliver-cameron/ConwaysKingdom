@@ -7,8 +7,8 @@
 // changing both.
 //
 //  byte 0 (R)                byte 1 (G)
-// | player |level|H|       |    kind     |I |A |
-//  7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
+// | player |level|H|       |K2| age  |K1 0|I |A |
+//  7 6 5 4  3 2 1  0        7  6 5 4  3 2  1  0
 //
 // Byte 2 (B) is **not** a cell byte. It is the neighbour mask -- which of the
 // four sides have a cell that would draw the same sprite -- computed on the
@@ -22,9 +22,12 @@
 // Only the player is read here. The level decides where a border ends up, and
 // it is not drawn: ground fading with it made every claim look like a
 // different kind of cell, and a strength nobody can act on separately is one
-// the map does not need to spell out. Alive, ice and kind are read as one
-// number -- byte 1 is the tile index into the sheet, so this shader never
-// takes them apart, and that is the point of the layout.
+// the map does not need to spell out.
+//
+// Alive, ice, kind and age are read as **one number** -- byte 1 is the tile
+// index into the sheet, so this shader never takes them apart, and that is the
+// point of the layout. Age is placed so the sheet reads as a grid: four states
+// across a row, eight ages down. See `sim::cell::bits`.
 const PLAYER_SHIFT: u32 = 4u;   // top of its byte, so no mask is needed
 
 // See render::atlas. One sheet; a cell's tile byte is the index into it.

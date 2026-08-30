@@ -51,7 +51,11 @@ It used to be a quad per chunk, and the visible chunk count grows as the square 
 
 ## Sprites
 
-**One sheet**, `assets/sprites/sheet.png`: 256×256, a 16×16 grid of 16×16 tiles. A cell's tile byte is the index into it — low nibble across, high nibble down — and that byte already carries alive and ice, so there is nothing to look up.
+**One sheet**, `assets/sprites/sheet.png`: 256×256, a 16×16 grid of 16×16 tiles. A cell's tile byte is the index into it — low nibble across, high nibble down — and that byte already carries alive, ice, kind and age, so there is nothing to look up.
+
+The fields are placed so the sheet reads as a grid rather than as a list. Alive and ice are the bottom two bits, so a kind's **four states are four columns**; age is the low three bits of the high nibble, so its **eight ages are eight rows** under them. The kind's third bit is the top bit of the byte, which splits the sheet in half: kinds 0–3 above, 4–7 below.
+
+Nothing advances age yet — see [payloads](planned.md#payloads), which is what it is for. What that costs today is nothing: every kind in play is 0–3 and every cell is age nought, so all the art that exists is in the first row, exactly where the old `kind * 4 + state` mapping put it.
 
 | tile | state |
 |---|---|
@@ -62,7 +66,7 @@ It used to be a quad per chunk, and the visible chunk count grows as the square 
 
 A tile per state rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One tile, one unconditional sample, and now not even a layer index to compute.
 
-The sheet in the repo is **provisional**: four flat tiles so the states are told apart. Redraw it and drop it in; no code changes, because the mapping is the tile byte and nothing else.
+The sheet in the repo is **provisional**: four flat tiles so the states are told apart, all in the first row. Redraw it and drop it in; no code changes, because the mapping is the tile byte and nothing else.
 
 The PNGs are the source, and `cnvt` converts between what you draw and what the shader reads, in both directions:
 

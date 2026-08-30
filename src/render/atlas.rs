@@ -30,6 +30,11 @@ pub const SHEET_N: u32 = TILE_N * SHEET_TILES;
 /// UV to carry, and one unconditional sample, which is what WGSL needs since
 /// it forbids implicit derivatives in non-uniform control flow.
 ///
+/// The tile byte's fields are placed so the sheet reads as a grid: a kind's
+/// four states are four columns, and its eight ages are eight rows under them.
+/// Kinds 0-3 are the top half of the sheet and 4-7 the bottom. Nothing
+/// advances age yet — see `sim::cell::bits::AGE_SHIFT`.
+///
 /// **Provisional art.** This sheet is a stand-in: four flat tiles so the four
 /// states are told apart and the game is playable. Redraw it and drop it in;
 /// nothing in the code needs to change, because the mapping is the tile byte
