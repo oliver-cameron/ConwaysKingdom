@@ -524,7 +524,8 @@ mod tests {
         assert_eq!(cup.parse().unwrap().2, Some(Victory::Territory { squares: 500 }));
         assert_eq!(cup.parse().unwrap().3, None, "a match is solo unless asked otherwise");
 
-        // Teams, and only on a match: a world has no result for a team to win.
+        // Teams on a match, and on a world too: a team is people playing as
+        // one player, which is worth having without a result to win.
         let sided = Draft {
             name: "cup".into(),
             ends: Ends::Timer,
@@ -533,13 +534,15 @@ mod tests {
             ..Draft::default()
         };
         assert_eq!(sided.parse().unwrap().3, Some(3));
-        let world_with_sides =
-            Draft { name: "hall".into(), together: Together::Teams, ..Draft::default() };
-        assert_eq!(
-            world_with_sides.parse().unwrap().3,
-            None,
-            "a world that never ends has no sides, whatever the toggle says"
-        );
+        let world_with_teams = Draft {
+            name: "hall".into(),
+            together: Together::Teams,
+            team_count: "2".into(),
+            ..Draft::default()
+        };
+        let made = world_with_teams.parse().unwrap();
+        assert_eq!(made.2, None, "a world still never ends");
+        assert_eq!(made.3, Some(2), "and may still be played in teams");
         let too_many = Draft {
             name: "cup".into(),
             ends: Ends::Timer,

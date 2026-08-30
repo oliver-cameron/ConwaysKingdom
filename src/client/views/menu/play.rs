@@ -410,10 +410,10 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // one that holds it.
             shape_row(ui, theme, draft);
 
-            // Teams, and only on a match: a team is a way of deciding a
-            // result and a world has none, so this row appears with the same
-            // rule every other conditional row here follows.
-            if draft.ends != Ends::Never {
+            // Teams, on a world as much as on a match: a team is people
+            // playing as one player, which is worth having without a result
+            // to win.
+            {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
                 let mut together = draft.together;

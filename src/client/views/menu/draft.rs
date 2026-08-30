@@ -20,8 +20,9 @@ pub enum Ends {
     Territory,
 }
 
-/// Whether a match is played in sides. Only a match can be: a team is a way of
-/// deciding a result, and a world has none.
+/// Whether it is played in teams. A world may be as much as a match: a team is
+/// people playing as one player, which is worth having without a result to
+/// win. What a match adds is that the teams have to be even at the whistle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Together {
     Solo,
@@ -123,11 +124,10 @@ impl Draft {
             Ends::Timer => Some(Victory::Timer { generations: self.number()? }),
             Ends::Territory => Some(Victory::Territory { squares: self.number()? as usize }),
         };
-        // Teams only on a match, and only when asked for. A world with teams
-        // is a world with a field nobody could ever read.
-        let teams = match (victory, self.together) {
-            (Some(_), Together::Teams) => Some(self.sides()?),
-            _ => None,
+        // Only when asked for; a world may have them as much as a match can.
+        let teams = match self.together {
+            Together::Teams => Some(self.sides()?),
+            Together::Solo => None,
         };
         Ok((name, shape, victory, teams))
     }

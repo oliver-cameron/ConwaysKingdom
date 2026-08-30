@@ -193,7 +193,11 @@ impl Server {
         if self.sides.is_empty() {
             return Err("this match has no teams".into());
         }
-        if !matches!(self.phase, Phase::Gathering) {
+        // A world has no whistle, so its teams are never settled: people join
+        // and leave one as they like. A match's are fixed at the start, or
+        // changing sides would hand your ground to the people you were
+        // fighting.
+        if matches!(self.phase, Phase::Running { .. } | Phase::Over { .. }) {
             return Err("teams are settled once a match starts".into());
         }
         // Their own number steps off a side; anything else has to be a side
@@ -215,7 +219,7 @@ impl Server {
         if !self.sides.contains(&team) {
             return Err("no such team".into());
         }
-        if !matches!(self.phase, Phase::Gathering) {
+        if matches!(self.phase, Phase::Running { .. } | Phase::Over { .. }) {
             return Err("teams are settled once a match starts".into());
         }
         let name = crate::net::team_name(name)?;
@@ -258,8 +262,12 @@ impl Server {
     /// team 3. What it costs is seats: a world holds [`PlayerId::MAX`]
     /// numbers, and a match with `n` sides has `n` fewer people in it.
     pub fn make_teams(&mut self, n: u8) -> Result<(), String> {
-        if !matches!(self.phase, Phase::Gathering) {
-            return Err("only a match has teams".into());
+        // A world may have them too. What a team is, is people building as one
+        // player — one purse, one patch of ground, one colour — and none of
+        // that needs a result to be about. What a *match* adds is that the
+        // teams have to be even before the whistle.
+        if matches!(self.phase, Phase::Running { .. } | Phase::Over { .. }) {
+            return Err("teams are settled once a match starts".into());
         }
         if !(crate::net::MIN_TEAMS..=crate::net::MAX_TEAMS).contains(&n) {
             return Err(format!(
@@ -1790,6 +1798,39 @@ mod tests {
         assert_eq!(s.value_of(alice), Some(25), "an ally's spending did not come out of the purse");
         assert_eq!(s.value_of(bob), Some(25));
         assert_eq!(s.value_of(carol), Some(0));
+    }
+
+    /// **A world may have teams**, and its teams are never settled: there is
+    /// no whistle, so people join and leave one as they like. A match fixes
+    /// them at the start, or changing sides would hand your ground to the
+    /// people you were fighting.
+    #[test]
+    fn a_world_has_teams_and_they_are_never_settled() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_teams(2).expect("a world was refused teams");
+        let teams: Vec<PlayerId> = s.teams().iter().map(|t| t.id).collect();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        s.join_team(alice, teams[0]).unwrap();
+        assert_eq!(s.plays_as(alice), teams[0]);
+
+        // A world steps forever, and the teams still move.
+        s.step();
+        s.join_team(alice, teams[1]).expect("a world settled its teams");
+        assert_eq!(s.plays_as(alice), teams[1]);
+        s.join_team(alice, alice).expect("stepping off a team was refused");
+        assert_eq!(s.plays_as(alice), alice);
+
+        // And a match's do not, once it is running.
+        let mut m = Server::new(World::infinite_empty());
+        m.make_match(Victory::Timer { generations: 100 });
+        m.make_teams(2).unwrap();
+        let teams: Vec<PlayerId> = m.teams().iter().map(|t| t.id).collect();
+        let (bob, _) = m.join_with("bob", None, None).unwrap();
+        let (carol, _) = m.join_with("carol", None, None).unwrap();
+        m.join_team(bob, teams[0]).unwrap();
+        m.join_team(carol, teams[1]).unwrap();
+        m.start_match(None).unwrap();
+        assert!(m.join_team(bob, teams[1]).is_err(), "a running match let somebody change teams");
     }
 
     /// **Giving up is a seat's decision and being out is a player's**, which

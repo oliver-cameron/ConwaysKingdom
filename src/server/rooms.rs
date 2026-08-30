@@ -912,14 +912,14 @@ impl Rooms {
         let mut server = Server::named(name.clone(), shape.build());
         if let Some(victory) = victory {
             server.make_match(victory);
-            // Sides only on a match. A team is a way of deciding a result, and
-            // a world has none — so a world asked for teams is a world with a
-            // field nobody could ever read.
-            if let Some(n) = teams {
-                server.make_teams(n)?;
-            }
-        } else if teams.is_some() {
-            return Err("only a match has teams".into());
+        }
+        // **A world may have teams.** What a team is, is people playing as one
+        // player, and that is worth having without a result to win: a world
+        // with two teams is two shared kingdoms rather than fifteen small
+        // ones. Made before anybody joins either way, because a team takes a
+        // number out of the same pool the seats do.
+        if let Some(n) = teams {
+            server.make_teams(n)?;
         }
         let path = save_path(&self.dir, &id);
         if victory.is_none() && !self.dir.as_os_str().is_empty() {
