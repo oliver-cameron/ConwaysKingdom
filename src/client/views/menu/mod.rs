@@ -253,6 +253,15 @@ impl Menu {
             draft: None,
         }
     }
+
+    /// The menu, opened on a sentence saying why the client is looking at it.
+    ///
+    /// For the client that was told where to go and could not get there: a
+    /// link into a room, or `--ws` on a command line. Those used to fall
+    /// through to a solo world with nothing said.
+    pub fn failed(default_address: String, on_web: bool, why: String) -> Self {
+        Self { stage: Stage::Failed(why), ..Self::new(default_address, on_web) }
+    }
 }
 
 /// Draw it, and say what was chosen. Returns the rectangle it covered, so the

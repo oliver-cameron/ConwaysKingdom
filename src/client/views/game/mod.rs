@@ -1025,8 +1025,14 @@ impl GameApp {
                 }
                 // Mid-game. The simulation is deterministic, so the world
                 // carries on locally rather than stopping -- offline is a
-                // solitary game, not a broken one.
-                Screen::Playing => log::warn!("link closed; continuing offline"),
+                // solitary game, not a broken one. **Said on screen as well as
+                // in the log**, because a log line is not somewhere a player
+                // is looking and the difference between this game and the one
+                // they were in is every other player in it.
+                Screen::Playing => {
+                    log::warn!("link closed; continuing offline");
+                    self.notice = Some(words::menu::LOST_CONNECTION.into());
+                }
             }
             return;
         }
@@ -1936,7 +1942,13 @@ impl GameApp {
     /// A menu that says "asking" forever is indistinguishable from one that is
     /// broken, and the two most likely causes -- a wrong address, and a server
     /// that is not running -- both look exactly like this.
-    fn time_out_room_list(&mut self) {
+    ///
+    /// **This runs for a client that was told where to go, too.** A link into
+    /// a room used to set no deadline at all, so a socket that never opened
+    /// left the client playing the world it starts every session with, on its
+    /// own, with nothing said and the HUD reading "connected" -- a browser's
+    /// socket object exists long before it connects, and may never connect.
+    fn time_out_first_word(&mut self) {
         let Some(asked) = self.asked_at else { return };
         if self.elapsed - asked < ROOM_LIST_TIMEOUT {
             return;
@@ -1978,6 +1990,9 @@ impl App for GameApp {
         // line or in a link is a choice already made; anything else opens the
         // menu, which is the only way a room can be chosen without a terminal.
         let mut pending: Option<Joining> = None;
+        // When the wait for a first word started, so it can run out. `None`
+        // once the server has answered, and for a client that is not waiting.
+        let mut asked_at: Option<f64> = None;
         let (screen, link) = match startup() {
             Start::Join { url, name, room, watch } => {
                 log::info!("connecting to {url}, asking for room {room:?}");
@@ -2000,7 +2015,31 @@ impl App for GameApp {
                 if link.is_some() && !watching {
                     pending = Some(Joining { name, room: room.clone() });
                 }
-                (Screen::Playing, link)
+                match link {
+                    // **Timed like the menu's own ask, which it was not.** A
+                    // link into a room set no deadline, so a socket that never
+                    // opened produced no message, no retry and no way to tell:
+                    // the client sat in `Screen::Playing` on the world it
+                    // starts with, and a browser's socket object exists long
+                    // before it connects, so the HUD said "connected" for the
+                    // whole of it. A game that quietly turns out to be a
+                    // different game is worse than one that says it failed.
+                    Some(link) => {
+                        asked_at = Some(0.0);
+                        (Screen::Playing, Some(link))
+                    }
+                    // The address is unusable — a browser refusing to build a
+                    // socket for it, which is the one way `dial` fails here.
+                    // Said now rather than waited out.
+                    None => (
+                        Screen::Menu(menu::Menu::failed(
+                            url.clone(),
+                            cfg!(target_arch = "wasm32"),
+                            words::menu::not_an_address(&url),
+                        )),
+                        None,
+                    ),
+                }
             }
             Start::Menu { address, page } => {
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
@@ -2101,7 +2140,7 @@ impl App for GameApp {
             last_action: None,
             value: Player::STARTING_VALUE,
             screen,
-            asked_at: None,
+            asked_at,
             listed_at: 0.0,
             lobby: None,
             me: None,
@@ -2154,7 +2193,7 @@ impl App for GameApp {
         if self.link.is_some() {
             self.pump_link();
         }
-        self.time_out_room_list();
+        self.time_out_first_word();
         self.refresh_room_list();
 
         if let Some(Pending { drag, to_px }) = self.pending.take() {
