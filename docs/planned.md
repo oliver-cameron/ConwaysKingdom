@@ -20,6 +20,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Player profiles](#player-profiles) | Decided | a person, rather than a seat in one room |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Payloads](#payloads) | Decided | a cell that explodes after a while |
+| [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
@@ -105,6 +106,20 @@ The four figures on the hotbar are labelled with a word each — `purse`, `groun
 `views::icons` already tints the sprite sheet on the CPU the way the shader tints it on the GPU, so a cell can be drawn on a button; a purse and a clock are not cells and would be the first art in the client that is not a cell. That is the decision this is waiting on — a second sheet, or a handful of shapes painted with `egui::Painter` the way `icons::back` is.
 
 `icons::back` is the precedent and the argument for painting them: the arrow it replaced was a character in a font this client does not load, and the one control whose job is to be recognised at a glance was drawn as a square until somebody painted it.
+
+## Overclockers
+
+**A cell that steps more than once a generation.** Twice, or more. Not designed yet; this is here to say what it will run into, because that is the part that is already decidable.
+
+**A generation is the unit everything else is keyed to.** The seeded dice are derived from it, so a birth's owner is a function of the generation — see [simulation.md](simulation.md#determinism). The server broadcasts one `Step` per generation and a client that finds itself at a different tick throws its world away and asks again. Mining pays per birth and the standings go out every eight generations. So "twice a generation" is not a rule about a cell so much as a question about what a generation *is*, and the answer has to be one of two shapes:
+
+**Sub-steps inside one generation.** The generation stays the unit on the wire and in the save; inside `World::step`, a region containing an overclocker runs the rule twice before the generation is called done. Everything outside the sim is untouched — one `Step`, one tick, one digest. What it needs is a rule for what a sub-step reads: the second pass sees the first pass's output, which means overclocked regions and ordinary ones are being stepped against different states at their border, and the border is where it will look wrong.
+
+**A faster tick with slower cells.** The opposite: the generation gets shorter and ordinary cells step every *n*th one. Nothing about the rule changes and everything about the cost does — the server steps four times as often for the same simulation, and the tick is already the thing the [latency work](networking.md#messages) was about.
+
+The first is almost certainly right and the second is worth writing down because it is the one that does not need a new concept.
+
+**What it must not become** is a cell whose speed depends on anything a client can see and the server cannot, or two peers stepping the same region a different number of times. Whatever the design turns out to be, the test is the one `examples/two` already runs: two peers, the real protocol, digests compared every shared generation.
 
 ## Depleted mines
 
