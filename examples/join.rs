@@ -24,7 +24,7 @@ fn main() {
     let room = std::env::args().nth(2);
     let mut link = Link::connect(url);
     let room = room.map(conwayskingdom::net::RoomId);
-    link.send(ClientMessage::Join { name: "late".into(), token: None, room, person: None });
+    link.send(ClientMessage::Join { name: "late".into(), room, person: None });
 
     // Replaced on Welcome by a world of the shape the server named. A client
     // always opens with something to look at, because a socket may never

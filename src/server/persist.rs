@@ -28,7 +28,14 @@ const MAGIC: &[u8; 4] = b"CKW\0";
 /// name, so the version is what turns a silently shuffled roster into a
 /// refusal. Nothing is lost going forward: a seat saved before people existed
 /// loads with none, which is exactly what it had.
-const VERSION: u8 = 6;
+///
+/// And to 7 when the rejoin token went. A seat is found by the **person** in
+/// it now, so the token was a second answer to a question already answered —
+/// and a version 6 file read as 7 would take the token's length bytes as the
+/// person's, which is the same silently-shuffled roster the last bump was
+/// about. Nothing to migrate: a seat whose person was never recorded is one
+/// nobody can come back to, and that was already true of a token nobody kept.
+const VERSION: u8 = 7;
 
 const KIND_INFINITE: u8 = 0;
 const KIND_TOROIDAL: u8 = 1;
@@ -93,9 +100,6 @@ pub fn save(path: &Path, world: &World, players: &[Player], tick: u64) -> io::Re
         out.extend_from_slice(name);
         out.extend_from_slice(&p.last_seen.to_le_bytes());
         out.extend_from_slice(&p.value.to_le_bytes());
-        let token = p.token.as_bytes();
-        out.extend_from_slice(&(token.len() as u16).to_le_bytes());
-        out.extend_from_slice(token);
         // Length-prefixed like the others, and empty for a seat with nobody
         // recorded in it -- there is no separate "absent" to encode when the
         // thing being encoded is a string that is never legitimately empty.
@@ -170,8 +174,6 @@ pub fn load(path: &Path) -> io::Result<Snapshot> {
         let mut p = Player::new(id, name);
         p.last_seen = r.u64()?;
         p.value = r.i32()?;
-        let len = r.u16()? as usize;
-        p.token = String::from_utf8_lossy(r.take(len)?).into_owned();
         let len = r.u16()? as usize;
         let person = String::from_utf8_lossy(r.take(len)?).into_owned();
         p.person = (!person.is_empty()).then_some(person);
@@ -284,13 +286,11 @@ mod tests {
     fn a_player_restored_from_a_file_is_not_online() {
         let path = scratch("offline");
         let mut alice = Player::new(PlayerId(2), "alice");
-        alice.token = "aaaa".into();
         assert!(alice.online, "a player who joins is online");
         save(&path, &World::toroidal_empty(3, 3), &[alice], 0).unwrap();
 
         let back = load(&path).unwrap();
         assert!(!back.players[0].online, "and one read off a disk is not");
-        assert_eq!(back.players[0].token, "aaaa", "but the token still is theirs");
         let _ = std::fs::remove_file(&path);
     }
 }

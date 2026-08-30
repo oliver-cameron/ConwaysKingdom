@@ -18,7 +18,7 @@ Neither side sends a ping. A joined client is written to four times a second by 
 
 ### A player who was away at the whistle plays a team match on no team
 
-`teams_are_fair` refuses to start a match with anybody unplaced, but it only looks at players who are **online**. Somebody who joined the lobby, dropped, and comes back with their token during the match is admitted — the returning-player gate in `Server::handle` is deliberate and right — and they are on no team, so they play as themselves against the teams.
+`teams_are_fair` refuses to start a match with anybody unplaced, but it only looks at players who are **online**. Somebody who joined the lobby, dropped, and comes back during the match is admitted — the returning-player gate in `Server::handle` is deliberate and right — and they are on no team, so they play as themselves against the teams.
 
 Reproduced: three players in a two-team match, one offline at the whistle, rejoining after it. They are welcomed, granted their own patch, and `plays_as` is their own number.
 
@@ -40,7 +40,7 @@ Reproduced: three players in a two-team match, one offline at the whistle, rejoi
 
 The library is written to this client's own store, so pinning is a fact about the browser or the machine rather than about the player. Somebody who plays on a phone and a laptop has two libraries, and a key that identifies them across servers — which `net::auth` now mints — has nothing to do with where their stamps live.
 
-*Still here because* it is the same gap [rating](planned.md#rating) and the rejoin token both have: a client keeps things per client, and a person is a newer idea than the store is. Fixing one properly is fixing all three.
+*Still here because* it is the same gap [rating](planned.md#rating) has: a client keeps things per client, and a person is a newer idea than the store is. The rejoin token had it too and is gone; this is what is left of it.
 
 ### The help screen's monospace column misaligns on a wide glyph
 

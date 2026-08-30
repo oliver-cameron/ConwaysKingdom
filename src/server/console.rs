@@ -411,7 +411,7 @@ mod tests {
         assert!(rooms.get(&"main".into()).is_some());
 
         // And a world somebody is standing in.
-        rooms.get_mut(&"arena".into()).unwrap().join_with("alice", None, None).unwrap();
+        rooms.get_mut(&"arena".into()).unwrap().join_with("alice", None).unwrap();
         assert!(out("world delete arena", &mut rooms).contains("still in"));
         assert!(rooms.get(&"arena".into()).is_some());
 

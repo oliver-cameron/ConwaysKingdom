@@ -549,7 +549,6 @@ pub enum ClientMessage {
     /// than a new one.
     Join {
         name: String,
-        token: Option<String>,
         /// Which world to join. `None` takes the server's default room, so a
         /// client with nothing to say about rooms still lands somewhere.
         ///
@@ -723,9 +722,6 @@ pub enum ServerMessage {
         you: PlayerId,
         tick: Tick,
         spawn: (i32, i32),
-        /// Keep this. Presenting it on a later `Join` asks for this player
-        /// back — the same number, the same value, the same ground.
-        token: String,
         /// **What this server calls you**, issued the first time it saw this
         /// client's secret and the same on every visit after.
         ///

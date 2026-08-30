@@ -22,7 +22,7 @@ Postcard over **binary** websocket messages. Binary because a chunk is raw cell 
 
 ```rust
 enum ClientMessage {
-    Join { name, token, room: Option<RoomName>, person: Option<Secret> },
+    Join { name, room: Option<RoomName>, person: Option<Secret> },
     Act(Stamped),                              // an action: tick, player, seat
     Subscribe { chunks },                      // send me these; a fetch, not a standing order
     Checkpoint { tick, chunks: Vec<(ChunkId, u64)> },
@@ -32,7 +32,7 @@ enum ClientMessage {
 }
 
 enum ServerMessage {
-    Welcome { you, person, tick, spawn, token, value, room, world: WorldKind },
+    Welcome { you, person, tick, spawn, value, room, world: WorldKind },
     Rejected { reason },
     Step { tick, actions },
     ChunkData { tick, chunk, cells },
@@ -138,19 +138,23 @@ What reaches the screen is one word beside "connected", which is the claim it qu
 
 `Welcome` carries the player's **value** as well as their number and ground. A returning player has a value already and the client cannot know it; assuming the starting figure left the two disagreeing from the first frame, with the client offering to spend money the server knew was gone and the server refusing the difference silently.
 
-**The token is on its way out**, and [profiles](planned.md#player-profiles) is what replaces it: a key does this job strictly better, since the claim is signed rather than presented and there is one of them for everywhere rather than one per room per server. What follows is what it does today and every hole it has, which is also the case for replacing it.
+**Coming back is coming back as yourself.** A client keeps a [`Secret`](server.md#who-somebody-is) — sixteen random bytes, made at startup — and sends it on a `Join`. The server exchanges it for a `PersonId` and finds the seat that person already holds in that room: the same number, the same value, the same ground.
 
-`Welcome` hands out a **token**: a random 128-bit secret the client keeps, in `localStorage` in a browser and under `$XDG_DATA_HOME/conwayskingdom/tokens/` natively. Present it on a later `Join` and you get your player back — the same number, the same value, the same ground.
+There was a **rejoin token** here until recently, and its going is worth recording because the reasons it was hard are the reasons a person is better. A token said *which seat in which room*, so it had to be filed per room — one secret for the whole server would have offered a token minted in one world to a server keeping its players in another, where it matched nobody, joined you as somebody new, and overwrote the one that would have got you back. It was also not keyed by *server*, so two servers running a room called `main` shared one and visiting the second cost you your player on the first. And a client naming no room had to guess which token to offer, because it could not know where it was going until it had already arrived.
 
-It is filed **under the room**. A room is a separate world with its own player numbers, so one secret for the whole server would offer a token minted in one world to a server that keeps its players in another, where it matches nobody, joins you as somebody new, and overwrites the token that would have got you back. A token that returns you to the wrong room is worse than no token at all.
+A secret says *who*, and the seat follows from that. One secret for everything, no room in the key, nothing to guess, and the per-server hole closed by there being nothing per-room to collide.
 
-That leaves the case of a client naming no room: it cannot look up the right secret before it has been told where it is going, and by the time it is told it has already joined. So it offers **the last room's**, which is nearly always where it is about to be put, and a wrong guess costs nothing that was not already lost — an unrecognised token joins you as somebody new, exactly as having none would.
+**A person is not two players**, and this is the one place the new rule is stricter. A token whose player was already connected quietly handed out a *new* player — honestly, since a token named a seat and two tabs sharing one were two seats. A second join from a person who is already in the room is **refused**, with a reason: somebody who has carried their secret to another machine wants to be told, and being handed a stranger's seat four hundred generations into a match is not being told.
 
-Not keyed by *server*, though, and that is a gap rather than a decision: two servers both running a room called `main` share one secret, and visiting the second costs you your player on the first. The address a client typed is not remembered anywhere yet, and when it is, it belongs beside this.
+It is still not authentication. Whoever holds the secret is you, which is the right strength for a game with no accounts — a name would not do, since two players may pick the same one, and an IP address would be worse, since a house shares one and a phone changes its own between reconnects.
 
-It is not authentication. It proves nothing to anybody else, and whoever holds it *is* that player. That is the right strength for a game with no accounts: what it buys is that a dropped connection is not a new life. A name would not do, since two players may pick the same one and anybody could claim yours. An IP address would be worse — two people in a house share one, and a phone changes its own between reconnects.
+A person this room has never seated is a **new player**, not an error. Anything else would lock somebody out of a room they have not been in.
 
-**A player number is never reused.** It used to fill the gap a departing player left, which was harmless when a number only meant some live cells. It is not harmless now: territory *is* the owner field, so handing a number on hands over everything that player claimed, and the ground outlives the connection. A player who leaves is marked gone and kept. Thirty-one numbers is therefore a limit on players a world has ever seen rather than on players connected at once, and coming back is what the token is for.
+A client with **no** secret still plays, as somebody new every time. That is the honest outcome for a browser with storage switched off rather than a reason to refuse to let anybody in.
+
+Running two clients on one machine as two people therefore wants `--keep DIR` on each, so they keep different secrets — otherwise they are one person, and the second is told so.
+
+**A player number is never reused.** It used to fill the gap a departing player left, which was harmless when a number only meant some live cells. It is not harmless now: territory *is* the owner field, so handing a number on hands over everything that player claimed, and the ground outlives the connection. A player who leaves is marked gone and kept. Thirty-one numbers is therefore a limit on players a world has ever seen rather than on players connected at once, and coming back is what a person is for.
 
 A token nobody holds is not an error — it joins you as somebody new. Anything else would lock a player out over a stale file. **Nor does a token in use bring you back**: two clients on one machine share a token store and two browser tabs share one storage, so a token whose player is already connected also joins you as somebody new. Nobody may be two people at once, and nobody may be one person twice — without that rule the second player to arrive simply becomes the first, which is not a multiplayer game but one player with two windows.
 

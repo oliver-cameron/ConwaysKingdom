@@ -77,18 +77,6 @@ pub struct Player {
     /// the arithmetic is naturally signed, though the rules never let it fall
     /// below zero -- an action that cannot be afforded is refused instead.
     pub value: i32,
-    /// The secret this player proves themselves with on a reconnect.
-    ///
-    /// Not authentication: it proves nothing to anybody else, and whoever
-    /// holds it *is* this player. It is a claim ticket, and that is all a game
-    /// with no accounts needs — what it buys is that a player who drops comes
-    /// back to their own number, their own value and their own ground, rather
-    /// than to a fresh player number beside a patch of land they can see and
-    /// cannot build on.
-    ///
-    /// A name would not do: two players may pick the same one, and anybody
-    /// could claim yours.
-    pub token: String,
     /// Whether they are connected right now.
     ///
     /// A player who leaves is remembered rather than removed. Their number is
@@ -136,7 +124,6 @@ impl Player {
             name: name.into(),
             last_seen: 0,
             value: Self::STARTING_VALUE,
-            token: String::new(),
             online: true,
             person: None,
             forfeited: false,

@@ -697,22 +697,17 @@ impl Server {
     pub fn join_with(
         &mut self,
         name: impl Into<String>,
-        token: Option<&str>,
         person: Option<&crate::net::PersonId>,
-    ) -> Result<(PlayerId, String), String> {
+    ) -> Result<PlayerId, String> {
         let name = name.into();
-        if let Some(token) = token.filter(|t| !t.is_empty()) {
-            match self.players.values_mut().find(|p| p.token == token) {
-                // Theirs, and they are not using it: this is them coming back.
+        if let Some(who) = person {
+            match self.players.values_mut().find(|p| p.person.as_deref() == Some(who.as_str())) {
+                // Their seat, and nobody is in it: this is them coming back.
                 Some(p) if !p.online => {
                     p.name = name;
                     p.last_seen = 0;
                     p.online = true;
-                    // Refreshed on the way back in, because a seat records
-                    // who is in it and a person may have been minted, or
-                    // transferred to this device, since they last sat here.
-                    p.person = person.map(|p| p.0.clone());
-                    let (id, token) = (p.id, p.token.clone());
+                    let id = p.id;
                     self.lobby_changed = true;
                     let started = self.phase.accepts_actions();
                     log::info!("rejoin: {id:?} \"{}\" came back", self.players[&id].name);
@@ -722,44 +717,42 @@ impl Server {
                     if started {
                         self.grant_territory(id);
                     }
-                    return Ok((id, token));
+                    return Ok(id);
                 }
-                // Theirs, and somebody is already playing as them. Nobody gets
-                // to be two people at once, and nobody gets to be one person
-                // twice: two clients on one machine share a token file, and
-                // two tabs share a browser's storage, so without this the
-                // second player to arrive simply becomes the first -- which is
-                // not a multiplayer game, it is one player with two windows.
-                Some(p) => log::info!(
-                    "{:?} \"{}\" is already connected; joining as somebody new",
-                    p.id,
-                    p.name
-                ),
-                None => log::info!("a token nobody here holds; joining as somebody new"),
+                // **Their seat, and they are already in it.** Refused rather
+                // than seated twice, which is the change a person makes: a
+                // token that was already in use quietly handed out a *new*
+                // player, because a token said which seat and not who, so two
+                // tabs sharing one were two players and that was the honest
+                // reading of it.
+                //
+                // A person is not two players. Somebody who has carried their
+                // secret to a second machine and joined from both wants to
+                // know that, and being handed a stranger's seat four hundred
+                // generations into a match is not knowing it.
+                Some(p) => {
+                    log::info!("{:?} \"{}\" is already here", p.id, p.name);
+                    return Err("you are already in this room somewhere else".into());
+                }
+                None => {}
             }
         }
         let id = self.join(name)?;
         self.lobby_changed = true;
-        let token = new_token();
         let seat = self.players.get_mut(&id).expect("just joined");
-        seat.token.clone_from(&token);
         seat.person = person.map(|p| p.0.clone());
-        Ok((id, token))
+        Ok(id)
     }
 
-    /// Whether this token brings somebody back to a seat that is already here.
+    /// Whether this person has a seat here to come back to.
     ///
-    /// Empty is not a token: `Player::new` starts with one and it is filled in
-    /// after, so a seat with nothing in that field is one that has never been
-    /// issued a secret rather than one whose secret is "".
-    fn returning(&self, token: Option<&str>) -> bool {
-        let Some(token) = token.filter(|t| !t.is_empty()) else { return false };
-        // **And not using it**, which is `join_with`'s own rule. A token whose
-        // player is still online does not come back to them -- it joins as
-        // somebody new, by design, since nobody gets to be one person twice.
-        // So a second tab holding a genuine token walked through this door and
-        // was handed a fresh seat four hundred generations into a race.
-        self.players.values().any(|p| p.token == token && !p.online)
+    /// **The same rule [`Self::join_with`] uses, and it has to be**: a gate
+    /// that admits on a weaker test than the one behind it is a gate with a
+    /// hole in it. So this asks about a seat that is theirs *and* empty —
+    /// somebody already in their seat is not returning, they are here.
+    fn returning(&self, person: Option<&crate::net::PersonId>) -> bool {
+        let Some(who) = person else { return false };
+        self.players.values().any(|p| p.person.as_deref() == Some(who.as_str()) && !p.online)
     }
 
     /// Move a purse.
@@ -911,33 +904,22 @@ impl Server {
             // everybody else has four hundred generations of ground and they
             // have a block. A player already seated here is unaffected — this
             // is the door, not the room.
-            ClientMessage::Join { token, .. }
-                if !self.phase.open_to_newcomers() && {
-                    // **The same rule `join_with` uses, and it has to be.** This
-                    // asked whether the token matched anybody's, and a `Player`
-                    // starts with an empty one -- so a client that sent an empty
-                    // token matched the first seat that had never been issued one,
-                    // walked through the door, and then had `join_with` ignore the
-                    // empty token and hand it a brand new player. A gate that
-                    // admits on a weaker test than the one behind it is a gate
-                    // with a hole in it.
-                    !self.returning(token.as_deref())
-                } =>
+            ClientMessage::Join { .. }
+                if !self.phase.open_to_newcomers() && !self.returning(who) =>
             {
                 vec![ServerMessage::Rejected {
                     reason: format!("\"{}\" is a match already under way", self.room),
                 }]
             }
-            ClientMessage::Join { name, token, room: _, person: _ } => {
-                match self.join_with(name, token.as_deref(), who) {
-                    Ok((you, token)) => {
+            ClientMessage::Join { name, room: _, person: _ } => {
+                match self.join_with(name, who) {
+                    Ok(you) => {
                         let spawn = crate::net::spawn_for(self.plays_as(you), &self.world);
                         let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
                         vec![ServerMessage::Welcome {
                             you,
                             tick: self.tick(),
                             spawn,
-                            token,
                             person: who.cloned(),
                             // Filled in by `rooms::Rooms`, which holds the table:
                             // a rating outlives every room here, so a room does
@@ -1491,18 +1473,24 @@ mod tests {
     ///
     /// A player is not saved as online — the flag is not in the format — so
     /// one rebuilt from a file came back marked connected, because
-    /// `Player::new` is what a player *joins* with. A player who is online
-    /// cannot be returned to by their token, that being what stops two tabs
-    /// becoming one player, so everybody who was in the room when it was
-    /// written found their token refused on the next run and joined as
-    /// somebody new, beside territory they could see and could not build on.
+    /// **A seat survives the server closing**, and the person in it is what
+    /// finds it again.
+    ///
+    /// Nobody is connected to a world read off a disk, which is what makes the
+    /// way back work: a player who is *online* is not returning, they are
+    /// here. `Player::new` is what a player joins with and joining means being
+    /// online, so a roster rebuilt from a file used to come back marked
+    /// connected — and everybody in it was then refused their own seat on the
+    /// next run and given a new one, beside territory they could see and could
+    /// not build on.
     #[test]
-    fn a_token_survives_the_server_closing() {
+    fn a_seat_survives_the_server_closing() {
         let path = std::env::temp_dir().join(format!("ck-restart-{}.ckw", std::process::id()));
         let _ = std::fs::remove_file(&path);
+        let who = crate::net::PersonId("3f2a".into());
 
         let mut before = Server::named("arena", World::infinite_empty());
-        let (me, token) = before.join_with("alice", None, None).unwrap();
+        let me = before.join_with("alice", Some(&who)).unwrap();
         before.players.get_mut(&me).unwrap().value = 42;
         assert!(before.players[&me].online, "connected while playing");
         before.save(&path).unwrap();
@@ -1511,10 +1499,13 @@ mod tests {
         let mut after = Server::load_or_new(&path, "arena", World::infinite_empty).unwrap();
         assert!(!after.players[&me].online, "nobody is connected to a world off a disk");
 
-        let (back, same) = after.join_with("alice", Some(&token), None).unwrap();
-        assert_eq!(back, me, "the token brings them back to their own number");
-        assert_eq!(same, token, "and the same secret, so it goes on working");
+        let back = after.join_with("alice", Some(&who)).unwrap();
+        assert_eq!(back, me, "the person brings them back to their own number");
         assert_eq!(after.players[&me].value, 42, "with what they had");
+
+        // And somebody else is somebody else, which is the other half of it.
+        let other = after.join_with("bob", Some(&crate::net::PersonId("aaaa".into()))).unwrap();
+        assert_ne!(other, me, "a different person took the same seat");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -1540,8 +1531,8 @@ mod tests {
     fn a_timer_match_ends_and_names_a_winner() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 5 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
 
         // Gathering holds still, which is what makes the opening drawn rather
         // than raced: nobody gains generations by arriving early.
@@ -1581,8 +1572,8 @@ mod tests {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 100 });
 
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
         assert!(s.world().live_cells().is_empty(), "no world yet");
         assert_eq!(s.territory().iter().sum::<usize>(), 0, "and no ground either");
         assert_eq!(s.value_of(alice), Some(0), "and nothing to spend");
@@ -1603,7 +1594,7 @@ mod tests {
     #[test]
     fn an_ordinary_room_still_grants_on_arrival() {
         let mut s = Server::named("main", World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         assert_eq!(s.world().live_cells().len(), 4, "a block, at once");
         assert_eq!(s.value_of(alice), Some(Player::STARTING_VALUE));
     }
@@ -1635,7 +1626,7 @@ mod tests {
         // Quiet in between: a lobby nobody has touched is not resent.
         assert!(lobby(&s.step()).is_none(), "nothing changed, so nothing is said");
 
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         let (players, _) = lobby(&s.step()).expect("somebody arrived");
         assert_eq!(players, vec![(alice, "alice".to_string())]);
 
@@ -1659,9 +1650,9 @@ mod tests {
     #[test]
     fn the_standing_is_most_first_and_leaves_out_the_empty() {
         let mut s = Server::named("arena", World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
-        let (carol, _) = s.join_with("carol", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
+        let carol = s.join_with("carol", None).unwrap();
 
         // A grant is not a score, so before anybody wins ground it is empty.
         let ServerMessage::Standing { held, .. } = s.standing() else { panic!() };
@@ -1686,7 +1677,7 @@ mod tests {
     fn the_standing_goes_out_on_a_cadence_and_at_the_whistle() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 3 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         stake(&mut s, alice, (900, 900), 4);
         s.start_match(None).unwrap();
 
@@ -1708,7 +1699,7 @@ mod tests {
     fn a_gathering_match_takes_no_actions() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 100 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         let cells = mine(alice, &[(3, 3), (3, 4)]);
 
         let before = s.world().live_cells().len();
@@ -1753,7 +1744,7 @@ mod tests {
     fn an_over_match_takes_no_actions() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         s.start_match(None).unwrap();
         s.step();
         assert!(matches!(s.phase(), Phase::Over { .. }), "one generation, then over");
@@ -1785,9 +1776,9 @@ mod tests {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1000 });
         s.make_teams(2).unwrap();
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
-        let (carol, _) = s.join_with("carol", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
+        let carol = s.join_with("carol", None).unwrap();
         s.join_team(alice, PlayerId(1)).unwrap();
         s.join_team(bob, PlayerId(1)).unwrap();
         s.join_team(carol, PlayerId(2)).unwrap();
@@ -1840,7 +1831,7 @@ mod tests {
         let mut s = Server::new(World::infinite_empty());
         s.make_teams(2).expect("a world was refused teams");
         let teams: Vec<PlayerId> = s.teams().iter().map(|t| t.id).collect();
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         s.join_team(alice, teams[0]).unwrap();
         assert_eq!(s.plays_as(alice), teams[0]);
 
@@ -1856,8 +1847,8 @@ mod tests {
         m.make_match(Victory::Timer { generations: 100 });
         m.make_teams(2).unwrap();
         let teams: Vec<PlayerId> = m.teams().iter().map(|t| t.id).collect();
-        let (bob, _) = m.join_with("bob", None, None).unwrap();
-        let (carol, _) = m.join_with("carol", None, None).unwrap();
+        let bob = m.join_with("bob", None).unwrap();
+        let carol = m.join_with("carol", None).unwrap();
         m.join_team(bob, teams[0]).unwrap();
         m.join_team(carol, teams[1]).unwrap();
         m.start_match(None).unwrap();
@@ -1873,9 +1864,9 @@ mod tests {
         s.make_match(Victory::Timer { generations: 10_000 });
         s.make_teams(2).unwrap();
         let teams: Vec<PlayerId> = s.teams().iter().map(|t| t.id).collect();
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
-        let (carol, _) = s.join_with("carol", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
+        let carol = s.join_with("carol", None).unwrap();
         s.join_team(alice, teams[0]).unwrap();
         s.join_team(bob, teams[0]).unwrap();
         s.join_team(carol, teams[1]).unwrap();
@@ -1905,7 +1896,7 @@ mod tests {
     fn a_match_with_one_player_is_not_over_before_it_begins() {
         let mut s = Server::new(World::infinite_empty());
         s.make_match(Victory::Timer { generations: 50 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         s.start_match(None).unwrap();
         s.step();
         assert!(matches!(s.phase(), Phase::Running { .. }), "{:?}", s.phase());
@@ -1920,8 +1911,8 @@ mod tests {
     fn a_seat_that_gave_up_cannot_act() {
         let mut s = Server::new(World::infinite_empty());
         s.make_match(Victory::Timer { generations: 10_000 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (_bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let _bob = s.join_with("bob", None).unwrap();
         s.start_match(None).unwrap();
         s.credit(alice, 100);
         let at = crate::net::spawn_for(alice, s.world());
@@ -1950,8 +1941,8 @@ mod tests {
     fn ending_a_match_early_names_whoever_is_ahead() {
         let mut s = Server::new(World::infinite_empty());
         s.make_match(Victory::Timer { generations: 10_000 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
         s.start_match(None).unwrap();
         stake(&mut s, alice, (5_000, 5_000), 6);
         stake(&mut s, bob, (9_000, 9_000), 2);
@@ -1976,8 +1967,8 @@ mod tests {
         s.make_match(Victory::Timer { generations: 500 });
         s.make_teams(2).unwrap();
         let teams: Vec<PlayerId> = s.teams().iter().map(|t| t.id).collect();
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
         s.join_team(alice, teams[0]).unwrap();
         s.join_team(bob, teams[1]).unwrap();
         s.start_match(None).unwrap();
@@ -2015,29 +2006,34 @@ mod tests {
         assert_eq!(s.pending.len(), 1, "a seat placed under a number it does not play");
     }
 
-    /// **The door is shut once a match is running**, and it was ajar.
+    /// **The door is shut once a match is running**, and only somebody coming
+    /// back to their own seat gets through it.
     ///
-    /// The gate asked whether the offered token matched anybody's. A `Player`
-    /// starts with an empty token and has one filled in after, so a client
-    /// sending an empty one matched the first seat that had never been issued
-    /// a secret -- and `join_with`, which *does* ignore an empty token, then
-    /// handed it a brand new player. Four hundred generations into a race.
+    /// The gate has to ask exactly what `join_with` asks — a gate that admits
+    /// on a weaker test than the one behind it is a gate with a hole in it,
+    /// and it had one: it asked whether the offered *token* matched anybody's,
+    /// and a `Player` started with an empty token, so a client sending an
+    /// empty one matched the first seat never issued a secret and was handed a
+    /// brand new player four hundred generations into a race.
     #[test]
     fn a_match_under_way_lets_nobody_new_in() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 100 });
-        let (_, token) = s.join_with("alice", None, None).unwrap();
+        let alice = crate::net::PersonId("3f2a".into());
+        s.join_with("alice", Some(&alice)).unwrap();
         s.start_match(None).unwrap();
         let before = s.players().count();
 
-        let door = |token: Option<String>| ClientMessage::Join {
-            name: "latecomer".into(),
-            token,
-            room: None,
-            person: None,
+        let door = |who: Option<crate::net::PersonId>| {
+            (
+                who.clone(),
+                ClientMessage::Join { name: "latecomer".into(), room: None, person: None },
+            )
         };
-        for offered in [None, Some(String::new()), Some("not a token here".into())] {
-            let out = s.handle(None, None, door(offered.clone()));
+        // Nobody, and somebody this room has never seated.
+        for offered in [None, Some(crate::net::PersonId("aaaa".into()))] {
+            let (who, msg) = door(offered.clone());
+            let out = s.handle(None, who.as_ref(), msg);
             assert!(
                 matches!(&out[..], [ServerMessage::Rejected { .. }]),
                 "{offered:?} got in: {out:?}"
@@ -2045,20 +2041,21 @@ mod tests {
         }
         assert_eq!(s.players().count(), before, "a refusal seated somebody anyway");
 
-        // A genuine token whose player is still connected is a second tab, not
-        // a reconnection: `join_with` would seat it as somebody new, so the
-        // door has to refuse it too.
-        let out = s.handle(None, None, door(Some(token.clone())));
+        // Somebody whose seat is here and *occupied* is a second machine, not
+        // a reconnection, so the door refuses that too.
+        let (who, msg) = door(Some(alice.clone()));
+        let out = s.handle(None, who.as_ref(), msg);
         assert!(
             matches!(&out[..], [ServerMessage::Rejected { .. }]),
-            "a second tab got in: {out:?}"
+            "a second machine got in: {out:?}"
         );
 
         // But a player who actually dropped comes back, because this is the
         // door and not the room.
-        let who = s.players().next().map(|p| p.id).unwrap();
-        s.leave(who);
-        let out = s.handle(None, None, door(Some(token)));
+        let seat = s.players().next().map(|p| p.id).unwrap();
+        s.leave(seat);
+        let (who, msg) = door(Some(alice));
+        let out = s.handle(None, who.as_ref(), msg);
         assert!(matches!(&out[..], [ServerMessage::Welcome { .. }]), "{out:?}");
         assert_eq!(s.players().count(), before, "coming back made a second player");
     }
@@ -2074,8 +2071,8 @@ mod tests {
     fn a_whistle_says_where_everybody_landed() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 100 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
         // Nothing is laid out while gathering, so nothing is announced either.
         assert!(!s.step().iter().any(|m| matches!(m, ServerMessage::Spawned { .. })));
 
@@ -2118,7 +2115,7 @@ mod tests {
     fn a_territory_match_ends_when_somebody_reaches_the_count() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Territory { squares: 50 });
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         s.start_match(None).unwrap();
 
         s.step();
@@ -2141,7 +2138,7 @@ mod tests {
     #[test]
     fn granted_ground_does_not_count_towards_a_score() {
         let mut s = Server::named("arena", World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
         assert_eq!(s.territory()[alice.0 as usize], 0, "a grant is not a score");
 
         stake(&mut s, alice, (900, 900), 3);
@@ -2156,13 +2153,14 @@ mod tests {
     fn a_running_match_takes_no_newcomers_but_takes_its_own_back() {
         let mut s = Server::named("arena", World::infinite_empty());
         s.make_match(matches::Victory::Timer { generations: 1000 });
-        let (alice, token) = s.join_with("alice", None, None).unwrap();
+        let who = crate::net::PersonId("3f2a".into());
+        let alice = s.join_with("alice", Some(&who)).unwrap();
         s.start_match(None).unwrap();
 
         let refused = s.handle(
             None,
             None,
-            ClientMessage::Join { name: "late".into(), token: None, room: None, person: None },
+            ClientMessage::Join { name: "late".into(), room: None, person: None },
         );
         assert!(
             matches!(refused.as_slice(), [ServerMessage::Rejected { reason }] if reason.contains("already under way")),
@@ -2172,13 +2170,8 @@ mod tests {
         s.leave(alice);
         let back = s.handle(
             None,
-            None,
-            ClientMessage::Join {
-                name: "alice".into(),
-                token: Some(token),
-                room: None,
-                person: None,
-            },
+            Some(&who),
+            ClientMessage::Join { name: "alice".into(), room: None, person: None },
         );
         assert!(
             matches!(back.first(), Some(ServerMessage::Welcome { you, .. }) if *you == alice),
@@ -2186,13 +2179,14 @@ mod tests {
         );
     }
 
-    /// The whole point of the token: a player who drops comes back to their
-    /// own number, their own value and their own ground, rather than to a
-    /// fresh number beside a patch they can see and cannot build on.
+    /// The whole point of being somebody: a player who drops comes back to
+    /// their own number, their own value and their own ground, rather than to
+    /// a fresh number beside a patch they can see and cannot build on.
     #[test]
-    fn a_token_brings_a_player_back_to_themselves() {
+    fn a_person_comes_back_to_themselves() {
         let mut s = Server::new(World::infinite_empty());
-        let (me, token) = s.join_with("alice", None, None).unwrap();
+        let who = crate::net::PersonId("3f2a".into());
+        let me = s.join_with("alice", Some(&who)).unwrap();
 
         // Spend some, so there is state worth coming back to.
         s.handle(
@@ -2220,18 +2214,13 @@ mod tests {
         // to spend money the server knows is gone.
         let welcome = s.handle(
             None,
-            None,
-            ClientMessage::Join {
-                name: "alice".into(),
-                token: Some(token.clone()),
-                room: None,
-                person: None,
-            },
+            Some(&who),
+            ClientMessage::Join { name: "alice".into(), room: None, person: None },
         );
         match welcome.as_slice() {
-            [ServerMessage::Welcome { you, token: back, value, .. }] => {
+            [ServerMessage::Welcome { you, person, value, .. }] => {
                 assert_eq!(*you, me, "the same number");
-                assert_eq!(*back, token, "and the same secret, so it keeps working");
+                assert_eq!(person.as_ref(), Some(&who), "and told who they are");
                 assert_eq!(*value, spent, "and the value they had");
             }
             other => panic!("expected a welcome, got {other:?}"),
@@ -2251,8 +2240,8 @@ mod tests {
     #[test]
     fn territory_reaches_the_clients_that_ask_for_it() {
         let mut s = Server::new(World::infinite_empty());
-        let (alice, _) = s.join_with("alice", None, None).unwrap();
-        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        let alice = s.join_with("alice", None).unwrap();
+        let bob = s.join_with("bob", None).unwrap();
 
         let (row, col) = crate::net::spawn_for(alice, s.world());
         let chunk = (row.div_euclid(CHUNK_N as i32), col.div_euclid(CHUNK_N as i32));
@@ -2285,49 +2274,49 @@ mod tests {
         );
     }
 
-    /// Nobody may be two people at once, and nobody may be one person twice.
+    /// **Nobody may be one person twice.** Somebody already in their seat is
+    /// refused a second one rather than handed a stranger's.
     ///
-    /// Two clients on one machine share a token file and two tabs share a
-    /// browser's storage, so a token already in use has to mean a new player.
-    /// Without this the second to arrive simply becomes the first, which is
-    /// not a multiplayer game — it is one player with two windows.
+    /// This is where a person is stricter than the token it replaced, and
+    /// deliberately so. A token said which *seat*, so two tabs sharing one
+    /// were honestly two players and the second quietly got a new number. A
+    /// person is not two players, and being told so beats finding out by
+    /// building on ground that turns out to be somebody else's.
     #[test]
-    fn a_token_already_in_use_joins_as_somebody_new() {
+    fn one_person_cannot_hold_two_seats() {
         let mut s = Server::new(World::infinite_empty());
-        let (alice, token) = s.join_with("alice", None, None).unwrap();
+        let who = crate::net::PersonId("3f2a".into());
+        let alice = s.join_with("alice", Some(&who)).unwrap();
 
-        let (bob, other) = s.join_with("bob", Some(&token), None).unwrap();
-        assert_ne!(bob, alice, "alice is still playing as alice");
-        assert_ne!(other, token, "and bob gets a secret of his own");
+        assert!(s.join_with("alice again", Some(&who)).is_err(), "one person took two seats");
+        assert_eq!(s.players().count(), 1, "a refused join seated somebody anyway");
 
-        // Once she has gone, her own token brings her back.
+        // Once she has gone, she comes back to her own.
         s.leave(alice);
-        let (back, _) = s.join_with("alice", Some(&token), None).unwrap();
-        assert_eq!(back, alice);
+        assert_eq!(s.join_with("alice", Some(&who)).unwrap(), alice);
     }
 
-    /// A token nobody holds is not an error, it is a new player. Anything else
-    /// would lock somebody out over a stale file.
+    /// A person this room has never seated is a new player, not an error.
+    /// Anything else would lock somebody out of a room they have not been in.
     #[test]
-    fn an_unknown_token_joins_as_somebody_new() {
+    fn an_unknown_person_joins_as_somebody_new() {
         let mut s = Server::new(World::infinite_empty());
-        let (first, token) = s.join_with("alice", None, None).unwrap();
-        let (second, other) = s.join_with("bob", Some("not a token anybody has"), None).unwrap();
+        let first = s.join_with("alice", Some(&crate::net::PersonId("3f2a".into()))).unwrap();
+        let second = s.join_with("bob", Some(&crate::net::PersonId("aaaa".into()))).unwrap();
         assert_ne!(first, second);
-        assert_ne!(token, other, "and gets a secret of its own");
     }
 
-    /// Two players must never be handed the same secret, or either could
-    /// claim the other.
+    /// **A client with no person is still a player**, and a new one every
+    /// time: there is nothing to find a seat by, which is the honest outcome
+    /// for a browser that cannot keep a secret rather than a reason to refuse
+    /// to let anybody play.
     #[test]
-    fn tokens_are_not_shared() {
+    fn a_client_with_no_person_is_new_every_time() {
         let mut s = Server::new(World::infinite_empty());
-        let mut seen = std::collections::HashSet::new();
-        for i in 0..8 {
-            let (_, token) = s.join_with(format!("p{i}"), None, None).unwrap();
-            assert_eq!(token.len(), 32, "128 bits, written as hex");
-            assert!(seen.insert(token), "a token was handed out twice");
-        }
+        let first = s.join_with("alice", None).unwrap();
+        let second = s.join_with("alice", None).unwrap();
+        assert_ne!(first, second, "two anonymous joins became one player");
+        assert_eq!(s.players().count(), 2);
     }
 
     /// Ice cannot be taken back, and the server is where that is decided. The
@@ -2466,14 +2455,15 @@ mod tests {
     /// Measured on the purse rather than on the world, because a single live
     /// cell dies of loneliness in the same step that applies it. The value is
     /// the honest witness: it moves exactly when an action was taken.
-    /// Coming back with a token used to hand you a fresh 12×12 patch and a
+    /// Coming back used to hand you a fresh 12×12 patch and a
     /// brand-new 2×2 block on top of whatever you had built — so disconnecting
     /// and returning conjured a still life out of nothing, for free, as often
     /// as you liked.
     #[test]
     fn coming_back_does_not_grant_a_second_platform() {
         let mut s = Server::new(World::infinite_empty());
-        let (me, token) = s.join_with("alice", None, None).unwrap();
+        let who = crate::net::PersonId("3f2a".into());
+        let me = s.join_with("alice", Some(&who)).unwrap();
         let at = crate::net::spawn_for(me, s.world());
 
         // Clear the block they were given, which is what a player who has
@@ -2490,8 +2480,8 @@ mod tests {
         assert_eq!(s.world().live_cells().len(), 0, "nothing of theirs is alive");
 
         s.leave(me);
-        let (back, _) = s.join_with("alice", Some(&token), None).unwrap();
-        assert_eq!(back, me, "the token brought them back to themselves");
+        let back = s.join_with("alice", Some(&who)).unwrap();
+        assert_eq!(back, me, "they came back to themselves");
         assert_eq!(
             s.world().live_cells().len(),
             0,

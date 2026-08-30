@@ -717,7 +717,6 @@ impl GameApp {
                     person,
                     tick,
                     spawn,
-                    token,
                     rating,
                     value,
                     room,
@@ -738,11 +737,12 @@ impl GameApp {
                     // whole point of there being an id: a room that is
                     // renamed is the same room, and a token that keyed off
                     // the name would come back to nothing.
-                    crate::net::keep::store_token(room.as_str(), &token);
-                    // Kept as well, so the settings screen can say who this
-                    // client is without waiting for the next join. The server
-                    // issues it, so this is the only way the client ever has
-                    // it — see `net::auth`.
+                    // The way back is the secret this client already has, so
+                    // there is nothing to file per room any more. What is kept
+                    // is who the server said we are, so the settings screen
+                    // can say it without waiting for the next join — the
+                    // server issues it, so this is the only way the client
+                    // ever has it. See `net::auth`.
                     if let Some(id) = &person {
                         crate::net::keep::remember_person(id);
                     }
@@ -2040,7 +2040,6 @@ impl GameApp {
         let Some(link) = self.link.as_ref() else { return };
         let Some(joining) = self.joining.take() else { return };
         link.send(ClientMessage::Join {
-            token: crate::net::keep::token_for_join(joining.room.as_ref().map(|r| r.as_str())),
             person: crate::net::keep::secret_or_new(),
             name: joining.name,
             room: joining.room,

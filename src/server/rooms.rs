@@ -1389,7 +1389,6 @@ mod tests {
             &Caller::nobody(),
             ClientMessage::Join {
                 name: "alice".into(),
-                token: None,
                 room: Some(RoomId::from("hall")),
                 person: None,
             },
@@ -1456,7 +1455,6 @@ mod tests {
 
         let join = |room: &str| ClientMessage::Join {
             name: "alice".into(),
-            token: None,
             room: Some(room.into()),
             person: None,
         };
@@ -1493,7 +1491,7 @@ mod tests {
         let mut rooms = Rooms::just(Server::named("ring", World::toroidal_empty(4, 6)));
         let replies = rooms.handle(
             &Caller::nobody(),
-            ClientMessage::Join { name: "alice".into(), token: None, room: None, person: None },
+            ClientMessage::Join { name: "alice".into(), room: None, person: None },
         );
         let [ServerMessage::Welcome { world, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
@@ -1533,12 +1531,7 @@ mod tests {
         let made_id = made.id.clone();
         let replies = rooms.handle(
             &me,
-            ClientMessage::Join {
-                name: "alice".into(),
-                token: None,
-                room: Some(made_id.clone()),
-                person: None,
-            },
+            ClientMessage::Join { name: "alice".into(), room: Some(made_id.clone()), person: None },
         );
         let [ServerMessage::Welcome { room, name, world, .. }] = &replies[..] else {
             panic!("expected a welcome, got {replies:?}");
@@ -1727,7 +1720,6 @@ mod tests {
             .unwrap();
         let join = |name: &str| ClientMessage::Join {
             name: name.into(),
-            token: None,
             room: Some(made.id.clone()),
             person: None,
         };
@@ -1796,12 +1788,7 @@ mod tests {
 
         let welcomed = rooms.handle(
             &me,
-            ClientMessage::Join {
-                name: "maker".into(),
-                token: None,
-                room: Some(made.id.clone()),
-                person: None,
-            },
+            ClientMessage::Join { name: "maker".into(), room: Some(made.id.clone()), person: None },
         );
         let you = welcomed
             .iter()
@@ -1841,12 +1828,7 @@ mod tests {
 
         let out = rooms.handle(
             &Caller::new(3),
-            ClientMessage::Join {
-                name: "someone".into(),
-                token: None,
-                room: Some(id.clone()),
-                person: None,
-            },
+            ClientMessage::Join { name: "someone".into(), room: Some(id.clone()), person: None },
         );
         let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
 
@@ -1866,7 +1848,6 @@ mod tests {
         let me = Secret::new().unwrap();
         let join = |secret: Option<Secret>| ClientMessage::Join {
             name: "alice".into(),
-            token: None,
             room: Some(RoomId::from("hall")),
             person: secret,
         };
@@ -1879,8 +1860,9 @@ mod tests {
         let first = person.clone().expect("no name was issued");
         assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
-        // A second connection with the same secret: the same person, and
-        // nothing was reissued.
+        // Away, and back: the same secret finds the same seat and the same
+        // name. Nothing was presented and nothing was reissued.
+        rooms.handle(&Caller::sitting(1, (hall.clone(), *you)), ClientMessage::Leave);
         let out = rooms.handle(&Caller::new(2), join(Some(me)));
         let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
         assert_eq!(person.as_ref(), Some(&first), "one secret was two people");
@@ -1902,7 +1884,6 @@ mod tests {
             &Caller::new(1),
             ClientMessage::Join {
                 name: "alice".into(),
-                token: None,
                 room: Some(RoomId::from("hall")),
                 person: None,
             },
@@ -1913,28 +1894,28 @@ mod tests {
         assert_eq!(seat.person, None);
     }
 
-    /// **Leaving frees the seat, and the token still brings you back.**
+    /// **Leaving frees the seat, and the person still brings you back.**
     ///
     /// Going back to the menu used to send nothing at all, so the player
-    /// stayed online: the room went on counting them, and the rejoin token —
-    /// which only returns you to a player who is *not* online — found them
-    /// online and issued a new one instead. Leave and come back three times
-    /// and a room with one person in it said three.
+    /// stayed online: the room went on counting them, and the way back — which
+    /// only returns you to a player who is *not* online — found them online
+    /// and made a new one instead. Leave and come back three times and a room
+    /// with one person in it said three.
     #[test]
-    fn leaving_frees_the_seat_and_the_token_still_comes_back() {
+    fn leaving_frees_the_seat_and_the_person_still_comes_back() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let hall = RoomId::from("hall");
         let me = Caller::new(3);
-        let join = |token: Option<String>| ClientMessage::Join {
+        let secret = Secret::new().unwrap();
+        let join = || ClientMessage::Join {
             name: "alice".into(),
-            token,
             room: Some(RoomId::from("hall")),
-            person: None,
+            person: Some(secret.clone()),
         };
 
-        let out = rooms.handle(&me, join(None));
-        let [ServerMessage::Welcome { you, token, .. }] = &out[..] else { panic!("{out:?}") };
-        let (first, token) = (*you, token.clone());
+        let out = rooms.handle(&me, join());
+        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let first = *you;
         assert_eq!(rooms.get(&hall).unwrap().players().filter(|p| p.online).count(), 1);
 
         // Back to the menu, still connected.
@@ -1945,8 +1926,9 @@ mod tests {
             "the room still counts somebody who left"
         );
 
-        // And back in, with the token: the same player, not a new one.
-        let out = rooms.handle(&me, join(Some(token)));
+        // And back in: the same player, not a new one. Nothing was presented —
+        // the secret this client already had is the whole of the way back.
+        let out = rooms.handle(&me, join());
         let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
         assert_eq!(*you, first, "coming back made a second player");
         assert_eq!(
@@ -1958,16 +1940,39 @@ mod tests {
         // Three times over, which is what the listing was counting.
         for _ in 0..3 {
             rooms.handle(&Caller::sitting(3, (hall.clone(), first)), ClientMessage::Leave);
-            let mine = rooms
-                .get(&hall)
-                .unwrap()
-                .players()
-                .find(|p| p.id == first)
-                .map(|p| p.token.clone())
-                .unwrap();
-            rooms.handle(&me, join(Some(mine)));
+            rooms.handle(&me, join());
         }
         assert_eq!(rooms.listing()[0].players, 1, "the room list counted the comings and goings");
+    }
+
+    /// **A person is not two players.** Somebody who has carried their secret
+    /// to a second machine and joined from both is told so, rather than being
+    /// handed a stranger's seat.
+    ///
+    /// This is the one place a person is stricter than the token it replaced.
+    /// A token said which *seat*, so two tabs sharing one were honestly two
+    /// players and the second quietly got a new number — four hundred
+    /// generations into a match, if that is when they arrived.
+    #[test]
+    fn one_person_cannot_be_in_a_room_twice() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let secret = Secret::new().unwrap();
+        let join = || ClientMessage::Join {
+            name: "alice".into(),
+            room: Some(RoomId::from("hall")),
+            person: Some(secret.clone()),
+        };
+        let out = rooms.handle(&Caller::new(1), join());
+        assert!(matches!(&out[..], [ServerMessage::Welcome { .. }]), "{out:?}");
+
+        let out = rooms.handle(&Caller::new(2), join());
+        let [ServerMessage::Rejected { reason }] = &out[..] else { panic!("{out:?}") };
+        assert!(reason.contains("already"), "{reason}");
+        assert_eq!(
+            rooms.get(&RoomId::from("hall")).unwrap().players().count(),
+            1,
+            "a refused join took a seat anyway"
+        );
     }
 
     /// Late to a match, and what happens now: the join is **refused** and the
@@ -2002,7 +2007,6 @@ mod tests {
             &late,
             ClientMessage::Join {
                 name: "late".into(),
-                token: None,
                 room: Some(RoomId::from("cup")),
                 person: None,
             },

@@ -51,13 +51,8 @@ mod tests {
     #[test]
     fn client_messages_round_trip() {
         let cases = vec![
-            ClientMessage::Join {
-                name: "alice".into(),
-                token: Some("cafef00d".into()),
-                room: Some("lobby".into()),
-                person: None,
-            },
-            ClientMessage::Join { name: "web".into(), token: None, room: None, person: None },
+            ClientMessage::Join { name: "alice".into(), room: Some("lobby".into()), person: None },
+            ClientMessage::Join { name: "web".into(), room: None, person: None },
             ClientMessage::Act(Stamped {
                 tick: 42,
                 player: PlayerId(3),
@@ -152,7 +147,6 @@ mod tests {
                 you: PlayerId(2),
                 tick: 5,
                 spawn: (-144, -96),
-                token: "0123456789abcdef".into(),
                 rating: 1200,
                 value: 73,
                 room: "main".into(),
@@ -166,7 +160,6 @@ mod tests {
                 you: PlayerId(7),
                 tick: 900,
                 spawn: (0, 0),
-                token: "beef".into(),
                 rating: 1200,
                 value: 0,
                 room: "ring".into(),
