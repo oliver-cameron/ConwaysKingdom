@@ -138,6 +138,8 @@ What reaches the screen is one word beside "connected", which is the claim it qu
 
 `Welcome` carries the player's **value** as well as their number and ground. A returning player has a value already and the client cannot know it; assuming the starting figure left the two disagreeing from the first frame, with the client offering to spend money the server knew was gone and the server refusing the difference silently.
 
+**The token is on its way out**, and [profiles](planned.md#player-profiles) is what replaces it: a key does this job strictly better, since the claim is signed rather than presented and there is one of them for everywhere rather than one per room per server. What follows is what it does today and every hole it has, which is also the case for replacing it.
+
 `Welcome` hands out a **token**: a random 128-bit secret the client keeps, in `localStorage` in a browser and under `$XDG_DATA_HOME/conwayskingdom/tokens/` natively. Present it on a later `Join` and you get your player back — the same number, the same value, the same ground.
 
 It is filed **under the room**. A room is a separate world with its own player numbers, so one secret for the whole server would offer a token minted in one world to a server that keeps its players in another, where it matches nobody, joins you as somebody new, and overwrites the token that would have got you back. A token that returns you to the wrong room is worse than no token at all.

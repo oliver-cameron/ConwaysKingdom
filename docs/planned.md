@@ -17,7 +17,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | | status | |
 |---|---|---|
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
-| [Player profiles](#player-profiles) | Decided | a person, rather than a seat in one room |
+| [Player profiles](#player-profiles) | Designed | a person, rather than a seat in one room |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Payloads](#payloads) | Decided | a cell that explodes after a while |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
@@ -80,24 +80,64 @@ Not next, and worth saying why. [The simulation on the GPU](#the-simulation-on-t
 
 ## Player profiles
 
-**A person, rather than a seat in one room.** Everything a player accumulates is currently filed somewhere that does not survive the thing it should: a `PlayerId` is a seat in one world, a rejoin token is per room, a rating is per server, and a stamp library is per browser. Somebody who plays two games on two machines is four different people to this code.
+**A person, rather than a seat in one room.** Everything a player accumulates is currently filed against something that does not survive what it should: a `PlayerId` is a seat in one world, a rejoin token is per room, a rating is per server, and a stamp library is per browser. Somebody who plays two games on two machines is four different people to this code.
 
-The identity exists already: `net::auth` mints an ed25519 keypair, the client keeps it, and `Join` carries a signature over the server's challenge — so a server can already say *which person* is asking. `server::people` is the table. What is missing is everything that should be filed against it.
+The identity exists already. `net::auth` mints an ed25519 keypair, the client keeps it — **at startup now, not at the first join**, because a record and a stamp library both exist before a server has been reached and both want an owner — and `Join` carries a signature over the server's challenge. A server can already say *which person* is asking. What is missing is everything that should be filed against the answer.
 
-**What moves onto a profile**
+### It subtracts before it adds
 
-- The **rating**, which is [already keyed by person](#rating) on one server and has nowhere to live across several.
-- The **record** — games played, largest territory, matches won — which `client::record` keeps per client and files under a room's display name, so two servers' `arena` are one line of history.
-- The **stamp library**, which is per browser today: a laptop and a phone are two libraries, and pinning is a fact about a machine rather than about a player.
-- The **rejoin token**, or rather its replacement: if the server knows who you are from your key, a per-room secret is a second answer to a question already answered.
+**A profile deletes the rejoin token.** The token exists so that a dropped connection comes back to the same seat, and [networking.md](networking.md#coming-back) is honest about what it costs: it is filed per room rather than per server, so two servers both running `main` share one secret; whoever holds it *is* you; and a token whose player is already connected joins you as somebody new. A key does the same job strictly better — the server maps person to seat per room, the claim is signed rather than presented, and there is one key for everywhere rather than one secret per room per server.
 
-**What does not**
+So the first version of this is not a feature on top. It is `Join` carrying a person and nothing else, `Server::join_with` looking a seat up by `PersonId`, and the token machinery going.
 
-The `PlayerId` in a cell. That is four bits and a seat in one world, and it must stay that: a profile is a fact about a person and a cell's owner is a fact about a square, and the whole reason territory works is that the second is small enough to sit in a byte. A profile is looked up *from* a seat, never stored in one.
+### What is yours and what is the server's
 
-**What it runs into**
+The line worth drawing early, because everything else follows from it: **anything another player is shown has to be the server's**. Client-side state is self-asserted, so a rating you keep is a rating you can type.
 
-Where a profile lives. On the server it is one more table beside `people` and `ratings`, and it is per server — which is most of what is wrong today, just moved. Across servers it is a distributed identity problem, and [many servers](#many-servers-and-what-must-not-be-decentralised) already says what must not be attempted. The honest first step is per server and keyed by person, which fixes the rating and the record and leaves the stamp library where it is.
+| | where | why |
+|---|---|---|
+| the key | yours, portable | it *is* the identity; the server only ever sees the public half |
+| your name | yours, sent on join | you choose it; nobody else is shown it as a fact |
+| stamps | yours | nobody else sees them, so nobody can be misled by them |
+| rating | the server's | shown to others, and the whole point is that it is not self-reported |
+| games played, largest held | the server's, per server | same argument; `client::record` stays as your own diary |
+| when first seen | the server's | it is a fact about a visit, not about a person |
+
+`client::record` does not have to move. It is a client's own history and it is worth keeping as one — what it must not do is be *shown to anybody else* while it lives there. The server keeps its own count of what happened on it, and those two numbers disagreeing is fine and readable: one is "what I have played" and the other is "what I have played here".
+
+### Names, and the two Alices
+
+Two players may pick the same name and nothing stops them. A key fixes this without an account system: show the name beside a **short fingerprint of the public key** — `alice·3f2a` — which is derived rather than assigned, so neither Alice has to accept being Alice2 and neither can take the other's name.
+
+Four hex characters is enough for a room of fifteen and is not meant to be enough for the world; it disambiguates the people you can see, and the full key is what identifies anybody absolutely.
+
+### What a profile screen shows
+
+**Yours.** Name, editable. Fingerprint beside it. The public key, and the control that exports the secret one — which is already the most important control in the client, because losing the key is losing the person and there is no recovery. Rating, marked *provisional* until enough games. Your record. Your stamps.
+
+**Somebody else's**, from the lobby or the standings: name and fingerprint, their colour, their rating, and what they have done **on this server**. Not their key file, not their stamps, not their record from elsewhere — a server can only vouch for what happened on it.
+
+### Ratings need a provisional state
+
+A new profile has no games, and an Elo from a fixed start is a number that means nothing until it has moved. The usual answer is a high K for the first *n* results and a mark on the figure until then, so a leaderboard is not topped by somebody who won once. `server::rating` already computes deltas; this is a count and a threshold.
+
+### What it must not become
+
+**An account system.** No password, no email, no recovery. The key is the whole of it, which is the right strength for a game with no accounts and is the same argument the rejoin token was already making — it is just a better claim ticket.
+
+**Required.** A client with no key still plays and is nobody the server remembers. That has to stay true: a browser with storage switched off is a real browser.
+
+**Part of a cell.** The `PlayerId` in the owner byte is four bits and a seat in one world, and it must stay that. A profile is looked up *from* a seat, never stored in one — the reason territory works at all is that a cell's owner fits in half a byte.
+
+### What it runs into
+
+**One person, two clients.** A key can be on a laptop and a phone. `net` already says nobody may be two people at once and nobody may be one person twice, and that rule is enforced per token today; keyed by person it becomes exactly the same rule with a better key. A person holding a seat in *several rooms* is allowed and should stay allowed. Two connections as one person in **one** room is what must still be refused.
+
+**Importing a key that is in use.** Paste your key onto a second machine while the first is connected, and the second is refused the seat rather than stealing it — which is the rule above, and is worth saying out loud because the refusal will look like a bug to whoever pastes.
+
+**Scope.** Per server, keyed by person, and stop there. That fixes the rating and the record and deletes the token. Across servers it is a distributed identity problem and [many servers](#many-servers-and-what-must-not-be-decentralised) already says what must not be attempted; the stamp library can stay per client until there is an answer.
+
+**Migration.** Records filed under a room's display name cannot be re-keyed, because the thing that would key them was never written down. They stay as they are and the server's counts start at zero, which is the honest outcome and is one line in the release note rather than a migration.
 
 ## Icons on the bar
 
