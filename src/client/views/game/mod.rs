@@ -342,12 +342,12 @@ pub struct GameApp {
     room_name: Option<String>,
     /// Chunks already asked for, so a moving viewport only asks for what is new.
     subscribed: std::collections::HashSet<crate::sim::Coord>,
-    /// What this connection was asked to sign, once it has been asked.
+    /// **What this server calls this client**, from the `Welcome`.
     ///
-    /// One per socket and cleared when the socket is replaced: a challenge
-    /// belongs to the server that set it, and signing one server's question
-    /// for another is exactly what having a challenge at all prevents.
-    challenge: Option<String>,
+    /// The client cannot derive it — the server issues it — so it is learnt
+    /// and remembered. `None` before a first join, or for a client with no
+    /// secret to offer.
+    person: Option<crate::net::PersonId>,
     /// What this client is rated on the server it is talking to.
     ///
     /// `None` until a server has said, which is a different thing from the
@@ -714,6 +714,7 @@ impl GameApp {
             match msg {
                 ServerMessage::Welcome {
                     you,
+                    person,
                     tick,
                     spawn,
                     token,
@@ -738,6 +739,14 @@ impl GameApp {
                     // renamed is the same room, and a token that keyed off
                     // the name would come back to nothing.
                     crate::net::keep::store_token(room.as_str(), &token);
+                    // Kept as well, so the settings screen can say who this
+                    // client is without waiting for the next join. The server
+                    // issues it, so this is the only way the client ever has
+                    // it — see `net::auth`.
+                    if let Some(id) = &person {
+                        crate::net::keep::remember_person(id);
+                    }
+                    self.person = person;
                     // A different room is a different match, or none.
                     self.lobby = None;
                     log::info!(
@@ -828,18 +837,12 @@ impl GameApp {
                     // goes, so it is where anything is likely to be.
                     self.camera.dirty = true;
                 }
-                // Something to sign, which is the server's first word and
-                // the thing a join has been waiting for.
-                ServerMessage::Challenge { nonce } => {
-                    self.challenge = Some(nonce);
-                    self.send_pending_join();
-                }
                 // A result, and what it did to somebody's number. Ours moves
                 // the dashboard; everybody else's is the half of a rating that
                 // makes it a comparison rather than a score, and is worth a
                 // line in the log until there is a screen for it.
                 ServerMessage::Rated { who, rating, change } => {
-                    let mine = crate::net::keep::key().map(|k| k.id());
+                    let mine = self.person.clone();
                     if mine.as_ref() == Some(&who) {
                         log::info!("rated {rating} ({change:+})");
                         self.rating = Some(rating);
@@ -1914,8 +1917,6 @@ impl GameApp {
                 // draining into one client, and the second Welcome would
                 // arrive into a world built for the first.
                 self.link = dial(&address);
-                // A challenge belongs to the socket that set it.
-                self.challenge = None;
                 match &self.link {
                     Some(link) => {
                         link.send(ClientMessage::Rooms);
@@ -1944,10 +1945,10 @@ impl GameApp {
             // No reconnect. A person is settled per join rather than per
             // socket, so the next join carries this one and the open socket
             // needs nothing done to it.
-            menu::Chose::UseKey(written) => match crate::net::Key::read(&written) {
+            menu::Chose::UseKey(written) => match crate::net::Secret::read(&written) {
                 Ok(key) => {
-                    log::info!("this client is now {}", key.id());
-                    crate::net::keep::remember_key(&key);
+                    log::info!("this client took a key it was given");
+                    crate::net::keep::remember_secret(&key);
                     if let Screen::Menu(m) = &mut self.ui.screen {
                         // Normalised, so the field shows what was actually
                         // kept rather than whatever spacing it was pasted in.
@@ -1964,7 +1965,6 @@ impl GameApp {
                 log::warn!("forgetting this client's key, record and settings");
                 crate::net::keep::forget_everything();
                 self.link = None;
-                self.challenge = None;
                 self.joining = None;
                 self.me = None;
                 self.room = None;
@@ -2019,30 +2019,29 @@ impl GameApp {
         }
     }
 
-    /// Join, or wait until there is something to sign and then join.
-    ///
-    /// Nothing is queued in the link for this: `Link` already holds messages
-    /// until the socket opens, and the wait here is longer than that — the
-    /// challenge is the server's first word *after* the socket is up, so a
-    /// join handed to the link would go out unsigned and be nobody.
+    /// Join.
     fn ask_to_join(&mut self, joining: Joining) {
         self.joining = Some(joining);
         self.send_pending_join();
     }
 
-    /// Send the waiting join, if there is one and there is something to sign.
+    /// Send the waiting join, if there is one and there is a link to send it
+    /// on.
     ///
-    /// A client with no key sends none, and plays as somebody this server will
-    /// not remember — which is the honest outcome for a browser that cannot
-    /// keep a key rather than a reason to refuse to let anybody play.
+    /// A client with no secret sends none, and plays as somebody this server
+    /// will not remember — the honest outcome for a browser that cannot keep
+    /// one, rather than a reason to refuse to let anybody play.
+    ///
+    /// **Nothing is waited for now.** A join used to be held until the server
+    /// sent a challenge to sign, which was a round trip before every join and
+    /// a state to get wrong; `Link` already holds messages until the socket is
+    /// open, so there is nothing left for this to be pending on.
     fn send_pending_join(&mut self) {
-        let (Some(challenge), Some(link)) = (self.challenge.clone(), self.link.as_ref()) else {
-            return;
-        };
+        let Some(link) = self.link.as_ref() else { return };
         let Some(joining) = self.joining.take() else { return };
         link.send(ClientMessage::Join {
             token: crate::net::keep::token_for_join(joining.room.as_ref().map(|r| r.as_str())),
-            person: crate::net::keep::key_or_new().map(|key| key.claim(&challenge)),
+            person: crate::net::keep::secret_or_new(),
             name: joining.name,
             room: joining.room,
         });
@@ -2130,8 +2129,8 @@ impl App for GameApp {
         // nothing to show until somebody had already played somewhere, which
         // is exactly when carrying an identity to another machine stops being
         // possible and starts being a repair job.
-        match crate::net::keep::key_or_new() {
-            Some(key) => log::info!("this client is {}", key.id()),
+        match crate::net::keep::secret_or_new() {
+            Some(_) => log::debug!("this client has a key"),
             None => log::warn!("no key: this client will be somebody new everywhere it goes"),
         }
         // Where to go, or whether to ask. A destination stated on a command
@@ -2305,7 +2304,7 @@ impl App for GameApp {
             room: None,
             room_name: None,
             subscribed: std::collections::HashSet::new(),
-            challenge: None,
+            person: crate::net::keep::person(),
             rating: None,
             rating_change: None,
             joining: pending,
@@ -2337,6 +2336,17 @@ impl App for GameApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        // **A join set up before the first frame goes out on it.** `init` puts
+        // one here for a link that named a room, and it used to be sent when
+        // the server's challenge arrived — which was the only thing that ever
+        // called this. With no challenge to wait for, nothing did, and a
+        // `?room=` link opened a solo world in silence.
+        //
+        // Cheap to ask every frame: `send_pending_join` takes what it sends,
+        // so this is one `Option` check once the join has gone.
+        if self.joining.is_some() {
+            self.send_pending_join();
+        }
         if self.fit(gpu) {
             self.subscribed.clear(); // a different area is visible now
         }

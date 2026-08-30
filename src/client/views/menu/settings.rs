@@ -20,29 +20,38 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
 
     ui.add_space(m.item_spacing * 2.0);
     ui.label(egui::RichText::new(words::home::settings::KEY).size(m.text_small));
-    let Some(mine) = crate::net::keep::key() else {
-        // A key is made at startup now, so reaching this means the store
-        // refused it or there was no entropy to make one from — a browser with
-        // no `crypto`, or one with storage switched off. Rare, and worth saying
+    let Some(mine) = crate::net::keep::secret() else {
+        // A key is made at startup, so reaching this means the store refused
+        // it or there was no entropy to make one from — a browser with no
+        // `crypto`, or one with storage switched off. Rare, and worth saying
         // rather than showing a blank panel: the consequence is that this
         // client is somebody new everywhere it goes.
         ui.small(words::home::settings::KEY_NONE);
         return Chose::Nothing;
     };
 
-    // **The public half, which is safe to look at.** What used to be here was
-    // the secret one in an editable box, which is the most destructive control
-    // in the client sitting in the form that invites typing. This names you
-    // and cannot be used to be you, and it is the same line `ssh-keygen -y`
-    // would print, so it is recognisable rather than sixty-four hex
-    // characters.
-    ui.label(egui::RichText::new(mine.public()).monospace().size(m.text_small));
+    // **What a server calls you, which is safe to look at.** The secret itself
+    // is never shown here: it is the most destructive thing in the client and
+    // a box that invites typing is the wrong place for it. This names you and
+    // cannot be used to be you, because the server picked it and it says
+    // nothing about the secret behind it.
+    //
+    // `None` until a server has been reached, because the server is what
+    // issues it — see `net::auth`.
+    match crate::net::keep::person() {
+        Some(id) => {
+            ui.label(egui::RichText::new(id.to_string()).monospace().size(m.text_small));
+        }
+        None => {
+            ui.small(words::home::settings::KEY_UNSEEN);
+        }
+    }
 
     // Natively the key is a file and the honest thing to show is where it is:
     // whoever wants to back it up should copy the file, not select text out of
     // a game. A browser has no path to give, so it offers the file instead.
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = crate::net::keep::key_path() {
+    if let Some(path) = crate::net::keep::secret_path() {
         ui.small(words::home::settings::key_lives_at(&path.display().to_string()));
     }
 
@@ -66,7 +75,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
         // this client holds. A button that is always pressable, for a press
         // that usually means "become who I already am", is one that only ever
         // gets pressed by accident.
-        let typed = crate::net::Key::read(&menu.key).ok().map(|k| k.written());
+        let typed = crate::net::Secret::read(&menu.key).ok().map(|k| k.written());
         if let Some(typed) = typed.filter(|t| *t != mine.written()) {
             ui.add_space(m.item_spacing);
             if ui.button(words::home::settings::KEY_TAKE).clicked() {

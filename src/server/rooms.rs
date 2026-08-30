@@ -68,22 +68,12 @@ pub struct Caller {
     /// judges an action asks the first and the code that routes a read asks
     /// either, and one field would make those the same question.
     pub watching: Option<RoomId>,
-    /// What this connection was asked to sign, so a `Join` can be checked.
-    ///
-    /// Per connection and not per join: within one connection a replayed
-    /// signature is the same client saying the same true thing twice, and the
-    /// thing worth preventing is a *different* server replaying a signature it
-    /// saw — which a nonce of this server's own stops by construction.
-    ///
-    /// Empty for a caller with no socket behind it: the console, and tests.
-    /// Nothing signs anything for those, so nothing claims to be anybody.
-    pub challenge: String,
 }
 
 impl Caller {
     /// A connection that has not joined anything.
     pub fn new(connection: ConnectionId) -> Self {
-        Self { connection, seat: None, watching: None, challenge: String::new() }
+        Self { connection, seat: None, watching: None }
     }
 
     /// For tests, and for the console, which is nobody's socket.
@@ -92,7 +82,7 @@ impl Caller {
     }
 
     pub fn sitting(connection: ConnectionId, seat: Seat) -> Self {
-        Self { challenge: String::new(), connection, seat: Some(seat), watching: None }
+        Self { connection, seat: Some(seat), watching: None }
     }
 
     /// Which room's messages this connection may be routed to, seated or not.
@@ -560,32 +550,20 @@ impl Rooms {
             // somebody is. A refusal is a refusal to join at all: a client
             // that offered a key meant to be somebody, and putting them in as
             // a stranger instead would be answering a different question.
-            // **Checked, not looked up.** A signature over this connection's
-            // challenge is the whole of the proof: the client made its own key
-            // and this server has issued nothing, so an id it has never seen
-            // is a person rather than an impostor, and the answer to a new one
-            // is to write it down. A claim that does not verify is refused
-            // outright -- somebody signed nothing, or signed somebody else's
-            // question, and neither should quietly become a stranger with a
-            // seat.
-            let who = match person {
-                Some(claim) if !claim.verifies(&caller.challenge) => {
-                    log::warn!("a claim that does not answer this connection's challenge");
-                    return vec![ServerMessage::Rejected {
-                        reason: "that player key did not check out".into(),
-                    }];
-                }
-                Some(claim) => Some(claim.id.clone()),
-                None => None,
-            };
-            if let Some(who) = &who
-                && self.people.seen(who)
-            {
+            // **Looked up, and written down if it is new.** A secret this
+            // server has not seen is a person it has not met, not an impostor:
+            // the client made it, nothing was issued, and the answer is to
+            // issue an id and remember the pairing. There is nothing here that
+            // can fail to check out, which is what a signature bought and what
+            // a single server does not need — see `net::auth`.
+            let who = person.as_ref().map(|secret| self.people.meet(secret));
+            if let Some((_, true)) = &who {
                 // A person met for the first time reaches disk before they
                 // rely on having been here: a rating earned by somebody this
                 // server forgets on a restart is worse than none.
                 self.save_people();
             }
+            let who = who.map(|(id, _)| id);
             return match self.resolve(asked.as_ref().map(RoomId::as_str)) {
                 Ok(name) => {
                     if let Some(seat) = seat {
@@ -602,7 +580,7 @@ impl Rooms {
                         .rooms
                         .get_mut(&name)
                         .expect("resolve only returns rooms that are here")
-                        .handle(None, msg);
+                        .handle(None, who.as_ref(), msg);
                     // The creator's first join is where a room's owner is
                     // recorded: it is the first moment there is a player to
                     // record, and a `PlayerId` survives the reconnect that a
@@ -646,7 +624,9 @@ impl Rooms {
         };
         let id = seat.map(|(_, id)| *id);
         match self.rooms.get_mut(room) {
-            Some(server) => server.handle(id, msg),
+            // Not a `Join`: those are answered above, where the person was
+            // settled. Everything else is asked by a seat and needs no name.
+            Some(server) => server.handle(id, None, msg),
             // Only reachable if a room could go away under a seated player,
             // which nothing does yet. Said out loud rather than ignored,
             // because the symptom would be one client silently going deaf.
@@ -1278,7 +1258,7 @@ fn saved_in(dir: &Path) -> std::io::Result<Vec<RoomName>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::Key;
+    use crate::net::Secret;
     use crate::sim::World;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1875,74 +1855,41 @@ mod tests {
         assert!(reason.contains("console"), "{reason}");
     }
 
-    /// **The client issues the key and the server merely checks it**, which is
-    /// the reversal from a server-minted secret and is what makes the same key
-    /// the same person everywhere.
-    ///
-    /// A signature over this connection's challenge is the whole of the proof.
-    /// A key this server has never seen is a person rather than an impostor,
-    /// because holding the private half is not something anybody can fake, so
-    /// the answer to a new one is to write it down.
+    /// **The same secret is the same person**, on a second connection and
+    /// after a restart. That is the whole of what an identity has to do: the
+    /// server issues an id the first time it sees a secret and gives the same
+    /// one back for ever after, so a rating filed against it does not move.
     #[test]
-    fn a_signed_claim_is_believed_and_the_seat_remembers_who() {
+    fn one_secret_is_one_person() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let hall = RoomId::from("hall");
-        let me = Key::new().unwrap();
-        let caller = |n: u64, challenge: &str| Caller {
-            connection: n,
-            seat: None,
-            watching: None,
-            challenge: challenge.into(),
-        };
-        let join = |claim| ClientMessage::Join {
+        let me = Secret::new().unwrap();
+        let join = |secret: Option<Secret>| ClientMessage::Join {
             name: "alice".into(),
             token: None,
             room: Some(RoomId::from("hall")),
-            person: claim,
+            person: secret,
+        };
+        let named = |rooms: &Rooms, you: &crate::sim::PlayerId| {
+            rooms.get(&hall).unwrap().players().find(|p| p.id == *you).unwrap().person.clone()
         };
 
-        let out = rooms.handle(&caller(1, "nonce-one"), join(Some(me.claim("nonce-one"))));
-        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
-        let seat = rooms.get(&hall).unwrap().players().find(|p| p.id == *you).unwrap();
-        assert_eq!(seat.person.as_deref(), Some(me.id().as_str()));
+        let out = rooms.handle(&Caller::new(1), join(Some(me.clone())));
+        let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
+        let first = person.clone().expect("no name was issued");
+        assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
-        // A second connection, a different challenge, the same key: the same
-        // person. That is the whole of transferring an identity -- nothing was
-        // reissued and nothing was looked up.
-        let out = rooms.handle(&caller(2, "nonce-two"), join(Some(me.claim("nonce-two"))));
-        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
-        let seat = rooms.get(&hall).unwrap().players().find(|p| p.id == *you).unwrap();
-        assert_eq!(seat.person.as_deref(), Some(me.id().as_str()), "the same key was two people");
-    }
+        // A second connection with the same secret: the same person, and
+        // nothing was reissued.
+        let out = rooms.handle(&Caller::new(2), join(Some(me)));
+        let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
+        assert_eq!(person.as_ref(), Some(&first), "one secret was two people");
+        assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
-    /// A signature is worth nothing against a question it was not asked, which
-    /// is what stops a server that saw one from being you somewhere else.
-    #[test]
-    fn a_claim_for_another_challenge_is_refused() {
-        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
-        let me = Key::new().unwrap();
-        let caller = Caller {
-            connection: 1,
-            seat: None,
-            watching: None,
-            challenge: "what this server asked".into(),
-        };
-        let out = rooms.handle(
-            &caller,
-            ClientMessage::Join {
-                name: "alice".into(),
-                token: None,
-                room: Some(RoomId::from("hall")),
-                // Signed for somebody else's question, which is exactly what a
-                // replayed signature is.
-                person: Some(me.claim("what that server asked")),
-            },
-        );
-        assert!(matches!(&out[..], [ServerMessage::Rejected { .. }]), "{out:?}");
-        assert!(
-            !rooms.get(&RoomId::from("hall")).unwrap().players().any(|p| p.online),
-            "a refused claim took a seat anyway"
-        );
+        // And somebody else's secret is somebody else.
+        let out = rooms.handle(&Caller::new(3), join(Some(Secret::new().unwrap())));
+        let [ServerMessage::Welcome { person, .. }] = &out[..] else { panic!("{out:?}") };
+        assert_ne!(person.as_ref(), Some(&first), "two secrets were one person");
     }
 
     /// A client with no key plays. It is nobody the server will remember,
@@ -2109,12 +2056,7 @@ mod tests {
     fn a_watcher_is_sent_chunks_and_changes_nothing() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let seated = rooms.get_mut(&RoomId::from("hall")).unwrap().join("alice").unwrap();
-        let watcher = Caller {
-            connection: 4,
-            seat: None,
-            watching: Some(RoomId::from("hall")),
-            challenge: String::new(),
-        };
+        let watcher = Caller { connection: 4, seat: None, watching: Some(RoomId::from("hall")) };
 
         let before = rooms.get(&RoomId::from("hall")).unwrap().world().digest();
 

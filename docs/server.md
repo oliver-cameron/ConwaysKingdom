@@ -68,6 +68,20 @@ Its own condition, which `decide` checks after each step so the generation that 
 
 The check for "one number left" lives in `forfeit` and not in `decide`, and that is not tidiness: a match that simply *has* one player in it has not been won by them, and putting it in `decide` ended every such match on its first generation.
 
+### Who somebody is
+
+**The client keeps a secret and the server issues the name.** A `Secret` is sixteen random bytes made at startup, kept in the client's own store, and sent on a `Join`; the server exchanges it for a `PersonId` — issuing one the first time it sees that secret and giving the same one back for ever after — and `server::people` remembers the pairing. The id is what everybody else is shown, in a lobby or beside a rating, and it says nothing about the secret behind it because it was picked at random rather than derived.
+
+That means the client cannot know its own public name until a server has told it, which is why `Welcome` carries it and the client writes it down.
+
+**It was an ed25519 keypair.** The client made both halves, the public one *was* the id, and a join was a signature over a nonce the server had just sent. That buys exactly one thing this does not: a server cannot be you on a *different* server, because it never learns the secret half. With one server it buys nothing, and it cost a signature scheme, an OpenSSH key parser, a round trip before every join, and a dependency — so it went, along with `ServerMessage::Challenge` and the state on both sides that waited for it.
+
+What is left is exactly as strong as the rejoin token it will replace: whoever holds the secret is you, and the server it is presented to knows it. That is the strength [networking.md](networking.md#coming-back) already argues is right for a game with no accounts.
+
+**Before a second server exists this has to change**, and not because anything breaks — because "the server knows your secret" stops being harmless the moment there is somewhere else to be you. See [planned.md](planned.md#player-profiles).
+
+`server::people` therefore holds secrets now, which it did not before and which is worth saying out loud rather than leaving to be discovered: that file is what an attacker who reached the disk would want. It is not a new exposure — a room file already holds a rejoin token per seat, which is the same bargain with a smaller blast radius — but it is a single-server design written down as one.
+
 ### Watching
 
 `ClientMessage::Watch` takes a room and no seat. `ServerMessage::Watching` answers with the room, its name, its tick and its shape — a `Welcome` without a player, because a spectator has no number, no token, no purse and no spawn, and sending zeroes would have the client draw a purse belonging to nobody.

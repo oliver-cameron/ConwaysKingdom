@@ -148,6 +148,7 @@ mod tests {
             },
             ServerMessage::Standing { tick: 0, held: Vec::new() },
             ServerMessage::Welcome {
+                person: Some(crate::net::PersonId("3f2a".into())),
                 you: PlayerId(2),
                 tick: 5,
                 spawn: (-144, -96),
@@ -161,6 +162,7 @@ mod tests {
             // The shape of a wrapping world has to survive the round trip, or
             // a client is told the world ends somewhere it does not.
             ServerMessage::Welcome {
+                person: Some(crate::net::PersonId("3f2a".into())),
                 you: PlayerId(7),
                 tick: 900,
                 spawn: (0, 0),

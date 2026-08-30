@@ -130,6 +130,9 @@ pub mod menu {
             /// A key is made at startup, so this is the store refusing it or
             /// there being no entropy to make one from — and the consequence
             /// is worth stating rather than the absence.
+            /// A server issues the name it calls you, so there is nothing to
+            /// show until one has.
+            pub const KEY_UNSEEN: &str = "No server has met this client yet, so none has named it.";
             pub const KEY_NONE: &str =
                 "No key could be made or kept here, so this client is somebody new \
                  everywhere it goes.";

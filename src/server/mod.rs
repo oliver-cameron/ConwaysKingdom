@@ -885,7 +885,17 @@ impl Server {
     }
 
     /// Decoded message in, replies out. Deliberately transport-agnostic.
-    pub fn handle(&mut self, from: Option<PlayerId>, msg: ClientMessage) -> Vec<ServerMessage> {
+    /// `who` is **which person this connection is**, as the server's table
+    /// settled it — see [`crate::server::people`]. A room cannot work that out
+    /// for itself and must not try: people are a server's table and a room is
+    /// one world on it, so fifteen rooms deciding would be fifteen ideas of
+    /// who somebody is.
+    pub fn handle(
+        &mut self,
+        from: Option<PlayerId>,
+        who: Option<&crate::net::PersonId>,
+        msg: ClientMessage,
+    ) -> Vec<ServerMessage> {
         if let Some(id) = from {
             let tick = self.tick();
             if let Some(p) = self.players.get_mut(&id) {
@@ -918,14 +928,8 @@ impl Server {
                     reason: format!("\"{}\" is a match already under way", self.room),
                 }]
             }
-            ClientMessage::Join { name, token, room: _, person } => {
-                // Who is asking was settled before this room ever saw the
-                // message -- people are a *server's* table and a room is one
-                // world on it, so `rooms::Rooms` admits and this stamps. A
-                // room asked to decide would be fifteen rooms each with their
-                // own idea of who somebody is.
-                let who = person.as_ref().map(|p| p.id.clone());
-                match self.join_with(name, token.as_deref(), who.as_ref()) {
+            ClientMessage::Join { name, token, room: _, person: _ } => {
+                match self.join_with(name, token.as_deref(), who) {
                     Ok((you, token)) => {
                         let spawn = crate::net::spawn_for(self.plays_as(you), &self.world);
                         let value = self.value_of(you).unwrap_or(Player::STARTING_VALUE);
@@ -934,6 +938,7 @@ impl Server {
                             tick: self.tick(),
                             spawn,
                             token,
+                            person: who.cloned(),
                             // Filled in by `rooms::Rooms`, which holds the table:
                             // a rating outlives every room here, so a room does
                             // not get to keep one.
@@ -1318,6 +1323,7 @@ mod tests {
         let cells = mine(me, &[(5, 4), (5, 5), (5, 6)]);
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
@@ -1352,6 +1358,7 @@ mod tests {
         let me = s.join("alice").unwrap();
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
@@ -1389,6 +1396,7 @@ mod tests {
         let me = s.join("alice").unwrap();
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
@@ -1448,6 +1456,7 @@ mod tests {
         let act = |s: &mut Server, action| {
             s.handle(
                 Some(me),
+                None,
                 ClientMessage::Act(Stamped { tick: s.tick(), player: me, seat: me, action }),
             );
             s.step();
@@ -1705,6 +1714,7 @@ mod tests {
         let before = s.world().live_cells().len();
         s.handle(
             Some(alice),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: alice,
@@ -1725,6 +1735,7 @@ mod tests {
         assert_eq!(before, 4, "a block, laid at the whistle");
         s.handle(
             Some(alice),
+            None,
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: alice,
@@ -1750,6 +1761,7 @@ mod tests {
         let before = s.world().live_cells().len();
         s.handle(
             Some(alice),
+            None,
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: alice,
@@ -1924,10 +1936,10 @@ mod tests {
                 },
             })
         };
-        s.handle(Some(alice), act());
+        s.handle(Some(alice), None, act());
         assert_eq!(s.pending.len(), 1);
         s.forfeit(alice).unwrap();
-        s.handle(Some(alice), act());
+        s.handle(Some(alice), None, act());
         assert_eq!(s.pending.len(), 1, "somebody who gave up went on placing");
     }
 
@@ -1989,17 +2001,17 @@ mod tests {
         s.credit(teams[1], 100);
 
         // Honest: alice, from alice's connection, playing her team.
-        s.handle(Some(alice), act(alice, teams[0]));
+        s.handle(Some(alice), None, act(alice, teams[0]));
         assert_eq!(s.pending.len(), 1, "an honest action was dropped");
 
         // A seat that is not the sender. Alice's connection cannot act as bob,
         // which is what the check was already for.
-        s.handle(Some(alice), act(bob, teams[1]));
+        s.handle(Some(alice), None, act(bob, teams[1]));
         assert_eq!(s.pending.len(), 1, "a connection acted as somebody else");
 
         // And the sender's own seat under a number they do not play: alice
         // putting cells down as the other team.
-        s.handle(Some(alice), act(alice, teams[1]));
+        s.handle(Some(alice), None, act(alice, teams[1]));
         assert_eq!(s.pending.len(), 1, "a seat placed under a number it does not play");
     }
 
@@ -2025,7 +2037,7 @@ mod tests {
             person: None,
         };
         for offered in [None, Some(String::new()), Some("not a token here".into())] {
-            let out = s.handle(None, door(offered.clone()));
+            let out = s.handle(None, None, door(offered.clone()));
             assert!(
                 matches!(&out[..], [ServerMessage::Rejected { .. }]),
                 "{offered:?} got in: {out:?}"
@@ -2036,7 +2048,7 @@ mod tests {
         // A genuine token whose player is still connected is a second tab, not
         // a reconnection: `join_with` would seat it as somebody new, so the
         // door has to refuse it too.
-        let out = s.handle(None, door(Some(token.clone())));
+        let out = s.handle(None, None, door(Some(token.clone())));
         assert!(
             matches!(&out[..], [ServerMessage::Rejected { .. }]),
             "a second tab got in: {out:?}"
@@ -2046,7 +2058,7 @@ mod tests {
         // door and not the room.
         let who = s.players().next().map(|p| p.id).unwrap();
         s.leave(who);
-        let out = s.handle(None, door(Some(token)));
+        let out = s.handle(None, None, door(Some(token)));
         assert!(matches!(&out[..], [ServerMessage::Welcome { .. }]), "{out:?}");
         assert_eq!(s.players().count(), before, "coming back made a second player");
     }
@@ -2149,6 +2161,7 @@ mod tests {
 
         let refused = s.handle(
             None,
+            None,
             ClientMessage::Join { name: "late".into(), token: None, room: None, person: None },
         );
         assert!(
@@ -2158,6 +2171,7 @@ mod tests {
 
         s.leave(alice);
         let back = s.handle(
+            None,
             None,
             ClientMessage::Join {
                 name: "alice".into(),
@@ -2183,6 +2197,7 @@ mod tests {
         // Spend some, so there is state worth coming back to.
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
@@ -2204,6 +2219,7 @@ mod tests {
         // the client returns believing it has the starting figure and offers
         // to spend money the server knows is gone.
         let welcome = s.handle(
+            None,
             None,
             ClientMessage::Join {
                 name: "alice".into(),
@@ -2241,7 +2257,7 @@ mod tests {
         let (row, col) = crate::net::spawn_for(alice, s.world());
         let chunk = (row.div_euclid(CHUNK_N as i32), col.div_euclid(CHUNK_N as i32));
 
-        let sent = s.handle(Some(bob), ClientMessage::Subscribe { chunks: vec![chunk] });
+        let sent = s.handle(Some(bob), None, ClientMessage::Subscribe { chunks: vec![chunk] });
         let [ServerMessage::ChunkData { cells, .. }] = sent.as_slice() else {
             panic!("bob should have been sent alice's chunk, got {sent:?}");
         };
@@ -2262,7 +2278,7 @@ mod tests {
                 s.world_mut().set_cell_at(at.0, at.1, cell.with_alive(false));
             }
         }
-        let sent = s.handle(Some(bob), ClientMessage::Subscribe { chunks: vec![chunk] });
+        let sent = s.handle(Some(bob), None, ClientMessage::Subscribe { chunks: vec![chunk] });
         assert!(
             matches!(sent.as_slice(), [ServerMessage::ChunkData { .. }]),
             "bare territory must still be sent, got {sent:?}"
@@ -2326,6 +2342,7 @@ mod tests {
 
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: me,
@@ -2340,6 +2357,7 @@ mod tests {
 
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: me,
@@ -2500,16 +2518,16 @@ mod tests {
         };
 
         // Bob's connection, claiming to be Alice.
-        s.handle(Some(bob), ClientMessage::Act(forged(s.tick())));
+        s.handle(Some(bob), None, ClientMessage::Act(forged(s.tick())));
         assert_eq!(s.value_of(alice).unwrap(), before, "Alice paid for Bob's action");
 
         // And a connection with no seat at all, which is what a spectator is.
-        s.handle(None, ClientMessage::Act(forged(s.tick())));
+        s.handle(None, None, ClientMessage::Act(forged(s.tick())));
         assert_eq!(s.value_of(alice).unwrap(), before, "a watcher acted");
 
         // The same action from Alice's own connection is taken, so this is a
         // test about attribution and not about the action being invalid.
-        s.handle(Some(alice), ClientMessage::Act(forged(s.tick())));
+        s.handle(Some(alice), None, ClientMessage::Act(forged(s.tick())));
         assert_eq!(
             s.value_of(alice).unwrap(),
             before - crate::sim::LIFE_COST,
@@ -2525,6 +2543,7 @@ mod tests {
         // A block again, so a's cell survives long enough for b to attack it.
         s.handle(
             Some(a),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: a,
@@ -2542,6 +2561,7 @@ mod tests {
         let before = s.value_of(b).unwrap();
         s.handle(
             Some(b),
+            None,
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: b,
@@ -2577,6 +2597,7 @@ mod tests {
 
         s.handle(
             Some(me),
+            None,
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
@@ -2604,7 +2625,7 @@ mod tests {
         // purse rides on every checkpoint now that value is not a thing a
         // client can work out for itself.
         let replies =
-            s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: held.clone() });
+            s.handle(Some(me), None, ClientMessage::Checkpoint { tick: 0, chunks: held.clone() });
         assert!(
             !replies.iter().any(|m| matches!(m, ServerMessage::Resync { .. })),
             "matching digests asked for a resync: {replies:?}"
@@ -2617,7 +2638,7 @@ mod tests {
         // One chunk wrong: only that one comes back.
         let mut bad = held.clone();
         bad[0].1 = !bad[0].1;
-        let replies = s.handle(Some(me), ClientMessage::Checkpoint { tick: 0, chunks: bad });
+        let replies = s.handle(Some(me), None, ClientMessage::Checkpoint { tick: 0, chunks: bad });
         let resyncs: Vec<_> = replies
             .iter()
             .filter_map(|m| match m {
@@ -2702,6 +2723,7 @@ mod tests {
         let tick = s.tick();
         s.handle(
             Some(id),
+            None,
             ClientMessage::Act(Stamped {
                 tick,
                 player: id,

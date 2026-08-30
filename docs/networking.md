@@ -22,7 +22,7 @@ Postcard over **binary** websocket messages. Binary because a chunk is raw cell 
 
 ```rust
 enum ClientMessage {
-    Join { name, token, room: Option<RoomName> },
+    Join { name, token, room: Option<RoomName>, person: Option<Secret> },
     Act(Stamped),                              // an action: tick, player, seat
     Subscribe { chunks },                      // send me these; a fetch, not a standing order
     Checkpoint { tick, chunks: Vec<(ChunkId, u64)> },
@@ -32,7 +32,7 @@ enum ClientMessage {
 }
 
 enum ServerMessage {
-    Welcome { you, tick, spawn, token, value, room, world: WorldKind },
+    Welcome { you, person, tick, spawn, token, value, room, world: WorldKind },
     Rejected { reason },
     Step { tick, actions },
     ChunkData { tick, chunk, cells },

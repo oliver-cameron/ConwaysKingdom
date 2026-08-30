@@ -1,20 +1,21 @@
-//! Who somebody is, and how they prove it.
+//! Who somebody is, on this server.
 //!
-//! What is here is [`person`]: a keypair the client generates and never
-//! sends, whose public half is the name everything else is keyed by. A
-//! server-minted bearer secret came first and was replaced, because a bearer
-//! secret cannot be both cross-server and safe — see the module for the two
-//! ways it fails once the same key is meant to mean the same person in more
-//! than one place.
+//! Two halves in [`person`]: a [`Secret`] the client keeps and never shows,
+//! and a [`PersonId`] the **server issues** on first sight and everybody sees.
+//! The pairing is the server's to remember — see [`crate::server::people`] —
+//! so an id says nothing about the secret behind it.
 //!
-//! Deliberately in [`crate::net`] and not in `server`: both ends of the wire
-//! have to agree on what a person is, and the client is the one that keeps the
-//! proof. The **table** of who exists is the server's, in
-//! [`crate::server::people`], and nothing in here knows it exists.
+//! Deliberately in [`crate::net`] rather than in `server`: both ends of the
+//! wire have to agree on what a person is, and it is the client that keeps the
+//! half that matters.
 //!
-//! [many servers]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#many-servers-and-what-must-not-be-decentralised
+//! An ed25519 keypair came first, where the client made both halves and a join
+//! was a signature over a nonce. It bought one thing — a server could not be
+//! you on a *different* server — which is worth nothing while there is one,
+//! and cost a signature scheme, an OpenSSH parser, a round trip before every
+//! join, and a dependency. The module note says what has to be revisited
+//! before a second server exists.
 
-pub mod openssh;
 pub mod person;
 
-pub use person::{Claim, Key, PersonId};
+pub use person::{PersonId, Secret};

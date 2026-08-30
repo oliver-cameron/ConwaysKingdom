@@ -29,7 +29,7 @@
 //! remembered now, which is half of what that key would need; making it the
 //! other half of the token's is the work that is left.
 
-use crate::net::Key;
+use crate::net::Secret;
 
 /// Where all of this is kept, when somewhere other than the usual place is
 /// wanted. Native only, and set before the client starts.
@@ -137,7 +137,7 @@ const KEY_FIELD: &str = "id_ed25519";
 /// that the browser has no answer. `localStorage` is not a path and nothing
 /// can be pointed at it.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn key_path() -> Option<std::path::PathBuf> {
+pub fn secret_path() -> Option<std::path::PathBuf> {
     Some(imp::base()?.join(KEY_FIELD))
 }
 
@@ -153,8 +153,8 @@ pub fn key_path() -> Option<std::path::PathBuf> {
 /// exporting an identity is reading this field and importing one is writing
 /// it. One format rather than a store format and a transfer format that have
 /// to agree.
-pub fn key() -> Option<Key> {
-    Key::read(imp::get(KEY_FIELD)?.trim()).ok()
+pub fn secret() -> Option<Secret> {
+    Secret::read(imp::get(KEY_FIELD)?.trim()).ok()
 }
 
 /// The key this client will use, making one if it has none.
@@ -174,22 +174,22 @@ pub fn key() -> Option<Key> {
 /// nobody a server will remember.
 ///
 /// [profiles]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#player-profiles
-pub fn key_or_new() -> Option<Key> {
-    if let Some(key) = key() {
+pub fn secret_or_new() -> Option<Secret> {
+    if let Some(key) = secret() {
         return Some(key);
     }
-    let key = Key::new()?;
-    remember_key(&key);
+    let key = Secret::new()?;
+    remember_secret(&key);
     // Read back rather than returned directly: if the store refused the write,
     // this client is about to be somebody new on its next visit and the log
     // should say so once rather than never.
-    if self::key().is_none() {
+    if self::secret().is_none() {
         log::warn!("could not keep this client's key; it will be somebody new next time");
     }
     Some(key)
 }
 
-pub fn remember_key(key: &Key) {
+pub fn remember_secret(key: &Secret) {
     set(KEY_FIELD, &key.written());
 }
 
@@ -212,7 +212,7 @@ pub fn forget_key() {
 /// directory somebody may have pointed elsewhere with [`keep_in`]. Removing
 /// what is ours is the only thing that is ours to do.
 pub fn forget_everything() {
-    for field in [KEY_FIELD, "name", "server", "games", "stamps", "last-room"] {
+    for field in [KEY_FIELD, "name", "server", "games", "stamps", "person", "last-room"] {
         set(field, "");
     }
     imp::forget_tokens();
@@ -241,6 +241,21 @@ pub fn games() -> String {
 
 pub fn remember_games(lines: &str) {
     set("games", lines);
+}
+
+/// What the server last called this client, so the settings screen can say who
+/// you are without waiting for the next join.
+///
+/// The **server** issues it — see [`crate::net::auth`] — so a client that has
+/// never reached one has none, and one that has visited two servers is showing
+/// the last. That second case is the shape of the single-server design and not
+/// a bug in this function.
+pub fn person() -> Option<crate::net::PersonId> {
+    get("person").map(crate::net::PersonId)
+}
+
+pub fn remember_person(id: &crate::net::PersonId) {
+    set("person", id.as_str());
 }
 
 /// The stamp library, as `client::views::stamp::Library` writes it.

@@ -13,38 +13,46 @@
 //! rather than fatal — losing one person out of a table is a nuisance, and
 //! refusing to start because one line is from the future is not.
 //!
-//! ## What is stored, and what is not
+//! ## What is stored
 //!
-//! Ids, and nothing else. **No secrets at all**, which is not carefulness on
-//! this file's part but a consequence of the client issuing its own key: a
-//! join is a signature over this server's challenge, so it is checked by
-//! arithmetic rather than by looking anything up, and there is nothing here
-//! worth stealing. It is a record of who has been seen, which is what a rating
-//! table will be keyed by.
+//! A secret and the id this server issued for it. **Both**, and that is worth
+//! stating plainly rather than being discovered: this file is the thing an
+//! attacker who reached the disk would want, because a secret in it is a
+//! player they can be.
 //!
-//! It follows that this table gates nothing. An id that is not in it is simply
-//! new — a person the client made and this server has not met — and the right
-//! answer to that is to write it down, not to refuse it. That was the opposite
-//! of the answer while the server minted keys, and the reversal is the whole
-//! difference between an identity a server hands out and one it merely
-//! recognises.
+//! It is not a new exposure. A room file already holds a rejoin token per
+//! seat, which is the same bargain with a smaller blast radius, and this
+//! replaces those. What it is, is a **single-server** design: a server that
+//! knows your secret can be you on any other server that has met it, and there
+//! is one. Before there are two, this has to change — see the note on
+//! [`crate::net::auth`].
+//!
+//! The id is issued here and is random, so it says nothing about the secret it
+//! stands for; that is what makes it safe to show in a lobby.
+//!
+//! This table **gates nothing**. A secret it has not seen is a person it has
+//! not met, and the answer to that is to write one down rather than refuse
+//! it.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-use crate::net::PersonId;
+use crate::net::{PersonId, Secret};
 
 /// The format of a stored line, so a build that cannot read one can tell that
 /// rather than mis-splitting it.
-/// Bumped to 2 when the proof column went: a key is no longer something this
-/// server issues, so there is nothing to keep beside the id.
-const VERSION: u8 = 2;
+///
+/// Bumped to 3 when the id stopped being a public key and became something
+/// this server issues — so a secret sits beside it, and a version 2 line names
+/// a person whose secret nobody has.
+const VERSION: u8 = 3;
 
-/// Everybody this server has seen.
+/// Everybody this server has seen, and what it calls them.
 #[derive(Default)]
 pub struct People {
-    known: HashSet<PersonId>,
+    /// The secret somebody presents, and the id this server issued for it.
+    known: HashMap<Secret, PersonId>,
 }
 
 impl People {
@@ -60,44 +68,66 @@ impl People {
         self.known.is_empty()
     }
 
-    /// Note that this person has been here. Returns whether they are new.
+    /// Who this secret is, issuing an id if this server has not seen it.
     ///
-    /// Called after the signature has checked out and never before: this
-    /// records a fact rather than deciding one.
-    pub fn seen(&mut self, id: &PersonId) -> bool {
-        let fresh = self.known.insert(id.clone());
-        if fresh {
-            log::info!("a player this server has not met: {id}");
+    /// The second half of the return says whether they are **new**, which the
+    /// caller wants so it can put a first-time player on disk before they rely
+    /// on having been here: a rating earned by somebody the server forgets on
+    /// a restart is worse than none.
+    ///
+    /// Records rather than decides. A secret it has not met is a person it has
+    /// not met, and the answer is to write one down.
+    pub fn meet(&mut self, secret: &Secret) -> (PersonId, bool) {
+        if let Some(id) = self.known.get(secret) {
+            return (id.clone(), false);
         }
-        fresh
+        // Random rather than counted, so an id says nothing about the secret
+        // behind it or about how many people came before. Retried against the
+        // table, because two people sharing an id would be one person.
+        let id = (0..10)
+            .map(|_| PersonId(crate::server::new_token()))
+            .find(|id| !self.known.values().any(|seen| seen == id))
+            .unwrap_or_else(|| PersonId(crate::server::new_token()));
+        log::info!("a player this server has not met: {id}");
+        self.known.insert(secret.clone(), id.clone());
+        (id, true)
     }
 
-    /// Whether this server has met this person before.
+    /// Whether this server has issued this id.
     pub fn knows(&self, id: &PersonId) -> bool {
-        self.known.contains(id)
+        self.known.values().any(|seen| seen == id)
     }
 
     /// The table as it is written down.
     pub fn to_lines(&self) -> String {
-        // Sorted, so a save is the same bytes for the same table and a diff
-        // between two of them says what changed rather than what moved.
-        let mut ids: Vec<_> = self.known.iter().collect();
-        ids.sort();
-        ids.iter().map(|id| format!("{VERSION}\t{id}\n")).collect()
+        // Sorted by id, so a save is the same bytes for the same table and a
+        // diff between two of them says what changed rather than what moved.
+        let mut rows: Vec<_> = self.known.iter().collect();
+        rows.sort_by(|a, b| a.1.cmp(b.1));
+        rows.iter().map(|(s, id)| format!("{VERSION}\t{id}\t{}\n", s.written())).collect()
     }
 
     /// Read a table back, skipping any line this build cannot make sense of.
     pub fn from_lines(text: &str) -> Self {
-        let mut known = HashSet::new();
+        let mut known = HashMap::new();
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
             let mut fields = line.split('\t');
-            match (fields.next(), fields.next(), fields.next()) {
-                (Some(v), Some(id), None) if v.parse::<u8>() == Ok(VERSION) && !id.is_empty() => {
-                    known.insert(PersonId(id.to_string()));
+            match (fields.next(), fields.next(), fields.next(), fields.next()) {
+                (Some(v), Some(id), Some(secret), None)
+                    if v.parse::<u8>() == Ok(VERSION) && !id.is_empty() =>
+                {
+                    match Secret::read(secret) {
+                        Ok(secret) => {
+                            known.insert(secret, PersonId(id.to_string()));
+                        }
+                        Err(why) => {
+                            log::warn!("line {} of the people file: {why}", n + 1)
+                        }
+                    }
                 }
                 _ => log::warn!("skipped line {} of the people file", n + 1),
             }
@@ -128,22 +158,48 @@ impl People {
 mod tests {
     use super::*;
 
-    fn id(n: &str) -> PersonId {
-        PersonId(format!("{n}{}", "0".repeat(64 - n.len())))
+    fn secret(n: &str) -> Secret {
+        Secret::read(&format!("{n}{}", "0".repeat(32 - n.len()))).expect("not a secret")
     }
 
-    /// This table records and never decides. An id it has not seen is a person
-    /// the client made and this server has not met, and the answer to that is
-    /// to write it down -- which is the reversal from when the server minted
-    /// keys and an unknown one had to be refused.
+    /// This table records and never decides. A secret it has not seen is a
+    /// person it has not met, and the answer is to issue an id and write the
+    /// pairing down -- the reversal from when the server minted keys and an
+    /// unknown one had to be refused.
     #[test]
     fn an_unknown_person_is_new_rather_than_wrong() {
         let mut people = People::new();
-        assert!(!people.knows(&id("a")));
-        assert!(people.seen(&id("a")), "a first visit was not new");
-        assert!(people.knows(&id("a")));
-        assert!(!people.seen(&id("a")), "a second visit was called new");
+        let (id, fresh) = people.meet(&secret("a"));
+        assert!(fresh, "a first visit was not new");
+        assert!(people.knows(&id));
+        let (again, fresh) = people.meet(&secret("a"));
+        assert!(!fresh, "a second visit was called new");
+        assert_eq!(again, id, "one secret got two names");
         assert_eq!(people.len(), 1);
+    }
+
+    /// **Two people are two ids.** An issuer that repeated itself would make
+    /// two players one person, and nothing would look wrong until both of them
+    /// were rated.
+    #[test]
+    fn two_secrets_get_two_names() {
+        let mut people = People::new();
+        let a = people.meet(&secret("a")).0;
+        let b = people.meet(&secret("b")).0;
+        assert_ne!(a, b);
+    }
+
+    /// **An id says nothing about the secret behind it**, which is what makes
+    /// it safe to show in a lobby. It is issued at random rather than derived,
+    /// so this is true by construction; the test is here because the day
+    /// somebody makes it a hash of the secret is the day that stops holding.
+    #[test]
+    fn an_id_does_not_contain_its_secret() {
+        let mut people = People::new();
+        let mine = secret("dead");
+        let id = people.meet(&mine).0;
+        assert!(!id.as_str().contains(&mine.written()));
+        assert!(!mine.written().contains(id.as_str()));
     }
 
     /// Written down and read back, and the same bytes each time so one save is
@@ -151,47 +207,43 @@ mod tests {
     #[test]
     fn a_table_survives_being_written_down() {
         let mut people = People::new();
-        for n in ["a", "b", "c"] {
-            people.seen(&id(n));
-        }
+        let ids: Vec<PersonId> =
+            ["a", "b", "c"].iter().map(|n| people.meet(&secret(n)).0).collect();
         let lines = people.to_lines();
         assert_eq!(lines, people.to_lines(), "two saves of one table differ");
 
-        let back = People::from_lines(&lines);
+        let mut back = People::from_lines(&lines);
         assert_eq!(back.len(), 3);
-        for n in ["a", "b", "c"] {
-            assert!(back.knows(&id(n)), "{n} was lost");
+        for (n, id) in ["a", "b", "c"].iter().zip(&ids) {
+            assert!(back.knows(id), "{n} was lost");
+            // And the same secret still gets the same name after a restart,
+            // which is the whole job: a rating filed against an id is worth
+            // nothing if the id moves.
+            assert_eq!(back.meet(&secret(n)).0, *id, "{n} was renamed by a restart");
         }
     }
 
-    /// Nothing in here is a secret, which is worth a test rather than a
-    /// comment: the moment a proof column comes back, so does a file worth
-    /// stealing.
-    #[test]
-    fn a_line_is_a_version_and_an_id_and_nothing_else() {
-        let mut people = People::new();
-        people.seen(&id("a"));
-        let line = people.to_lines();
-        assert_eq!(line.trim().split('\t').count(), 2, "{line:?}");
-    }
-
-    /// A line from a build that knew more is skipped, not fatal. Losing one
-    /// person is a nuisance; refusing to start is not better.
-    #[test]
-    fn a_line_this_build_cannot_read_is_skipped() {
-        let table = People::from_lines(&format!(
-            "{VERSION}\tabc\n9\tfrom\tthe\tfuture\n\n1\tolder\tproof\nrubbish\n"
-        ));
-        assert_eq!(table.len(), 1, "a bad line took a good one with it");
-        assert!(table.knows(&PersonId("abc".into())));
-    }
-
-    /// A server nobody has played on is where every server starts, so a table
-    /// that is not there is empty rather than an error.
+    /// A table that is not there yet is an empty one: a server with no people
+    /// is a server nobody has played on, which is where every server starts.
     #[test]
     fn a_table_that_is_not_there_is_empty() {
-        let missing = std::env::temp_dir().join("ck-people-that-do-not-exist/people.tsv");
+        let missing = std::env::temp_dir()
+            .join(format!("ck-people-{}", std::process::id()))
+            .join("people.tsv");
         let _ = std::fs::remove_dir_all(missing.parent().unwrap());
         assert!(People::load(&missing).unwrap().is_empty());
+    }
+
+    /// A line this build cannot read is skipped rather than fatal: losing one
+    /// person out of a table is a nuisance, and refusing to start because one
+    /// line is from the future is not.
+    #[test]
+    fn an_unreadable_line_is_skipped_and_the_rest_kept() {
+        let mut people = People::new();
+        let id = people.meet(&secret("a")).0;
+        let mixed = format!("{}\n99\tfrom-the-future\tzz\nrubbish\n", people.to_lines().trim());
+        let back = People::from_lines(&mixed);
+        assert_eq!(back.len(), 1);
+        assert!(back.knows(&id));
     }
 }

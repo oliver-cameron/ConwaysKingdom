@@ -26,7 +26,7 @@ pub mod link_web;
 #[cfg(target_arch = "wasm32")]
 pub use link_web as link;
 
-pub use auth::{Claim, Key, PersonId};
+pub use auth::{PersonId, Secret};
 
 use serde::{Deserialize, Serialize};
 
@@ -560,19 +560,17 @@ pub enum ClientMessage {
         room: Option<RoomId>,
         /// Who is asking, as against which seat they want back.
         ///
-        /// A signature over the [`Challenge`] this connection was sent, so the
-        /// server learns who it is talking to without ever having issued them
-        /// anything and without being handed anything it could reuse
-        /// elsewhere. `None` from a client with no key yet, which plays as
+        /// The client's [`Secret`], which the server exchanges for a
+        /// [`PersonId`] — issuing one if it has not seen this secret before.
+        /// `None` from a client that could not make one, which plays as
         /// somebody the server will not remember.
         ///
-        /// Beside the token rather than instead of it, because the two answer
-        /// different questions — this one is *who*, and the token is *which
-        /// seat in this room* — and a person may hold a seat in several rooms
-        /// at once.
-        ///
-        /// [`Challenge`]: ServerMessage::Challenge
-        person: Option<Claim>,
+        /// It used to be a signature over a nonce the server had just sent, so
+        /// that the secret never crossed the wire at all. That is the right
+        /// answer for more than one server and an expensive one for a single
+        /// server, where it is the same bargain the rejoin token already makes
+        /// — see [`crate::net::auth`].
+        person: Option<Secret>,
     },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
@@ -728,6 +726,15 @@ pub enum ServerMessage {
         /// Keep this. Presenting it on a later `Join` asks for this player
         /// back — the same number, the same value, the same ground.
         token: String,
+        /// **What this server calls you**, issued the first time it saw this
+        /// client's secret and the same on every visit after.
+        ///
+        /// The client cannot work it out for itself — that is what the server
+        /// issuing it means — so it is told, and remembers it so the settings
+        /// screen has something to show before the next join. `None` for a
+        /// client that offered no secret, which plays as somebody this server
+        /// will not remember.
+        person: Option<PersonId>,
         /// What this client is rated on this server.
         ///
         /// Everybody starts on the same number, so this is a figure rather
@@ -846,18 +853,6 @@ pub enum ServerMessage {
         who: PersonId,
         rating: i32,
         change: i32,
-    },
-    /// Something to sign, so a join can say who it is from.
-    ///
-    /// **Sent unprompted, as soon as the socket opens**, because the client
-    /// cannot ask for it without first saying something and the first thing it
-    /// says is the join this answers. One per connection and reusable for
-    /// every join on it: within a connection a replay is the same client
-    /// saying the same true thing twice, and the thing worth preventing is a
-    /// *different server* replaying a signature it saw — which this stops by
-    /// being that server's own nonce and not something the client chose.
-    Challenge {
-        nonce: String,
     },
     /// Full contents of a chunk the client does not hold. Bytes are a chunk's
     /// cells exactly as `Chunk::as_bytes` produces them.
