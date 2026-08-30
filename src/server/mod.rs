@@ -859,12 +859,20 @@ impl Server {
                 // match, so a free-for-all asks exactly what it always did —
                 // and somebody on no side cannot borrow a side's number,
                 // because then the two do not match.
+                //
+                // **Both halves.** `seat` says who sent it and `player` says
+                // what number its cells carry, and a client that could lie
+                // about either could act as somebody else or put its cells
+                // under their number. Checked rather than rewritten, because
+                // the two disagreeing is a client that is wrong or lying and
+                // neither should be quietly obeyed under a corrected name.
                 let acting_as = from.map(|seat| self.plays_as(seat));
-                if acting_as != Some(stamped.player) {
+                if from != Some(stamped.seat) || acting_as != Some(stamped.player) {
                     log::warn!(
-                        "dropped an action attributed to {:?} from {:?}",
-                        stamped.player,
-                        from
+                        "dropped an action from {:?} claiming to be {:?} playing {:?}",
+                        from,
+                        stamped.seat,
+                        stamped.player
                     );
                     return Vec::new();
                 }
@@ -1179,6 +1187,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
+                seat: me,
                 action: Action::Paint { cells: cells.clone(), placement: Placement::Life },
             }),
         );
@@ -1212,6 +1221,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
+                seat: me,
                 action: Action::Paint {
                     cells: mine(me, &[(0, 0), (0, 1), (0, 2)]),
                     placement: Placement::Life,
@@ -1248,6 +1258,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
+                seat: me,
                 action: Action::Paint {
                     cells: mine(me, &[(4, 4), (4, 5), (4, 6)]),
                     placement: Placement::Life,
@@ -1301,7 +1312,10 @@ mod tests {
         let start = s.value_of(me).unwrap();
 
         let act = |s: &mut Server, action| {
-            s.handle(Some(me), ClientMessage::Act(Stamped { tick: s.tick(), player: me, action }));
+            s.handle(
+                Some(me),
+                ClientMessage::Act(Stamped { tick: s.tick(), player: me, seat: me, action }),
+            );
             s.step();
         };
 
@@ -1560,6 +1574,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: alice,
+                seat: alice,
                 action: Action::Paint { cells: cells.clone(), placement: Placement::Life },
             }),
         );
@@ -1579,6 +1594,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: alice,
+                seat: alice,
                 action: Action::Paint { cells, placement: Placement::Life },
             }),
         );
@@ -1603,6 +1619,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: alice,
+                seat: alice,
                 action: Action::Paint { cells: mine(alice, &[(3, 3)]), placement: Placement::Life },
             }),
         );
@@ -1666,6 +1683,55 @@ mod tests {
         assert_eq!(s.value_of(alice), Some(25), "an ally's spending did not come out of the purse");
         assert_eq!(s.value_of(bob), Some(25));
         assert_eq!(s.value_of(carol), Some(0));
+    }
+
+    /// **An action says who sent it as well as what number it carries**, and
+    /// both are checked. They were one question until a team became a player:
+    /// several clients share `player`, so it can no longer say which of them
+    /// acted, and a client that could name any seat could act as a teammate.
+    #[test]
+    fn an_action_must_name_the_seat_that_sent_it() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 500 });
+        s.make_teams(2).unwrap();
+        let teams: Vec<PlayerId> = s.teams().iter().map(|t| t.id).collect();
+        let (alice, _) = s.join_with("alice", None, None).unwrap();
+        let (bob, _) = s.join_with("bob", None, None).unwrap();
+        s.join_team(alice, teams[0]).unwrap();
+        s.join_team(bob, teams[1]).unwrap();
+        s.start_match(None).unwrap();
+
+        let at = crate::net::spawn_for(teams[0], s.world());
+        let tick = s.tick();
+        let act = |seat, player| {
+            ClientMessage::Act(Stamped {
+                tick,
+                player,
+                seat,
+                action: crate::net::Action::Paint {
+                    cells: vec![at],
+                    placement: crate::net::Placement::Life,
+                },
+            })
+        };
+
+        // A match starts everybody at nothing, and a paint costs.
+        s.credit(teams[0], 100);
+        s.credit(teams[1], 100);
+
+        // Honest: alice, from alice's connection, playing her team.
+        s.handle(Some(alice), act(alice, teams[0]));
+        assert_eq!(s.pending.len(), 1, "an honest action was dropped");
+
+        // A seat that is not the sender. Alice's connection cannot act as bob,
+        // which is what the check was already for.
+        s.handle(Some(alice), act(bob, teams[1]));
+        assert_eq!(s.pending.len(), 1, "a connection acted as somebody else");
+
+        // And the sender's own seat under a number they do not play: alice
+        // putting cells down as the other team.
+        s.handle(Some(alice), act(alice, teams[1]));
+        assert_eq!(s.pending.len(), 1, "a seat placed under a number it does not play");
     }
 
     /// **The door is shut once a match is running**, and it was ajar.
@@ -1851,6 +1917,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
+                seat: me,
                 action: Action::Paint {
                     cells: mine(me, &[(0, 0), (0, 1)]),
                     placement: Placement::Life,
@@ -1993,6 +2060,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: me,
+                seat: me,
                 action: Action::Paint { cells: pane.clone(), placement: Placement::Ice },
             }),
         );
@@ -2006,6 +2074,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: me,
+                seat: me,
                 action: Action::Erase { cells: pane, placement: Placement::Ice },
             }),
         );
@@ -2157,6 +2226,7 @@ mod tests {
         let forged = |tick| Stamped {
             tick,
             player: alice,
+            seat: alice,
             action: Action::Paint { cells: vec![at], placement: Placement::Life },
         };
 
@@ -2189,6 +2259,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: a,
+                seat: a,
                 action: Action::Paint {
                     cells: mine(a, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
                     placement: Placement::Life,
@@ -2205,6 +2276,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: s.tick(),
                 player: b,
+                seat: b,
                 action: Action::Erase { cells: mine(a, &[(0, 0)]), placement: Placement::Life },
             }),
         );
@@ -2239,6 +2311,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 0,
                 player: me,
+                seat: me,
                 action: Action::Paint { cells: too_many, placement: Placement::Life },
             }),
         );
@@ -2363,6 +2436,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick,
                 player: id,
+                seat: id,
                 action: Action::Paint { cells: mine(id, offsets), placement: Placement::Mine },
             }),
         );

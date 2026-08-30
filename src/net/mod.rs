@@ -386,7 +386,27 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamped {
     pub tick: Tick,
+    /// **The number the cells will carry**, which in a team match is the
+    /// team's and not the sender's own.
     pub player: PlayerId,
+    /// **Who sent it**, which is a different question and has to be asked
+    /// separately as soon as two clients can be one player.
+    ///
+    /// A client applies its own actions the moment it makes them and must not
+    /// apply them again when they come back — a `Paint` is idempotent on the
+    /// generation it was meant for and not one generation later, so laying it
+    /// twice stamps the original pattern back on top of where it has got to.
+    /// "Its own" used to be `player`, which was the same question until a team
+    /// became a player: a teammate's action carries the team's number, so a
+    /// client skipped it as something it had already predicted and **never
+    /// applied it at all** — the two copies of the world then differed by
+    /// everything the rest of the team did, until a checkpoint dragged the
+    /// chunks back.
+    ///
+    /// The seat, then, because that is what a client is one of. Equal to
+    /// `player` outside a match, and offline, where a client is the only thing
+    /// at its own controls.
+    pub seat: PlayerId,
     pub action: Action,
 }
 
@@ -1479,7 +1499,12 @@ mod tests {
     use super::*;
 
     fn paint(cells: Vec<(i32, i32)>, placement: Placement) -> Stamped {
-        Stamped { tick: 0, player: PlayerId(1), action: Action::Paint { cells, placement } }
+        Stamped {
+            tick: 0,
+            player: PlayerId(1),
+            seat: PlayerId(1),
+            action: Action::Paint { cells, placement },
+        }
     }
 
     /// Why a client must not apply its own action a second time when the
@@ -1496,6 +1521,7 @@ mod tests {
         let paint = Stamped {
             tick: 0,
             player: PlayerId(1),
+            seat: PlayerId(1),
             action: Action::Paint { cells: glider, placement: Placement::Life },
         };
 
@@ -1690,6 +1716,7 @@ mod tests {
         let theirs = Stamped {
             tick: 0,
             player: PlayerId(2),
+            seat: PlayerId(2),
             action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         apply(&mut world, &theirs);
@@ -1711,6 +1738,7 @@ mod tests {
         let take = Stamped {
             tick: 0,
             player: PlayerId(1),
+            seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
         assert_eq!(value_delta(&world, &take), 1, "reclaiming your own pays one");
@@ -1734,6 +1762,7 @@ mod tests {
         let take = Stamped {
             tick: 0,
             player: PlayerId(1),
+            seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         apply(&mut world, &take);
@@ -1754,6 +1783,7 @@ mod tests {
         let no_pane = Stamped {
             tick: 0,
             player: PlayerId(1),
+            seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         assert_eq!(value_delta(&world, &no_pane), 0);
@@ -1773,6 +1803,7 @@ mod tests {
         let theirs = Stamped {
             tick: 0,
             player: PlayerId(2),
+            seat: PlayerId(2),
             action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         apply(&mut world, &theirs);
@@ -1780,6 +1811,7 @@ mod tests {
         let mine = Stamped {
             tick: 0,
             player: PlayerId(1),
+            seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
         assert_eq!(value_delta(&world, &mine), -1);
@@ -1847,12 +1879,14 @@ mod tests {
             &Stamped {
                 tick: 0,
                 player: them,
+                seat: them,
                 action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Life },
             },
         );
         let mine = Stamped {
             tick: 0,
             player: PlayerId(1),
+            seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
         assert_eq!(value_delta(&world, &mine), -RECLAIM);

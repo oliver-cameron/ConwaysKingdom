@@ -2085,6 +2085,7 @@ mod tests {
             ClientMessage::Act(crate::net::Stamped {
                 tick: rooms.get(&RoomId::from("hall")).unwrap().tick(),
                 player: seated,
+                seat: seated,
                 action: crate::net::Action::Paint {
                     cells: vec![(0, 0)],
                     placement: crate::net::Placement::Life,

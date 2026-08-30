@@ -61,16 +61,19 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 42,
                 player: PlayerId(3),
+                seat: PlayerId(3),
                 action: Action::Paint { cells: vec![(1, 2), (-3, 4)], placement: Placement::Life },
             }),
             ClientMessage::Act(Stamped {
                 tick: 7,
                 player: PlayerId(1),
+                seat: PlayerId(1),
                 action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
             }),
             ClientMessage::Act(Stamped {
                 tick: 8,
                 player: PlayerId(2),
+                seat: PlayerId(2),
                 action: Action::Paint { cells: vec![(3, 3)], placement: Placement::Ice },
             }),
             ClientMessage::Subscribe { chunks: vec![(0, 0), (-1, 5)] },
@@ -82,6 +85,7 @@ mod tests {
             ClientMessage::Act(Stamped {
                 tick: 11,
                 player: PlayerId(4),
+                seat: PlayerId(4),
                 action: Action::Paint { cells: vec![(2, 2)], placement: Placement::Mine },
             }),
             // A world and a match, which differ on the wire by one field.
@@ -173,6 +177,7 @@ mod tests {
                 actions: vec![Stamped {
                     tick: 1,
                     player: PlayerId(1),
+                    seat: PlayerId(1),
                     action: Action::Paint { cells: vec![(5, 5)], placement: Placement::Life },
                 }],
             },

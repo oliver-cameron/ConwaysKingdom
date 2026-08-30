@@ -17,6 +17,21 @@ use crate::client::views::words::menu::watch as whistle;
 use crate::net::{MatchPhase, Team, Victory};
 use crate::sim::PlayerId;
 
+/// **What colour a seat draws in: its team's, or its own.**
+///
+/// A team is a player and a player is a hue, so everybody at one team's
+/// controls shares one swatch — which is the whole of what a team looks like
+/// and is worth getting right *here*, because the lobby is where somebody
+/// checks they are on the side they meant to be.
+///
+/// It used to look the seat's own number up, so a two-team lobby showed its
+/// players in the third and fourth colours of the wheel while the board they
+/// were about to play on drew them in the first and second. The board was
+/// right: cells carry the team's number.
+fn drawn_as(seat: PlayerId, teams: &[Team]) -> PlayerId {
+    teams.iter().find(|t| t.players.contains(&seat)).map_or(seat, |t| t.id)
+}
+
 /// Draw it, if this room is a match with something to say. Returns the
 /// rectangle it covered, so the client knows what the pointer is over.
 /// What a press in the lobby meant.
@@ -40,6 +55,10 @@ pub enum Did {
 /// every one of these is read by name at the other end anyway.
 pub struct Look<'a> {
     pub me: PlayerId,
+    /// Why the last whistle was refused, if it was. Shown beside the button
+    /// that produced it — a refusal in the HUD's corner is a refusal nobody
+    /// reads, and a button that appears to do nothing reads as a broken lobby.
+    pub refused: Option<&'a str>,
     pub phase: &'a MatchPhase,
     pub victory: Option<Victory>,
     pub players: &'a [(PlayerId, String)],
@@ -125,7 +144,7 @@ pub fn show(
                                     .find(|(p, _)| p == id)
                                     .map(|(_, name)| name.clone())
                                     .unwrap_or_else(|| format!("player {}", id.0));
-                                swatch(ui, *id, look.hues);
+                                swatch(ui, drawn_as(*id, look.teams), look.hues);
                                 ui.heading(if *id == look.me {
                                     words::YOU_WON.to_string()
                                 } else {
@@ -158,7 +177,7 @@ pub fn show(
                             if look.teams.is_empty() {
                                 for (id, name) in look.players {
                                     ui.horizontal(|ui| {
-                                        swatch(ui, *id, look.hues);
+                                        swatch(ui, drawn_as(*id, look.teams), look.hues);
                                         if *id == look.me {
                                             ui.label(format!("{name}  ({})", words::YOU));
                                         } else {
@@ -190,7 +209,17 @@ pub fn show(
                                 {
                                     did = Did::Start;
                                 }
-                                ui.small(whistle::START_NOTE);
+                                match look.refused {
+                                    Some(why) => {
+                                        ui.colored_label(
+                                            p.warn,
+                                            egui::RichText::new(why).size(m.text_small),
+                                        );
+                                    }
+                                    None => {
+                                        ui.small(whistle::START_NOTE);
+                                    }
+                                }
                             } else {
                                 // Said rather than left blank: a lobby that
                                 // does nothing and explains nothing is
@@ -300,7 +329,7 @@ fn team_picker(
                 }
                 for &id in &team.players {
                     ui.horizontal(|ui| {
-                        swatch(ui, id, look.hues);
+                        swatch(ui, drawn_as(id, look.teams), look.hues);
                         let who = name_of(id);
                         ui.colored_label(
                             if id == me { p.text } else { p.text_dim },
@@ -361,5 +390,37 @@ pub fn describe(victory: Victory) -> String {
     match victory {
         Victory::Timer { generations } => words::timer(generations),
         Victory::Territory { squares } => words::territory(squares),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn team(id: u8, players: &[u8]) -> Team {
+        Team {
+            id: PlayerId(id),
+            name: format!("Team {id}"),
+            players: players.iter().map(|&p| PlayerId(p)).collect(),
+        }
+    }
+
+    /// **A seat draws in its team's colour**, because a team is a player and a
+    /// player is a hue — so everybody at one team's controls is one colour on
+    /// the board, and the lobby has to agree with the board about that.
+    ///
+    /// It looked the seat's own number up, so a two-team lobby showed its
+    /// players in the third and fourth colours of the wheel while the match
+    /// they were about to play drew them in the first and second.
+    #[test]
+    fn a_seat_is_drawn_in_its_teams_colour() {
+        let teams = [team(1, &[3, 5]), team(2, &[4])];
+        assert_eq!(drawn_as(PlayerId(3), &teams), PlayerId(1));
+        assert_eq!(drawn_as(PlayerId(5), &teams), PlayerId(1), "allies are one colour");
+        assert_eq!(drawn_as(PlayerId(4), &teams), PlayerId(2));
+        // Nobody's team is your own number, which is what a free-for-all is
+        // and what somebody who has not picked yet should look like.
+        assert_eq!(drawn_as(PlayerId(6), &teams), PlayerId(6));
+        assert_eq!(drawn_as(PlayerId(3), &[]), PlayerId(3), "a match with no teams");
     }
 }

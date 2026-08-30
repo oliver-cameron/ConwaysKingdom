@@ -167,9 +167,15 @@ impl Lobby {
         crate::client::views::hue::table()
     }
 
-    fn look<'a>(&'a self, me: PlayerId, hues: &'a [f32; PlayerId::COUNT]) -> lobby_view::Look<'a> {
+    fn look<'a>(
+        &'a self,
+        me: PlayerId,
+        hues: &'a [f32; PlayerId::COUNT],
+        refused: Option<&'a str>,
+    ) -> lobby_view::Look<'a> {
         lobby_view::Look {
             me,
+            refused,
             phase: &self.phase,
             victory: self.victory,
             players: &self.players,
@@ -351,6 +357,16 @@ pub struct GameApp {
     /// frame, and a name half-typed would vanish between two of them — the
     /// same reason `sketch` lives here.
     naming_team: Option<(PlayerId, String)>,
+    /// Why the last attempt to start or leave a match was refused.
+    ///
+    /// Beside the lobby rather than in [`Self::notice`], which is drawn in the
+    /// HUD's corner: a refusal belongs against the control that produced it,
+    /// which is the same reason a `Made` refusal lands in the creation form.
+    /// A button that appears to do nothing reads as a broken lobby, and
+    /// "somebody has not picked a team" is a thing to *act on*.
+    ///
+    /// Cleared when the phase moves, because by then it has been answered.
+    refused_start: Option<String>,
     /// **The number this client's cells carry**, which in a team match is the
     /// team's and not this seat's.
     ///
@@ -852,6 +868,11 @@ impl GameApp {
                             teams.iter().find(|t| t.players.contains(&me)).map_or(me, |t| t.id)
                         })
                         .or(self.plays_as);
+                    // The phase moved, or somebody picked a team: either way
+                    // whatever the last whistle was refused for has been
+                    // answered, and a stale reason under the button is worse
+                    // than none.
+                    self.refused_start = None;
                     self.lobby =
                         Some(Lobby { teams, phase, victory, players, owner, started_by, code });
                 }
@@ -881,7 +902,8 @@ impl GameApp {
                 // reason to read.
                 ServerMessage::NotStarted { reason } => {
                     log::info!("the match did not start: {reason}");
-                    self.notice = Some(reason);
+                    self.notice = Some(reason.clone());
+                    self.refused_start = Some(reason);
                 }
                 // The answer to `Create`, into the form it was sent from.
                 // A refusal has to land beside the fields that produced it:
@@ -975,7 +997,32 @@ impl GameApp {
                     // always had -- the same cells, a generation out, which the
                     // checkpoint puts right -- instead of a different pattern
                     // that the rules then build on.
-                    for stamped in actions.iter().filter(|s| Some(s.player) != self.plays_as) {
+                    //
+                    // **By seat, not by player.** Those are the same question
+                    // until a team is a player and several clients are at its
+                    // controls; then a teammate's action carries the team's
+                    // number, this skipped it as something already predicted,
+                    // and never applied it at all. Two people building on one
+                    // team saw different worlds until a checkpoint dragged the
+                    // chunks across -- which it did, every few seconds, for as
+                    // long as they both kept playing.
+                    for stamped in actions.iter().filter(|s| Some(s.seat) != self.me) {
+                        // **And a teammate's comes out of the purse we share.**
+                        // One team is one purse, so an ally spending is this
+                        // client's balance moving with no action of its own
+                        // behind it. Predicted for the same reason our own
+                        // spending is: the alternative is a figure that stays
+                        // wrong until the next checkpoint, which is seconds of
+                        // offering to spend money somebody else has spent.
+                        //
+                        // **Priced before it is applied**, which is the whole
+                        // contract of `value_delta` -- it reads what is there
+                        // now, and what is there now is what the server priced
+                        // it against.
+                        if Some(stamped.player) == self.plays_as {
+                            let delta = crate::net::value_delta(&self.world, stamped);
+                            self.value = (self.value + delta).max(0);
+                        }
                         crate::net::apply(&mut self.world, stamped);
                     }
                     self.advance_to(tick);
@@ -1238,7 +1285,15 @@ impl GameApp {
         } else {
             Action::Paint { cells, placement }
         };
-        let stamped = Stamped { tick: self.world.generation, player: self.player(), action };
+        let stamped = Stamped {
+            tick: self.world.generation,
+            player: self.player(),
+            // This client, as against the number it plays under. In a team
+            // match they differ, and telling them apart is what stops a
+            // teammate's action being mistaken for one this client predicted.
+            seat: self.me.unwrap_or_else(|| self.player()),
+            action,
+        };
         let delta = crate::net::value_delta(&self.world, &stamped);
         (stamped, delta)
     }
@@ -2163,6 +2218,7 @@ impl App for GameApp {
             said_where: None,
             helping: false,
             naming_team: None,
+            refused_start: None,
             in_play: None,
             geiger: Default::default(),
             sketch: stamp::Sketch::default(),
@@ -2374,7 +2430,7 @@ impl App for GameApp {
                                     lobby_view::show(
                                         ctx,
                                         &theme,
-                                        &l.look(me, &l.hues()),
+                                        &l.look(me, &l.hues(), self.refused_start.as_deref()),
                                         &mut naming,
                                     )
                                 });
@@ -2401,8 +2457,12 @@ impl App for GameApp {
                         // A decided match keeps its board: the result is what is on
                         // it, and covering that to say who won would hide the reason.
                         let waiting = lobby.as_ref().and_then(|l| {
-                            let (rect, did) =
-                                lobby_view::show(ctx, &theme, &l.look(me, &l.hues()), &mut naming);
+                            let (rect, did) = lobby_view::show(
+                                ctx,
+                                &theme,
+                                &l.look(me, &l.hues(), self.refused_start.as_deref()),
+                                &mut naming,
+                            );
                             if !matches!(did, lobby_view::Did::Nothing) {
                                 in_lobby = did;
                             }

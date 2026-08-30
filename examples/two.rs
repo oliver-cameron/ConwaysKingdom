@@ -159,6 +159,7 @@ fn main() {
     let stamped = Stamped {
         tick: a.world.generation,
         player: a.me,
+        seat: a.me,
         action: Action::Paint { cells, placement: Placement::Life },
     };
     // Predicted here and sent, which is what the client does.
