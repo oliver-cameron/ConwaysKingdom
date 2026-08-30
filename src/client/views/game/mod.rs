@@ -2217,17 +2217,37 @@ impl App for GameApp {
             geiger: self.geiger,
             watching: self.watching,
         };
-        // What the pan cluster prints here, read before the frame because the
-        // closure below holds `views` for the whole of it. Four keys by
-        // position; the label is whatever they type on this layout.
-        let pan_cluster: Option<String> = {
+        // What the keys bound by *position* print here, read before the frame
+        // because the closure below holds `views` for the whole of it. Three
+        // rows, and every one of them prints something different on a keyboard
+        // that is not the one this was written on.
+        let help_keys = {
             use winit::keyboard::KeyCode as K;
+            const DIGITS: [K; 10] = [
+                K::Digit1,
+                K::Digit2,
+                K::Digit3,
+                K::Digit4,
+                K::Digit5,
+                K::Digit6,
+                K::Digit7,
+                K::Digit8,
+                K::Digit9,
+                K::Digit0,
+            ];
             let views = self.views.borrow();
-            let letters: Vec<&str> = [K::KeyW, K::KeyA, K::KeyS, K::KeyD]
-                .into_iter()
-                .filter_map(|code| views.label(code, false))
-                .collect();
-            (letters.len() == 4).then(|| letters.concat())
+            // All of a row or none of it: half a row of keycaps with the rest
+            // guessed is a row nobody can read.
+            let row = |codes: &[K], shift: bool| {
+                let seen: Vec<&str> =
+                    codes.iter().filter_map(|&code| views.label(code, shift)).collect();
+                (seen.len() == codes.len()).then(|| seen.concat())
+            };
+            help::Keys {
+                pan: row(&[K::KeyW, K::KeyA, K::KeyS, K::KeyD], false),
+                stamps: row(&DIGITS, false),
+                tools: row(&DIGITS[..4], true),
+            }
         };
         let (held, theme, shifted) = {
             let views = self.views.borrow();
@@ -2376,7 +2396,7 @@ impl App for GameApp {
             // screen asked for it. Its rectangle joins the list the client
             // uses to keep a press off the world behind.
             if helping {
-                let (rect, closed) = help::show(ctx, &theme, pan_cluster.as_deref());
+                let (rect, closed) = help::show(ctx, &theme, &help_keys);
                 help_closed = closed;
                 rects.extend(rect);
             }
@@ -2535,52 +2555,45 @@ impl App for GameApp {
         // One step at a time, innermost first: a form shuts before a world
         // does. Escape that skipped a level would take somebody out of a game
         // because they wanted to close a panel.
-        // `?` and `~` are bound to the characters they are *drawn as*, not to
-        // the keys that type them on a US board. The help screen says `?` and
-        // the hotbar square says `~`; a positional binding would make both
-        // labels wrong on any layout that puts those characters elsewhere,
-        // and a label that lies is worse than no label.
-        if pressed && typed == Some("?") {
-            self.helping = !self.helping;
-            return;
-        }
-        // **The shape axis has one key, and it always lands in one place.**
-        // It puts the shape back to whatever the held material is usually
-        // wanted in — a pencil for life, mines and turrets, a pane for ice —
-        // rather than toggling, so its meaning does not depend on what was
-        // pressed last. That also makes it the way out of a stamp or a
-        // capture without looking at the bar to see what it will do.
-        if pressed && typed == Some("~") {
-            self.held = self.held.defaulted();
-            self.picking_stamp = false;
-            return;
-        }
-        // **A pattern and the same pattern turned are one pattern.** Without
-        // this the library fills up with its own reflections — four gliders,
-        // and four more that are their mirror image, and the same again for
-        // every spaceship and every corner of a wall.
-        //
-        // `R` and `F` because that is what a builder game binds them to, and
-        // both are clear of the pan keys. Shift turns the other way rather
-        // than taking a key of its own: three presses and one press are the
-        // same place, so the second binding is a convenience and should read
-        // as one.
-        //
-        // **By character**, because these are the letters and not the places:
-        // the R position types `p` on Dvorak, so a positional binding would
-        // hide rotate under a key nothing tells you about and leave `r` inert.
-        // Matched case-insensitively, since shift is one of the meanings.
-        let letter = typed.map(str::to_ascii_lowercase);
-        if pressed && matches!(letter.as_deref(), Some("r") | Some("f")) {
-            self.held.turn = match (letter.as_deref(), self.shift) {
-                (Some("r"), false) => self.held.turn.right(),
-                (Some("r"), true) => self.held.turn.left(),
-                _ => self.held.turn.mirror(),
-            };
-            // Said out loud, because a rotation with nothing held changes
-            // nothing on the screen and looks like a key that does not work.
-            if !matches!(self.held.shape, hotbar::Shape::Stamp(_)) {
-                self.notice = Some(words::stamps::NOTHING_TO_TURN.into());
+        // **The four keys bound to what they say rather than to where they
+        // sit**, resolved in one place — see [`input::mnemonic`], which is
+        // also where the fallback for a keyboard that cannot type them is and
+        // where all of it is tested without a window.
+        if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift)) {
+            match what {
+                input::Mnemonic::Help => self.helping = !self.helping,
+                // **The shape axis has one key, and it always lands in one
+                // place.** It puts the shape back to whatever the held
+                // material is usually wanted in — a pencil for life, mines and
+                // turrets, a pane for ice — rather than toggling, so its
+                // meaning does not depend on what was pressed last. That also
+                // makes it the way out of a stamp or a capture without looking
+                // at the bar to see what it will do.
+                input::Mnemonic::Shape => {
+                    self.held = self.held.defaulted();
+                    self.picking_stamp = false;
+                }
+                // **A pattern and the same pattern turned are one pattern.**
+                // Without this the library fills up with its own reflections —
+                // four gliders, and four more that are their mirror image, and
+                // the same again for every spaceship and every corner of a
+                // wall.
+                //
+                // Shift turns the other way rather than taking a key of its
+                // own: three presses and one press are the same place, so the
+                // second binding is a convenience and should read as one.
+                input::Mnemonic::Turn | input::Mnemonic::Mirror => {
+                    self.held.turn = match (what, self.shift) {
+                        (input::Mnemonic::Turn, false) => self.held.turn.right(),
+                        (input::Mnemonic::Turn, true) => self.held.turn.left(),
+                        _ => self.held.turn.mirror(),
+                    };
+                    // Said out loud, because a rotation with nothing held
+                    // changes nothing on screen and looks like a dead key.
+                    if !matches!(self.held.shape, hotbar::Shape::Stamp(_)) {
+                        self.notice = Some(words::stamps::NOTHING_TO_TURN.into());
+                    }
+                }
             }
             return;
         }

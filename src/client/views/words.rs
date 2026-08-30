@@ -311,9 +311,11 @@ pub mod hotbar {
     /// something.
     ///
     /// Written as the character it produces rather than as the chord that
-    /// produces it: shift and backtick **is** tilde on every layout this is
-    /// bound for, and `S\`` was two symbols asking to be decoded.
-    pub const FLIP_KEY: &str = "~";
+    /// produces it, and as the **unshifted** half of that key: one press
+    /// rather than two, and `~` is a dead key on the Spanish, Portuguese and
+    /// Nordic layouts, where it produces no text at all and left this
+    /// unreachable. `~` is still accepted; this is what the square says.
+    pub const FLIP_KEY: &str = "`";
 
     pub const CAPTURE: &str = "Grab";
     /// The square that opens the library.
@@ -534,12 +536,28 @@ pub mod help {
         /// nothing to report: the arrows do the same job and are the same
         /// everywhere, so they are the honest half of the answer.
         pub const PAN_ARROWS: &str = "arrows";
+
+        /// The tool row, as whatever shift and the first four digits print
+        /// here. Bound by position, so the label is the keyboard's answer and
+        /// not the one a US layout would have given.
+        pub fn with_shift(row: &str) -> String {
+            format!("shift + {row}")
+        }
+
         pub const PAN_FAST: &str = "shift";
         pub const PAN_DRAG: &str = "space or middle drag";
         pub const ZOOM: &str = "wheel / pinch";
+        /// What a US keyboard prints, which is the guess until somebody has
+        /// pressed one of them.
         pub const TOOLS: &str = "shift + 1-4";
-        pub const STAMPS: &str = "1-9";
-        pub const SHAPE: &str = "~";
+        /// Ten of them, and the tenth is `0` — the key `input::digit` was
+        /// missing, so the hotbar's tenth square named a key that did nothing.
+        pub const STAMPS: &str = "1-9, 0";
+        /// The unshifted half of the key `~` is on, so it is one press — and
+        /// `~` is a dead key on the Spanish, Portuguese and Nordic layouts,
+        /// which produces no text at all and left the shape reset unreachable
+        /// there. `~` still works; this is what the square says.
+        pub const SHAPE: &str = "`";
         pub const TURN: &str = "R / shift + R";
         pub const MIRROR: &str = "F";
         pub const DRAG: &str = "drag";

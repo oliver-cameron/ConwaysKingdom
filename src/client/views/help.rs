@@ -28,32 +28,51 @@ struct Group {
     keys: Vec<(String, &'static str)>,
 }
 
-/// **The one label here that is not the same on every keyboard.**
+/// What the keys on this keyboard actually print, as far as anybody has found
+/// out by pressing them.
 ///
-/// Pan is bound by *position* — the cluster under a left hand — so what it
-/// prints depends on the layout: on Dvorak those four keys are `,aoe`. A list
-/// of keys that is wrong is worse than no list, and this is the list that
-/// exists to be read by somebody who does not know the keys yet.
+/// **Every row bound by position asks**, which is three of them and used to be
+/// one. A positional binding is the same key everywhere and prints something
+/// different on every layout: the pan cluster is `,aoe` on Dvorak, and the
+/// digit row types `&é"'(-è_ç` unshifted on a French keyboard — so a help
+/// screen saying `1-9` was naming nine keys that layout does not have, on the
+/// one screen that exists to be read by somebody who does not know the keys
+/// yet.
 ///
-/// Nothing else here asks. Every other row is either a key bound by
-/// *character*, which is the same label everywhere by construction, or a key
-/// with a name rather than a print — space, tab, escape, the arrows.
+/// The rows bound by *character* do not ask. `R`, `F`, `?` and `~` are the
+/// same label everywhere because that is what they are bound to, and
+/// [`input::mnemonic`] is what makes that true on a keyboard which cannot type
+/// them.
 ///
-/// `None` until somebody has pressed one of them, which is answered with the
-/// arrows alone rather than with a guess.
+/// `None` for a key nobody has pressed, which is answered with the half of the
+/// row that is the same everywhere rather than with a guess.
 ///
-/// ---
-///
+/// [`input::mnemonic`]: crate::client::views::game::input::mnemonic
+#[derive(Default)]
+pub struct Keys {
+    /// What the four pan keys print, in order, once all four are known.
+    pub pan: Option<String>,
+    /// What the bare digit row prints — the stamps.
+    pub stamps: Option<String>,
+    /// What shift and the first four digits print — the tools.
+    pub tools: Option<String>,
+}
+
 /// What the client can be told to do, by what it is being told to do it to.
 ///
 /// Here rather than beside the handlers that read them, for the reason
 /// [`super::words`] exists at all: what the game *says* is a decision, and a
 /// list of keys that drifts out of step with the keys is worse than no list.
 /// Anything added to `on_key` belongs here in the same commit.
-fn groups(pan_cluster: Option<&str>) -> Vec<Group> {
-    let pan = match pan_cluster {
+fn groups(keys: &Keys) -> Vec<Group> {
+    let pan = match &keys.pan {
         Some(cluster) => words::keys::pan(cluster),
         None => words::keys::PAN_ARROWS.to_string(),
+    };
+    let stamps = keys.stamps.clone().unwrap_or_else(|| words::keys::STAMPS.to_string());
+    let tools = match &keys.tools {
+        Some(row) => words::keys::with_shift(row),
+        None => words::keys::TOOLS.to_string(),
     };
 
     vec![
@@ -69,8 +88,8 @@ fn groups(pan_cluster: Option<&str>) -> Vec<Group> {
         Group {
             heading: words::BUILDING,
             keys: vec![
-                (words::keys::TOOLS.into(), words::TOOLS),
-                (words::keys::STAMPS.into(), words::STAMPS),
+                (tools, words::TOOLS),
+                (stamps, words::STAMPS),
                 (words::keys::SHAPE.into(), words::SHAPE),
                 (words::keys::TURN.into(), words::TURN),
                 (words::keys::MIRROR.into(), words::MIRROR),
@@ -92,11 +111,7 @@ fn groups(pan_cluster: Option<&str>) -> Vec<Group> {
 
 /// Draw it. Returns the rectangle covered, so a click on it does not also
 /// reach the world, and whether it was dismissed.
-pub fn show(
-    ctx: &egui::Context,
-    theme: &Theme,
-    pan_cluster: Option<&str>,
-) -> (Option<egui::Rect>, bool) {
+pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> (Option<egui::Rect>, bool) {
     let p = theme.palette;
     let m = theme.metrics;
     let mut close = false;
@@ -105,7 +120,7 @@ pub fn show(
     // the whole panel rather than per group — measured rather than guessed,
     // because a hard-coded width is a width that is wrong on the next key
     // somebody adds.
-    let groups = groups(pan_cluster);
+    let groups = groups(keys);
     let widest = groups
         .iter()
         .flat_map(|g| g.keys.iter())
@@ -173,7 +188,7 @@ mod tests {
     /// The list as somebody who has pressed nothing sees it, which is the
     /// worst case for every assertion below.
     fn cold() -> Vec<Group> {
-        groups(None)
+        groups(&Keys::default())
     }
 
     /// The list is the documentation, so an empty group or a blank key is a
@@ -200,8 +215,8 @@ mod tests {
     /// telling them the wrong ones.
     #[test]
     fn the_pan_row_follows_the_keyboard() {
-        let row = |cluster| {
-            groups(cluster)
+        let row = |pan: Option<&str>| {
+            groups(&Keys { pan: pan.map(str::to_string), ..Keys::default() })
                 .into_iter()
                 .flat_map(|g| g.keys)
                 .map(|(key, _)| key)
@@ -246,5 +261,29 @@ mod tests {
                 "{key} would not fill the column"
             );
         }
+    }
+
+    /// **The digit rows follow the keyboard too**, which they did not. They
+    /// are bound by position — the row is a shape — and a French keyboard
+    /// types `&é"'(-è_ç` where a US one types `1-9`, so the one screen that
+    /// exists to be read by somebody who does not know the keys was naming
+    /// nine of them that layout does not have.
+    #[test]
+    fn the_digit_rows_follow_the_keyboard() {
+        let azerty = Keys {
+            pan: Some("zqsd".into()),
+            stamps: Some("&é\"'(-è_çà".into()),
+            tools: Some("1234".into()),
+        };
+        let caps: Vec<String> =
+            groups(&azerty).into_iter().flat_map(|g| g.keys).map(|(k, _)| k).collect();
+        assert!(caps.iter().any(|k| k.contains("&é")), "the stamp row still said 1-9: {caps:?}");
+        assert!(caps.iter().any(|k| k.contains("shift") && k.contains("1234")));
+        assert!(!caps.iter().any(|k| k == "1-9"), "a US label survived: {caps:?}");
+
+        // And before anybody has pressed one, the row a US keyboard has is
+        // still the honest guess rather than a blank.
+        let caps: Vec<String> = cold().into_iter().flat_map(|g| g.keys).map(|(k, _)| k).collect();
+        assert!(caps.iter().any(|k| k == words::keys::STAMPS));
     }
 }

@@ -190,9 +190,20 @@ pub(crate) fn pinch_span(touches: &[(u64, (f64, f64))]) -> Option<f64> {
 }
 
 /// The digit a key stands for, if it is one.
+///
+/// Positional, because the digit row is a **shape**: its meaning is the order
+/// the keys sit in, and on a French keyboard the top row types `&é"'(-è_ç`
+/// unshifted while still being the same ten keys in the same order.
+///
+/// `0` is here because the tenth stamp is picked with it — [`stamp_for_digit`]
+/// maps it and the hotbar draws "0" in that square's corner. It was missing,
+/// so the tenth stamp had a label naming a key that did nothing.
+///
+/// [`stamp_for_digit`]: super::hotbar::stamp_for_digit
 pub(crate) fn digit(code: winit::keyboard::KeyCode) -> Option<u32> {
     use winit::keyboard::KeyCode as K;
     Some(match code {
+        K::Digit0 | K::Numpad0 => 0,
         K::Digit1 | K::Numpad1 => 1,
         K::Digit2 | K::Numpad2 => 2,
         K::Digit3 | K::Numpad3 => 3,
@@ -204,4 +215,184 @@ pub(crate) fn digit(code: winit::keyboard::KeyCode) -> Option<u32> {
         K::Digit9 | K::Numpad9 => 9,
         _ => return None,
     })
+}
+
+/// A key bound to what it **says** rather than to where it sits.
+///
+/// Four of the client's keys are mnemonics: `R` for rotate, `F` for flip, `?`
+/// for the help screen and `` ` `` for the shape reset. Their meaning is the
+/// character, not the place — the help screen prints `?` and the hotbar square
+/// prints `` ` ``, so a positional binding would make both labels lie on any
+/// layout that puts those characters elsewhere. On Dvorak the `R` *position*
+/// types `p`, which would hide rotate under a key nothing mentions and leave
+/// `r` inert.
+///
+/// **The shape reset is `` ` `` and not `~`.** They are the same key on a US
+/// keyboard and the backtick is the unshifted half of it, so it is one press
+/// rather than two — and, which matters more, `~` is a **dead key** on the
+/// Spanish, Portuguese and Nordic layouts: it produces no text at all on its
+/// own, waiting for a vowel to put a tilde over, so a client bound to the
+/// character never saw it. A backtick is a plain character everywhere. `~` is
+/// still accepted, because it is the same key and somebody who learnt the old
+/// label should not find it dead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Mnemonic {
+    Help,
+    Shape,
+    Turn,
+    Mirror,
+}
+
+/// Whether this key types a Latin letter — which is the question that decides
+/// whether a mnemonic can be bound by character at all.
+fn types_a_letter(typed: Option<&str>) -> bool {
+    typed.is_some_and(|t| t.chars().any(|c| c.is_ascii_alphabetic()))
+}
+
+/// What a press means, if it means one of the four.
+///
+/// **Character first, and the US position as a fallback**, which is the half
+/// that was missing. Binding purely by character is right on every layout that
+/// can *type* the character and leaves the key unreachable on every layout
+/// that cannot: on a Cyrillic, Greek, Hebrew or Thai keyboard the `R` key
+/// types `к`, so rotate, flip and the help screen naming them had no key at
+/// all — and `~` is worse than that, because it is a dead key on the Spanish,
+/// Portuguese and Nordic layouts and so produces no text even where the
+/// alphabet is Latin.
+///
+/// The fallback is narrow on purpose. `R` and `F` fall back to their positions
+/// **only when that key types something that is not a Latin letter**, so
+/// Dvorak — where the `R` position types a perfectly good `p` — keeps the
+/// character binding and nothing is hidden under a key the help screen does
+/// not name. `?` and `~` fall back unconditionally, because their US positions
+/// are bound to nothing else and cannot collide.
+///
+/// **Direct-input layouts only.** A keyboard driven through an input method —
+/// Pinyin, Japanese, Korean — composes text over several presses and hands it
+/// over as a finished string, so `to_text` during composition says nothing
+/// this could read and the game's single-key bindings are not a thing that
+/// layout has. That is a separate problem and deliberately not attempted; see
+/// docs/gotchas.md.
+pub(crate) fn mnemonic(
+    code: winit::keyboard::KeyCode,
+    typed: Option<&str>,
+    shift: bool,
+) -> Option<Mnemonic> {
+    use winit::keyboard::KeyCode as K;
+    let says = |what: &str| typed.is_some_and(|t| t.eq_ignore_ascii_case(what));
+    // A letter this keyboard cannot produce falls back to where it sits on the
+    // one it is named after.
+    let unreachable = !types_a_letter(typed);
+    Some(match code {
+        _ if says("?") => Mnemonic::Help,
+        // Both halves of one key: the backtick is what the label says and the
+        // tilde is what it used to.
+        _ if says("`") || says("~") => Mnemonic::Shape,
+        _ if says("r") => Mnemonic::Turn,
+        _ if says("f") => Mnemonic::Mirror,
+        K::Slash if shift => Mnemonic::Help,
+        K::Backquote => Mnemonic::Shape,
+        K::KeyR if unreachable => Mnemonic::Turn,
+        K::KeyF if unreachable => Mnemonic::Mirror,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::KeyCode as K;
+
+    /// **Programmer Dvorak, where the digit row is shifted by default.** The
+    /// letters sit where Dvorak puts them, so `r` and `f` are found by
+    /// character; the top row types `&[{}()=*)+]!#` unshifted and the digits
+    /// need shift, which the *bindings* do not care about because the row is
+    /// bound by position — and which the help screen now says out loud,
+    /// because it reads the labels off the keyboard rather than assuming.
+    #[test]
+    fn programmer_dvorak_finds_its_keys() {
+        assert_eq!(mnemonic(K::KeyP, Some("r"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyU, Some("f"), false), Some(Mnemonic::Mirror));
+        // The digit row is positional, so it is untouched by any of this.
+        assert_eq!(digit(K::Digit1), Some(1));
+        assert_eq!(digit(K::Digit0), Some(0));
+        // Where the backtick sits, that key types `$` — and nothing else in
+        // the client wants it, so the position still resets the shape.
+        assert_eq!(mnemonic(K::Backquote, Some("$"), false), Some(Mnemonic::Shape));
+        // And so does whichever key does type a backtick.
+        assert_eq!(mnemonic(K::Digit4, Some("`"), true), Some(Mnemonic::Shape));
+    }
+
+    /// The layout the game was written on, where character and position agree.
+    #[test]
+    fn a_us_keyboard_is_unchanged() {
+        assert_eq!(mnemonic(K::KeyR, Some("r"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyR, Some("R"), true), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyF, Some("f"), false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::Slash, Some("?"), true), Some(Mnemonic::Help));
+        assert_eq!(mnemonic(K::Backquote, Some("`"), false), Some(Mnemonic::Shape));
+    }
+
+    /// **Dvorak keeps the character binding**, which is what the fallback must
+    /// not undo: the `R` position types `p` there, and rotate belongs under
+    /// the key that types `r` rather than under one nothing tells you about.
+    #[test]
+    fn dvorak_binds_the_letter_and_not_the_place() {
+        assert_eq!(mnemonic(K::KeyP, Some("r"), false), Some(Mnemonic::Turn), "r is r");
+        assert_eq!(mnemonic(K::KeyR, Some("p"), false), None, "the R position types p there");
+        assert_eq!(mnemonic(K::KeyU, Some("f"), false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::KeyY, Some("f"), false), Some(Mnemonic::Mirror));
+    }
+
+    /// **And a keyboard with no Latin letters falls back to the place**, which
+    /// is the case that had no key at all: on a Cyrillic layout `R` types `к`,
+    /// so rotate, flip and the help screen naming them were unreachable.
+    #[test]
+    fn a_non_latin_keyboard_falls_back_to_where_the_key_sits() {
+        assert_eq!(mnemonic(K::KeyR, Some("\u{43a}"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyF, Some("\u{430}"), false), Some(Mnemonic::Mirror));
+        // Greek and Hebrew are the same argument.
+        assert_eq!(mnemonic(K::KeyR, Some("\u{3c1}"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyF, Some("\u{5db}"), false), Some(Mnemonic::Mirror));
+    }
+
+    /// **A dead key types nothing**, which is what `~` is on the Spanish,
+    /// Portuguese and Nordic layouts — so a shape reset bound to that
+    /// character had no key there even though the alphabet is Latin and every
+    /// label was in place. It is bound to the backtick now, which is the
+    /// unshifted half of the same key and is never dead.
+    #[test]
+    fn a_dead_tilde_still_resets_the_shape() {
+        assert_eq!(mnemonic(K::Backquote, Some("`"), false), Some(Mnemonic::Shape));
+        assert_eq!(mnemonic(K::Backquote, Some("~"), true), Some(Mnemonic::Shape), "the old label");
+        assert_eq!(mnemonic(K::Backquote, None, false), Some(Mnemonic::Shape));
+        // And where `?` is somewhere else entirely, the position still works.
+        assert_eq!(mnemonic(K::Slash, None, true), Some(Mnemonic::Help));
+        // Shift matters for `?`: the unshifted key is `/` and means nothing.
+        assert_eq!(mnemonic(K::Slash, Some("/"), false), None);
+    }
+
+    /// Nothing else is one of the four. A key that means something is a key
+    /// taken away from whatever else wanted it.
+    #[test]
+    fn an_ordinary_key_means_none_of_them() {
+        for (code, typed) in
+            [(K::KeyA, "a"), (K::KeyW, "w"), (K::Digit1, "1"), (K::Space, " "), (K::KeyG, "g")]
+        {
+            assert_eq!(mnemonic(code, Some(typed), false), None, "{typed}");
+        }
+    }
+
+    /// The tenth stamp's square is drawn with a "0" in the corner, so the key
+    /// has to reach it. It did not.
+    #[test]
+    fn zero_is_a_digit() {
+        assert_eq!(digit(K::Digit0), Some(0));
+        assert_eq!(digit(K::Numpad0), Some(0));
+        assert_eq!(super::super::hotbar::stamp_for_digit(0), Some(9));
+        // And the nine above it are unchanged.
+        for n in 1..=9u32 {
+            assert_eq!(super::super::hotbar::stamp_for_digit(n), Some(n as usize - 1));
+        }
+    }
 }
