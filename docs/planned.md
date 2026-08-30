@@ -16,7 +16,9 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 | | status | |
 |---|---|---|
-| [Payloads](#Payoloads) | decided | A type of cell that explodes after a certain amount of time | 
+| [Payloads](#payloads) | Decided | a cell that explodes after a while |
+| [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
+| [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
 | [Spectating](#spectating) | Built | a room with no seat in it |
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
@@ -56,6 +58,48 @@ The goal of detonation is to make the surrounding area look like random noise. O
 *Closeness* is of the form $\frac{1}{\delta x ^ 2 | \delta y ^ 2 + D}$, where `D` is some constant. Score is multiplied by this.
 
 This makes the surrounding area more random.
+## Depleted mines
+
+**The problem is that mine income scales faster than size.** A mine pays when one of its kind is *born*, and births scale with the perimeter of a growing pattern — so a player with four times the territory does not earn four times as much, they earn more than that, and they can spend it on more territory. Nothing in the rules pushes back.
+
+A **depleted** mine is the push-back: past some point it stops paying and is an ordinary cell that happens to have cost more. What that buys is a ceiling on what any one lineage is worth, so income comes from *building new things* rather than from having built a big one.
+
+### Where the bit comes from
+
+Byte 1 is full — alive, ice, kind, age; see [simulation.md](simulation.md#the-cell). There is no spare bit, so this is a choice between three, and they are not equally good.
+
+**A kind.** `Kind::DEPLETED_MINE` beside `Kind::MINE`, costing one of eight kind indices and no bits at all. It gets art of its own for free, which a flag would not — a depleted mine has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted mine's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
+
+**The age field.** A mine's age *is* its depletion: `net::earnings` scales down with it and a mine at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that mines can no longer use age for anything else, and it collides with payloads if a payload is ever also a mine.
+
+**A bit off age.** Three bits become two, four ages instead of eight. Cheapest to write and the worst of the three: it takes resolution away from the one field that has a use lined up, to buy a flag that a kind gives away.
+
+### What is not decided
+
+How much is "past some point", and whether depletion is a count of births or of generations. A count of births is the honest one — it is what a mine is paid for — but it needs somewhere to keep the count, which is the age field again.
+
+## The simulation on the GPU
+
+**Costed, not started.** The full working is in `design-notes/05-compute-feasibility.md`, which sits beside this repository rather than in it; the parts that decide anything are here.
+
+`Rg8Uint` **cannot be a compute shader's output.** wgpu's guaranteed format features give it `msaa | attachment` and no `STORAGE_BINDING`, and a compute shader can only write to a storage texture. So moving the simulation onto the GPU means changing the cell's texture format first: `Rgba8Uint` is the natural one — storage-capable, and four independent `u8`s where the cell already wants fields — or `R32Uint`, which is fully read-write and has atomics at the cost of packing by hand.
+
+`Rgba8Uint` grants read-only and write-only storage but not read-write, which suits Conway anyway: bind one generation read-only and the next write-only, and swap each tick.
+
+**WebGL2 cannot do it at all.** `Limits::downlevel_webgl2_defaults` zeroes every compute limit, and the browser client falls back to WebGL2 whenever WebGPU is unavailable — a blocklisted driver, a VM, a headless browser; see [gotchas.md](gotchas.md). So this is never the only simulation. There has to be a CPU path regardless.
+
+### The hard part is not the shader
+
+It is that **two simulations must agree exactly.** The server steps on the CPU and the client predicts against it, and a `Checkpoint` compares them chunk by chunk — so a GPU step that differs from the CPU step by one cell is not slower or uglier, it is a client that resyncs every few seconds forever. Everything the rule does is integer work on bytes, which is reproducible on a GPU in a way floating point would not be, but "reproducible" has to be *established* rather than assumed: the seeded dice in `sim::seed`, the order births resolve in, and the tie-breaks in the territory rule all have to come out the same.
+
+Which suggests the shape: `examples/headless` already runs the simulation with no GPU, so the test is a world stepped both ways for a few hundred generations with the digests compared every step — the same comparison `examples/two` already makes between two peers.
+
+### What it buys, and when
+
+Nothing yet. The world steps four times a second and a chunk is 256 cells; the server's cost is linear in *resident* chunks and the client only holds its viewport. This is worth doing when a room holds a world big enough that a quarter-second is not enough to step it, and that is a size nobody has run.
+
+The cheap thing to do now is not to close the door: `Rgba8Uint` is a format constant and a fourth byte on the cell, and it is the difference between swapping a constant and rewriting the storage layer.
+
 ## Making rooms from the client
 
 **Built** — see [game.md](game.md#the-menu) for the form and [server.md](server.md#made-by-a-client) for the wire, the cap and the owner. A world, a match or a private game, from the menu, on a phone.
@@ -144,7 +188,7 @@ There was a real design here and it is worth recording what it cost, because the
 
 **Friendly fire is on**, and that is the honest first answer rather than a decision. A glider is a weapon whoever built it, and a rule making allied life pass through allied life would be a rule in `sim` — which is what this design exists to avoid. Teams are about scoring and building, not immunity.
 
-**Nothing in a world.** Teams are a match feature because a team is a way of deciding a result and a world has none. A persistent world with standing alliances is a different feature wearing the same word.
+**A world may have them too**, which reversed a decision. Teams were a match feature on the reasoning that a team is a way of deciding a result and a world has none — but that is only half of what a team is, and the other half is people playing as one player, which needs nothing to win. A world with two teams is two shared kingdoms rather than fifteen small ones. What stays a match's alone is the balance check, because a world has no moment to make it at.
 
 **The lobby cannot lock a team**, so anybody may join any team including one that is already full. That is deliberate — see the balance check above — and it does mean a five-player match can end up four against one if people are careless. The whistle allows it; whether it should is a playtest question.
 

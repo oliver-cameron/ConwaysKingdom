@@ -30,11 +30,17 @@ Reproduced: three players in a two-team match, one offline at the whistle, rejoi
 
 ### The hotbar labels its stamp squares with keys a keyboard may not have
 
-`hotbar::tool_hint` asks the keyboard what shift and a digit type here, and falls back to `S1`–`S4` until somebody has pressed one. `hotbar::stamp_hint` beside it hard-codes `1`–`9` and `0`.
+`game::hotbar::tool_hint` asks the keyboard what shift and a digit type here, and falls back to `S1`–`S4` until somebody has pressed one. `game::hotbar::stamp_hint` beside it hard-codes `1`–`9` and `0`.
 
 *You would see:* on a French keyboard, ten stamp squares labelled `1`–`0` whose keys type ``&é"'(-è_çà``. The help screen is right about this and the bar is not, which is worse than both being wrong.
 
 *Still here because* the machinery is all there — `Views::label(code, false)` answers it, and the help screen was taught to ask in the same pass that found this — and it is a small change to a file that was not otherwise being touched.
+
+### A pinned stamp is pinned per client, not per person
+
+The library is written to this client's own store, so pinning is a fact about the browser or the machine rather than about the player. Somebody who plays on a phone and a laptop has two libraries, and a key that identifies them across servers — which `net::auth` now mints — has nothing to do with where their stamps live.
+
+*Still here because* it is the same gap [rating](planned.md#rating) and the rejoin token both have: a client keeps things per client, and a person is a newer idea than the store is. Fixing one properly is fixing all three.
 
 ### The help screen's monospace column misaligns on a wide glyph
 

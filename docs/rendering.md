@@ -102,7 +102,7 @@ Asking for more chroma than sRGB can show is the *normal* case at useful saturat
 
 Player colour has two axes. Hue is spaced by the golden ratio; saturation alternates between two tiers. Hue alone left the closest of 31 players 0.026 apart in OKLab; the tiers lift that to 0.037 over all 31 and 0.119 over the first eight. Spreading saturation *smoothly* measured worse than doing nothing, because lowering it shrinks the chroma radius and pulls colours together — the alternation is the point.
 
-`client::views::hud::player_colour` reproduces the same arithmetic on the CPU so the HUD swatch and the board cannot disagree.
+`client::views::hue::player_colour` reproduces the same arithmetic on the CPU so a swatch and the board cannot disagree. It sits beside the hue table it converts, rather than in the HUD, so that a screen wanting a swatch does not have to depend on the HUD to get one.
 
 ## The camera
 

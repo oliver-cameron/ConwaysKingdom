@@ -267,7 +267,15 @@ A stamp is **the live cells and their kind**, not the rectangle you swept, and t
 
 The pad asks the same questions the board does. A click lays a cell, or lifts it if what is there is already what you are holding; a drag only ever lays, because a sweep across cells already drawn is far more likely to be drawing over them than asking for them back. What the pad holds is its own choice and not the hotbar's — a pad that changed what your next click on the world would do would be a trap. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of mines is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
 
-Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern. Past ten, the rest are behind the library key — which is **always** there, not only when something has overflowed, because the library is where a stamp is looked at and thrown away as well as where the extras live. It shows each pattern at a size you can recognise, beside its size and cell count.
+Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern.
+
+**The library survives the session.** It is written to the client's own store after every change — after, not on the way out, because a browser gives no reliable moment to save at. So a stamp is worth naming, and a name is a click on the one it already has.
+
+**Which ten are on the bar is yours to choose.** Pin any and the bar is exactly what is pinned; pin none and it is the newest ten, which is what it always was. Not "your pins, then the newest of the rest", which would reshuffle the bar under your fingers every time you captured something. The bar has ten squares, so an eleventh pin is refused rather than silently doing nothing.
+
+**Editing** opens a stamp on the pad, centred, and keeping puts it back where it was with its pin intact — a stamp that jumped to the top of the library and off the bar every time you corrected a cell is one nobody corrects twice. The pad says which of the two it is about to do.
+
+The library is behind a key that is **always** there, not only when something has overflowed, because it is where a stamp is named, pinned, edited and thrown away as well as where the extras live. It shows each pattern at a size you can recognise, beside its size and cell count.
 
 **Not yet: the double cost.** `planned.md` decided a stamp should cost twice what drawing it would, and it does not — it costs the same. Doubling needs the action to say on the wire that it is a stamp, or the client charges double and the server charges single and the two disagree about money.
 
@@ -383,9 +391,13 @@ Watching is its own address rather than a flag on a room, because "come and play
 
 The address is **replaced, not pushed**. A client that pushed every screen change would fill the history with the six presses it took to get into a game, and the back button would walk them backwards rather than leaving — which is not what a back button means to somebody who wants out.
 
-## The HUD
+## The HUD, and the bar
 
-Player and their colour, value, generation, **who is winning**, connection state, which room, whether the world wraps, and why the last action was refused.
+Two places, split by whether you **watch** it.
+
+The four figures that change while you play — your purse, the ground you hold, the tick and your rating — are a segment at the left end of the **hotbar**, beside a stripe in the colour the shader gives your cells. They were in the HUD, in the opposite corner from the squares and the pointer, which put the numbers you read most furthest from where you play. Each is the figure first and bigger with a quiet word under it: at a glance the number is what is being read and the word is what makes it mean something.
+
+The **HUD** keeps what is about the connection and the room: whether the link is up and how well it is keeping up, which room, whether the world wraps, what the last match did to your rating, **who is winning**, and why the last action was refused. None of that is watched, which is what makes a corner the right place for it.
 
 Who is winning is a column of **bars**, one per player in their own colour — the same one the shader gives their cells, so a bar and the ground it counts cannot disagree about whose it is. Bars rather than figures because the question is who is ahead and by how much, which is a comparison: six numbers in a column have to be read and subtracted, where six bars are one glance. The numbers sit beside them for when it is close. Scaled to the leader rather than to the world, since what is being asked is how the players compare with each other and against a boundless world every bar would be a sliver. Six of them, most first, because thirty-one people can have been through a world and a column of thirty-one bars is a screen of its own.
 

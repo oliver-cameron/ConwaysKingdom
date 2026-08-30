@@ -23,7 +23,7 @@ Postcard over **binary** websocket messages. Binary because a chunk is raw cell 
 ```rust
 enum ClientMessage {
     Join { name, token, room: Option<RoomName> },
-    Act(Stamped),                              // an action, with player and tick
+    Act(Stamped),                              // an action: tick, player, seat
     Subscribe { chunks },                      // send me these; a fetch, not a standing order
     Checkpoint { tick, chunks: Vec<(ChunkId, u64)> },
     Rooms,                                     // what worlds are here?
@@ -41,6 +41,10 @@ enum ServerMessage {
     Purse { value },                           // what you actually have
 }
 ```
+
+`Stamped` carries a **`seat`** beside its `player`: who sent it, as against what number its cells carry. Those were one question until a team became a player and several clients started sharing that number — and a client skips its own actions when they come back, so with only `player` to go on it skipped its *teammates'* actions too and never applied them at all. The server checks both, because a client that could name any seat could act as a teammate, and one that could name any player could put its cells under another team's number.
+
+`EndMatch` and `Forfeit` are the two ways a match ends that are not its own condition; see [server.md](server.md#ending-one).
 
 `Purse` rides on every `Checkpoint` reply. Value used to be predictable from a client's own actions alone, so the number on screen was the number the server would agree with. Mining broke that: earnings depend on births *anywhere* in the world and a client holds a viewport, so its guess is always low and always getting lower, and nothing else would ever correct it. The machinery for "your copy is wrong, here is mine" already exists and runs every few seconds, so value uses it rather than growing a second one. The cost is that an action sent for the current tick and not yet applied shows for a moment as money still in hand.
 
@@ -100,7 +104,7 @@ A client applies its own action straight away, connected or not, so what you dra
 
 Usually. The server applies it whenever the message lands — this generation if it arrives before the next step, the one after if it arrives later — so a click is a coin flip, and on the losing side that client has evolved those cells a generation earlier than everyone else. Waiting for the server instead would remove it, at the cost of a quarter of a second before you see your own cells, which is a poor trade for something rare.
 
-**A client does not apply its own actions when they come back.** It predicted them; applying them again is not a no-op, because a `Paint` is idempotent on the generation it was meant for and not one generation later. By then the cells it named have moved, and laying them again stamps the original pattern back on top of where it went.
+**A client does not apply its own actions when they come back** — its own by `seat`, not by `player`. It predicted them; applying them again is not a no-op, because a `Paint` is idempotent on the generation it was meant for and not one generation later. By then the cells it named have moved, and laying them again stamps the original pattern back on top of where it went.
 
 The symptom is unmistakable once you have seen it: draw a glider, watch it thicken into a blob and settle into a honey farm, and watch it snap back to a glider a few seconds later when the resync lands. It needs latency to happen at all — the action has to miss one server step, which on a loopback socket it never does — so it is a browser and a real network problem and invisible locally.
 

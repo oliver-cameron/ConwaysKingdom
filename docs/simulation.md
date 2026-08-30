@@ -20,20 +20,27 @@ Two bytes, uploaded as `Rg8Uint`. The second of them is a sprite.
 
 ```
  byte 0 (R)                byte 1 (G)
-| player |level|H|       |    kind     |I |A |
- 7 6 5 4  3 2 1  0        7 6 5 4 3 2   1  0
+| player |level|H|       |K2| age  |K1 0|I |A |
+ 7 6 5 4  3 2 1  0        7  6 5 4  3 2  1  0
 ```
 
 | field | where | meaning |
 |---|---|---|
 | alive | G bit 0 | living or not |
 | ice | G bit 1 | a pane covers it; independent of alive |
-| kind | G bits 2..8 | what it is — see `kinds!` |
+| kind | G bits 2..4 and bit 7 | what it is — see `kinds!`, 8 of them |
+| age | G bits 4..7 | how old, 0..7 — a step, not a count of generations |
 | home | R bit 0 | granted ground, which is a source |
 | level | R bits 1..4 | how much of the owner's influence reaches here, 0..7 |
 | player | R bits 4..8 | owner, 0 = unowned, so 15 players |
 
-**Byte 1 is the tile this cell draws**, whole and unshifted: low nibble across the sheet, high nibble down it. Alive and ice sit in its bottom bits and the kind in the rest, so a kind's four states are four consecutive tiles and finding a cell's picture is arithmetic rather than a lookup. There is no layer to choose and no UV to carry — what a cell looks like is one number.
+**Byte 1 is the tile this cell draws**, whole and unshifted: low nibble across the sheet, high nibble down it. There is no layer to choose and no UV to carry — what a cell looks like is one number.
+
+The fields are placed so that reads as a **grid**. Alive and ice are the bottom two bits, so a kind's four states are four columns; age is the low three bits of the high nibble, which is the row, so its eight ages are eight rows under them. The kind's third bit is the top bit of the byte, splitting the sheet in half — kinds 0–3 above, 4–7 below.
+
+That split is the price of the placement, and it is worth paying: with the state in bits 0–1 and the age in 4–6, the only bits left for a three-bit kind are 2, 3 and 7. The alternative puts age in bits 5–7 and keeps the kind contiguous, at the cost of a sheet where age advances every *two* rows.
+
+**Nothing advances age yet.** It was six bits of kind, of which three were used, and sixty-one spare kinds is not worth a nibble that does not line up. See [payloads](planned.md#payloads), which is what it is for, and [depleted mines](planned.md#depleted-mines), which may want it instead. The art that exists did not move: every kind in play is 0–2 at age nought, so all of it is in the sheet's first row exactly where `kind * 4 + state` put it.
 
 The player sits at the top of its byte, so extracting it is a shift with no mask.
 

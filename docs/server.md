@@ -44,7 +44,9 @@ Nothing else in the crate learns that teams exist. `net::reach`, `may_place`, `v
 
 What that replaced: a `Sides` array indexed by `PlayerId`, copied onto every `Match` broadcast so the client could price a placement beside a teammate the way the server would, and an `allied()` call threaded through placement, pricing, spawning, mining, scoring and colour. There is nothing to price differently now — a teammate's cells are the client's own.
 
-`ClientMessage::Create` carries `teams: Option<u8>` — `None` is a free-for-all, `Some(n)` is n teams, and it is refused on a world, because a team is a way of deciding a result and a world has none. `JoinTeam` and `NameTeam` work only while a match is `Gathering`, and `JoinTeam` naming your own number is how you step off a team.
+`ClientMessage::Create` carries `teams: Option<u8>` — `None` is a free-for-all and `Some(n)` is n teams. **A world may have them as much as a match can**: a team is people playing as one player, one purse and one patch of ground, and that is worth having without a result to win. What a match adds is that the teams have to be even at the whistle.
+
+A world's teams are never settled either, because there is no whistle to settle them at: people join and leave one as they like. A match's are fixed once it is running, or changing sides would hand your ground to the people you were fighting. `JoinTeam` naming your own number is how you step off a team.
 
 **A team costs a number.** There are fifteen — `PlayerId` is four bits in the cell — and teams and seats come out of the same pool, so a match with `n` teams has `n` fewer people in it. That is the price of the two being the same kind of thing, and it is what makes it impossible for a team and a seat to be the same number: they used to be drawn from one 1..15 space by two different rules, and an unaligned player 3 was seated on top of team 3. `net::MAX_TEAMS` is seven for the same reason — a team nobody can sit on is not a team.
 
