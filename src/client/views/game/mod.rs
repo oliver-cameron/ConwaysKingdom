@@ -203,7 +203,61 @@ struct Pending {
     to_px: (f64, f64),
 }
 
+/// **What the interface is holding between frames**, in one place.
+///
+/// The frame needs `&mut` on all of it while `views` is borrowed, and these
+/// were taken out one at a time with `mem::take` and put back afterwards —
+/// five separate fields, each of which is silently *missing* if anything
+/// between the two returns early. Grouped, the frame borrows one thing.
+///
+/// What belongs here is state the **interface** owns: which screen, and what
+/// is half-typed or half-drawn on it. The world, the link and the purse are
+/// not interface state and stay on the app.
+struct Ui {
+    /// Menu or game. Everything the world does with input asks this first: a
+    /// click that lands beside the menu panel must not draw on the world
+    /// behind it.
+    screen: Screen,
+    /// The pattern being drawn by hand in the library, if any.
+    ///
+    /// Lives here rather than in the library window because the window is
+    /// built afresh every frame, and half a drawing that vanished when you
+    /// looked away would not be worth having.
+    sketch: stamp::Sketch,
+    /// Which side is having its name typed, and what has been typed so far.
+    ///
+    /// Here rather than in the lobby panel because that panel is rebuilt every
+    /// frame, and a name half-typed would vanish between two of them — the
+    /// same reason `sketch` lives here.
+    naming_team: Option<(PlayerId, String)>,
+    /// What is being typed into a stamp's name box, held here for the reason
+    /// [`Self::naming_team`] is.
+    naming_stamp: Option<(usize, String)>,
+    /// Which stamp the pad is editing, so keeping replaces it rather than
+    /// adding a second copy. See [`stamp::Editing`].
+    editing_stamp: stamp::Editing,
+    /// Whether the stamps that did not fit on the bar are on screen.
+    picking_stamp: bool,
+    /// Whether the key list is on screen.
+    ///
+    /// Above every screen rather than on one, because the keys it lists work
+    /// on more than one and a player who wants them does not know which screen
+    /// they are supposed to ask from.
+    helping: bool,
+    /// Why the last attempt to start or leave a match was refused.
+    ///
+    /// Beside the lobby rather than in [`Self::notice`], which is drawn in the
+    /// HUD's corner: a refusal belongs against the control that produced it,
+    /// which is the same reason a `Made` refusal lands in the creation form.
+    /// A button that appears to do nothing reads as a broken lobby, and
+    /// "somebody has not picked a team" is a thing to *act on*.
+    ///
+    /// Cleared when the phase moves, because by then it has been answered.
+    refused_start: Option<String>,
+}
+
 pub struct GameApp {
+    ui: Ui,
     /// The interface, and the shapes it produced this frame.
     ///
     /// Behind a cell because the overlay is recorded while the frame holds an
@@ -264,10 +318,6 @@ pub struct GameApp {
     /// `Join` and its `Welcome` also has no number, and it is not a spectator.
     /// Everything that acts asks this first.
     watching: bool,
-    /// Menu or game. Everything the world does with input asks this first: a
-    /// click that lands beside the menu panel must not draw on the world
-    /// behind it.
-    screen: Screen,
     /// When the room list was asked for, so a server that never answers
     /// becomes a message rather than a menu that says "asking" forever.
     asked_at: Option<f64>,
@@ -342,8 +392,6 @@ pub struct GameApp {
     /// The sprite sheet as egui can draw it, so the hotbar shows the cell each
     /// tool puts down rather than spelling its name.
     icons: icons::Icons,
-    /// Whether the stamps that did not fit on the bar are on screen.
-    picking_stamp: bool,
     /// Who holds how much ground, most first, as the server last said.
     ///
     /// From the server because a client holds only the chunks it subscribed
@@ -352,39 +400,11 @@ pub struct GameApp {
     /// The address last written down, so it is written again only when it
     /// would say something different.
     said_where: Option<(bool, bool, bool, Option<crate::net::RoomId>)>,
-    /// Whether the key list is on screen.
-    ///
-    /// Above every screen rather than on one, because the keys it lists work
-    /// on more than one and a player who wants them does not know which screen
-    /// they are supposed to ask from.
-    helping: bool,
-    /// Which side is having its name typed, and what has been typed so far.
-    ///
-    /// Here rather than in the lobby panel because that panel is rebuilt every
-    /// frame, and a name half-typed would vanish between two of them — the
-    /// same reason `sketch` lives here.
-    naming_team: Option<(PlayerId, String)>,
-    /// What is being typed into a stamp's name box, held here for the reason
-    /// [`Self::naming_team`] is.
-    naming_stamp: Option<(usize, String)>,
-    /// Which stamp the pad is editing, so keeping replaces it rather than
-    /// adding a second copy. See [`stamp::Editing`].
-    editing_stamp: stamp::Editing,
     /// Whether this seat has given up, as the server last said.
     ///
     /// Held so the control can say so rather than offer to concede twice, and
     /// cleared on a `Welcome`, which is a different match or none.
     forfeited: bool,
-    /// Why the last attempt to start or leave a match was refused.
-    ///
-    /// Beside the lobby rather than in [`Self::notice`], which is drawn in the
-    /// HUD's corner: a refusal belongs against the control that produced it,
-    /// which is the same reason a `Made` refusal lands in the creation form.
-    /// A button that appears to do nothing reads as a broken lobby, and
-    /// "somebody has not picked a team" is a thing to *act on*.
-    ///
-    /// Cleared when the phase moves, because by then it has been answered.
-    refused_start: Option<String>,
     /// **The number this client's cells carry**, which in a team match is the
     /// team's and not this seat's.
     ///
@@ -412,12 +432,6 @@ pub struct GameApp {
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate rather than a log line — see [`crate::client::desync`].
     geiger: crate::client::desync::Geiger,
-    /// The pattern being drawn by hand in the library, if any.
-    ///
-    /// Lives here rather than in the library window because the window is
-    /// built afresh every frame, and half a drawing that vanished when you
-    /// looked away would not be worth having.
-    sketch: stamp::Sketch,
 }
 
 impl GameApp {
@@ -737,7 +751,7 @@ impl GameApp {
                     // is no world to be in, and a menu that closed on the
                     // click would leave the player staring at ground they
                     // could not build on while the socket was still opening.
-                    self.screen = Screen::Playing;
+                    self.ui.screen = Screen::Playing;
                     self.asked_at = None;
                     self.say_where();
                     // Now, and only now, drop the local world. Until Welcome
@@ -787,7 +801,7 @@ impl GameApp {
                     self.file_game();
                     self.room = Some(room);
                     self.room_name = Some(name);
-                    self.screen = Screen::Playing;
+                    self.ui.screen = Screen::Playing;
                     self.asked_at = None;
                     self.say_where();
                     self.world = crate::net::sane_world(world);
@@ -818,7 +832,7 @@ impl GameApp {
                         self.rating_change = Some(change);
                         // The home screen reads this when it is built, and it
                         // is already built if we are looking at it.
-                        if let Screen::Menu(m) = &mut self.screen {
+                        if let Screen::Menu(m) = &mut self.ui.screen {
                             m.rating = Some((rating, Some(change)));
                         }
                     } else {
@@ -891,7 +905,7 @@ impl GameApp {
                     // whatever the last whistle was refused for has been
                     // answered, and a stale reason under the button is worse
                     // than none.
-                    self.refused_start = None;
+                    self.ui.refused_start = None;
                     self.lobby =
                         Some(Lobby { teams, phase, victory, players, owner, started_by, code });
                 }
@@ -922,7 +936,7 @@ impl GameApp {
                 ServerMessage::NotStarted { reason } => {
                     log::info!("the match did not start: {reason}");
                     self.notice = Some(reason.clone());
-                    self.refused_start = Some(reason);
+                    self.ui.refused_start = Some(reason);
                 }
                 // The answer to `Create`, into the form it was sent from.
                 // A refusal has to land beside the fields that produced it:
@@ -934,7 +948,7 @@ impl GameApp {
                         // A code is the thing you send somebody, so it goes
                         // into the field it can be read off and copied from
                         // rather than only into a log line nobody will see.
-                        if let Screen::Menu(m) = &mut self.screen {
+                        if let Screen::Menu(m) = &mut self.ui.screen {
                             if let Some(code) = code {
                                 m.code = code;
                             }
@@ -948,7 +962,7 @@ impl GameApp {
                     Err(why) => {
                         log::info!("the server would not make that room: {why}");
                         if let Screen::Menu(menu::Menu { draft: Some(draft), .. }) =
-                            &mut self.screen
+                            &mut self.ui.screen
                         {
                             draft.asking = false;
                             draft.note = Some(why);
@@ -959,7 +973,7 @@ impl GameApp {
                     log::debug!("the server has {} room(s)", rooms.len());
                     self.asked_at = None;
                     self.listed_at = self.elapsed;
-                    if let Screen::Menu(m) = &mut self.screen {
+                    if let Screen::Menu(m) = &mut self.ui.screen {
                         // A refusal already on screen is carried over rather
                         // than replaced: the reason and the list of rooms that
                         // do exist are two halves of one answer, and a list
@@ -1081,7 +1095,7 @@ impl GameApp {
             self.file_game();
             self.link = None;
             self.asked_at = None;
-            match &self.screen {
+            match &self.ui.screen {
                 // Nothing was ever reached. The address is the likely reason
                 // and the only thing the player can act on, so it is what the
                 // message names.
@@ -1103,7 +1117,7 @@ impl GameApp {
             return;
         }
 
-        if matches!(self.screen, Screen::Playing) {
+        if matches!(self.ui.screen, Screen::Playing) {
             self.subscribe_to_view();
         }
     }
@@ -1549,11 +1563,11 @@ impl GameApp {
             // shape does not change what it is made of.
             Key::Shape(shape) => {
                 self.held.shape = shape;
-                self.picking_stamp = false;
+                self.ui.picking_stamp = false;
             }
             Key::Kind(kind) => self.held.kind = kind,
-            Key::More => self.picking_stamp = !self.picking_stamp,
-            Key::Help => self.helping = !self.helping,
+            Key::More => self.ui.picking_stamp = !self.ui.picking_stamp,
+            Key::Help => self.ui.helping = !self.ui.helping,
         }
     }
 
@@ -1628,7 +1642,7 @@ impl GameApp {
 
     /// Whether input from the world should be acted on at all.
     fn playing(&self) -> bool {
-        matches!(self.screen, Screen::Playing)
+        matches!(self.ui.screen, Screen::Playing)
     }
 
     /// Back to the menu, in this state, keeping whatever was typed into it.
@@ -1642,7 +1656,7 @@ impl GameApp {
     /// match is the other way round — the board is the result, and covering it
     /// to say who won would hide the thing that says why.
     fn showing_world(&self) -> bool {
-        if matches!(self.screen, Screen::Menu(_)) {
+        if matches!(self.ui.screen, Screen::Menu(_)) {
             return false;
         }
         !matches!(self.lobby.as_ref().map(|l| &l.phase), Some(crate::net::MatchPhase::Gathering))
@@ -1746,7 +1760,7 @@ impl GameApp {
         // The chunk store still holds the room's world, and a dirty camera is
         // what makes `update` sync it against this one.
         self.camera.dirty = true;
-        self.screen = Screen::Playing;
+        self.ui.screen = Screen::Playing;
     }
 
     /// Say where the client is, in the address bar.
@@ -1763,8 +1777,8 @@ impl GameApp {
     /// again only when it would say something different.
     fn here(&self) -> Option<(bool, bool, bool, Option<crate::net::RoomId>)> {
         Some((
-            matches!(self.screen, Screen::Playing),
-            match &self.screen {
+            matches!(self.ui.screen, Screen::Playing),
+            match &self.ui.screen {
                 Screen::Menu(m) => m.page == menu::Page::Play,
                 Screen::Playing => self.watching,
             },
@@ -1775,7 +1789,7 @@ impl GameApp {
 
     fn say_where(&self) {
         use crate::client::route::Route;
-        let route = match (&self.screen, &self.room) {
+        let route = match (&self.ui.screen, &self.room) {
             (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
             (Screen::Menu(_), _) => Route::Home,
             (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
@@ -1791,7 +1805,7 @@ impl GameApp {
     }
 
     fn show_menu(&mut self, stage: menu::Stage) {
-        match &mut self.screen {
+        match &mut self.ui.screen {
             Screen::Menu(m) => {
                 // A fresh attempt starts a fresh retry cadence. Left standing,
                 // a `failed_at` from the last refusal would make the next one
@@ -1814,7 +1828,7 @@ impl GameApp {
                 // the app is the only thing that has been told one. A match
                 // that has just ended is the commonest way to arrive here.
                 m.rating = self.rating.map(|r| (r, self.rating_change));
-                self.screen = Screen::Menu(m);
+                self.ui.screen = Screen::Menu(m);
             }
         }
     }
@@ -1842,7 +1856,7 @@ impl GameApp {
                 self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
             }
             menu::Chose::Connect(address) => {
-                if let Screen::Menu(m) = &mut self.screen {
+                if let Screen::Menu(m) = &mut self.ui.screen {
                     crate::net::keep::remember_name(&m.name);
                 }
                 crate::net::keep::remember_server(&address);
@@ -1869,7 +1883,7 @@ impl GameApp {
             // back to the menu keeps the socket and holds the seat until
             // another `Join` takes its place.
             menu::Chose::Resume => {
-                self.screen = Screen::Playing;
+                self.ui.screen = Screen::Playing;
             }
             // **Kept, and not proved.** A key is checked by the server on the
             // next `Join` and nowhere else -- a client cannot know whether one
@@ -1885,7 +1899,7 @@ impl GameApp {
                 Ok(key) => {
                     log::info!("this client is now {}", key.id());
                     crate::net::keep::remember_key(&key);
-                    if let Screen::Menu(m) = &mut self.screen {
+                    if let Screen::Menu(m) = &mut self.ui.screen {
                         // Normalised, so the field shows what was actually
                         // kept rather than whatever spacing it was pasted in.
                         m.key = key.written();
@@ -1906,7 +1920,7 @@ impl GameApp {
                 self.me = None;
                 self.room = None;
                 self.room_name = None;
-                self.screen = Screen::Menu(menu::Menu::new(
+                self.ui.screen = Screen::Menu(menu::Menu::new(
                     self.address_hint(),
                     cfg!(target_arch = "wasm32"),
                 ));
@@ -1914,7 +1928,7 @@ impl GameApp {
             // The form is a column now rather than something opened, so there
             // is nothing to shut: a press here puts it back to its defaults.
             menu::Chose::Clear => {
-                if let Screen::Menu(m) = &mut self.screen {
+                if let Screen::Menu(m) = &mut self.ui.screen {
                     m.draft = Some(menu::Draft::default());
                 }
             }
@@ -1945,7 +1959,7 @@ impl GameApp {
                     return;
                 };
                 let _ = link;
-                let name = match &self.screen {
+                let name = match &self.ui.screen {
                     Screen::Menu(m) => m.name.clone(),
                     Screen::Playing => "player".into(),
                 };
@@ -1999,7 +2013,7 @@ impl GameApp {
     /// would be answering a question nobody has open.
     fn refresh_room_list(&mut self) {
         if !matches!(
-            self.screen,
+            self.ui.screen,
             Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { .. }, .. })
         ) {
             return;
@@ -2198,6 +2212,16 @@ impl App for GameApp {
             chunks,
             _atlas: atlas,
             world,
+            ui: Ui {
+                screen,
+                sketch: stamp::Sketch::default(),
+                naming_team: None,
+                naming_stamp: None,
+                editing_stamp: None,
+                picking_stamp: false,
+                helping: false,
+                refused_start: None,
+            },
             camera: camera::Camera::new(home, START_ZOOM),
             gesture: Gesture::None,
             space: false,
@@ -2213,7 +2237,6 @@ impl App for GameApp {
             notice: None,
             last_action: None,
             value: Player::STARTING_VALUE,
-            screen,
             asked_at,
             listed_at: 0.0,
             lobby: None,
@@ -2231,19 +2254,12 @@ impl App for GameApp {
             held: Held::default(),
             stamps: stamp::Library::remembered(),
             icons: icons::Icons::default(),
-            picking_stamp: false,
             standing: Vec::new(),
             plays_as: None,
             said_where: None,
-            helping: false,
-            naming_team: None,
-            naming_stamp: None,
-            editing_stamp: None,
-            refused_start: None,
             forfeited: false,
             in_play: None,
             geiger: Default::default(),
-            sketch: stamp::Sketch::default(),
             link,
         };
         app.world.dirty = false;
@@ -2397,28 +2413,15 @@ impl App for GameApp {
         };
         let mut picked = None;
         let mut from_library = stamp::Picked::Nothing;
-        let picking = self.picking_stamp;
+        let picking = self.ui.picking_stamp;
         let mut chose = menu::Chose::Nothing;
-        // Taken out for the frame, because the closure needs `&mut` on it and
-        // `self` is already borrowed by `views`. Put back below, whatever the
-        // menu did with it.
+        // What the frame decided, acted on after it is built: each of these
+        // changes the screen, and the screen is what the frame was drawn from.
         let mut leaving = false;
         let mut in_hud = hud::Did::Nothing;
         // What a press in the lobby meant, acted on after the frame is built
         // because both answers change the screen the frame was drawn from.
         let mut in_lobby = lobby_view::Did::Nothing;
-        // Taken out for the frame, for the reason the screen and the sketch
-        // are: the closure needs `&mut` on it while `self` is borrowed by
-        // `views`. A half-typed side name has to survive the frame it is being
-        // typed in, so it cannot live in the panel that is rebuilt each time.
-        let mut naming = std::mem::take(&mut self.naming_team);
-        let mut naming_stamp = std::mem::take(&mut self.naming_stamp);
-        let editing = self.editing_stamp;
-        let mut screen = std::mem::replace(&mut self.screen, Screen::Playing);
-        // Taken out for the frame for the same reason the screen is: the
-        // closure needs `&mut` on it while `self` is already borrowed by
-        // `views`. Put back below, whatever was drawn on it.
-        let mut sketch = std::mem::take(&mut self.sketch);
         let lobby = self.lobby.clone();
         let standing = self.standing.clone();
         let generation = self.world.generation;
@@ -2433,13 +2436,27 @@ impl App for GameApp {
                 ),
         };
         let me = self.player();
-        let helping = self.helping;
+        let helping = self.ui.helping;
         let mut help_closed = false;
+        // **One borrow, not five takes.** The closure needs `&mut` on the
+        // interface's own state while `views` is borrowed, and because `ui`
+        // and `views` are different fields, borrowing one says nothing about
+        // the other — so the closure simply holds it.
+        //
+        // What that replaces is a `mem::take` per field and a put-back
+        // afterwards: the screen, a half-typed name, a half-drawn pad. Every
+        // one of them is silently *lost* if anything between the two returns
+        // early, and one of the arms below does exactly that.
+        //
+        // Last, after everything read off `&self`, so that from here the
+        // interface's state is borrowed and the world's is untouched.
+        let ui = &mut self.ui;
+        let editing = ui.editing_stamp;
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {
             // The screen, in its own closure so that an arm may still return
             // early -- one of them draws a lobby and nothing else.
             let mut rects: Vec<egui::Rect> = (|| -> Vec<egui::Rect> {
-                match &mut screen {
+                match &mut ui.screen {
                     // The world is still drawn behind it, and still running if this
                     // client is offline. A menu over a dead grey rectangle says the
                     // game has not started; a menu over a world says it is waiting for
@@ -2464,8 +2481,8 @@ impl App for GameApp {
                                     lobby_view::show(
                                         ctx,
                                         &theme,
-                                        &l.look(me, &l.hues(), self.refused_start.as_deref()),
-                                        &mut naming,
+                                        &l.look(me, &l.hues(), ui.refused_start.as_deref()),
+                                        &mut ui.naming_team,
                                     )
                                 },
                             );
@@ -2497,8 +2514,8 @@ impl App for GameApp {
                             let shown = lobby_view::show(
                                 ctx,
                                 &theme,
-                                &l.look(me, &l.hues(), self.refused_start.as_deref()),
-                                &mut naming,
+                                &l.look(me, &l.hues(), ui.refused_start.as_deref()),
+                                &mut ui.naming_team,
                             );
                             if !matches!(shown.did, lobby_view::Did::Nothing) {
                                 in_lobby = shown.did;
@@ -2510,11 +2527,11 @@ impl App for GameApp {
                                 ctx,
                                 &theme,
                                 &self.stamps,
-                                &mut sketch,
+                                &mut ui.sketch,
                                 what,
                                 me,
                                 sheet,
-                                &mut naming_stamp,
+                                &mut ui.naming_stamp,
                                 editing,
                             );
                             from_library = shown.did;
@@ -2541,9 +2558,7 @@ impl App for GameApp {
             }
             rects
         });
-        self.screen = screen;
-        self.naming_team = naming;
-        self.naming_stamp = naming_stamp;
+
         self.chose(chose);
         if let Some(key) = picked {
             self.pick(key);
@@ -2552,7 +2567,7 @@ impl App for GameApp {
             stamp::Picked::Nothing => {}
             stamp::Picked::Hold(i) => {
                 self.held.shape = hotbar::Shape::Stamp(i);
-                self.picking_stamp = false;
+                self.ui.picking_stamp = false;
             }
             // Held by index, so forgetting one shifts everything after it --
             // drop back to a tool rather than quietly holding a different
@@ -2560,8 +2575,8 @@ impl App for GameApp {
             stamp::Picked::Forget(i) => {
                 self.stamps.forget(i);
                 self.stamps.remember();
-                self.naming_stamp = None;
-                self.editing_stamp = None;
+                self.ui.naming_stamp = None;
+                self.ui.editing_stamp = None;
                 self.held.shape = hotbar::Shape::default();
             }
             stamp::Picked::Pin(i, on) => {
@@ -2574,21 +2589,21 @@ impl App for GameApp {
             stamp::Picked::Rename(i, name) => {
                 self.stamps.rename(i, &name);
                 self.stamps.remember();
-                self.naming_stamp = None;
+                self.ui.naming_stamp = None;
             }
             // Onto the pad, and remembered as the one being edited so that
             // keeping puts it back rather than leaving the old one beside it.
             stamp::Picked::Edit(i) => {
                 if let Some(stamp) = self.stamps.get(i) {
-                    self.sketch = stamp::Sketch::of(stamp);
-                    self.editing_stamp = Some(i);
+                    self.ui.sketch = stamp::Sketch::of(stamp);
+                    self.ui.editing_stamp = Some(i);
                 }
             }
             // Kept where a captured one is kept, and held straight away: you
             // drew it because you meant to place it.
             stamp::Picked::Keep(stamp) => {
                 let (name, cells) = (stamp.name.clone(), stamp.cells.len());
-                let held = match self.editing_stamp.take() {
+                let held = match self.ui.editing_stamp.take() {
                     Some(i) => {
                         self.stamps.replace(i, stamp);
                         i
@@ -2602,9 +2617,8 @@ impl App for GameApp {
                 self.held.shape = hotbar::Shape::Stamp(held);
                 self.notice = Some(words::stamps::captured(&name, cells));
             }
-            stamp::Picked::Close => self.picking_stamp = false,
+            stamp::Picked::Close => self.ui.picking_stamp = false,
         }
-        self.sketch = sketch;
         // Acted on after the frame is built, because it changes the screen and
         // the screen is what the frame was drawn from.
         //
@@ -2659,7 +2673,7 @@ impl App for GameApp {
             }
         }
         if help_closed {
-            self.helping = false;
+            self.ui.helping = false;
         }
         if leaving {
             self.back_to_menu();
@@ -2759,7 +2773,7 @@ impl App for GameApp {
         // where all of it is tested without a window.
         if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift)) {
             match what {
-                input::Mnemonic::Help => self.helping = !self.helping,
+                input::Mnemonic::Help => self.ui.helping = !self.ui.helping,
                 // **The shape axis has one key, and it always lands in one
                 // place.** It puts the shape back to whatever the held
                 // material is usually wanted in — a pencil for life, mines and
@@ -2769,7 +2783,7 @@ impl App for GameApp {
                 // at the bar to see what it will do.
                 input::Mnemonic::Shape => {
                     self.held = self.held.defaulted();
-                    self.picking_stamp = false;
+                    self.ui.picking_stamp = false;
                 }
                 // **A pattern and the same pattern turned are one pattern.**
                 // Without this the library fills up with its own reflections —
@@ -2795,12 +2809,12 @@ impl App for GameApp {
             }
             return;
         }
-        if pressed && code == K::Escape && self.helping {
-            self.helping = false;
+        if pressed && code == K::Escape && self.ui.helping {
+            self.ui.helping = false;
             return;
         }
         if pressed && code == K::Escape && !self.playing() {
-            if let Screen::Menu(m) = &mut self.screen {
+            if let Screen::Menu(m) = &mut self.ui.screen {
                 // The form is a column rather than something opened, so there
                 // is no rung for it: a field lets go of the keyboard (handled
                 // in `menu::show`, before the app sees the key at all), then
