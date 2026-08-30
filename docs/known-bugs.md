@@ -50,6 +50,16 @@ The library is written to this client's own store, so pinning is a fact about th
 
 *Still here because* it needs a width table rather than `chars().count()`, and the layouts that produce wide keycaps are the input-method ones this client does not otherwise support.
 
+### Loaded chunks read differently from the backdrop
+
+Ground the client holds is very slightly brighter or darker than ground it does not, so the edge of what has arrived is visible as a faint patchwork — on empty ground, where the two are drawing the same thing.
+
+*You would see:* a rectangular seam that moves as chunks arrive, most obvious when zoomed out and over ground nobody owns.
+
+*Still here because* the mechanism is understood and the fix is not small. Both paths draw the same dead cells, but they arrive at "which cell is this pixel" by different arithmetic: a loaded chunk interpolates `local` across its own quad, and the backdrop derives it by wrapping the world position onto one shared layer. At one pixel per cell the two agree. Below that, one pixel covers several cells and `textureLoad` picks exactly one of them — so the two routes round differently, and since `grid_tint` darkens the outer ring of every chunk, the *proportion* of ring pixels each route lands on differs. That is a brightness difference over a large area.
+
+It is one symptom of point-sampling at low zoom rather than a fault of its own, so the fix is [zooming out without lying](planned.md#zooming-out-without-lying) — or the zoom floor that made the case not arise. Reported from reading the shader rather than from measuring it: what is confirmed is that the two paths compute the cell differently and that the sheet sampler is `Nearest`, so it is not the sprite atlas bleeding.
+
 ## Likely, from reading
 
 These have a mechanism and a code path and were not made to happen.

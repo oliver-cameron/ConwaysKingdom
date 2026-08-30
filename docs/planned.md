@@ -19,6 +19,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
 | [Player profiles](#player-profiles) | Designed | a person, rather than a seat in one room |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
+| [Zooming out without lying](#zooming-out-without-lying) | Decided | antialiasing and a level of detail |
+| [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Decided | one copy of a wrapping world, drawn many times |
 | [Payloads](#payloads) | Decided | a cell that explodes after a while |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
@@ -160,6 +162,34 @@ The four figures on the hotbar are labelled with a word each — `purse`, `groun
 The first is almost certainly right and the second is worth writing down because it is the one that does not need a new concept.
 
 **What it must not become** is a cell whose speed depends on anything a client can see and the server cannot, or two peers stepping the same region a different number of times. Whatever the design turns out to be, the test is the one `examples/two` already runs: two peers, the real protocol, digests compared every shared generation.
+
+## Zooming out without lying
+
+**One pixel covers many cells and the shader picks one of them.** `textureLoad` is a point sample by construction — there is no filtering on a `Uint` texture and there should not be, since these are bit fields and a blended kind is not a kind. That is exactly right at one pixel per cell and increasingly a lie below it: which cell a pixel shows comes down to rounding, so a pattern shimmers as the camera moves, thin structures disappear entirely at some zooms and not others, and two paths through the shader that arrive at the same pixel by different arithmetic can disagree about which cell it is.
+
+That last one has a symptom on screen today: loaded chunks read very slightly brighter or darker than the backdrop, which is the same dead ground drawn by a different route — see [known-bugs.md](known-bugs.md#loaded-chunks-read-differently-from-the-backdrop).
+
+### What it wants
+
+**Antialiasing at low zoom.** Not MSAA, which samples geometry and there is one quad; what is wanted is averaging over the *cells* a pixel covers. Sampling a fixed `k`×`k` neighbourhood per pixel and averaging the shaded colours would do it and costs `k²` texture loads on the frames where the zoom is low, which are exactly the frames with fewest quads.
+
+**A level of detail.** The honest version: a reduction chain over the cell texture, so a pixel covering sixteen cells reads one texel of a level that already summarised them. This wants a compute pass — [the simulation on the GPU](#the-simulation-on-the-gpu) says why the format has to change first — and it wants a **max-or-count** reduction rather than an average, because averaging bit fields is meaningless and automatic mipmapping does not apply to `Uint` formats at all.
+
+What each level should hold is the design question, and it is not "a smaller picture": at four cells per pixel what a player needs is *who holds this* and *is anything alive here*, which is a dominant owner and a live count. That is two numbers per texel and neither is an average of the layer below.
+
+### Why it was deferred
+
+[texture-residency](../design-notes/02-texture-residency.md) capped the zoom floor at one pixel per cell, which makes all of this unnecessary by making the case not arise. That cap is the thing to revisit first: if it stays, none of this is needed and the brightness difference is the whole of the problem; if it goes — and a minimap or a world overview means it goes — then this is what has to exist before it does.
+
+## A torus repeats, so its textures can
+
+**A wrapping world is the same ground over and over**, and the renderer does not know it. `ChunkStore` holds a texture layer per resident chunk; on a torus the world is allocated whole and every chunk is distinct, so that is honest — but the *view* of it is not. Pan far enough on a 12x12 torus and the same 144 chunks come round again, and each repetition is uploaded and drawn as though it were new ground.
+
+The backdrop already does exactly the trick this wants: one quad standing in for thousands of chunks, with the world position wrapped onto a single layer — `local = (world - floor(world / n) * n) * TILE_N` in `grid.wgsl`. A torus is the same idea with the wrap at the world's size rather than at one chunk.
+
+**What it buys** is that the resident set stops growing with how far somebody has panned and starts being bounded by the world: a 12x12 torus is 144 layers however much of it is on screen at once, and a viewport straddling the seam costs nothing extra. Today the same chunk on two sides of the seam is two residents.
+
+**What it runs into** is that residency is keyed by chunk coordinate and the fold is `World::canonical`, which `net` already uses for exactly this — so the change is in the renderer's map rather than in the protocol. The seam is where it will be got wrong: a quad spanning the wrap needs its texture coordinate wrapped *inside* the fragment rather than at the vertices, or the interpolation runs backwards across the whole world.
 
 ## Depleted mines
 
