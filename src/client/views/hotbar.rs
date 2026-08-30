@@ -227,6 +227,10 @@ pub enum Key {
 /// **The digits are the stamps.** `1` to `9` then `0`, which is ten and is why
 /// [`ON_THE_BAR`](crate::client::views::stamp::ON_THE_BAR) is ten.
 ///
+/// The answer is a **slot on the bar**, not an index into the library — see
+/// `Library::bar`, which is the mapping between them and is the same one the
+/// squares are drawn from, so the keys and the bar cannot disagree.
+///
 /// The stamps get them because they are the keys you reach for without
 /// looking, and stamps are the thing you hold ten of and swap between. The
 /// three tools never change and never grow, so they can afford a modifier.
@@ -397,7 +401,13 @@ pub fn show(
                         picked = Some(Key::Shape(Shape::Capture));
                     }
                     shift += 1;
-                    for i in 0..library.on_the_bar() {
+                    // **A slot on the bar is a place, and the stamp standing
+                    // in it is looked up.** They were the same number while
+                    // the bar was always the first ten of the library; they
+                    // are not once a stamp can be pinned to a square. What is
+                    // *held* stays a library index, so re-pinning does not
+                    // change what is in your hand.
+                    for (slot, i) in library.bar().into_iter().enumerate() {
                         let Some(stamp) = library.get(i) else { continue };
                         // The held square shows the pattern **as it would be
                         // laid**, turn and all. A thumbnail that stayed upright
@@ -415,7 +425,7 @@ pub fn show(
                             look,
                             Face::Pattern(stamp),
                             &stamp.name,
-                            stamp_hint(i),
+                            stamp_hint(slot),
                             held.shape == Shape::Stamp(i),
                         ) {
                             picked = Some(Key::Shape(Shape::Stamp(i)));
@@ -615,7 +625,12 @@ mod tests {
     fn library(n: usize) -> Library {
         let mut library = Library::default();
         for i in 0..n {
-            library.keep(Stamp { name: format!("s{i}"), cells: vec![(0, 0)], size: (1, 1) });
+            library.keep(Stamp {
+                name: format!("s{i}"),
+                cells: vec![(0, 0)],
+                size: (1, 1),
+                on_bar: false,
+            });
         }
         library
     }

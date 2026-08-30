@@ -79,6 +79,16 @@ pub struct Stamp {
     pub cells: Vec<(i32, i32)>,
     /// Rows and columns the pattern spans, for the preview and the label.
     pub size: (i32, i32),
+    /// Whether this one is on the hotbar.
+    ///
+    /// **Nothing pinned means the newest ten**, which is what the bar always
+    /// showed and is the right default: somebody who has never thought about
+    /// it gets the stamp they just took, on the key beside their hand. Pin one
+    /// and the bar becomes exactly what is pinned, because half a rule is
+    /// worse than either — a bar that was "your pins, then the newest of the
+    /// rest" would reshuffle itself under your fingers every time you captured
+    /// something.
+    pub on_bar: bool,
 }
 
 impl Stamp {
@@ -133,6 +143,7 @@ impl Stamp {
             name: format!("{}x{}", bottom - top + 1, right - left + 1),
             cells: found.into_iter().map(|(r, c)| (r - top, c - left)).collect(),
             size: (bottom - top + 1, right - left + 1),
+            on_bar: false,
         }
     }
 
@@ -451,9 +462,118 @@ pub struct Library {
     stamps: Vec<Stamp>,
 }
 
+/// The version on a saved library, so a format that changes can say so rather
+/// than being misread. Same shape as `client::record`, and for the same reason.
+const SAVED: &str = "ck-stamps-1";
+
 impl Library {
     pub fn keep(&mut self, stamp: Stamp) {
         self.stamps.insert(0, stamp);
+    }
+
+    /// Replace one in place, keeping where it sits and whether it is pinned.
+    ///
+    /// **In place**, because editing a stamp is not capturing a new one: a
+    /// stamp that jumped to the top of the library and off the bar every time
+    /// its owner corrected a cell would be a stamp nobody corrected twice.
+    pub fn replace(&mut self, index: usize, stamp: Stamp) {
+        if let Some(slot) = self.stamps.get_mut(index) {
+            let (was_pinned, name) = (slot.on_bar, slot.name.clone());
+            *slot = Stamp { on_bar: was_pinned, name, ..stamp };
+        }
+    }
+
+    pub fn rename(&mut self, index: usize, name: &str) {
+        if let Some(slot) = self.stamps.get_mut(index) {
+            slot.name = tidy(name);
+        }
+    }
+
+    /// Put one on the hotbar, or take it off.
+    ///
+    /// Refused past [`ON_THE_BAR`], because the bar has ten squares and the
+    /// eleventh pin would be one that silently did nothing.
+    pub fn pin(&mut self, index: usize, on: bool) -> bool {
+        if on && self.stamps.iter().filter(|s| s.on_bar).count() >= ON_THE_BAR {
+            return false;
+        }
+        if let Some(slot) = self.stamps.get_mut(index) {
+            slot.on_bar = on;
+        }
+        true
+    }
+
+    /// Which stamps the bar shows, as indices into the library, in order.
+    ///
+    /// What is pinned, or the newest ten when nothing is — see
+    /// [`Stamp::on_bar`]. A slot on the bar is a *place*, and this is the
+    /// mapping from that place to the stamp standing in it, which is why the
+    /// keys and the squares agree without either knowing about pinning.
+    pub fn bar(&self) -> Vec<usize> {
+        let pinned: Vec<usize> =
+            self.stamps.iter().enumerate().filter(|(_, s)| s.on_bar).map(|(i, _)| i).collect();
+        if pinned.is_empty() {
+            (0..self.stamps.len().min(ON_THE_BAR)).collect()
+        } else {
+            pinned
+        }
+    }
+
+    /// Everything kept, as text, for [`crate::net::keep`].
+    ///
+    /// One stamp a line, tab separated, with a version on the front: the same
+    /// hand-rolled shape `client::record` uses, and for the same reasons —
+    /// it is a handful of lines, it is readable in a file somebody may want to
+    /// look at, and it costs no dependency.
+    pub fn written(&self) -> String {
+        let mut out = String::from(SAVED);
+        for stamp in &self.stamps {
+            let cells: Vec<String> = stamp.cells.iter().map(|(r, c)| format!("{r},{c}")).collect();
+            out.push('\n');
+            out.push_str(&format!(
+                "{}\t{}\t{}",
+                tidy(&stamp.name),
+                if stamp.on_bar { "bar" } else { "-" },
+                cells.join(" ")
+            ));
+        }
+        out
+    }
+
+    /// Read one back. Anything unreadable is skipped rather than fatal: a
+    /// library is a convenience, and losing all of it because one line is
+    /// malformed is the wrong trade.
+    pub fn read(text: &str) -> Self {
+        let mut lines = text.lines();
+        if lines.next().map(str::trim) != Some(SAVED) {
+            return Self::default();
+        }
+        let stamps = lines
+            .filter_map(|line| {
+                let mut parts = line.split('\t');
+                let name = parts.next()?.to_string();
+                let pinned = parts.next()? == "bar";
+                let cells: Vec<(i32, i32)> = parts
+                    .next()?
+                    .split_whitespace()
+                    .filter_map(|pair| {
+                        let (r, c) = pair.split_once(',')?;
+                        Some((r.parse().ok()?, c.parse().ok()?))
+                    })
+                    .collect();
+                if cells.is_empty() {
+                    return None;
+                }
+                // Re-trimmed rather than trusted, so a hand-edited file cannot
+                // produce a stamp whose `size` disagrees with its cells and
+                // draws a preview that is the wrong shape.
+                let mut stamp = Stamp::trimmed(cells);
+                stamp.name = name;
+                stamp.on_bar = pinned;
+                Some(stamp)
+            })
+            .collect();
+        Self { stamps }
     }
 
     pub fn get(&self, index: usize) -> Option<&Stamp> {
@@ -472,15 +592,27 @@ impl Library {
         self.stamps.iter()
     }
 
-    /// How many fit on the bar. The rest are reachable through the menu.
+    /// How many squares the bar shows.
     pub fn on_the_bar(&self) -> usize {
-        self.stamps.len().min(ON_THE_BAR)
+        self.bar().len()
     }
 
     pub fn forget(&mut self, index: usize) {
         if index < self.stamps.len() {
             self.stamps.remove(index);
         }
+    }
+}
+
+/// A name with nothing in it that would break the file it is written to, or
+/// the row it is drawn in.
+fn tidy(raw: &str) -> String {
+    let name: String =
+        raw.trim().chars().filter(|c| !c.is_control() && *c != '\t').take(24).collect();
+    if name.is_empty() {
+        "unnamed".into()
+    } else {
+        name
     }
 }
 

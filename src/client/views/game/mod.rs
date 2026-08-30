@@ -2765,8 +2765,10 @@ impl App for GameApp {
                 let key = if self.shift {
                     hotbar::shifted_for_digit(d, &self.stamps)
                 } else {
+                    // Through the bar, because a digit names a **square** and
+                    // the stamp standing in it is whatever is pinned there.
                     hotbar::stamp_for_digit(d)
-                        .filter(|&i| i < self.stamps.len())
+                        .and_then(|slot| self.stamps.bar().get(slot).copied())
                         .map(|i| Key::Shape(hotbar::Shape::Stamp(i)))
                 };
                 if let Some(key) = key {
