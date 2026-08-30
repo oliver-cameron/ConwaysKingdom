@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn a_player_restored_from_a_file_is_not_online() {
         let path = scratch("offline");
-        let mut alice = Player::new(PlayerId(2), "alice");
+        let alice = Player::new(PlayerId(2), "alice");
         assert!(alice.online, "a player who joins is online");
         save(&path, &World::toroidal_empty(3, 3), &[alice], 0).unwrap();
 

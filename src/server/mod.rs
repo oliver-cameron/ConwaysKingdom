@@ -414,18 +414,7 @@ impl Server {
     /// world that has seen thirty-one people, most of the list is nobody, and
     /// a bar of length zero says nothing a missing row does not.
     pub fn standing(&self) -> ServerMessage {
-        let held = self.territory();
-        let mut rows: Vec<(PlayerId, u32)> = held
-            .iter()
-            .enumerate()
-            .skip(1)
-            .filter(|&(_, &n)| n > 0)
-            .map(|(id, &n)| (PlayerId(id as u8), n as u32))
-            .collect();
-        // Most first, and by number where two hold the same, so the order is
-        // the same on every peer and rows do not swap places at a tie.
-        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        ServerMessage::Standing { tick: self.tick(), held: rows }
+        ServerMessage::Standing { tick: self.tick(), held: crate::net::standings(&self.world) }
     }
 
     /// How much ground each player holds, by their number.
@@ -439,21 +428,20 @@ impl Server {
     /// the whistle; scoring it would be points for having turned up. The floor
     /// stays — they can still build on it — it simply does not win anything.
     pub fn territory(&self) -> [usize; PlayerId::COUNT] {
-        let mut held = [0usize; PlayerId::COUNT];
-        for (_, chunk) in self.world.stored() {
-            for row in 0..crate::sim::CHUNK_N {
-                for col in 0..crate::sim::CHUNK_N {
-                    let cell = chunk[(row, col)];
-                    if cell.is_home() {
-                        continue;
-                    }
-                    if cell.player().is_owned() {
-                        held[cell.player().0 as usize] += 1;
-                    }
-                }
-            }
-        }
-        held
+        crate::net::holdings(&self.world, crate::net::Granted::Excluded)
+    }
+
+    /// **Every square somebody holds**, granted ground included.
+    ///
+    /// What a player is *shown*, as against what they are scored on. The two
+    /// differ by the patch everybody is handed on joining, and that difference
+    /// is the whole reason there are two: a grant is not an achievement, so it
+    /// is not a score — and it is very much ground, so a bar reading nought
+    /// beside a screen of squares plainly yours is simply wrong. Which is what
+    /// it read, for as long as somebody built only inside their own patch: a
+    /// block is a still life and never leaves the twelve squares it was given.
+    pub fn ground(&self) -> [usize; PlayerId::COUNT] {
+        crate::net::holdings(&self.world, crate::net::Granted::Counted)
     }
 
     /// Whether this number still has anybody playing it.
@@ -1654,9 +1642,17 @@ mod tests {
         let bob = s.join_with("bob", None).unwrap();
         let carol = s.join_with("carol", None).unwrap();
 
-        // A grant is not a score, so before anybody wins ground it is empty.
+        // **A grant is not a score, and it is very much ground.** Every row
+        // here is somebody with a patch and nothing won yet, so the scores are
+        // nought and the ground is not — which is the whole reason there are
+        // two numbers. The bar shows the second, and read nought for as long
+        // as it showed the first.
         let ServerMessage::Standing { held, .. } = s.standing() else { panic!() };
-        assert!(held.is_empty(), "a grant is not a score: {held:?}");
+        assert_eq!(held.len(), 3, "a grant is ground: {held:?}");
+        for row in &held {
+            assert_eq!(row.score, 0, "a grant scored: {row:?}");
+            assert!(row.ground >= 100, "a granted patch is ground: {row:?}");
+        }
 
         stake(&mut s, bob, (900, 900), 4);
         stake(&mut s, carol, (900, 940), 4);
@@ -1664,11 +1660,17 @@ mod tests {
 
         let ServerMessage::Standing { held, tick } = s.standing() else { panic!() };
         assert_eq!(tick, s.tick());
+        let scores: Vec<(PlayerId, u32)> = held.iter().map(|h| (h.who, h.score)).collect();
         assert_eq!(
-            held,
+            scores,
             vec![(alice, 25), (bob, 16), (carol, 16)],
             "most first, and a tie by the lower number"
         );
+        // And the ground each holds is their score plus the patch they were
+        // given, which is what a player sees on the map.
+        for row in &held {
+            assert!(row.ground > row.score, "ground left out the grant: {row:?}");
+        }
     }
 
     /// The standings go out on a cadence, and the moment a match is decided

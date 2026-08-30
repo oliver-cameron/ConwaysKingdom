@@ -396,7 +396,10 @@ pub struct GameApp {
     ///
     /// From the server because a client holds only the chunks it subscribed
     /// to: counting locally would score its own screen rather than the world.
-    standing: Vec<(crate::sim::PlayerId, u32)>,
+    standing: Vec<crate::net::Holding>,
+    /// The generation [`Self::standing`] was counted at, offline. A pass over
+    /// the world per generation and not per frame.
+    counted_at: crate::net::Tick,
     /// The address last written down, so it is written again only when it
     /// would say something different.
     said_where: Option<(bool, bool, bool, Option<crate::net::RoomId>)>,
@@ -929,7 +932,7 @@ impl GameApp {
                 ServerMessage::Standing { held, .. } => {
                     if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.plays_as) {
                         live.holding(
-                            held.iter().find(|(id, _)| *id == me).map(|(_, n)| *n).unwrap_or(0),
+                            held.iter().find(|h| h.who == me).map(|h| h.score).unwrap_or(0),
                         );
                     }
                     self.standing = held;
@@ -2313,6 +2316,7 @@ impl App for GameApp {
             stamps: stamp::Library::remembered(),
             icons: icons::Icons::default(),
             standing: Vec::new(),
+            counted_at: u64::MAX,
             plays_as: None,
             said_where: None,
             applied_early: Vec::new(),
@@ -2386,6 +2390,21 @@ impl App for GameApp {
         if self.link.is_none() {
             let mined = self.world.update(dt, GENERATION_SPAN);
             self.bank(&mined);
+            // **And its own standings**, which nothing else was producing:
+            // they arrive in a `ServerMessage::Standing` and offline there is
+            // no server, so every figure that reads them sat at nought for the
+            // whole of a solo game — the ground on the bar, and the bars in
+            // the HUD.
+            //
+            // Counted exactly rather than guessed. A *connected* client holds
+            // its screen and a margin, which is why it takes the server's
+            // figure; offline it owns the whole world, so the same count the
+            // server would do is the right one. `net::standings` is that
+            // count, shared so the two cannot disagree.
+            if self.world.generation != self.counted_at {
+                self.counted_at = self.world.generation;
+                self.standing = crate::net::standings(&self.world);
+            }
         }
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);

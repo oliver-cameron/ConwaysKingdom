@@ -30,13 +30,34 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
-    ui.horizontal(|ui| {
-        // Every screen has a way out of it, by pointer as well as by escape.
-        if ui.small_button(words::BACK).clicked() {
-            menu.page = Page::Home;
-        }
-        ui.heading(words::home::PLAY);
-    });
+    let reached = matches!(menu.stage, Stage::Choosing { .. });
+
+    // **One line: where you are, what you are reaching, and what it said.**
+    // They were three — a heading, a "Server" label over a row, and the answer
+    // under that — which is three lines of chrome above the two columns that
+    // are the screen. None of them is worth a line of its own: the heading
+    // says one word, the label named the field it sits beside, and the answer
+    // is three or four.
+    let mut reach = None;
+    // **Given the width rather than measured for it.** The card centres its
+    // children, so a row narrower than the card is placed according to its own
+    // size — which egui knows only from the *last* frame. A row that changed
+    // width therefore moved everything in it sideways for a frame, and Back
+    // slid two hundred pixels the moment the server controls joined the line.
+    // Allocating the full width says where the row is without measuring it.
+    let full = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(full, 0.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            // Every screen has a way out, by pointer as well as by escape.
+            if ui.small_button(words::BACK).clicked() {
+                menu.page = Page::Home;
+            }
+            ui.heading(words::home::PLAY);
+            reach = server_field(ui, theme, menu, at, reached);
+        },
+    );
     ui.add_space(m.item_spacing);
 
     // **Both columns, whatever the server has said.** Gating them on a room
@@ -52,12 +73,9 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         Stage::Choosing { rooms, note } => (rooms.clone(), note.clone()),
         _ => (Vec::new(), None),
     };
-    let reached = matches!(menu.stage, Stage::Choosing { .. });
-
-    if let Some(reach) = server_field(ui, theme, menu, at, reached) {
+    if let Some(reach) = reach {
         chose = reach;
     }
-    ui.add_space(m.item_spacing);
 
     ui.add_space(m.item_spacing * 2.0);
     if let Some(note) = note {
@@ -112,9 +130,7 @@ fn server_field(
     let mut refresh = false;
     let mut typed = false;
 
-    ui.label(egui::RichText::new(words::SERVER).size(m.text_small));
-
-    ui.horizontal(|ui| {
+    {
         // **The button comes first and belongs to both clients.** It used to
         // be drawn after the address, inside the branch that makes the address
         // a field — so a browser, whose socket comes from the page it was
@@ -130,10 +146,11 @@ fn server_field(
         // glyph it used to be is in no font this client loads, because this
         // client loads none, and a control that is one symbol has nothing left
         // when the symbol is a box.
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(m.button_height, m.button_height),
-            egui::Sense::click(),
-        );
+        // Sized to the text beside it rather than to a button: it sits in a
+        // row of words now, and a square the height of a field made that row
+        // as tall as a field for the sake of one glyph.
+        let side = m.text_body + 4.0;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
         ui.painter().rect_stroke(
             rect,
             m.rounding,
@@ -154,8 +171,13 @@ fn server_field(
             ui.colored_label(p.text_dim, &menu.address);
             false
         } else {
+            // **A width of its own, not a share of the row.** Asking for what
+            // is left made the row as wide as the address plus everything
+            // beside it, and a `horizontal` does not wrap — so the row set the
+            // width of the whole screen and the columns under it moved to
+            // suit. An address is a known length; this is enough for one.
             let field = ui.add_sized(
-                [ui.available_width(), m.button_height],
+                [200.0, m.button_height],
                 egui::TextEdit::singleline(&mut menu.address).hint_text(words::SERVER_HINT),
             );
             if field.changed() {
@@ -183,7 +205,7 @@ fn server_field(
         } else if menu.typed_at.is_some_and(|t| at.now - t >= SETTLE) {
             ask = true;
         }
-    });
+    }
 
     match &menu.stage {
         Stage::Asking => {
@@ -616,41 +638,46 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
                 .inner_margin(m.panel_padding * 0.5)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.vertical_centered(|ui| {
+                    // **On the label's own line**, so choosing does not make
+                    // the button taller and shove everything under it down.
+                    // The size is what this option *is*, so it reads as part
+                    // of the word rather than as a question under it.
+                    ui.horizontal(|ui| {
                         ui.colored_label(
                             if wrapping { p.ground } else { p.text },
                             egui::RichText::new(words::make::WRAPPING).size(m.text_small),
                         );
-                    });
-                    if wrapping {
-                        ui.add_space(m.item_spacing * 0.5);
-                        ui.horizontal_top(|ui| {
-                            let half = (ui.available_width() - m.item_spacing) / 2.0;
-                            for (label, field) in [
-                                (words::make::ROWS, &mut draft.rows),
-                                (words::make::COLS, &mut draft.cols),
-                            ] {
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    // On the accent, so the quiet colour the
-                                    // label wears elsewhere would be unreadable.
-                                    ui.colored_label(
-                                        p.ground,
-                                        egui::RichText::new(label).size(m.text_small),
-                                    );
-                                    ui.add(
-                                        egui::TextEdit::singleline(field)
-                                            .desired_width(f32::INFINITY)
-                                            .horizontal_align(egui::Align::Center),
-                                    );
-                                });
-                            }
+                        // **Shown either way**, greyed when the world does not
+                        // wrap. Appearing and disappearing made the button
+                        // change width as you chose, so the two options moved
+                        // under the pointer and the row jumped — and a control
+                        // that is not there cannot be read before it matters.
+                        //
+                        // `12x12`, which is how a size is written and how
+                        // `--torus` takes one. Labelled fields said "rows" and
+                        // "cols" over two boxes that could only be a size, in
+                        // a row whose whole subject is the shape of a world.
+                        // The unit is on hover rather than on a line of its
+                        // own: it is worth knowing once and worth no space
+                        // after that.
+                        let ink = if wrapping { p.ground } else { p.text_dim };
+                        ui.add_enabled_ui(wrapping, |ui| {
+                            let box_ = |ui: &mut egui::Ui, field: &mut String| {
+                                ui.add(
+                                    egui::TextEdit::singleline(field)
+                                        .desired_width(m.button_height * 1.4)
+                                        .horizontal_align(egui::Align::Center),
+                                )
+                                .on_hover_text(words::make::SIZE_NOTE);
+                            };
+                            box_(ui, &mut draft.rows);
+                            ui.colored_label(
+                                ink,
+                                egui::RichText::new(words::make::BY).size(m.text_small),
+                            );
+                            box_(ui, &mut draft.cols);
                         });
-                        ui.colored_label(
-                            p.ground,
-                            egui::RichText::new(words::make::SIZE_NOTE).size(m.text_small),
-                        );
-                    }
+                    });
                 });
             // The panel itself, minus whatever a field claimed: clicking a
             // number must edit it rather than re-choose the option it is on.

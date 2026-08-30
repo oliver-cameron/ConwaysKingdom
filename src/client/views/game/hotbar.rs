@@ -510,12 +510,12 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
         // Six figures, which is what `Player::MAX_VALUE` allows and therefore
         // what the column has to be wide enough for.
         stat(ui, words::PURSE, status.value.max(0) as u64, 6, p.accent);
-        let ground: u32 = status
-            .standing
-            .iter()
-            .find(|(id, _)| *id == status.player)
-            .map(|(_, n)| *n)
-            .unwrap_or(0);
+        // **What you hold, not what you are scored on.** The two differ by
+        // the patch everybody is granted, and the score leaves it out — so
+        // this read nought for as long as somebody built only inside their own
+        // ground, which a block does for ever.
+        let ground: u32 =
+            status.standing.iter().find(|h| h.who == status.player).map(|h| h.ground).unwrap_or(0);
         stat(ui, words::GROUND, ground as u64, 6, p.text);
         stat(ui, words::TICK, status.generation, 6, p.text);
         // Silent when there is none: a client that has reached no server has

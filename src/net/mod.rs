@@ -198,6 +198,87 @@ pub struct Team {
     pub players: Vec<PlayerId>,
 }
 
+/// How much ground each player holds, by their number.
+///
+/// **Here rather than on the server**, because an offline client is its own
+/// server and needs the same answer: it owns the whole world, so counting it
+/// is exact rather than a guess about a viewport. A *connected* client still
+/// takes the server's figure — there it holds its screen and a margin, and
+/// counting that would score the view.
+///
+/// `granted` says whether the patch everybody is handed on joining counts. It
+/// does not for a **score** — a grant is not an achievement, and everybody has
+/// one — and it does for **ground**, which is what a player is shown. A figure
+/// reading nought beside a screen of squares plainly yours is wrong however
+/// defensible the scoring rule is, and it read nought for as long as somebody
+/// built only inside their own patch, which a block does for ever.
+pub fn holdings(world: &World, granted: Granted) -> [usize; PlayerId::COUNT] {
+    let mut held = [0usize; PlayerId::COUNT];
+    for (_, chunk) in world.stored() {
+        for row in 0..crate::sim::CHUNK_N {
+            for col in 0..crate::sim::CHUNK_N {
+                let cell = chunk[(row, col)];
+                if granted == Granted::Excluded && cell.is_home() {
+                    continue;
+                }
+                if cell.player().is_owned() {
+                    held[cell.player().0 as usize] += 1;
+                }
+            }
+        }
+    }
+    held
+}
+
+/// Whether a count includes the patch everybody is granted on joining.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Granted {
+    /// A score: a grant is not an achievement.
+    Excluded,
+    /// Ground: a grant is very much ground.
+    Counted,
+}
+
+/// Everybody's holdings, most first, as the standings report them.
+///
+/// Shared so an offline client and a server produce the same rows in the same
+/// order — the ordering is part of it, since rows that swapped places at a tie
+/// would jump about on one and not the other.
+pub fn standings(world: &World) -> Vec<Holding> {
+    let scored = holdings(world, Granted::Excluded);
+    let held = holdings(world, Granted::Counted);
+    let mut rows: Vec<Holding> = held
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|&(_, &n)| n > 0)
+        .map(|(id, &n)| Holding {
+            who: PlayerId(id as u8),
+            score: scored[id] as u32,
+            ground: n as u32,
+        })
+        .collect();
+    // Most first, and by number where two hold the same, so the order is the
+    // same on every peer and rows do not swap places at a tie.
+    rows.sort_by(|a, b| b.score.cmp(&a.score).then(a.who.cmp(&b.who)));
+    rows
+}
+
+/// What one player holds, as the standings report it.
+///
+/// **Two numbers, because they answer two questions.** `score` is what a match
+/// is won on and leaves out the patch everybody is granted on joining — a
+/// grant is not an achievement. `ground` is every square they hold, which is
+/// what a player is *shown*: a figure reading nought beside a screen of
+/// squares plainly theirs is wrong however defensible the scoring rule is, and
+/// it read nought for as long as somebody built only inside their own patch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holding {
+    pub who: PlayerId,
+    pub score: u32,
+    pub ground: u32,
+}
+
 /// What a player is putting down.
 ///
 /// Named rather than carried as raw cell bits: the server has to be able to
@@ -941,7 +1022,7 @@ pub enum ServerMessage {
     /// would be harder to read than one that moved every couple of seconds.
     Standing {
         tick: Tick,
-        held: Vec<(PlayerId, u32)>,
+        held: Vec<Holding>,
     },
     /// What this player actually has to spend.
     ///

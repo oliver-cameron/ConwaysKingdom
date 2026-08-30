@@ -13,7 +13,6 @@
 use crate::client::views::theme::Theme;
 use crate::client::views::words::clock as words;
 use crate::net::{MatchPhase, Victory};
-use crate::sim::PlayerId;
 
 /// Generations per second, so a count of them can be said in seconds. The
 /// client steps its own world at this rate and the server is asked to, so it
@@ -29,7 +28,7 @@ pub fn show(
     generation: u64,
     phase: &MatchPhase,
     victory: Option<Victory>,
-    standing: &[(PlayerId, u32)],
+    standing: &[crate::net::Holding],
 ) -> crate::client::views::Shown<()> {
     // Only while it is running. A gathering match has its lobby and a decided
     // one has its result, and both of those say more than a clock could.
@@ -45,7 +44,7 @@ pub fn show(
         Victory::Territory { squares } => {
             // Against the **leader**, not against you: the question a target
             // asks is how close anybody is to ending it.
-            let most = standing.first().map(|&(_, n)| n as u64).unwrap_or(0);
+            let most = standing.first().map(|h| h.score as u64).unwrap_or(0);
             (words::squares_left(squares as u64, most), most, squares as u64)
         }
     };

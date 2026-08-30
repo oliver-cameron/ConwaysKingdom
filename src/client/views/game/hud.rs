@@ -43,7 +43,7 @@ pub struct Status<'a> {
     /// The hotbar slot currently selected.
     pub holding: &'a str,
     /// Who holds how much ground, most first. Empty until the server has said.
-    pub standing: &'a [(PlayerId, u32)],
+    pub standing: &'a [crate::net::Holding],
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate. Shown beside "connected" because that is the claim it qualifies:
     /// a link that is open and a link that is keeping up are two facts, and
@@ -294,9 +294,10 @@ fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, stat
     ui.separator();
     ui.small(words::HOLDING);
 
-    let most = status.standing.iter().map(|&(_, n)| n).max().unwrap_or(1).max(1) as f32;
+    let most = status.standing.iter().map(|h| h.score).max().unwrap_or(1).max(1) as f32;
     let width = ui.available_width().max(80.0);
-    for &(player, held) in status.standing.iter().take(SHOWN) {
+    for &crate::net::Holding { who: player, score: held, .. } in status.standing.iter().take(SHOWN)
+    {
         let (r, g, b) = player_colour(player);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 14.0), egui::Sense::hover());
 

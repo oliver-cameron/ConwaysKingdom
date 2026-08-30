@@ -842,11 +842,22 @@ mod tests {
         let mut y = rect.top();
         while y < rect.bottom() {
             for &x in &lanes {
+                // **Put the screen back if the press navigated off it.** A
+                // sweep presses everything, and everything includes the way
+                // out — so one lane landing on Back left the probe pressing
+                // its way down the home screen, looking for a control that is
+                // on the one it just left. That is a probe finding nothing
+                // rather than a screen offering nothing, and the two are
+                // indistinguishable from the failure.
+                let was = menu.page;
                 let point = egui::pos2(x, y);
                 tick(menu, down(point));
                 let (chose, _) = tick(menu, up(point));
                 if answered(menu, &chose) {
                     return true;
+                }
+                if menu.page != was {
+                    menu.page = was;
                 }
             }
             y += 6.0;
@@ -913,15 +924,25 @@ mod tests {
         };
 
         // Into the address field, which the play screen always has.
+        //
+        // **Lanes rather than the centre line**, for the reason `probe` uses
+        // them: the centre line was enough while every control ran the full
+        // width, and the address field is a field-sized thing in a row of
+        // other things now — so a sweep down the middle walks past it.
         let (_, rect) = tick(&mut menu, Vec::new());
+        let lanes: Vec<f32> =
+            (1..=8).map(|n| rect.left() + rect.width() * n as f32 / 9.0).collect();
         let mut into = None;
         let mut y = rect.top();
         while y < rect.bottom() && into.is_none() {
-            let point = egui::pos2(rect.center().x, y);
-            tick(&mut menu, down(point));
-            tick(&mut menu, up(point));
-            if ctx.memory(|m| m.focused()).is_some() {
-                into = Some(point);
+            for &x in &lanes {
+                let point = egui::pos2(x, y);
+                tick(&mut menu, down(point));
+                tick(&mut menu, up(point));
+                if ctx.memory(|m| m.focused()).is_some() {
+                    into = Some(point);
+                    break;
+                }
             }
             y += 6.0;
         }

@@ -139,7 +139,10 @@ mod tests {
             },
             ServerMessage::Standing {
                 tick: 40,
-                held: vec![(PlayerId(3), 1200), (PlayerId(1), 88), (PlayerId(9), 0)],
+                held: vec![
+                    crate::net::Holding { who: PlayerId(3), score: 1200, ground: 1344 },
+                    crate::net::Holding { who: PlayerId(1), score: 88, ground: 232 },
+                ],
             },
             ServerMessage::Standing { tick: 0, held: Vec::new() },
             ServerMessage::Welcome {

@@ -230,6 +230,12 @@ pub mod menu {
         pub const COLS: &str = "Columns";
         /// Chunks, not cells. Said out loud because the number is small and
         /// would otherwise read as a tiny world.
+        /// Between the two numbers, so a size reads as `12x12` — which is how
+        /// a size is written and what `--torus` takes. Two boxes labelled
+        /// "Rows" and "Columns" said, over two lines, what one character says.
+        pub const BY: &str = "x";
+        /// On hover rather than on a line of its own: worth knowing once, and
+        /// worth no space after that.
         pub const SIZE_NOTE: &str = "in chunks, each 16 cells square";
         pub const TOGETHER: &str = "Played";
         pub const SOLO: &str = "Every player for themselves";
