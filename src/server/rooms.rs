@@ -657,6 +657,23 @@ impl Rooms {
         }
     }
 
+    /// Everything the rooms want said **now** rather than at the next step,
+    /// with the room it belongs to. See [`ServerMessage::Acted`].
+    pub fn take_announcements(&mut self) -> Vec<(RoomId, ServerMessage)> {
+        let owners = self.owner.clone();
+        let codes = self.codes.clone();
+        self.rooms
+            .iter_mut()
+            .flat_map(|(id, server)| {
+                let (owner, code) = (owners.get(id).copied(), codes.get(id).cloned());
+                server.take_announcements().into_iter().map(move |mut m| {
+                    stamp(&mut m, owner, code.clone());
+                    (id.clone(), m)
+                })
+            })
+            .collect()
+    }
+
     /// Advance every room one generation, and say which room each reply
     /// belongs to. A `Step` is only meaningful to the clients in its own
     /// world, so the room travels with it as far as the connection that

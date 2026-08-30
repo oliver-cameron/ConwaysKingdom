@@ -400,6 +400,13 @@ pub struct GameApp {
     /// The address last written down, so it is written again only when it
     /// would say something different.
     said_where: Option<(bool, bool, bool, Option<crate::net::RoomId>)>,
+    /// Actions taken from an [`Acted`] before the `Step` that carries them.
+    ///
+    /// Emptied every `Step`, because an action belongs to one generation and
+    /// the `Step` that names it is the last chance to hear about it.
+    ///
+    /// [`Acted`]: crate::net::ServerMessage::Acted
+    applied_early: Vec<Stamped>,
     /// Whether this seat has given up, as the server last said.
     ///
     /// Held so the control can say so rather than offer to concede twice, and
@@ -1039,7 +1046,15 @@ impl GameApp {
                     // team saw different worlds until a checkpoint dragged the
                     // chunks across -- which it did, every few seconds, for as
                     // long as they both kept playing.
-                    for stamped in actions.iter().filter(|s| Some(s.seat) != self.me) {
+                    // **And not one this client already applied early**, or a
+                    // `Paint` lands twice: idempotent on the generation it was
+                    // meant for, and not on the one after. `Acted` is a
+                    // shortcut that can be dropped, so the `Step` still
+                    // carries everything and this is where the two meet.
+                    let early = std::mem::take(&mut self.applied_early);
+                    for stamped in
+                        actions.iter().filter(|s| Some(s.seat) != self.me && !early.contains(s))
+                    {
                         // **And a teammate's comes out of the purse we share.**
                         // One team is one purse, so an ally spending is this
                         // client's balance moving with no action of its own
@@ -1065,6 +1080,33 @@ impl GameApp {
                     // the less of the world has been built on top of it.
                     if self.world.generation % CHECKPOINT_EVERY == 0 {
                         self.send_checkpoint();
+                    }
+                }
+                // **An action, the moment the server took it.** Applied here
+                // rather than waited for, so a cell somebody else placed
+                // appears in a round trip instead of at the next generation —
+                // which at four a second was 125 ms of doing nothing on a link
+                // that costs four.
+                //
+                // **Not on the tick it names**, which was the wrong test and
+                // cost a whole generation whenever an action was made near a
+                // boundary. `stamped.tick` is the *actor's* guess; the server
+                // applies whatever is pending on the step it happens to be on
+                // when it steps, which is the generation this client is on too
+                // — `advance_to` puts it there and nothing else moves it. So
+                // being caught up is the condition, and this is what being
+                // caught up looks like.
+                //
+                // Our own is already down: this client predicted it when it
+                // was made, which is the same thing a round trip earlier.
+                ServerMessage::Acted(stamped) => {
+                    if Some(stamped.seat) != self.me {
+                        crate::net::apply(&mut self.world, &stamped);
+                        if Some(stamped.player) == self.plays_as {
+                            let delta = crate::net::value_delta(&self.world, &stamped);
+                            self.value = (self.value + delta).max(0);
+                        }
+                        self.applied_early.push(stamped);
                     }
                 }
                 ServerMessage::Resync { tick, chunks } => {
@@ -2257,6 +2299,7 @@ impl App for GameApp {
             standing: Vec::new(),
             plays_as: None,
             said_where: None,
+            applied_early: Vec::new(),
             forfeited: false,
             in_play: None,
             geiger: Default::default(),

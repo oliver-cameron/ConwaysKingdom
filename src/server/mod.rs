@@ -82,6 +82,10 @@ pub struct Server {
     lobby_changed: bool,
     /// Grants made since the last step, waiting to be announced.
     granted: Vec<(PlayerId, (i32, i32))>,
+    /// Actions taken since the last drain, to go out **now** rather than with
+    /// the step they belong to. Drained by whatever carries the bytes; see
+    /// [`ServerMessage::Acted`].
+    announce: Vec<ServerMessage>,
 }
 
 /// The most chunks one message may fetch.
@@ -134,6 +138,7 @@ impl Server {
             started_by: None,
             lobby_changed: false,
             granted: Vec::new(),
+            announce: Vec::new(),
         }
     }
 
@@ -650,6 +655,12 @@ impl Server {
             .collect()
     }
 
+    /// Everything waiting to go out before the next step. See
+    /// [`ServerMessage::Acted`].
+    pub fn take_announcements(&mut self) -> Vec<ServerMessage> {
+        std::mem::take(&mut self.announce)
+    }
+
     /// Whether this match was decided on the generation just stepped.
     pub fn just_decided(&self) -> bool {
         matches!(self.phase, Phase::Over { at, .. } if at == self.tick())
@@ -1041,6 +1052,11 @@ impl Server {
                         return Vec::new();
                     }
                     self.credit(stamped.player, delta);
+                    // Out at once, so everybody else applies it on the tick it
+                    // names rather than when that tick is announced. It rides
+                    // in the `Step` as well, because a broadcast can be
+                    // dropped and this is a shortcut rather than a promise.
+                    self.announce.push(ServerMessage::Acted(stamped.clone()));
                     self.pending.push(stamped);
                 }
                 Vec::new()

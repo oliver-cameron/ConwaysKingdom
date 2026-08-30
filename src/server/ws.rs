@@ -429,6 +429,13 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                             for out in rooms.handle(&from, msg) {
                                 let _ = reply.send(out);
                             }
+                            // Anything the rooms want said at once rather than
+                            // at the next tick -- an action, so that a cell
+                            // appears on everybody's screen in a round trip
+                            // instead of half a generation later.
+                            for labelled in rooms.take_announcements() {
+                                let _ = sim_broadcast.send(labelled);
+                            }
                         }
                     }
                 }

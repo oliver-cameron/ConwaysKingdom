@@ -871,6 +871,24 @@ pub enum ServerMessage {
         tick: Tick,
         chunks: Vec<ChunkId>,
     },
+    /// One action, the moment the server took it, rather than at the end of
+    /// the generation it belongs to.
+    ///
+    /// **This is what makes a cell appear on somebody else's screen in a round
+    /// trip instead of at the next tick.** An action is applied by the server
+    /// during the step it names, and used to reach other clients only in the
+    /// `Step` that announces that step is done — so a click was worth a wait
+    /// of half a generation on average, which at four generations a second is
+    /// 125 ms of doing nothing on a link that costs four. The client that
+    /// *made* the action never waited: it predicts. This lets everybody else
+    /// predict the same thing at the same tick.
+    ///
+    /// The `Step` still carries it. A broadcast can be dropped — `server::ws`
+    /// logs `connection lagged` and carries on — so this is a shortcut and not
+    /// a replacement, and a client applies whichever reaches it first and
+    /// ignores the other; see `Stamped` and the skip in the client's `Step`
+    /// handling.
+    Acted(Stamped),
     /// What the match in this room is doing, and who is in it.
     ///
     /// Sent on joining and again whenever it changes, because a lobby is a
