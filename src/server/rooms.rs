@@ -771,6 +771,7 @@ impl Rooms {
     /// sometimes means "and empty it" is one keystroke from destroying a world
     /// somebody is standing in.
     pub fn create(&mut self, name: &str, shape: WorldKind) -> Result<RoomId, String> {
+        let shape = shape.checked()?;
         let name = crate::net::room_name(name)?;
         // A room made at the console takes its name as its id, so the
         // directory on disk stays readable and `--room arena` reaches the same
@@ -809,6 +810,7 @@ impl Rooms {
         shape: WorldKind,
         victory: Victory,
     ) -> Result<RoomId, String> {
+        let shape = shape.checked()?;
         let name = crate::net::room_name(name)?;
         let id = RoomId(name.clone());
         if self.rooms.contains_key(&id) {
@@ -853,6 +855,13 @@ impl Rooms {
                 self.made.len()
             ));
         }
+        // **The shape, before anything is built out of it.** It arrives on a
+        // socket from a connection that has not joined anything, and a torus
+        // is allocated whole -- so `rows: 0` reached an `assert!` and
+        // `100000x100000` overflowed the multiply that sizes the allocation.
+        // Either one killed the simulation task, which owns every room in the
+        // process. See `WorldKind::checked`.
+        let shape = shape.checked()?;
         // A name is still a name on a private room. What used to happen here
         // was that the code *became* the name, which conflated a credential
         // with an identity: the code could never be changed, and somebody

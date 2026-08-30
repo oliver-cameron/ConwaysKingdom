@@ -717,7 +717,7 @@ impl GameApp {
                     // showed the moment anything crossed it. Nothing a client
                     // can see says whether the ground ends, so this is the only
                     // way it can know.
-                    self.world = world.build();
+                    self.world = crate::net::sane_world(world);
                     // A birth's owner is seeded from the generation, so a
                     // client simulating at a different tick would make
                     // different choices from identical cells.
@@ -755,7 +755,7 @@ impl GameApp {
                     self.screen = Screen::Playing;
                     self.asked_at = None;
                     self.say_where();
-                    self.world = world.build();
+                    self.world = crate::net::sane_world(world);
                     self.world.set_generation(tick);
                     self.subscribed.clear();
                     self.geiger.reset();

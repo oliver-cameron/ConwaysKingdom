@@ -54,14 +54,63 @@ pub enum WorldKind {
     Toroidal { rows: i32, cols: i32 },
 }
 
+/// The largest torus this will build, per side and in total.
+///
+/// **Because a shape arrives over the wire.** `ClientMessage::Create` carries
+/// a `WorldKind` straight off a socket, and a torus is allocated whole -- so
+/// `rows: 0` reached an `assert!` and killed the process, and `100000x100000`
+/// overflowed the `i32` multiply that sizes the allocation. Either one was a
+/// whole server, every room in it, from one message on a connection that had
+/// not joined anything. The release profile is `panic = "abort"`, so it did
+/// not even unwind.
+///
+/// The numbers are what a server can actually step four times a second rather
+/// than what it can hold: 16384 chunks is a little over four million cells,
+/// and the per-side cap stops a 1x16384 world that fits the budget and is a
+/// corridor nobody can play in.
+pub const MAX_TORUS_SIDE: i32 = 512;
+pub const MAX_TORUS_CHUNKS: i64 = 16_384;
+
 impl WorldKind {
     /// A world of this shape with nothing in it, which is what both a server
     /// and a client that has just been told the shape start from.
+    ///
+    /// Only call this on a shape that has been through [`Self::checked`], or
+    /// that came from somewhere that has -- [`parse_torus`] for a command
+    /// line, and `Welcome` for a client, which is repeating a shape the server
+    /// already built.
     pub fn build(self) -> World {
         match self {
             Self::Infinite => World::infinite_empty(),
             Self::Toroidal { rows, cols } => World::toroidal_empty(rows, cols),
         }
+    }
+
+    /// This shape, or why it is not one.
+    ///
+    /// **Every path from a client to [`Self::build`] goes through here.** A
+    /// shape is three numbers on a wire and two of them can be anything a
+    /// sender likes; see [`MAX_TORUS_SIDE`] for what that used to cost.
+    pub fn checked(self) -> Result<Self, String> {
+        let Self::Toroidal { rows, cols } = self else { return Ok(self) };
+        for (n, what) in [(rows, "rows"), (cols, "columns")] {
+            if n < 1 {
+                return Err(format!("a torus needs at least one chunk of {what}, not {n}"));
+            }
+            if n > MAX_TORUS_SIDE {
+                return Err(format!(
+                    "{n} chunks of {what} is more than the {MAX_TORUS_SIDE} a torus may have"
+                ));
+            }
+        }
+        // In `i64`, because the product of two legal `i32`s is not one.
+        let chunks = rows as i64 * cols as i64;
+        if chunks > MAX_TORUS_CHUNKS {
+            return Err(format!(
+                "{rows}x{cols} is {chunks} chunks, and a torus holds at most {MAX_TORUS_CHUNKS}"
+            ));
+        }
+        Ok(self)
     }
 }
 
@@ -89,7 +138,7 @@ pub fn parse_torus(text: &str) -> Result<WorldKind, String> {
             .filter(|&n| n > 0)
             .ok_or_else(|| format!("{what} must be a positive number of chunks, got {v:?}"))
     };
-    Ok(WorldKind::Toroidal { rows: parse(rows, "rows")?, cols: parse(cols, "cols")? })
+    WorldKind::Toroidal { rows: parse(rows, "rows")?, cols: parse(cols, "cols")? }.checked()
 }
 
 impl World {
@@ -138,9 +187,15 @@ impl World {
     /// A torus with nothing on it, which is what a game starts from: the
     /// world opens empty and every player brings a block. `toroidal` seeds a
     /// glider on top, and the tests that want something already moving use it.
+    /// The assert is the last line of defence and not the first: a shape that
+    /// came over a wire is refused by [`WorldKind::checked`] long before it
+    /// reaches this, with a sentence rather than a panic. What is left here is
+    /// the invariant, for a caller inside the crate that got it wrong.
     pub fn toroidal_empty(rows: i32, cols: i32) -> Self {
         assert!(rows > 0 && cols > 0, "a torus needs at least one chunk");
-        let chunks = vec![Chunk::dead(); (rows * cols) as usize].into_boxed_slice();
+        let cells = rows as i64 * cols as i64;
+        assert!(cells <= MAX_TORUS_CHUNKS, "a torus of {rows}x{cols} chunks is too big to build");
+        let chunks = vec![Chunk::dead(); cells as usize].into_boxed_slice();
         Self::new(Storage::Toroidal { rows, cols, chunks })
     }
 
@@ -1747,5 +1802,33 @@ mod tests {
     fn an_infinite_world_never_folds_coordinates() {
         let w = World::infinite();
         assert_eq!(w.canonical((-5, 12)), (-5, 12));
+    }
+
+    /// **A shape arrives over a wire**, so two numbers a sender chose freely
+    /// have to be refused rather than allocated. Each of these used to take
+    /// the whole process down from one `Create` on a connection that had not
+    /// joined anything: the first two through the `assert!` in
+    /// `toroidal_empty`, the third through the `i32` multiply that sizes it.
+    #[test]
+    fn a_torus_a_client_asked_for_is_refused_before_it_is_built() {
+        for (rows, cols) in [(0, 4), (-1, -1), (4, 0), (100_000, 100_000), (1, 100_000)] {
+            let asked = WorldKind::Toroidal { rows, cols };
+            assert!(asked.checked().is_err(), "{rows}x{cols} was accepted");
+        }
+        // And the shapes the documentation tells people to run still build.
+        for (rows, cols) in [(1, 1), (18, 18), (40, 40), (MAX_TORUS_SIDE, 32)] {
+            let asked = WorldKind::Toroidal { rows, cols };
+            assert_eq!(asked.checked(), Ok(asked), "{rows}x{cols} was refused");
+        }
+        assert_eq!(WorldKind::Infinite.checked(), Ok(WorldKind::Infinite));
+    }
+
+    /// The command line and the wire agree about what a torus may be, because
+    /// there is one answer and `parse_torus` asks it.
+    #[test]
+    fn the_command_line_refuses_what_the_wire_refuses() {
+        assert!(parse_torus("0x4").is_err());
+        assert!(parse_torus("100000x100000").is_err());
+        assert_eq!(parse_torus("18x18"), Ok(WorldKind::Toroidal { rows: 18, cols: 18 }));
     }
 }

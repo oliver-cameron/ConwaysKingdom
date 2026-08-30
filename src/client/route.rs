@@ -161,22 +161,41 @@ impl Route {
 /// malformed one: a `%` sequence left as-is would become part of an id, which
 /// then names no room and refuses with a message about a character the person
 /// never typed.
+///
+/// **Bytes throughout, and that is the fix for a panic.** It used to slice the
+/// `&str` — `&raw[i + 1..i + 3]` — after seeing a `%`, and byte `i + 3` can
+/// land in the middle of a character: `?room=%€` was three bytes into a
+/// four-byte string and Rust refuses that slice by panicking. This runs on
+/// `location.pathname` during startup, so a link with a `%` in front of any
+/// non-ASCII character killed the wasm module before the first frame — and
+/// the page's watchdog then reported it as "the game did not load", which is
+/// where a client that cannot reach its server ends up too.
+///
+/// Decoded as UTF-8 rather than a byte at a time, so `%E2%82%AC` comes back
+/// as `€` and not as three of the characters it is spelled with. What cannot
+/// be decoded is kept verbatim, so a refusal names what was actually typed.
 fn decode(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
     let bytes = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
-                out.push(byte as char);
+        let pair = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match pair {
+            Some(byte) => {
+                out.push(byte);
                 i += 3;
-                continue;
+            }
+            None => {
+                out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+                i += 1;
             }
         }
-        out.push(if bytes[i] == b'+' { ' ' } else { bytes[i] as char });
-        i += 1;
     }
-    out
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Say where we are, in the address bar.
@@ -304,6 +323,20 @@ mod tests {
     /// A room id needs no encoding, so this is for the malformed link: left
     /// as-is, a `%` sequence becomes part of an id and refuses with a message
     /// about a character nobody typed.
+    /// **A malformed link is not a crash.** Slicing the string by byte offset
+    /// after a `%` panics whenever the next character is multi-byte, and this
+    /// runs on the address bar before the first frame — so `?room=%€` was a
+    /// blank page reported as "the game did not load".
+    #[test]
+    fn a_link_nobody_could_have_meant_does_not_panic() {
+        for query in ["room=%€", "room=%日x", "room=%🙂", "room=%", "room=%A", "room=%ZZ"] {
+            let _ = Route::read(query);
+        }
+        for path in ["/room/%€", "/watch/%🙂", "/lobby/%"] {
+            let _ = Route::from_path(path);
+        }
+    }
+
     #[test]
     fn a_percent_encoded_room_comes_back_readable() {
         assert_eq!(Route::read("room=my%2Droom"), Some(Route::Room(RoomId::from("my-room"))));
@@ -311,5 +344,8 @@ mod tests {
         // A stray percent is kept rather than swallowed, so what comes back is
         // what was typed and the refusal names it.
         assert_eq!(Route::read("room=100%"), Some(Route::Room(RoomId::from("100%"))));
+        // And a multi-byte character comes back as itself rather than as the
+        // bytes it is spelled with.
+        assert_eq!(Route::read("room=%E2%82%AC"), Some(Route::Room(RoomId::from("€"))));
     }
 }

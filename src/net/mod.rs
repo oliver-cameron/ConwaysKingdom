@@ -557,9 +557,17 @@ pub enum ClientMessage {
     /// What this player did, and when they believe it happened.
     Act(Stamped),
     /// The chunks the client now needs, because its viewport moved.
+    ///
+    /// **A fetch, and named for something it never quite was.** Nothing is
+    /// kept: the server answers with the chunks it holds and forgets the
+    /// request, because chunk *changes* reach a client as the `Step` for the
+    /// generation they happened in, broadcast to the whole room. There is no
+    /// push for a subscription to select from.
+    ///
+    /// There was an `Unsubscribe` beside this for a while, and a list on the
+    /// server for it to remove from. Nothing ever read the list and no client
+    /// ever sent the message.
     Subscribe { chunks: Vec<ChunkId> },
-    /// Chunks the client has dropped and no longer wants updates for.
-    Unsubscribe { chunks: Vec<ChunkId> },
     /// Per-chunk digests of what the client holds, so the server can spot a
     /// desync. Per chunk rather than whole-world: a client holds only what its
     /// viewport covers, so a world digest would always disagree.
@@ -1219,6 +1227,25 @@ pub fn too_cramped_for_grants(world: &World) -> bool {
         let (down, along) = torus_grid(h, w);
         down * along < PlayerId::MAX as i32
     })
+}
+
+/// The world a server just said this client is in, or a boundless one.
+///
+/// **A client trusts its server about the shape of the world and should not
+/// trust it about the size.** `Welcome` and `Resync` carry a `WorldKind`
+/// straight off a socket, and a torus is allocated whole — so a server that
+/// said `100000x100000`, by malice or by running an older build, took the
+/// client's browser tab with it. Falling back to a boundless world means the
+/// client goes on playing and disagrees with the server, which the checkpoint
+/// will say out loud; the alternative is a page that closes itself.
+pub fn sane_world(kind: crate::sim::WorldKind) -> World {
+    match kind.checked() {
+        Ok(kind) => kind.build(),
+        Err(why) => {
+            log::error!("the server named a world this client will not build ({why})");
+            World::infinite_empty()
+        }
+    }
 }
 
 /// Every chunk a grant at this position touches, folded onto the chunks the

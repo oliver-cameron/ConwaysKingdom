@@ -35,8 +35,6 @@ pub struct Server {
     room: RoomName,
     world: World,
     players: HashMap<PlayerId, Player>,
-    /// Chunks each player has asked to be kept informed about.
-    subscriptions: HashMap<PlayerId, Vec<ChunkId>>,
     /// Actions received for a tick that has not been simulated yet.
     pending: Vec<Stamped>,
     /// Whether this room is a match, and what it is doing. [`Phase::Open`] is
@@ -86,6 +84,16 @@ pub struct Server {
     granted: Vec<(PlayerId, (i32, i32))>,
 }
 
+/// The most chunks one message may fetch.
+///
+/// **Because the reply is unbounded and the request is not.** A `Subscribe`
+/// naming a million chunks costs a few kilobytes to send and, on a torus where
+/// every chunk exists, half a gigabyte of `ChunkData` queued into the
+/// connection's unbounded channel. A viewport with its margin covers a few
+/// hundred at the widest zoom, so this is far above anything a client asks for
+/// and far below anything that hurts.
+const MOST_CHUNKS_AT_ONCE: usize = 4096;
+
 /// How often the standings go out, in generations.
 ///
 /// Every other second at the usual tick rate. It is a pass over the world to
@@ -118,7 +126,6 @@ impl Server {
             room: room.into(),
             world,
             players: HashMap::new(),
-            subscriptions: HashMap::new(),
             pending: Vec::new(),
             phase: Phase::Open,
             victory: None,
@@ -764,7 +771,6 @@ impl Server {
                 self.players.values().filter(|p| p.online).count()
             );
         }
-        self.subscriptions.remove(&id);
     }
 
     /// Decoded message in, replies out. Deliberately transport-agnostic.
@@ -925,7 +931,16 @@ impl Server {
                 }
                 Vec::new()
             }
+            // **A fetch, whatever it is called.** Chunk contents only ever
+            // leave here in reply to one of these; a change is broadcast as a
+            // `Step` to everybody in the room, so there is no push that a
+            // subscription would select. The server used to keep the list
+            // anyway, in a `HashMap<PlayerId, Vec<ChunkId>>` that nothing read
+            // — unbounded, undeduplicated, and grown by every resync, with an
+            // `Unsubscribe` beside it doing an `O(n*m)` `retain` over
+            // attacker-sized input on the one task that owns every room.
             ClientMessage::Subscribe { chunks } => {
+                let chunks = &chunks[..chunks.len().min(MOST_CHUNKS_AT_ONCE)];
                 let out: Vec<_> =
                     chunks.iter().filter_map(|&chunk| self.chunk_message(chunk)).collect();
                 log::info!(
@@ -934,16 +949,7 @@ impl Server {
                     chunks.len(),
                     out.len()
                 );
-                if let Some(id) = from {
-                    self.subscriptions.entry(id).or_default().extend(chunks);
-                }
                 out
-            }
-            ClientMessage::Unsubscribe { chunks } => {
-                if let Some(subs) = from.and_then(|id| self.subscriptions.get_mut(&id)) {
-                    subs.retain(|c| !chunks.contains(c));
-                }
-                Vec::new()
             }
             // A room cannot answer these three. It is one room, so it knows
             // of no others to list, cannot make one, and cannot admit a
