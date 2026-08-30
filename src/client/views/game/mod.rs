@@ -686,6 +686,10 @@ impl GameApp {
         // Cleared, or `subscribe_to_view` would take this client's word for
         // what it already holds and ask for none of it.
         self.subscribed.clear();
+        // And this, which is a record of what was applied to the world that
+        // has just been thrown away. Kept, it would tell the next `Step` to
+        // skip an action that nothing in the new world has ever seen.
+        self.applied_early.clear();
         self.geiger.reset();
         self.subscribe_to_view();
     }
@@ -774,6 +778,7 @@ impl GameApp {
                     // showed the moment anything crossed it. Nothing a client
                     // can see says whether the ground ends, so this is the only
                     // way it can know.
+                    self.applied_early.clear();
                     self.world = crate::net::sane_world(world);
                     // A birth's owner is seeded from the generation, so a
                     // client simulating at a different tick would make
@@ -812,6 +817,7 @@ impl GameApp {
                     self.ui.screen = Screen::Playing;
                     self.asked_at = None;
                     self.say_where();
+                    self.applied_early.clear();
                     self.world = crate::net::sane_world(world);
                     self.world.set_generation(tick);
                     self.subscribed.clear();
