@@ -5,7 +5,7 @@
 //! came from and cannot change them.
 
 use crate::client::desync::{Geiger, Level};
-use crate::client::views::hue::{player_colour, team_colour};
+use crate::client::views::hue::player_colour;
 use crate::client::views::words::hud as words;
 use crate::sim::{PlayerId, WorldKind};
 
@@ -154,9 +154,12 @@ pub fn show(
                 ui.heading(format!("Player {}", status.player.0));
             });
 
+            // The purse, the ground held, the tick and the rating are on the
+            // **bar** — see `hotbar::standing`. They were here, in the
+            // opposite corner from the squares and the pointer, which put the
+            // numbers that change while you play furthest from where you play.
+            // What is left is about the *connection*, which you do not watch.
             ui.separator();
-            ui.label(format!("Value  {}", status.value));
-            ui.label(format!("Generation  {}", status.generation));
             if DEBUG {
                 ui.label(format!(
                     "Chunks  {} held, {} drawn",
@@ -200,22 +203,15 @@ pub fn show(
                     );
                 }
             });
-            // The rating, on its own line and always. A change rides beside it
-            // in the colour of its sign, because a rating is a comparison and
-            // the direction is the half people actually read.
-            ui.horizontal(|ui| match status.rating {
-                Some((rating, change)) => {
-                    ui.label(words::rating(rating));
-                    if let Some(change) = change.filter(|&c| c != 0) {
-                        let colour =
-                            if change > 0 { theme.palette.good } else { theme.palette.bad };
-                        ui.colored_label(colour, words::rating_change(change));
-                    }
-                }
-                None => {
-                    ui.colored_label(theme.palette.text_dim, words::UNRATED);
-                }
-            });
+            // What the last match did to the rating. The rating itself is on
+            // the bar; this is the half that is only worth a line for as long
+            // as it is news.
+            if let Some((_, Some(change))) =
+                status.rating.filter(|(_, c)| c.is_some_and(|c| c != 0))
+            {
+                let colour = if change > 0 { theme.palette.good } else { theme.palette.bad };
+                ui.colored_label(colour, words::rating_change(change));
+            }
             ui.small(match status.world {
                 WorldKind::Infinite => words::BOUNDLESS.to_string(),
                 WorldKind::Toroidal { rows, cols } => {

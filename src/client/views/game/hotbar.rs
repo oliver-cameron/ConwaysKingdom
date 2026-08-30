@@ -325,13 +325,7 @@ pub fn show(
                 ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
                 ui.set_min_height(m.slot + m.panel_padding * 1.2 + 2.0);
 
-                // Add player colour, show stats for total territory and $. Also show generation number.
-                segment(ui, theme, |ui| {
-                    ui.vertical(|ui| {
-                        let value = status.value;
-                        ui.label(format!("${value}"));
-                    });
-                });
+                standing(ui, theme, status);
 
                 // **What it is made of.** One segment, four kinds, and ice
                 // among them: it used to sit behind a rule because it came
@@ -473,6 +467,61 @@ fn rule(ui: &mut egui::Ui, theme: &Theme) {
 }
 
 /// One boxed group of squares.
+/// Who you are and how you are doing, at the left end of the bar.
+///
+/// **Where you are looking already.** These were in the HUD, in the opposite
+/// corner from the squares and the pointer — so the three numbers that change
+/// while you play were the three furthest from where you play. The HUD keeps
+/// what is about the *connection*: whether it is up, which room, and the
+/// rating, none of which you watch.
+///
+/// Two rows of two rather than a list, because these pair: what you hold and
+/// what you can spend are the state of your kingdom, and the tick and your
+/// rating are the state of the match. The swatch is the colour the shader
+/// gives your cells, so the bar and the board cannot disagree about who you
+/// are.
+fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::game::hud::Status) {
+    let p = theme.palette;
+    let m = theme.metrics;
+    // A number and what it is, the number first and bigger: at a glance the
+    // figure is what is being read and the word is what makes it mean
+    // something, so the word is the quiet half.
+    let stat = |ui: &mut egui::Ui, what: &str, value: String, ink: egui::Color32| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.colored_label(ink, egui::RichText::new(value).size(m.text_body).strong());
+            ui.colored_label(p.text_dim, egui::RichText::new(what).size(m.text_small));
+        });
+    };
+    segment(ui, theme, |ui| {
+        let (r, g, b) = crate::client::views::hue::player_colour(status.player);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, m.slot), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(r, g, b));
+        ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
+
+        stat(ui, words::PURSE, format!("{}", status.value), p.accent);
+        let held: u32 = status
+            .standing
+            .iter()
+            .find(|(id, _)| *id == status.player)
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        stat(ui, words::HELD, format!("{held}"), p.text);
+        stat(ui, words::TICK, format!("{}", status.generation), p.text);
+        // Silent when there is none: a client that has reached no server has
+        // no rating rather than a starting figure, and a dash where a number
+        // goes is one more thing to read.
+        if let Some((rating, change)) = status.rating {
+            let ink = match change {
+                Some(c) if c > 0 => p.good,
+                Some(c) if c < 0 => p.bad,
+                _ => p.text,
+            };
+            stat(ui, words::RATING, format!("{rating}"), ink);
+        }
+    });
+}
+
 fn segment(ui: &mut egui::Ui, theme: &Theme, contents: impl FnOnce(&mut egui::Ui)) {
     let p = theme.palette;
     let m = theme.metrics;

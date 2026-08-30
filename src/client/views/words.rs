@@ -293,6 +293,14 @@ pub mod menu {
 
 /// The bar along the bottom.
 pub mod hotbar {
+    /// The four figures on the bar. One word each, lower case: they label a
+    /// number rather than heading a section, and a capital would make each of
+    /// them look like the start of something.
+    pub const PURSE: &str = "purse";
+    pub const HELD: &str = "held";
+    pub const TICK: &str = "tick";
+    pub const RATING: &str = "elo";
+
     pub const LIFE: &str = "Life";
     pub const MINE: &str = "Mine";
     pub const TURRET: &str = "Turret";
@@ -446,28 +454,12 @@ pub mod hud {
     pub const CONNECTED: &str = "connected";
     pub const OFFLINE: &str = "offline";
 
-    /// The rating, on the HUD, always. It used to appear on the home screen
-    /// and nowhere else, so the number a match is played *for* was the one
-    /// thing you could not see while playing one.
-    ///
-    /// Short, because it sits in a corner beside everything else: "Elo" rather
-    /// than "Rated", which is the word the rest of the screen uses and is two
-    /// characters longer than the space this has.
-    pub fn rating(rating: i32) -> String {
-        format!("Elo {rating}")
-    }
-
     /// What the last match did to it, kept beside the number for as long as
     /// the number is on screen. A rating is a comparison, and a comparison
     /// with nothing to compare against is a score.
     pub fn rating_change(change: i32) -> String {
         format!("{change:+}")
     }
-
-    /// Before there is one. A client that has reached no server has no rating
-    /// rather than a starting number, and saying so is better than showing a
-    /// figure nobody has earned.
-    pub const UNRATED: &str = "Elo --";
 
     /// Giving up, which is not the same as leaving: the back arrow beside this
     /// walks out of the room and gives up the seat, and somebody losing a
