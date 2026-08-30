@@ -76,6 +76,12 @@ In practice `pump_link` sets `self.link = None` on the frame it notices `is_clos
 
 Not a bug so much as a shape: the outbound half wants a `tokio::sync::mpsc` the select can await, and then there is no timer at all.
 
+### The tunnel is not in this repository
+
+`agent.py` and `relay.py` are what make a server on a home connection reachable, and they sit beside this repository rather than in it — so they are not in the tests, not in `cargo fmt`, and not in any history. The pool bug in [gotchas.md](gotchas.md#one-browser-is-six-connections-and-the-tunnel-counted-players) was a bug in the browser client as far as anybody debugging it could tell, and there was nowhere to record the fix.
+
+Either they belong in `tunnel/` here or they belong in a repository of their own. What they should not be is untracked files next to a tracked project that documents them.
+
 ## Not bugs, but the next thing to go wrong
 
 ### A match is never saved, and now the teams go with it

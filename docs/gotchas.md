@@ -204,13 +204,17 @@ The general shape is worth more than the instance: **an index computed from one 
 
 ## One browser is six connections, and the tunnel counted players
 
-`tunnel/agent.py` kept `--pool` spare connections open through the firewall and returned a slot to the pool when the connection it carried **closed**. That is the right rule for a player and the wrong one for a browser: loading the page opens several TCP connections — the document, the module, the 7.5 MB of wasm, the art — and HTTP keep-alive holds each of them open and idle long after its response has landed.
+Not in this repository: the tunnel is two Python scripts that sit **beside** it, and they are what makes a server on a home connection reachable at all. Written down here anyway, because the symptom is entirely inside the browser client and this is where somebody will come looking.
+
+`agent.py` kept `--pool` spare connections open through the firewall and returned a slot to the pool when the connection it carried **closed**. That is the right rule for a player and the wrong one for a browser: loading the page opens several TCP connections — the document, the module, the 7.5 MB of wasm, the art — and HTTP keep-alive holds each of them open and idle long after its response has landed.
 
 The websocket is the **last** thing the page asks for, after all of that. So one browser held all four spares through its own page load, the socket found none, and `relay.py` waited `--wait` seconds and closed the browser's connection with no response at all.
 
 *Symptom:* the page loads perfectly and only the socket fails; more often on a slow link, never on a fast one, and never at all on localhost where there is no tunnel. It reads as a game that cannot reach its server, which sends you looking at `net::link_web` and at the server's `/ws` route, both of which are fine.
 
 A spare now asks for its replacement the moment the relay wakes it, so the pool is a floor on how many are *waiting* rather than a ceiling on how many are open. Reproduced with six keep-alive requests in front of a websocket: the old agent starves at its shipped default of four and the new one does not.
+
+The general shape, which is not about tunnels: **anything that pools connections for this game has to be sized in connections and not in people.** A player is one websocket and, before it, a page load's worth of HTTP that the browser holds open long after it is done with it.
 
 ## A key bound to a character is a key some keyboards do not have
 
