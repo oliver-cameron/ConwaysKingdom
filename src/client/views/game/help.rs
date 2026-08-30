@@ -19,8 +19,8 @@
 //! [chess-tui]: https://github.com/thomas-mauran/chess-tui
 //! [docs/game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 
-use super::theme::Theme;
-use super::words::help as words;
+use crate::client::views::theme::Theme;
+use crate::client::views::words::help as words;
 
 /// One group of keys, and what they are for.
 struct Group {
@@ -111,10 +111,18 @@ fn groups(keys: &Keys) -> Vec<Group> {
 
 /// Draw it. Returns the rectangle covered, so a click on it does not also
 /// reach the world, and whether it was dismissed.
-pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> (Option<egui::Rect>, bool) {
+/// What a press on the key list meant.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Did {
+    #[default]
+    Nothing,
+    Close,
+}
+
+pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> crate::client::views::Shown<Did> {
     let p = theme.palette;
     let m = theme.metrics;
-    let mut close = false;
+    let mut did = Did::Nothing;
 
     // The widest keycap across every group, so the two columns line up down
     // the whole panel rather than per group — measured rather than guessed,
@@ -142,7 +150,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> (Option<egui::Re
                         ui.heading(words::TITLE);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button(words::CLOSE).clicked() {
-                                close = true;
+                                did = Did::Close;
                             }
                         });
                     });
@@ -178,7 +186,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> (Option<egui::Re
         },
     );
 
-    (Some(area.response.rect), close)
+    crate::client::views::Shown::new(area.response.rect, did)
 }
 
 #[cfg(test)]

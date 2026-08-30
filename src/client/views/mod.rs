@@ -1,7 +1,20 @@
 //! The views, and the interface they are drawn with.
 //!
-//! A view is a screen: [`game`] is the game, and a menu or a lobby would sit
-//! beside it. [`Views`] is the egui plumbing they share.
+//! **Two screens, and what they share.** [`game`] is the world and everything
+//! drawn over it — the HUD, the hotbar, the lobby, the key list, the stamp
+//! library; [`menu`] is what comes before it. What is left here is what both
+//! need: [`theme`] is every colour and measurement, [`words`] every string,
+//! [`hue`] a player's colour, [`icons`] the sprite sheet as egui wants it, and
+//! [`record`] the games this client has played.
+//!
+//! A module moves down into a screen the moment only that screen uses it, and
+//! back up the moment two do. The one thing that crossed was a `Victory` in a
+//! sentence, which the lobby showed and the creation form borrowed; it is
+//! `words::describe` now, because a helper one screen borrows from another is
+//! the thing keeping two screens in one module.
+//!
+//! Every view answers with a [`Shown`]: what it covered, and what it was told.
+//! [`Views`] is the egui plumbing they share.
 //!
 //! Lives under `client` rather than `render` because what to show is policy,
 //! not plumbing — `render` stays generic wgpu and winit, and knows nothing
@@ -17,19 +30,11 @@
 //! targets, and a HUD needs only pointer, wheel and modifiers — the IME and
 //! clipboard handling that egui-winit exists for is not in play.
 
-pub mod camera;
-pub mod clock;
 pub mod game;
-pub mod help;
-pub mod hotbar;
-pub mod hud;
 pub mod hue;
 pub mod icons;
-pub mod lobby;
 pub mod menu;
-pub mod overlay;
 pub mod record;
-pub mod stamp;
 pub mod theme;
 pub mod words;
 
@@ -193,6 +198,39 @@ enum Change<'a> {
 /// first claims all the world between them.
 fn claims(panels: &[egui::Rect], pointer: egui::Pos2) -> bool {
     panels.iter().any(|panel| panel.contains(pointer))
+}
+
+/// What a view drew, and what it was told while drawing it.
+///
+/// **One shape for every view**, because they all answer the same two
+/// questions and used to answer them five ways: a bare `bool`, a bare
+/// `Option<Rect>`, `(Rect, Did)`, `(Did, Rect)`, and one struct of its own.
+/// At a call site that is an order to remember and a `.0` to decode, and the
+/// two that differ only in order are the ones that get swapped silently.
+///
+/// `did` is the view's own enum rather than a shared one: what a hotbar can be
+/// told and what a lobby can be told have nothing in common, and folding them
+/// into one type would mean every caller matching arms that cannot happen.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Shown<T> {
+    /// What it covered, so a click on it does not also reach the world.
+    /// `None` for a view that drew nothing this frame.
+    pub rect: Option<egui::Rect>,
+    pub did: T,
+}
+
+impl<T: Default> Shown<T> {
+    /// Drew nothing and was told nothing, which is a screen this view is not
+    /// on rather than a failure.
+    pub fn nowhere() -> Self {
+        Self::default()
+    }
+}
+
+impl<T> Shown<T> {
+    pub fn new(rect: impl Into<Option<egui::Rect>>, did: T) -> Self {
+        Self { rect: rect.into(), did }
+    }
 }
 
 /// The shapes a frame of interface produced.

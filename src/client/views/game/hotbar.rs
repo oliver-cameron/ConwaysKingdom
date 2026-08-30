@@ -21,8 +21,8 @@
 //! because shift and `1` is `!` on one keyboard and something else on
 //! Programmer Dvorak, and nothing but the keyboard can say which.
 
+use crate::client::views::game::stamp::{Library, Stamp};
 use crate::client::views::icons::{self, Icons};
-use crate::client::views::stamp::{Library, Stamp};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::hotbar as words;
 use crate::net::Placement;
@@ -152,7 +152,7 @@ pub struct Held {
     /// How the held pattern is turned. Nothing but a stamp has an orientation,
     /// and a stamp keeps this across a change of material — turning a glider
     /// and then deciding it should be ice is two decisions, not one undone.
-    pub turn: crate::client::views::stamp::Turn,
+    pub turn: crate::client::views::game::stamp::Turn,
     /// Which of [`KINDS`]. An index rather than the `Placement`, so a square
     /// on the bar and the thing it lays cannot come apart.
     pub kind: usize,
@@ -225,7 +225,7 @@ pub enum Key {
 }
 
 /// **The digits are the stamps.** `1` to `9` then `0`, which is ten and is why
-/// [`ON_THE_BAR`](crate::client::views::stamp::ON_THE_BAR) is ten.
+/// [`ON_THE_BAR`](crate::client::views::game::stamp::ON_THE_BAR) is ten.
 ///
 /// The answer is a **slot on the bar**, not an index into the library — see
 /// `Library::bar`, which is the mapping between them and is the same one the
@@ -284,13 +284,6 @@ fn tool_hint(index: usize, typed: &Typed) -> Option<String> {
 /// assumed — see the module note.
 pub type Typed<'a> = dyn Fn(u32) -> Option<String> + 'a;
 
-pub struct Shown {
-    /// What the bar covered, so clicks on it do not reach the world.
-    pub rect: Option<egui::Rect>,
-    /// What the player just clicked.
-    pub picked: Option<Key>,
-}
-
 /// Everything a square might need to draw itself.
 pub struct Look<'a> {
     pub theme: &'a Theme,
@@ -310,8 +303,8 @@ pub fn show(
     look: &Look<'_>,
     held: Held,
     library: &Library,
-    status: &crate::client::views::hud::Status,
-) -> Shown {
+    status: &crate::client::views::game::hud::Status,
+) -> crate::client::views::Shown<Option<Key>> {
     let theme = look.theme;
     let typed = look.typed;
     let m = theme.metrics;
@@ -466,7 +459,7 @@ pub fn show(
             });
         });
 
-    Shown { rect: Some(response.response.rect), picked }
+    crate::client::views::Shown::new(response.response.rect, picked)
 }
 
 /// A hairline between two squares in one segment: same group, different job.
@@ -619,7 +612,7 @@ fn shadowed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::views::stamp::{Stamp, ON_THE_BAR};
+    use crate::client::views::game::stamp::{Stamp, ON_THE_BAR};
 
     fn library(n: usize) -> Library {
         let mut library = Library::default();

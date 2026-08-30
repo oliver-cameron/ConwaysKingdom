@@ -13,7 +13,7 @@
 //! register as a widget being dragged, and the world would stop receiving the
 //! very gesture this exists to show.
 
-use super::theme::Theme;
+use crate::client::views::theme::Theme;
 
 /// Everything the overlay draws, assembled by the client each frame.
 pub struct Marks {

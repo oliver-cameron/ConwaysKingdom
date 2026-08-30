@@ -30,11 +30,11 @@ pub fn show(
     phase: &MatchPhase,
     victory: Option<Victory>,
     standing: &[(PlayerId, u32)],
-) -> Option<egui::Rect> {
+) -> crate::client::views::Shown<()> {
     // Only while it is running. A gathering match has its lobby and a decided
     // one has its result, and both of those say more than a clock could.
-    let MatchPhase::Running { from } = phase else { return None };
-    let victory = victory?;
+    let MatchPhase::Running { from } = phase else { return crate::client::views::Shown::nowhere() };
+    let Some(victory) = victory else { return crate::client::views::Shown::nowhere() };
 
     let (left, done, of) = match victory {
         Victory::Timer { generations } => {
@@ -84,7 +84,7 @@ pub fn show(
                     ui.painter().rect_filled(filled, 3.0, ink);
                 });
         });
-    Some(area.response.rect)
+    crate::client::views::Shown::new(area.response.rect, ())
 }
 
 fn seconds(generations: u64) -> u64 {

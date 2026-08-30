@@ -531,6 +531,18 @@ pub mod desync {
 }
 
 /// Every key, on one screen, behind `?`.
+/// How a room is won, in a sentence.
+///
+/// Here rather than in the lobby that shows it, because the creation form
+/// shows it too — and a helper one screen borrows from another is the one
+/// thing keeping two screens in the same module.
+pub fn describe(victory: crate::net::Victory) -> String {
+    match victory {
+        crate::net::Victory::Timer { generations } => lobby::timer(generations),
+        crate::net::Victory::Territory { squares } => lobby::territory(squares),
+    }
+}
+
 pub mod help {
     pub const TITLE: &str = "Keys";
     pub const CLOSE: &str = "close";

@@ -298,12 +298,7 @@ pub struct Where {
     pub waiting_in_a_match: bool,
 }
 
-pub fn show(
-    ctx: &egui::Context,
-    theme: &Theme,
-    menu: &mut Menu,
-    at: Where,
-) -> (Chose, Option<egui::Rect>) {
+pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> super::Shown<Chose> {
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
@@ -451,7 +446,7 @@ pub fn show(
         }
     }
 
-    (chose, Some(area.response.rect))
+    super::Shown::new(area.response.rect, chose)
 }
 
 /// Who you are, what you have done, and the way in.
@@ -679,7 +674,8 @@ mod tests {
             events,
             ..Default::default()
         });
-        let (chose, rect) = show(ctx, &theme, menu, at);
+        let shown = show(ctx, &theme, menu, at);
+        let (chose, rect) = (shown.did, shown.rect);
         // Cleared, not dropped — see docs/gotchas.md.
         let mut out = ctx.end_pass();
         out.textures_delta.clear();
@@ -774,7 +770,7 @@ mod tests {
                 focused: true,
                 ..Default::default()
             });
-            let (_, rect) = show(&ctx, &theme, &mut menu, at(0.0, false));
+            let rect = show(&ctx, &theme, &mut menu, at(0.0, false)).rect;
             let mut out = ctx.end_pass();
             out.textures_delta.clear();
             assert!(
@@ -800,7 +796,7 @@ mod tests {
                 focused: true,
                 ..Default::default()
             });
-            let (_, rect) = show(&ctx, &theme, &mut menu, at(0.0, false));
+            let rect = show(&ctx, &theme, &mut menu, at(0.0, false)).rect;
             let mut out = ctx.end_pass();
             out.textures_delta.clear();
 

@@ -741,7 +741,7 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                 under = format!(
                     "{under} · {} · {}",
                     crate::client::views::words::phase(&room.phase),
-                    crate::client::views::lobby::describe(victory)
+                    crate::client::views::words::describe(victory)
                 );
             }
             ui.colored_label(

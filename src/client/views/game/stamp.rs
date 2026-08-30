@@ -367,7 +367,7 @@ fn cell(
                 Placement::Mine => 0.78,
                 _ => 0.62,
             };
-            let (red, green, blue) = crate::client::views::hud::shade(lightness, 1.0, player);
+            let (red, green, blue) = crate::client::views::hue::shade(lightness, 1.0, player);
             painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(red, green, blue));
         }
     }
@@ -649,7 +649,9 @@ fn tidy(raw: &str) -> String {
 }
 
 /// What the player did with the picker this frame.
+#[derive(Default)]
 pub enum Picked {
+    #[default]
     Nothing,
     Hold(usize),
     Forget(usize),
@@ -691,7 +693,7 @@ pub fn show(
     // two of them — the same reason a team's name is.
     naming: &mut Option<(usize, String)>,
     editing: Editing,
-) -> (Picked, Option<egui::Rect>) {
+) -> crate::client::views::Shown<Picked> {
     let p = theme.palette;
     let m = theme.metrics;
     let mut picked = Picked::Nothing;
@@ -813,7 +815,7 @@ pub fn show(
                 });
         });
 
-    (picked, Some(area.response.rect))
+    crate::client::views::Shown::new(area.response.rect, picked)
 }
 
 #[cfg(test)]

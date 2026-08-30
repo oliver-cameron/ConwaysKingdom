@@ -53,7 +53,11 @@ fn tint(player: PlayerId) -> Option<egui::ColorImage> {
     let sheet = crate::render::atlas::decoded()?;
     let mut pixels = Vec::with_capacity((SHEET_N * SHEET_N) as usize);
     for texel in sheet.chunks_exact(4) {
-        let (r, g, b) = super::hud::shade(texel[1] as f32 / 255.0, texel[0] as f32 / 255.0, player);
+        let (r, g, b) = crate::client::views::hue::shade(
+            texel[1] as f32 / 255.0,
+            texel[0] as f32 / 255.0,
+            player,
+        );
         pixels.push(egui::Color32::from_rgba_unmultiplied(r, g, b, texel[3]));
     }
     Some(egui::ColorImage {

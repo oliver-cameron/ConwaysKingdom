@@ -5,6 +5,7 @@
 //! came from and cannot change them.
 
 use crate::client::desync::{Geiger, Level};
+use crate::client::views::hue::{player_colour, team_colour};
 use crate::client::views::words::hud as words;
 use crate::sim::{PlayerId, WorldKind};
 
@@ -76,8 +77,9 @@ pub struct Status<'a> {
 /// live game is the thing it exists to avoid — and the back arrow beside these
 /// *leaves the room*, giving up the seat. Somebody who wants out of a match
 /// they are losing should be able to concede it rather than walk out of it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum Did {
+    #[default]
     Nothing,
     /// Leave the room entirely.
     Back,
@@ -104,7 +106,7 @@ pub fn show(
     ctx: &egui::Context,
     theme: &crate::client::views::theme::Theme,
     status: &Status<'_>,
-) -> (Option<egui::Rect>, Did) {
+) -> crate::client::views::Shown<Did> {
     let mut did = Did::Nothing;
     let response = egui::Window::new("kingdom")
         .title_bar(false)
@@ -272,7 +274,7 @@ pub fn show(
                 }
             }
         });
-    (response.map(|r| r.response.rect), did)
+    crate::client::views::Shown::new(response.map(|r| r.response.rect), did)
 }
 
 /// Who is winning, as bars.
@@ -338,70 +340,3 @@ fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, stat
 /// bars is a screen of its own. Whoever is winning is at the top, and you are
 /// interested in the rest of the field only once you are in it.
 const SHOWN: usize = 6;
-
-/// The colour the shader gives a player, computed the same way so the HUD
-/// swatch matches the cells on the board. OKLab with the chroma bisected down
-/// until it fits sRGB, which keeps hue and lightness exactly rather than
-/// bending them the way clamping would.
-/// What the shader draws a sheet texel as, for this player.
-///
-/// The sheet carries no hue: a texel is saturation and lightness, and the hue
-/// comes from the player's number. Mirrors `shade` and `player_hue` in
-/// `grid.wgsl`, which is the one that has to be right — this only has to agree
-/// with it.
-pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) {
-    shade_at(
-        lightness,
-        saturation,
-        player,
-        (player.0 as f32 * crate::client::views::hue::STEP).fract(),
-    )
-}
-
-/// The same, at a hue somebody else worked out — which is how a team's colour
-/// reaches a swatch. See [`crate::client::views::hue`], which is the one place
-/// a hue is decided and is handed to the shader as a whole table.
-pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) -> (u8, u8, u8) {
-    const TAU: f32 = std::f32::consts::TAU;
-    const MAX_CHROMA: f32 = 0.13;
-
-    let hue = turn * TAU;
-    // Player zero is nobody, and nobody's ground is grey.
-    let tier = if player.0 == 0 {
-        0.0
-    } else if player.0 % 2 == 1 {
-        1.0
-    } else {
-        0.55
-    };
-    // Chroma tapers off at the ends, where there is no room for it.
-    let taper = 1.0 - (2.0 * lightness - 1.0).abs().powi(2);
-    let chroma = MAX_CHROMA * saturation * tier * taper;
-    let (a, b) = (chroma * hue.cos(), chroma * hue.sin());
-
-    let l_ = lightness + 0.396_337_78 * a + 0.215_803_76 * b;
-    let m_ = lightness - 0.105_561_346 * a - 0.063_854_17 * b;
-    let s_ = lightness - 0.089_484_18 * a - 1.291_485_5 * b;
-    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-    let linear = [
-        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
-        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
-        -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
-    ];
-    let byte = |v: f32| {
-        let v = v.clamp(0.0, 1.0);
-        let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-        (s * 255.0).round() as u8
-    };
-    (byte(linear[0]), byte(linear[1]), byte(linear[2]))
-}
-
-/// The colour of a player's cells, for a swatch beside their name.
-pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
-    shade(0.62, 1.0, player)
-}
-
-/// The same, for a player whose team decides their hue.
-pub fn team_colour(player: PlayerId, hues: &[f32; PlayerId::COUNT]) -> (u8, u8, u8) {
-    shade_at(0.62, 1.0, player, hues[player.0 as usize])
-}

@@ -3,7 +3,15 @@
 //! A view rather than the application, so a menu or a lobby can be another one
 //! beside it without this having to know they exist.
 
+pub mod camera;
+pub mod clock;
+pub mod help;
+pub mod hotbar;
+pub mod hud;
 pub mod input;
+pub mod lobby;
+pub mod overlay;
+pub mod stamp;
 pub mod start;
 
 use input::{cell_under, centroid, digit, pinch_span, span, Drag, Gesture};
@@ -17,9 +25,7 @@ pub use start::{default_address, set_connection, set_world, Connection};
 use std::cell::RefCell;
 
 use super::words;
-use super::{
-    camera, clock, help, hotbar, hud, icons, lobby as lobby_view, menu, overlay, stamp, Views,
-};
+use super::{icons, menu, Views};
 use crate::render::app::App;
 use crate::render::atlas::Atlas;
 use crate::render::chunks::{
@@ -29,6 +35,7 @@ use crate::render::context::{Draw, DrawCall, GpuState};
 use crate::render::pipeline::{create_pipeline, PipelineDescriptor};
 use crate::sim::{World, WorldKind, CHUNK_N};
 use hotbar::{Held, Key};
+use lobby as lobby_view;
 
 use crate::net::link::Link;
 use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
@@ -1368,7 +1375,7 @@ impl GameApp {
             hotbar::Stroke::Rectangle => vec![self.camera.cell_rect(drag.from, to)],
         };
 
-        let (r, g, b) = hud::player_colour(self.player());
+        let (r, g, b) = crate::client::views::hue::player_colour(self.player());
         Some(overlay::Selection {
             bounds: self.camera.cell_rect(drag.from, to),
             cells: rects,
@@ -1419,7 +1426,7 @@ impl GameApp {
             format!("{}   {}x{}   {delta:+}", stamp.name, stamp.size.0, stamp.size.1)
         };
 
-        let (r, g, b) = hud::player_colour(self.player());
+        let (r, g, b) = crate::client::views::hue::player_colour(self.player());
         let far = (corner.0 + stamp.size.0 - 1, corner.1 + stamp.size.1 - 1);
         Some(overlay::Selection {
             bounds: self.camera.cell_rect(corner, far),
@@ -2382,7 +2389,7 @@ impl App for GameApp {
         // found out by pressing it.
         let typed =
             move |digit: u32| shifted.get(digit.checked_sub(1)? as usize).cloned().flatten();
-        let (r, g, b) = hud::player_colour(self.player());
+        let (r, g, b) = crate::client::views::hue::player_colour(self.player());
         let marks = overlay::Marks {
             tint: egui::Color32::from_rgb(r, g, b),
             hover: self.hover_mark(status.pointer_on_ui),
@@ -2438,7 +2445,8 @@ impl App for GameApp {
                     // game has not started; a menu over a world says it is waiting for
                     // you.
                     Screen::Menu(m) => {
-                        let (picked_menu, rect) = menu::show(ctx, &theme, m, at);
+                        let shown = menu::show(ctx, &theme, m, at);
+                        let (picked_menu, rect) = (shown.did, shown.rect);
                         chose = picked_menu;
                         rect.into_iter().collect()
                     }
@@ -2450,51 +2458,55 @@ impl App for GameApp {
                             lobby.as_ref().map(|l| &l.phase),
                             Some(crate::net::MatchPhase::Gathering)
                         ) {
-                            let (rect, did) =
-                                lobby.as_ref().map_or((None, lobby_view::Did::Nothing), |l| {
+                            let shown = lobby.as_ref().map_or_else(
+                                crate::client::views::Shown::nowhere,
+                                |l| {
                                     lobby_view::show(
                                         ctx,
                                         &theme,
                                         &l.look(me, &l.hues(), self.refused_start.as_deref()),
                                         &mut naming,
                                     )
-                                });
-                            in_lobby = did;
-                            return rect.into_iter().collect();
+                                },
+                            );
+                            in_lobby = shown.did;
+                            return shown.rect.into_iter().collect();
                         }
 
                         overlay::show(ctx, &theme, &marks);
-                        let (hud_rect, pressed) = hud::show(ctx, &theme, &status);
+                        let shown = hud::show(ctx, &theme, &status);
+                        let (hud_rect, pressed) = (shown.rect, shown.did);
                         in_hud = pressed;
                         // How much of the match is left, which is the one thing on
                         // screen that is about the room rather than about a player.
                         let clock_rect = lobby.as_ref().and_then(|l| {
                             clock::show(ctx, &theme, generation, &l.phase, l.victory, &standing)
+                                .rect
                         });
                         let what = held.placement().unwrap_or(crate::net::Placement::Life);
                         let look =
                             hotbar::Look { theme: &theme, what, sheet, player: me, typed: &typed };
                         let bar = hotbar::show(ctx, &look, held, &self.stamps, &status);
-                        picked = bar.picked;
+                        picked = bar.did;
                         // Over the world rather than instead of it: a match that has
                         // not started looks exactly like a game that is broken, since
                         // nothing moves and nothing a player does appears.
                         // A decided match keeps its board: the result is what is on
                         // it, and covering that to say who won would hide the reason.
                         let waiting = lobby.as_ref().and_then(|l| {
-                            let (rect, did) = lobby_view::show(
+                            let shown = lobby_view::show(
                                 ctx,
                                 &theme,
                                 &l.look(me, &l.hues(), self.refused_start.as_deref()),
                                 &mut naming,
                             );
-                            if !matches!(did, lobby_view::Did::Nothing) {
-                                in_lobby = did;
+                            if !matches!(shown.did, lobby_view::Did::Nothing) {
+                                in_lobby = shown.did;
                             }
-                            rect
+                            shown.rect
                         });
                         if picking {
-                            let (chose, rect) = stamp::show(
+                            let shown = stamp::show(
                                 ctx,
                                 &theme,
                                 &self.stamps,
@@ -2505,8 +2517,8 @@ impl App for GameApp {
                                 &mut naming_stamp,
                                 editing,
                             );
-                            from_library = chose;
-                            return [hud_rect, bar.rect, rect, waiting, clock_rect]
+                            from_library = shown.did;
+                            return [hud_rect, bar.rect, shown.rect, waiting, clock_rect]
                                 .into_iter()
                                 .flatten()
                                 .collect();
@@ -2522,7 +2534,8 @@ impl App for GameApp {
             // screen asked for it. Its rectangle joins the list the client
             // uses to keep a press off the world behind.
             if helping {
-                let (rect, closed) = help::show(ctx, &theme, &help_keys);
+                let shown = help::show(ctx, &theme, &help_keys);
+                let (rect, closed) = (shown.rect, shown.did == help::Did::Close);
                 help_closed = closed;
                 rects.extend(rect);
             }
@@ -3116,7 +3129,7 @@ mod tests {
     /// is in range and distinct between players.
     #[test]
     fn player_colours_are_in_gamut_and_distinct() {
-        use crate::client::views::hud::player_colour;
+        use crate::client::views::hue::player_colour;
         let mut seen = Vec::new();
         for p in 1..=PlayerId::MAX {
             let c = player_colour(PlayerId(p));

@@ -10,7 +10,7 @@
 //! what they came for, and covering it entirely to say "soon" tells them less
 //! than showing it does.
 
-use crate::client::views::hud::team_colour;
+use crate::client::views::hue::team_colour;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
@@ -35,7 +35,9 @@ fn drawn_as(seat: PlayerId, teams: &[Team]) -> PlayerId {
 /// Draw it, if this room is a match with something to say. Returns the
 /// rectangle it covered, so the client knows what the pointer is over.
 /// What a press in the lobby meant.
+#[derive(Default)]
 pub enum Did {
+    #[default]
     Nothing,
     /// Back to the menu.
     Leave,
@@ -86,14 +88,14 @@ pub fn show(
     // client rather than here, because this panel is rebuilt every frame and
     // a name half-typed would vanish between two of them.
     naming: &mut Option<(PlayerId, String)>,
-) -> (Option<egui::Rect>, Did) {
+) -> crate::client::views::Shown<Did> {
     let mut did = Did::Nothing;
     // An open room is not a match, and a running one is a game — neither wants
     // a panel in the middle of it. Only the two ends have anything to say.
     let heading = match look.phase {
         MatchPhase::Gathering => words::WAITING,
         MatchPhase::Over { .. } => words::FINISHED,
-        _ => return (None, Did::Nothing),
+        _ => return crate::client::views::Shown::nowhere(),
     };
     let p = theme.palette;
     let m = theme.metrics;
@@ -110,7 +112,10 @@ pub fn show(
                     ui.set_width(theme.panel_width(ctx.content_rect().width()) * 0.7);
                     ui.heading(heading);
                     if let Some(victory) = look.victory {
-                        ui.colored_label(p.text_dim, describe(victory));
+                        ui.colored_label(
+                            p.text_dim,
+                            crate::client::views::words::describe(victory),
+                        );
                     }
                     // The code, where somebody waiting for their friends can
                     // read it off and send it. It appears once in the menu
@@ -247,7 +252,7 @@ pub fn show(
                 });
         });
 
-    (Some(area.response.rect), did)
+    crate::client::views::Shown::new(area.response.rect, did)
 }
 
 /// Who is on which side, and the two things a player may do about it: join one,
@@ -384,13 +389,6 @@ fn swatch(ui: &mut egui::Ui, player: PlayerId, hues: &[f32; PlayerId::COUNT]) {
     let (r, g, b) = team_colour(player, hues);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
-}
-
-pub fn describe(victory: Victory) -> String {
-    match victory {
-        Victory::Timer { generations } => words::timer(generations),
-        Victory::Territory { squares } => words::territory(squares),
-    }
 }
 
 #[cfg(test)]
