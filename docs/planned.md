@@ -21,7 +21,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Part built | antialiasing is in; the level of detail is what low zoom actually needs |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
-| [Payloads](#payloads) | Decided | a cell that explodes after a while |
+| [Payloads](#payloads) | Designed | a cell that counts down and scrambles the ground around it |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
@@ -34,7 +34,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | a person exists; a *safe* one does not, and discovery is not started |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
-| [Experiments](#experiments) | Decided | a laboratory rather than a match: pause, step, save, reset |
+| [Experiments](#experiments) | Decided | Golly, with this simulation underneath |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
@@ -54,18 +54,74 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 ## Payloads
 
-Payload cells will utilise the new age flag in the cell. While it is alive, a payload will have a chance to increase it's timer, with this chance at 100% in the state right before detonation.
+**Designed.** A cell that counts down and then scrambles the ground around it. The age field exists for this and nothing uses it.
 
-### Detonation
-The goal of detonation is to make the surrounding area look like random noise. On detonation, a payload can do a certain number of actions, in order of precedence. These actions are given a score, weighted by distance, and selecting the greatest scoring action, recalculating each time.
-1. Setting nearby cells to detonate the next generation:
-> Payloads with a fuse of less than 14 will be set to 14, with a score of 20.
-2. Reducing "randomness cost"
-> The randomness cost of a cell is a sum of the life of cells in a kernel around it, where alive is 1 and dead is zero, balanced by a density constant, squared. The score given to a particular cell to flip is the total cost decrease over the kernels that that cell lives in. This can be negative.
+### The fuse
 
-*Closeness* is of the form $\frac{1}{\delta x ^ 2 | \delta y ^ 2 + D}$, where `D` is some constant. Score is multiplied by this.
+The **age** field is the fuse: three bits, so nought to seven. While a payload is alive and not under ice it has a chance each generation to advance, and at six it always advances — so it goes off on the generation after it reaches seven.
 
-This makes the surrounding area more random.
+Two reasons for a chance rather than a count, and the second is the one that earns it. A chance **scatters** payloads placed together, so four laid in one gesture do not go off in lockstep. And the certain last step makes the warning **reliable**: the sprite for "about to go" is on screen for exactly one generation, always, so it is a tell somebody can act on rather than a maybe. That is worth a rule of its own, because a weapon with a random warning is a weapon with no warning.
+
+Ages are rows on the sheet — eight of them under a kind's four states, which is [why age sits where it does](simulation.md#the-cell) — so a payload visibly counts down and needs no interface at all to be readable.
+
+### Detonation, simplified
+
+The goal was *make the surrounding area look like random noise*, and the design for it was a scoring function: a squared density cost over a kernel, a closeness weight of `1/(dx² + dy² + D)`, and a greedy pass picking the highest-scoring cell to flip and recomputing after each one.
+
+**Every peer already agrees about randomness.** `sim::seed` is a seeded stream per cell per generation, it exists precisely so that two peers make the same random choice without exchanging anything, and it is what a birth already uses to pick a parent. So the scoring function is a way of *manufacturing* randomness with a deterministic optimiser inside a codebase that has deterministic randomness. One `mix` per square gives the same result for nothing.
+
+So detonation is: **every square within `PAYLOAD_REACH` takes its own roll, and comes up alive at `PAYLOAD_DENSITY` out of sixty-four.** One constant, and it is the same constant the cost function was reaching for — the density term was the only thing in that design doing work that a probability does not do directly.
+
+Three more reasons to drop the search, beyond not needing it:
+
+**It is the wrong shape for this simulation.** Every rule in `sim::rule` is a pure function of a cell and its eight neighbours, which is what lets a generation run out of a `Halo` with no bounds checks. A region-wide optimiser cannot be a rule; it has to be a pass, like `fire_turrets` and `break_ice_from`. Detonation is a pass either way — "every square within reach" is not a question a halo can answer — but a pass that is one roll per square is nothing, and a pass that is *actions × area × kernel* with a recomputation between each is the most expensive thing in the game happening at the least predictable moment.
+
+**Cost that varies with the board is the enemy of a prediction.** The same step runs on the server and on every client, and [a rollout](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) runs it hundreds of times over. A detonation whose cost depends on how crowded the neighbourhood is makes all of that unschedulable.
+
+**And the numbers do not fit.** "Payloads with a fuse of less than 14 will be set to 14" — the age field is three bits, so a fuse is nought to seven and fourteen is not a number it can hold. That is what a design written beside the code rather than in it eventually does.
+
+### The chain, which is the best idea in it
+
+The one part of the scoring design worth keeping outright, and it needs no score: **on detonation, every payload within reach has its fuse set to full**, so it goes off the next generation. A line of them is then a fuse, and a cluster is one blast a generation wide rather than one big one.
+
+It cannot recurse, and that is worth saying because it reads as though it might: setting a fuse to full means the cell detonates on the **next** generation, not this one, so a chain is one ring per generation and the pass never re-enters itself.
+
+### Whose noise is it
+
+**The ground decides.** A square brought to life takes the owner already on it, and a square nobody holds cannot come alive at all — `Cell::alive` asserts a live cell has an owner, because unowned life has nobody to attribute a birth to.
+
+That one rule does the whole balance job, which is why it is the rule rather than a price:
+
+- Into somebody's country, it turns their ordered pattern into **their** noise: their mines' corpses cost them upkeep, their shapes stop being shapes, and their territory destabilises because the sources moved.
+- Over no-man's-land it does nothing, so nobody wastes one there.
+- It is **never a land grab**. A payload cannot give you a square, so it stays a weapon and does not compete with a turret, which is the tool that takes ground.
+
+It also needs no new placement rule. `net::may_place` confines you to your own influence, so a payload is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
+
+### What it is made of
+
+`Kind::PAYLOAD`, which is a row in `kinds!` and costs one of eight kind indices — three are used, and [depleted mines](#depleted-mines) wants a fourth, leaving three spare. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
+
+**Not inherited**, for the turret's reason exactly: a payload whose children were payloads would make any gun a bomb factory, and a kind that does not inherit is always precisely the cells somebody paid for.
+
+The payload is **consumed** — it becomes ordinary dead ground, the way a spent mine does.
+
+### The counterplay is already in the rules
+
+Worth checking rather than assuming, because a weapon that deletes a screen of somebody's work with no answer is not a mechanic. Three answers, none of them new:
+
+**You can see it coming.** Eight ages are eight sprites, and the last one lasts exactly one generation.
+
+**Ice stops it.** A pane freezes what it covers and that is every rule, so an iced payload's fuse does not advance. Ice is the counter, and it is the one defensive tool in the game — which is an argument for [ice anywhere, at a price](#ice-anywhere-at-a-price), since a payload is precisely the thing you want to wall off on somebody else's doorstep.
+
+**It has to survive to go off.** A payload is a live cell, so one on its own dies of loneliness in a generation, exactly like a turret. Keeping it alive means building something around it, and that is the real cost rather than the purchase price.
+
+### The numbers, which are not decided
+
+`PAYLOAD_COST`, `PAYLOAD_REACH`, `PAYLOAD_DENSITY` and the fuse chance. `examples/balance.rs` is where they should be argued out, the way [turrets](#turrets) says its own numbers should be.
+
+The one with a shape already: **density**. Conway's classic soup is a half, which mostly burns down; a third is where a random field produces the most that goes on happening. So `PAYLOAD_DENSITY` around twenty-four in sixty-four, and it wants playing with rather than deriving.
+
 ## What to do next
 
 A reading of the rest of this file, in the order the things depend on each other rather than in the order they were thought of. Nothing here is new; what it adds is which one unblocks the most.
@@ -549,23 +605,43 @@ What would end it in one step is the browser console on a failing load, or the s
 
 ## Experiments
 
-**Decided, not costed.** A mode for using this as a laboratory rather than playing it: pause, step one generation, save what is on screen, reset it, and more than one world side by side. Somewhat replacing Golly.
+**Decided, not costed.** Golly, with this simulation underneath: draw a pattern, watch it, step it a generation at a time, save it, come back to it. More than one world side by side.
 
-The argument for it is that **the simulation is already the hard part and it is already done.** `sim` is a deterministic cellular automaton with a rule table, chunked storage that only holds what life has reached, and a step that is a pure function of state and tick. What Golly is for — draw a pattern, watch it, step it a generation at a time, save it, come back to it — is that plus an interface, and everything in the way of it today is a *game* decision rather than a simulation one: the server is the clock, a player may only build where their influence reaches, and placing costs money.
+### The premise, which is now measured rather than argued
 
-So the shape of the work is mostly subtraction, and it lands in three places.
+Everything here rests on one claim: **a pattern written down by somebody else runs here the way it runs anywhere.** If it does not, reading fifty years of other people's work means reading it wrong, and the whole idea is a curiosity.
 
-**The clock becomes the player's.** [networking.md](networking.md#the-server-is-the-clock) is emphatic that a connected client advances when told and never on its own, and that is right for a shared world and exactly wrong here. An experiment is offline by construction — one authority, which is you — so pausing and stepping is `World::step` behind a button rather than anything on a wire. The existing offline path already does this; what it lacks is a pause and a single step.
+It holds, and it is not obvious from the code that it should. Three of the four things this simulation adds to Conway do not touch whether a cell lives — territory writes the owner byte of *dead* squares, a mine is a tally, and ice is inert until a pane is laid. That is an argument; `sim::world`'s `liveness_is_exactly_b3_s23` is the measurement, comparing two hundred generations of a 64x64 soup cell for cell against a B3/S23 stepper written out longhand. An R-pentomino also stabilises here at generation 1103 with 116 cells, which is the figure in every book.
 
-**The rules come off.** Placing is confined to a player's own territory and is priced, both of which are the game. A laboratory wants neither, and the honest way to get there is a flag on the world rather than a second `sim` — the moment there are two simulations they diverge, and the whole value of experimenting here is that what you see is what a match would do. `net::price` and `net::grant` are the two places that would have to ask.
+**The caveat is two things, and it is worth knowing exactly which.** Turrets and ice are the only rules that touch liveness — a turret because unowning a live square kills what stands on it, ice because it stops time. Neither is on an empty board, so an imported pattern is unaffected by anything this game adds.
 
-**A pattern becomes a file.** `client::views::stamp` is most of this already — a captured rectangle of cells, kept between visits — and what it is missing is a *format*. Golly reads and writes RLE and `.cells`, which is how every pattern anybody has ever published is written down, and reading RLE is an afternoon. That is the single highest-value piece here and it is worth doing whether or not the rest happens: it turns the stamp library from a scratchpad into a way in to fifty years of other people's work.
+That also makes "the rules come off" much smaller than it sounded. There is no need for a second `sim` and no flag on the step: what has to be switchable is **placing**, and that is two questions, `net::price` and `net::may_place`. The simulation is already the one a match runs, which is the whole value of experimenting here rather than in Golly.
 
-Two things it is not. It is not a second renderer: split panes are several viewports onto several worlds, and `render::app` holds one surface and one camera, so the cost is a camera and a viewport per pane rather than a second pipeline. And it is not multiplayer — a shared laboratory is a shared world with the rules off, which is a room anybody can edit anywhere, and that is a different feature with a different argument behind it.
+### What to take from Golly, in order
 
-**Pause, step and reset are one derive between them.** Stepping on a button is what the offline path already does, and what it lacks is a way *back* — which is a kept copy of the world put in place again. That is `World: Clone`, and it is the same line [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) and a searching bot are both waiting on. Reset is then restore, and "save what is on screen" is a clone with a name on it, which is most of the way to a scratch library that is not the stamp library.
+**RLE, and it stands alone.** This is the single highest-value piece and it is worth doing whether or not the rest happens. RLE and `.cells` are how every pattern anybody has ever published is written down, reading one is an afternoon, and it turns `client::views::game::stamp::Library` from a scratchpad into a way in to fifty years of work. **Writing it matters as much as reading it** — a pattern found here should be able to leave, or this is a place things go into and not a place they come out of.
 
-The order that makes sense is RLE first, since it stands alone; then pause, step and reset, which is a derive and three buttons; then the rules flag; then panes, which is the only part that is real work.
+**Pause, step and reset.** One derive between them; see [predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), which wants the same `World: Clone` and gets reset as restore. The offline path already steps on its own clock, because [the server is the clock](networking.md#the-server-is-the-clock) only applies when there is a server, and an experiment is offline by construction — one authority, which is you.
+
+**Speed.** Golly's generation slider, and `World::update` already takes a span, so this is a number the interface owns. `MAX_CATCHUP_STEPS` is already the guard against a slider that asks for more than a frame can do.
+
+**Rule switching**, which is smaller than it looks and is the one place being *not* Conway is the point. `RuleFn` is already "the whole rule, as a function pointer, for swapping it wholesale", and `SURVIVES_ON` and `BORN_ON` are two small arrays in `sim::rule`. Arbitrary `B/S` rulestrings — HighLife's B36/S23, Day and Night, Seeds — is turning two constants into values the world carries. It is also the one thing on this list that a match must never see: a room whose rule is not the game's is a different game, so this belongs to an experiment and not to a `WorldKind`.
+
+### What not to take, and why the obvious one is wrong
+
+**Hashlife.** It is the first thing anybody asks for and it cannot work here. Hashlife memoises quadtree nodes on the assumption that a region's future is a function of that region alone; this simulation has three passes for which that is false — territory is a field with sources, a turret searches a disc that crosses node boundaries, and ice breaks along connected runs of unbounded length. Nothing memoises. It would work on a board with none of those on it, which is a second simulation, which is exactly what this must not become.
+
+Worth stating rather than leaving to be discovered, because "why is this slower than Golly" has a real answer: Golly is fast at *pure* Conway on repetitive patterns, and the trade here is that what you are watching is what a match would do.
+
+**Scripting.** Golly has Python and Lua. That is a different product.
+
+### What is actually left
+
+**Panes**, which is the only part that is real work: several viewports onto several worlds. `render::app` holds one surface and one camera, so the cost is a camera and a viewport per pane rather than a second pipeline — and the [level of detail](#zooming-out-without-lying) is what makes a small pane showing a whole world possible at all.
+
+And it is **not multiplayer**. A shared laboratory is a shared world with the rules off, which is a room anybody can edit anywhere; that is a different feature with a different argument behind it.
+
+The order: RLE first, since it stands alone and is worth the most; then pause, step and reset, which is a derive and three buttons; then speed and rulestrings; then the placing flag; then panes.
 
 ## Better interfaces
 

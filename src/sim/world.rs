@@ -1267,6 +1267,79 @@ mod tests {
         assert!(!w.cell_at(0, 0).unwrap().is_alive());
     }
 
+    /// **The liveness of this world is plain Conway, exactly.**
+    ///
+    /// Which is the premise of everything Golly-shaped — see
+    /// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#experiments):
+    /// a pattern written down by somebody else runs here the way it runs
+    /// anywhere, or reading fifty years of other people's work is reading it
+    /// wrong. It is not obvious from the code that it holds. Three of the four
+    /// things this simulation adds to Conway do not touch whether a cell
+    /// lives — territory writes the owner byte of dead squares, a mine is a
+    /// tally, and ice is inert until a pane is laid — but that is an argument,
+    /// and this is the measurement.
+    ///
+    /// Against a reference stepper written out longhand rather than against a
+    /// recorded answer, so it says *which generation* diverged and not merely
+    /// that something did.
+    ///
+    /// The two things that **do** touch liveness are turrets and ice, and
+    /// neither is on this board. That is the whole of the caveat and it is
+    /// worth stating where somebody will find it.
+    #[test]
+    fn liveness_is_exactly_b3_s23() {
+        const N: usize = 64;
+        let mut soup = [[false; N]; N];
+        let mut w = World::toroidal_empty(4, 4);
+        assert_eq!(w.size_in_cells(), Some((N as i32, N as i32)));
+
+        // A fixed soup, from the dice the simulation already uses, so this
+        // starts from something busy rather than from something chosen.
+        for r in 0..N {
+            for c in 0..N {
+                let seed = super::super::seed::mix(0x5011_5EED, (r as u64) << 32 | c as u64);
+                if Roll::new(seed).chance(0, 24) {
+                    soup[r][c] = true;
+                    w.set_cell_at(r as i32, c as i32, Cell::alive(PlayerId(1)));
+                }
+            }
+        }
+
+        let step_reference = |grid: &[[bool; N]; N]| {
+            let mut next = [[false; N]; N];
+            for r in 0..N {
+                for c in 0..N {
+                    let mut live = 0;
+                    for dr in [N - 1, 0, 1] {
+                        for dc in [N - 1, 0, 1] {
+                            if (dr, dc) == (0, 0) {
+                                continue;
+                            }
+                            if grid[(r + dr) % N][(c + dc) % N] {
+                                live += 1;
+                            }
+                        }
+                    }
+                    next[r][c] = if grid[r][c] { live == 2 || live == 3 } else { live == 3 };
+                }
+            }
+            next
+        };
+
+        for generation in 1..=200 {
+            w.step();
+            soup = step_reference(&soup);
+
+            let theirs: Vec<(i32, i32)> = (0..N)
+                .flat_map(|r| (0..N).map(move |c| (r, c)))
+                .filter(|&(r, c)| soup[r][c])
+                .map(|(r, c)| (r as i32, c as i32))
+                .collect();
+            assert_eq!(w.live_cells(), theirs, "generation {generation} is not what Conway does");
+        }
+        assert!(!w.live_cells().is_empty(), "the soup died out; test proves nothing");
+    }
+
     /// The pass is part of the step, so it is under the same contract: two
     /// worlds given the same start stay byte-identical. The tie-break is a
     /// seeded roll and the turret list is sorted, which is what makes that
