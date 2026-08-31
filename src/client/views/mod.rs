@@ -201,6 +201,37 @@ pub fn ask_the_keyboard() {
     });
 }
 
+/// Whether this is a Mac, for the labels whose key is spelled differently
+/// there.
+///
+/// **Because most people are not on the machine this was written on.** The
+/// modifier conventions genuinely differ — a Mac's back is `cmd+[` where
+/// everywhere else it is `alt+left` — so a key list that names one of them
+/// names the wrong key for a large share of whoever is reading it.
+///
+/// Asked of the browser rather than of `cfg!(target_os)`, which on a wasm
+/// build says `unknown` and would be wrong for everybody. `userAgentData` is
+/// the modern spelling and `platform` the one Safari and Firefox still answer,
+/// so both are tried; failing both, the majority answer is "not a Mac".
+#[cfg(target_arch = "wasm32")]
+pub fn on_a_mac() -> bool {
+    let Some(window) = web_sys::window() else { return false };
+    let navigator = window.navigator();
+    let modern = js_sys::Reflect::get(&navigator, &"userAgentData".into())
+        .ok()
+        .and_then(|data| js_sys::Reflect::get(&data, &"platform".into()).ok())
+        .and_then(|p| p.as_string());
+    let said = modern.or_else(|| navigator.platform().ok()).unwrap_or_default();
+    let said = said.to_ascii_lowercase();
+    said.contains("mac") || said.contains("iphone") || said.contains("ipad")
+}
+
+/// Natively, the build knows.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn on_a_mac() -> bool {
+    cfg!(target_os = "macos")
+}
+
 /// Every physical key the screen puts a name to, so one list decides what is
 /// asked about rather than each caller guessing.
 ///

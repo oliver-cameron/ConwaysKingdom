@@ -271,3 +271,21 @@ has no binding for it.
 
 Native has no equivalent — winit reports what a key typed, and only once it has
 been pressed — so there the seed and the learning are the whole answer.
+
+## The keyboard answers are Chromium's, and most people are not on this machine
+
+Two limits on the key-label work, both worth knowing before trusting it.
+
+`navigator.keyboard.getLayoutMap()` is **Chromium-only**. Safari and Firefox do
+not implement it, so a Mac user on Safari — which is a large share of Mac users
+— falls back to the same seed-and-learn-on-press the native client uses. That
+is not a regression, it is what everybody had before, and it means the fix is
+"correct where it can be" rather than "correct everywhere".
+
+And **modifier conventions differ by platform**, which is easy to miss when the
+person writing and the person reviewing are both on Linux. Back is `alt+left`
+on Linux and Windows and `cmd+[` on a Mac, so `ctrl+[` is bound here only where
+it collides with nothing — on a Mac the browser already does it, and binding it
+too would call `history.back()` beside the browser's own and go back twice.
+`views::on_a_mac` asks the browser rather than `cfg!(target_os)`, which on a
+wasm build says `unknown` and would be wrong for everybody.

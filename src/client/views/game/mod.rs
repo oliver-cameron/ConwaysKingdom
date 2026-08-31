@@ -283,6 +283,10 @@ pub struct GameApp {
     gesture: Gesture,
     /// Shift held, which hurries the keyboard pan.
     shift: bool,
+    /// Ctrl held. Only `ctrl+[` reads it, and it is tracked the way shift is
+    /// for the same reason: what a key *means* can depend on a modifier, and
+    /// the modifier arrives as its own press.
+    ctrl: bool,
     /// Held pan keys: left, right, up, down.
     pan: [bool; 4],
     /// Fingers currently down, as (id, position).
@@ -584,6 +588,7 @@ impl GameApp {
         self.pending = None;
         self.pan = [false; 4];
         self.shift = false;
+        self.ctrl = false;
         self.touches.clear();
         self.touch_count = 0;
         self.touch_view = false;
@@ -2505,6 +2510,7 @@ impl App for GameApp {
             camera: camera::Camera::new(home, START_ZOOM),
             gesture: Gesture::None,
             shift: false,
+            ctrl: false,
             pan: [false; 4],
             touches: Vec::new(),
             touch_count: 0,
@@ -3122,11 +3128,15 @@ impl App for GameApp {
         // sit**, resolved in one place — see [`input::mnemonic`], which is
         // also where the fallback for a keyboard that cannot type them is and
         // where all of it is tested without a window.
-        if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift)) {
+        if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift, self.ctrl)) {
             match what {
                 input::Mnemonic::Help => self.ui.helping = !self.ui.helping,
                 input::Mnemonic::Play => self.toggle_running(),
                 input::Mnemonic::StepOne => self.step_one(),
+                // Through the browser's history rather than by changing screen
+                // here, so a key and the back button are one path and cannot
+                // disagree about where back is.
+                input::Mnemonic::Back => crate::client::route::go_back(),
                 // **A pattern and the same pattern turned are one pattern.**
                 // Without this the library fills up with its own reflections —
                 // four gliders, and four more that are their mirror image, and
@@ -3195,6 +3205,10 @@ impl App for GameApp {
         match code {
             K::ShiftLeft | K::ShiftRight => {
                 self.shift = pressed;
+                return;
+            }
+            K::ControlLeft | K::ControlRight => {
+                self.ctrl = pressed;
                 return;
             }
             // Abandon whatever is being drawn. A rectangle you have decided

@@ -593,6 +593,7 @@ pub mod help {
     pub const STEP_ONE: &str = "one generation, and stay stopped";
     /// Said when either is pressed in a room somebody else is keeping time in.
     pub const SERVER_KEEPS_TIME: &str = "the server keeps time here; the clock is yours alone";
+    pub const GO_BACK: &str = "back a screen";
     pub const PAUSED: &str = "paused";
     pub const RUNNING: &str = "running";
     pub fn stepped_to(generation: u64) -> String {
@@ -658,6 +659,18 @@ pub mod help {
         /// Return, and a full stop. Golly's, because somebody who wants a
         /// pause button has almost certainly used Golly.
         pub const PLAY: &str = "space";
+        /// **Two spellings, because the key is genuinely different.** On a
+        /// Mac, back is `cmd+[` and the browser already does it; everywhere
+        /// else `ctrl+[` is bound here because nothing else claims it. Naming
+        /// one of them would name the wrong key for most of whoever is
+        /// reading, which is the failure a key list exists to prevent.
+        pub fn back_key(mac: bool) -> &'static str {
+            if mac {
+                "\u{2318} ["
+            } else {
+                "ctrl + ["
+            }
+        }
         pub const STEP_ONE: &str = ".";
         pub const WALK: &str = "up / down";
         pub const CHOOSE: &str = "enter";

@@ -324,6 +324,29 @@ pub fn follow_the_back_button() {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn follow_the_back_button() {}
 
+/// Ask the browser to go back, as though the back button had been pressed.
+///
+/// **So a key can mean it.** `ctrl+[` is the ASCII escape code and is "back"
+/// in enough editors to be a habit, and it is not browser-back on Linux or
+/// Windows — that is `alt+left`. On macOS `cmd+[` already is, which is why
+/// only ctrl is bound: two things calling this at once goes back twice.
+///
+/// Going through the history rather than changing screens directly is what
+/// keeps the key and the button the same thing: the listener above does the
+/// work either way, so there is one path back rather than a keyboard one
+/// beside a browser one that can disagree.
+#[cfg(target_arch = "wasm32")]
+pub fn go_back() {
+    let Some(window) = web_sys::window() else { return };
+    if let Ok(history) = window.history() {
+        let _ = history.back();
+    }
+}
+
+/// Native has no history to walk.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn go_back() {}
+
 /// Where back or forward has just taken us, if anywhere.
 ///
 /// Drained, so acting on it happens once. Called each frame and answers `None`
