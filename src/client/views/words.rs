@@ -212,6 +212,25 @@ pub mod menu {
     /// the decision it belongs to is live — see [inspiration.md].
     ///
     /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
+    pub mod lab {
+        pub const TITLE: &str = "Experiments";
+        /// Says what it is *for* rather than what it does, because the list of
+        /// what it does is the page underneath.
+        pub const NOTE: &str =
+            "A laboratory, not a match. The same simulation, with the game taken off it.";
+        pub const RULES: &str = "Rules";
+        pub const FREE_HAND: &str = "Place anywhere, for nothing";
+        /// Both halves named, because they are two rules and somebody turning
+        /// this off should know which two come back.
+        pub const FREE_HAND_NOTE: &str =
+            "Off, placing is confined to your own ground and costs money, as in a game.";
+        /// The clock is the other half of a laboratory and it needs no
+        /// setting: it is already yours offline.
+        pub const CLOCK: &str =
+            "Space runs and stops it. A full stop takes one generation and stays stopped.";
+        pub const OPEN: &str = "Open the laboratory";
+    }
+
     pub mod alone {
         pub const TITLE: &str = "Play alone";
         /// Said once, at the top, rather than beside every field: the whole

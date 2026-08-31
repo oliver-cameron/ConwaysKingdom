@@ -115,6 +115,7 @@ pub(crate) fn startup() -> Start {
         // A solitary world names none, so `/solo` opens the form rather than
         // building something nobody described — see `Route::Solo`.
         Some(Route::Alone | Route::Solo) => Start::Menu { address: url, page: menu::Page::Alone },
+        Some(Route::Lab) => Start::Menu { address: url, page: menu::Page::Experiments },
         _ => Start::Menu { address: url, page: menu::Page::Home },
     }
 }

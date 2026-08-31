@@ -597,6 +597,7 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
         .route_service("/home", index())
         .route_service("/play", index())
         .route_service("/alone", index())
+        .route_service("/experiments", index())
         .route_service("/solo", index())
         .route_service("/room/{id}", index())
         .route_service("/lobby/{id}", index())

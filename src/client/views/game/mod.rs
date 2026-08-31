@@ -406,7 +406,7 @@ pub struct GameApp {
     counted_at: crate::net::Tick,
     /// The address last written down, so it is written again only when it
     /// would say something different.
-    said_where: Option<(bool, bool, bool, bool, Option<crate::net::RoomId>)>,
+    said_where: Option<(bool, bool, bool, bool, bool, Option<crate::net::RoomId>)>,
     /// Actions taken from an [`Acted`] before the `Step` that carries them.
     ///
     /// Emptied every `Step`, because an action belongs to one generation and
@@ -446,6 +446,17 @@ pub struct GameApp {
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate rather than a log line — see [`crate::client::desync`].
     geiger: crate::client::desync::Geiger,
+    /// **A laboratory**: place anywhere, and for nothing.
+    ///
+    /// The two questions that are the *game* rather than the simulation —
+    /// `net::may_place` and `net::price` — and the only two an experiment has
+    /// to take off, because [liveness is exactly B3/S23] whatever else is
+    /// true. Offline only, and cleared on a `Welcome`: a client that predicted
+    /// placements a server would refuse is a client that resyncs every time it
+    /// draws.
+    ///
+    /// [liveness is exactly B3/S23]: crate::sim::World::step
+    free_hand: bool,
     /// **The world is stopped**, which only means anything offline.
     ///
     /// A connected client advances when the server says a generation happened
@@ -863,8 +874,10 @@ impl GameApp {
                     // way it can know.
                     self.applied_early.clear();
                     // A pause is a fact about a world this client was keeping
-                    // time in, and it is not keeping time in this one.
+                    // time in, and it is not keeping time in this one -- and a
+                    // laboratory's rules are off in a world nobody else is in.
                     self.paused = false;
+                    self.free_hand = false;
                     self.world = crate::net::sane_world(
                         world,
                         self.room.as_ref().expect("the room was just set"),
@@ -908,8 +921,10 @@ impl GameApp {
                     self.say_where();
                     self.applied_early.clear();
                     // A pause is a fact about a world this client was keeping
-                    // time in, and it is not keeping time in this one.
+                    // time in, and it is not keeping time in this one -- and a
+                    // laboratory's rules are off in a world nobody else is in.
                     self.paused = false;
+                    self.free_hand = false;
                     self.world = crate::net::sane_world(
                         world,
                         self.room.as_ref().expect("the room was just set"),
@@ -1207,7 +1222,7 @@ impl GameApp {
                         // and a teammate's spending never moved this client's
                         // purse until the next `Purse` corrected it.
                         if Some(stamped.player) == self.plays_as {
-                            let delta = crate::net::value_delta(&self.world, &stamped);
+                            let delta = self.price(&stamped);
                             self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
                         }
                         crate::net::apply(&mut self.world, &stamped);
@@ -1311,12 +1326,8 @@ impl GameApp {
         let name = self.holding().to_string();
         // A refusal again: a stroke is all or nothing, so one cell nothing of
         // yours reaches refuses the whole of it, before the button comes up.
-        let outside = |cells: &[(i32, i32)]| {
-            cells
-                .iter()
-                .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
-                .count()
-        };
+        let outside =
+            |cells: &[(i32, i32)]| cells.iter().filter(|&&(r, c)| !self.may_place_at(r, c)).count();
         match drag.stroke {
             hotbar::Stroke::Pencil => {
                 let stray = outside(&drag.path);
@@ -1474,7 +1485,7 @@ impl GameApp {
             seat: self.me.unwrap_or_else(|| self.player()),
             action,
         };
-        let delta = crate::net::value_delta(&self.world, &stamped);
+        let delta = self.price(&stamped);
         (stamped, delta)
     }
 
@@ -1573,10 +1584,7 @@ impl GameApp {
         // preview says and what the click charges cannot drift apart.
         let what = self.held.placement()?;
         let delta = self.quote_as(laid.clone(), false, what).1;
-        let stray = laid
-            .iter()
-            .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
-            .count();
+        let stray = laid.iter().filter(|&&(r, c)| !self.may_place_at(r, c)).count();
 
         let allowed = stray == 0 && self.value + delta >= 0;
         let label = if stray > 0 {
@@ -1649,7 +1657,7 @@ impl GameApp {
         // the same terms the server refuses it, so the answer is instant
         // rather than a round trip away. Taking back what is already there is
         // not placing and is not confined.
-        if !already_there && !crate::net::may_place(&self.world, player, row, col) {
+        if !already_there && !self.may_place_at(row, col) {
             self.notice = Some(words::refused::not_your_territory(row, col));
             self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
             return;
@@ -1691,6 +1699,23 @@ impl GameApp {
     }
 
     /// What the hotbar is holding, for the HUD and for a drag's label.
+    /// Whether this client may put something on that square.
+    ///
+    /// One question in one place, so a laboratory takes the rule off
+    /// everywhere it is asked rather than at three of the four call sites.
+    fn may_place_at(&self, row: i32, col: i32) -> bool {
+        self.free_hand || crate::net::may_place(&self.world, self.player(), row, col)
+    }
+
+    /// What an action costs, which in a laboratory is nothing.
+    fn price(&self, stamped: &Stamped) -> i32 {
+        if self.free_hand {
+            0
+        } else {
+            crate::net::value_delta(&self.world, stamped)
+        }
+    }
+
     /// Run, or stop running. Offline only.
     ///
     /// **Said rather than ignored** when there is a link. A key that does
@@ -1794,10 +1819,7 @@ impl GameApp {
         let quotes = [self.quote_as(laid.clone(), false, what)];
 
         let cells: usize = stamp.cells.len();
-        let stray = laid
-            .iter()
-            .filter(|&&(r, c)| !crate::net::may_place(&self.world, self.player(), r, c))
-            .count();
+        let stray = laid.iter().filter(|&&(r, c)| !self.may_place_at(r, c)).count();
         if stray > 0 {
             self.notice = Some(words::refused::cells_not_yours(stray));
             return;
@@ -2000,7 +2022,7 @@ impl GameApp {
 
     /// What the address would say, as something comparable — so it is written
     /// again only when it would say something different.
-    fn here(&self) -> Option<(bool, bool, bool, bool, Option<crate::net::RoomId>)> {
+    fn here(&self) -> Option<(bool, bool, bool, bool, bool, Option<crate::net::RoomId>)> {
         Some((
             matches!(self.ui.screen, Screen::Playing),
             match &self.ui.screen {
@@ -2008,6 +2030,7 @@ impl GameApp {
                 Screen::Playing => self.watching,
             },
             matches!(&self.ui.screen, Screen::Menu(m) if m.page == menu::Page::Alone),
+            matches!(&self.ui.screen, Screen::Menu(m) if m.page == menu::Page::Experiments),
             self.gathering(),
             self.room.clone(),
         ))
@@ -2052,6 +2075,7 @@ impl GameApp {
             // Both, because a solitary world names no shape and so cannot be
             // rebuilt from an address. The form is where you say what it was.
             Route::Alone | Route::Solo => self.show_menu_page(menu::Page::Alone),
+            Route::Lab => self.show_menu_page(menu::Page::Experiments),
         }
     }
 
@@ -2070,6 +2094,7 @@ impl GameApp {
         let route = match (&self.ui.screen, &self.room) {
             (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
             (Screen::Menu(m), _) if m.page == menu::Page::Alone => Route::Alone,
+            (Screen::Menu(m), _) if m.page == menu::Page::Experiments => Route::Lab,
             (Screen::Menu(_), _) => Route::Home,
             (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
             // A lobby is a screen of its own, so it says so. Following either
@@ -2131,6 +2156,15 @@ impl GameApp {
             menu::Chose::Nothing => {}
             menu::Chose::Offline => self.play_alone(),
             menu::Chose::Alone { shape, victory } => self.play_alone_on(shape, victory),
+            // **A laboratory opens stopped.** Golly's habit and the right one:
+            // the first thing anybody does here is draw, and a world running
+            // while you draw into it is a world eating what you drew.
+            menu::Chose::Experiment { free_hand } => {
+                self.play_alone_on(crate::sim::WorldKind::Infinite, None);
+                self.free_hand = free_hand;
+                self.paused = true;
+                self.last_action = Some(words::help::PAUSED.into());
+            }
             // The list refreshes itself; this is for somebody who has just
             // made a room elsewhere and does not want to wait out the
             // interval. Asking again is one small message.
@@ -2555,6 +2589,7 @@ impl App for GameApp {
             plays_as: None,
             said_where: None,
             applied_early: Vec::new(),
+            free_hand: false,
             paused: false,
             step_once: false,
             forfeited: false,

@@ -40,6 +40,8 @@ pub enum Route {
     Play,
     /// Describing a world to play in on your own.
     Alone,
+    /// The laboratory's own screen.
+    Lab,
     /// In a solitary world.
     ///
     /// **A screen with no room in it, which is why it needed a route of its
@@ -90,6 +92,7 @@ impl Route {
             Self::Home => format!("{SCREEN}=home"),
             Self::Play => format!("{SCREEN}=play"),
             Self::Alone => format!("{SCREEN}=alone"),
+            Self::Lab => format!("{SCREEN}=experiments"),
             Self::Solo => format!("{SCREEN}=solo"),
             Self::Room(id) => format!("{ROOM}={id}"),
             Self::Lobby(id) => format!("{LOBBY}={id}"),
@@ -103,6 +106,7 @@ impl Route {
             Self::Home => "/home".into(),
             Self::Play => "/play".into(),
             Self::Alone => "/alone".into(),
+            Self::Lab => "/experiments".into(),
             Self::Solo => "/solo".into(),
             Self::Room(id) => format!("/room/{id}"),
             Self::Lobby(id) => format!("/lobby/{id}"),
@@ -119,6 +123,7 @@ impl Route {
             ("home", _) => Some(Self::Home),
             ("play", _) => Some(Self::Play),
             ("alone", _) => Some(Self::Alone),
+            ("experiments", _) => Some(Self::Lab),
             ("solo", _) => Some(Self::Solo),
             ("room", Some(id)) => Some(Self::Room(RoomId(id))),
             ("lobby", Some(id)) => Some(Self::Lobby(RoomId(id))),
@@ -163,6 +168,7 @@ impl Route {
             Some("play") => Some(Self::Play),
             Some("home") => Some(Self::Home),
             Some("alone") => Some(Self::Alone),
+            Some("experiments") => Some(Self::Lab),
             Some("solo") => Some(Self::Solo),
             _ => None,
         }
@@ -176,7 +182,7 @@ impl Route {
     pub fn to_join(&self) -> Option<&RoomId> {
         match self {
             Self::Room(id) | Self::Lobby(id) => Some(id),
-            Self::Home | Self::Play | Self::Alone | Self::Solo | Self::Watch(_) => None,
+            Self::Home | Self::Play | Self::Alone | Self::Lab | Self::Solo | Self::Watch(_) => None,
         }
     }
 }
@@ -379,6 +385,7 @@ mod tests {
             Route::Home,
             Route::Play,
             Route::Alone,
+            Route::Lab,
             Route::Solo,
             Route::Room(RoomId::from("arena")),
             Route::Room(RoomId::from("r-t6n98x")),

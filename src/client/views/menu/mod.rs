@@ -20,6 +20,7 @@
 
 mod alone;
 pub mod draft;
+mod experiments;
 mod home;
 mod play;
 mod settings;
@@ -85,6 +86,8 @@ pub enum Page {
     Home,
     /// A server, its rooms, a code, and the form that makes one.
     Play,
+    /// A laboratory: a world with the game's rules off, driven by hand.
+    Experiments,
     /// Describing a world to play in on your own.
     ///
     /// **A page rather than a button.** "Play alone" went straight into a
@@ -97,6 +100,8 @@ pub enum Page {
 
 pub struct Menu {
     pub name: String,
+    /// Whether a laboratory places anywhere and for nothing.
+    pub lab_free_hand: bool,
     /// Where to connect. Fixed on the web — the page came from a server, so
     /// that is the server — and typed natively, where there is no page to
     /// have come from.
@@ -194,6 +199,14 @@ pub enum Chose {
     /// for. The simulation is deterministic, so this is a whole game rather
     /// than a broken one — just a solitary one.
     Offline,
+    /// Open a laboratory: a boundless world that never ends, with the game's
+    /// rules off if asked.
+    Experiment {
+        /// Place anywhere, and for nothing. The two questions `net::may_place`
+        /// and `net::price` ask, which are the game rather than the
+        /// simulation — see [`super::experiments`].
+        free_hand: bool,
+    },
     /// The same, on a world described here.
     ///
     /// **The make-a-world form, pointed somewhere else.** Its questions —
@@ -258,6 +271,7 @@ impl Menu {
         let key = String::new();
         Self {
             name: crate::net::keep::name().unwrap_or_else(|| "player".to_string()),
+            lab_free_hand: true,
             address,
             stage: Stage::Idle,
             page: Page::Home,
@@ -445,6 +459,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                     Page::Home => chose = home(ui, theme, menu, at),
                                     Page::Play => chose = play(ui, theme, menu, at),
                                     Page::Alone => chose = alone::show(ui, theme, menu),
+                                    Page::Experiments => chose = experiments::show(ui, theme, menu),
                                 }
                             });
                             ui.add_space(m.margin * 2.0);

@@ -34,7 +34,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | a person exists; a *safe* one does not, and discovery is not started |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
-| [Experiments](#experiments) | Decided | Golly, with this simulation underneath |
+| [Experiments](#experiments) | Part built | a page, a laboratory world, the clock and the rules off; RLE and reset are not |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
@@ -654,6 +654,14 @@ It holds, and it is not obvious from the code that it should. Three of the four 
 **The caveat is two things, and it is worth knowing exactly which.** Turrets and ice are the only rules that touch liveness — a turret because unowning a live square kills what stands on it, ice because it stops time. Neither is on an empty board, so an imported pattern is unaffected by anything this game adds.
 
 That also makes "the rules come off" much smaller than it sounded. There is no need for a second `sim` and no flag on the step: what has to be switchable is **placing**, and that is two questions, `net::price` and `net::may_place`. The simulation is already the one a match runs, which is the whole value of experimenting here rather than in Golly.
+
+### What is built
+
+**A page of its own**, at `/experiments`, reached from the home screen beside the other two ways to play — a laboratory is a third of those rather than a setting on one of them. It opens a boundless world that never ends, because both of the alternatives are game answers to game questions: a torus is a shape a *match* wants so its ground is finite and contested, and a victory condition is a way to win. Neither means anything to somebody watching a pattern.
+
+**The rules come off, and it is two questions rather than a second `sim`.** `net::may_place` and `net::price` are the whole of what the game adds to placing, so a laboratory is a flag that answers both — routed through one `may_place_at` and one `price` on the client so it comes off everywhere it is asked rather than at three of the four call sites. Cleared on a `Welcome`, because a client predicting placements a server would refuse resyncs every time it draws.
+
+**And it opens stopped**, which is Golly's habit and the right one: the first thing anybody does here is draw, and a world running while you draw into it is a world eating what you drew. Space runs and stops it; a full stop takes one generation and stays stopped.
 
 ### What to take from Golly, in order
 
