@@ -16,15 +16,17 @@
 //! one place the mapping lives, and `glyphs_are_in_the_font` below is what
 //! says every one of them is really in the file.
 //!
-//! ## What it costs, and how to make it cost less
+//! ## Only what is named here ships
 //!
 //! The whole regular face is 477 KB for about twelve hundred icons, of which
-//! this uses a dozen. `tools/subset-icons.sh` cuts it to the ones named below
-//! — measured at **4.2 KB**, which is a hundredth of the size — and it reads
-//! its codepoint list out of this file, so the two cannot drift. The whole
-//! font is here rather than the subset because any icon is then a line in this
-//! module rather than a line plus a rebuild; swap when the size matters more
-//! than that does, and the test below is what makes the swap safe.
+//! this uses a dozen. `build.rs` cuts it down to exactly the constants below —
+//! **5 KB, one per cent** — by reading this file, so there is no second list
+//! and nothing to keep in step: adding an icon is a line here and nothing
+//! else, and a codepoint the face does not have fails the build by name.
+//!
+//! Which is why the constants are written plainly, one per line, in the shape
+//! `rustfmt` produces. The build parses them, and
+//! `every_glyph_is_one_private_character` is what says they stay that shape.
 
 /// The family name the fonts are registered under. Its own family rather than
 /// a fallback on the text one, so a missing glyph is a blank box in an icon
@@ -115,11 +117,12 @@ mod tests {
 
     /// **Every named glyph is really in the font that ships.**
     ///
-    /// The one that matters, and the one that makes
-    /// `tools/subset-icons.sh` safe to run: a name whose glyph was left out of
-    /// a subset draws a blank box, silently, on whichever screen happens to
-    /// use it. Read out of the embedded bytes rather than trusted, by walking
-    /// the `cmap` — which is a few dozen lines and needs no dependency.
+    /// The one that matters. `build.rs` cuts the face down to these
+    /// codepoints, so this reads the **generated** font back and checks the
+    /// cut did what it was asked — a name whose glyph was left out draws a
+    /// blank box, silently, on whichever screen happens to use it. Read out of
+    /// the embedded bytes by walking the `cmap`, which is a few dozen lines
+    /// and needs no dependency.
     #[test]
     fn glyphs_are_in_the_font() {
         let have = super::super::font_codepoints(super::super::ICON_FONT);
@@ -128,8 +131,8 @@ mod tests {
             let c = glyph.chars().next().unwrap() as u32;
             assert!(
                 have.contains(&c),
-                "{name} is U+{c:04X} and the font does not have it — if this followed a run \
-                 of tools/subset-icons.sh, the subset was built from an older list"
+                "{name} is U+{c:04X} and the font that shipped does not have it, so the \
+                 build cut the face to a different list than this one"
             );
         }
     }

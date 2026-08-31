@@ -57,6 +57,16 @@ render = ["dep:wgpu", "dep:winit", "dep:egui", "dep:egui-wgpu"]
 # `cargo serve` and `cargo server` in .cargo/config.toml are the shorthand.
 server = ["dep:axum", "dep:tower-http", "dep:rustyline"]
 
+# Cutting the icon font down to the glyphs the client names -- see build.rs.
+# A build dependency, so none of it ships; what it produces is a few kilobytes
+# where the whole face is four hundred and eighty.
+#
+# `allsorts` rather than `subsetter`, which is otherwise the obvious choice:
+# that one drops the `cmap`, because it subsets for PDF embedding where a glyph
+# is addressed by index, and egui looks one up by character.
+[build-dependencies]
+allsorts = "0.17"
+
 [dependencies]
 wgpu = { version = "30", optional = true }
 winit = { version = "0.30.13", optional = true }

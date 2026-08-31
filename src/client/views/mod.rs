@@ -441,12 +441,14 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// The icon face, embedded the way the two text faces are.
+/// The icon face, embedded the way the two text faces are — **cut down at
+/// build time to the glyphs [`glyph`] names**.
 ///
-/// Phosphor regular, MIT, in `PHOSPHOR-LICENSE.txt` beside it. The whole face
-/// rather than a subset — see [`glyph`] for what that costs and for the script
-/// that cuts it down.
-pub const ICON_FONT: &[u8] = include_bytes!("../../../assets/fonts/Phosphor-Regular.ttf");
+/// Phosphor regular, MIT, in `PHOSPHOR-LICENSE.txt` beside the whole face in
+/// `assets/`. What ships is `build.rs`'s output: a few kilobytes against the
+/// four hundred and eighty the face weighs, and it cannot go stale, because
+/// the list it is cut to is read out of the module that does the naming.
+pub const ICON_FONT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icons.ttf"));
 
 /// Every codepoint a font has a glyph for, read out of its `cmap`.
 ///
