@@ -281,10 +281,6 @@ pub struct GameApp {
     camera: camera::Camera,
     /// What the pointer is doing.
     gesture: Gesture,
-    /// Space held, which turns the left button into a pan. The convention in
-    /// every drawing tool, and the only mouse pan available on a trackpad with
-    /// no middle button.
-    space: bool,
     /// Shift held, which hurries the keyboard pan.
     shift: bool,
     /// Held pan keys: left, right, up, down.
@@ -587,7 +583,6 @@ impl GameApp {
         self.gesture = Gesture::None;
         self.pending = None;
         self.pan = [false; 4];
-        self.space = false;
         self.shift = false;
         self.touches.clear();
         self.touch_count = 0;
@@ -1746,6 +1741,16 @@ impl GameApp {
             Key::Kind(kind) => self.held.kind = kind,
             Key::More => self.ui.picking_stamp = !self.ui.picking_stamp,
             Key::Help => self.ui.helping = !self.ui.helping,
+            // The one place flipping happens, so the key and the square
+            // cannot drift apart -- which they did, the key putting the shape
+            // back to the kind's usual while a click toggled. The turn goes
+            // with it, because a pattern left rotated after a flip is a reset
+            // somebody has to reset.
+            Key::Flip => {
+                self.held.shape = self.held.shape.other();
+                self.held.turn = Default::default();
+                self.ui.picking_stamp = false;
+            }
         }
     }
 
@@ -2439,7 +2444,6 @@ impl App for GameApp {
             },
             camera: camera::Camera::new(home, START_ZOOM),
             gesture: Gesture::None,
-            space: false,
             shift: false,
             pan: [false; 4],
             touches: Vec::new(),
@@ -2620,6 +2624,10 @@ impl App for GameApp {
         // because the closure below holds `views` for the whole of it. Three
         // rows, and every one of them prints something different on a keyboard
         // that is not the one this was written on.
+        // Once the browser has said what this keyboard prints, take it. It
+        // answers on a promise, so this is the frame after it resolved and
+        // every frame after that is a lock and a `None`.
+        self.views.borrow_mut().take_what_the_browser_said();
         let help_keys = {
             use winit::keyboard::KeyCode as K;
             const DIGITS: [K; 10] = [
@@ -2642,17 +2650,26 @@ impl App for GameApp {
                     codes.iter().filter_map(|&code| views.label(code, shift)).collect();
                 (seen.len() == codes.len()).then(|| seen.concat())
             };
+            // **The whole shifted row, not the first four.** It was four
+            // while the tools were four, and the row has been six since a
+            // capture and a "more" joined them and seven since the shape
+            // square did — so the help screen named `shift + 1-4` for a row
+            // that runs to seven. Asked of `hotbar::shifted`, which is the
+            // list the keyboard actually uses.
+            let tools = hotbar::shifted(&self.stamps).len().min(DIGITS.len());
             help::Keys {
                 pan: row(&[K::KeyW, K::KeyA, K::KeyS, K::KeyD], false),
                 stamps: row(&DIGITS, false),
-                tools: row(&DIGITS[..4], true),
+                tools: row(&DIGITS[..tools], true),
             }
         };
-        let (held, theme, shifted) = {
+        let (held, theme, shifted, bare) = {
             let views = self.views.borrow();
             let learned: Vec<Option<String>> =
                 (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect();
-            (self.held, views.theme, learned)
+            let bare: Vec<Option<String>> =
+                (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect();
+            (self.held, views.theme, learned, bare)
         };
         // Registered before the frame rather than inside it: loading a texture
         // needs the context, and the context is borrowed for the whole build.
@@ -2664,6 +2681,8 @@ impl App for GameApp {
         // found out by pressing it.
         let typed =
             move |digit: u32| shifted.get(digit.checked_sub(1)? as usize).cloned().flatten();
+        // And what it types on its own, for the stamp squares.
+        let plain = move |digit: u32| bare.get(digit as usize).cloned().flatten();
         let (r, g, b) = crate::client::views::hue::player_colour(self.player());
         let marks = overlay::Marks {
             tint: egui::Color32::from_rgb(r, g, b),
@@ -2763,8 +2782,14 @@ impl App for GameApp {
                             .rect
                         });
                         let what = held.placement().unwrap_or(crate::net::Placement::Life);
-                        let look =
-                            hotbar::Look { theme: &theme, what, sheet, player: me, typed: &typed };
+                        let look = hotbar::Look {
+                            theme: &theme,
+                            what,
+                            sheet,
+                            player: me,
+                            typed: &typed,
+                            plain: &plain,
+                        };
                         let bar = hotbar::show(ctx, &look, held, &self.stamps, &status);
                         picked = bar.did;
                         // Over the world rather than instead of it: a match that has
@@ -3038,17 +3063,6 @@ impl App for GameApp {
                 input::Mnemonic::Help => self.ui.helping = !self.ui.helping,
                 input::Mnemonic::Play => self.toggle_running(),
                 input::Mnemonic::StepOne => self.step_one(),
-                // **The shape axis has one key, and it always lands in one
-                // place.** It puts the shape back to whatever the held
-                // material is usually wanted in — a pencil for life, mines and
-                // turrets, a pane for ice — rather than toggling, so its
-                // meaning does not depend on what was pressed last. That also
-                // makes it the way out of a stamp or a capture without looking
-                // at the bar to see what it will do.
-                input::Mnemonic::Shape => {
-                    self.held = self.held.defaulted();
-                    self.ui.picking_stamp = false;
-                }
                 // **A pattern and the same pattern turned are one pattern.**
                 // Without this the library fills up with its own reflections —
                 // four gliders, and four more that are their mirror image, and
@@ -3115,10 +3129,6 @@ impl App for GameApp {
             return;
         }
         match code {
-            K::Space => {
-                self.space = pressed;
-                return;
-            }
             K::ShiftLeft | K::ShiftRight => {
                 self.shift = pressed;
                 return;
@@ -3299,7 +3309,6 @@ impl App for GameApp {
             self.camera.halt();
             match button {
                 B::Middle | B::Right => self.begin_pan(Some(button)),
-                B::Left if self.space => self.begin_pan(Some(button)),
                 B::Left => self.begin_drawing(self.cursor),
                 _ => {}
             }
@@ -3321,8 +3330,6 @@ impl App for GameApp {
         use winit::window::CursorIcon as C;
         if self.is_panning() {
             C::Grabbing
-        } else if self.space {
-            C::Grab
         } else if self.views.borrow().wants_pointer() {
             C::Default
         } else {

@@ -233,16 +233,16 @@ pub(crate) fn digit(code: winit::keyboard::KeyCode) -> Option<u32> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Mnemonic {
     Help,
-    Shape,
     Turn,
     Mirror,
     /// Run, or stop running.
     ///
-    /// **Not Golly's return**, which is what this wanted to be: return is
-    /// already how a list is chosen here, and `help`'s own test says so before
-    /// anybody can ship two meanings for one key. `P` says what it does and
-    /// binds the way `R` and `F` do. A full stop for one generation is Golly's
-    /// though, near enough — it uses space, which is the pan modifier here.
+    /// **Space**, which is what a pause key is everywhere and what Golly's
+    /// nearest equivalent is. It was the drag-to-pan modifier and that is the
+    /// weaker claim on it: panning has a middle drag, the arrows and the walk
+    /// cluster, and a pause has nowhere else obvious to be. Return was tried
+    /// first and `help`'s own test refused it, since return already takes what
+    /// a list has picked.
     Play,
     /// One generation, and stay stopped.
     StepOne,
@@ -290,18 +290,16 @@ pub(crate) fn mnemonic(
     let unreachable = !types_a_letter(typed);
     Some(match code {
         _ if says("?") => Mnemonic::Help,
-        // Both halves of one key: the backtick is what the label says and the
-        // tilde is what it used to.
-        _ if says("`") || says("~") => Mnemonic::Shape,
         _ if says("r") => Mnemonic::Turn,
         _ if says("f") => Mnemonic::Mirror,
-        _ if says("p") => Mnemonic::Play,
         _ if says(".") => Mnemonic::StepOne,
         K::Slash if shift => Mnemonic::Help,
-        K::Backquote => Mnemonic::Shape,
         K::KeyR if unreachable => Mnemonic::Turn,
         K::KeyF if unreachable => Mnemonic::Mirror,
-        K::KeyP if unreachable => Mnemonic::Play,
+        // Positional, and there is no character to bind: the space bar prints
+        // a space on every layout there is, so its position is never a
+        // surprise and its label never has to be learned.
+        K::Space => Mnemonic::Play,
         // A full stop falls back unconditionally: both positions are bound to
         // nothing else here and neither can collide.
         K::Period | K::NumpadDecimal => Mnemonic::StepOne,
@@ -319,17 +317,12 @@ mod tests {
     /// whose full stop is somewhere else still has the key where `.` sits.
     #[test]
     fn the_clock_keys_are_reachable_on_any_layout() {
-        assert_eq!(mnemonic(K::KeyP, Some("p"), false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Space, Some(" "), false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Space, None, false), Some(Mnemonic::Play));
         assert_eq!(mnemonic(K::Period, Some("."), false), Some(Mnemonic::StepOne));
-        // By character wherever they have moved to.
-        assert_eq!(mnemonic(K::KeyR, Some("p"), false), Some(Mnemonic::Play));
+        // A full stop by character wherever it has moved to.
         assert_eq!(mnemonic(K::Semicolon, Some("."), false), Some(Mnemonic::StepOne));
-        // And by position on a keyboard that types no Latin letter there.
-        assert_eq!(mnemonic(K::KeyP, Some("з"), false), Some(Mnemonic::Play));
         assert_eq!(mnemonic(K::Period, None, false), Some(Mnemonic::StepOne));
-        // Where the letter *is* reachable, the position is not stolen: on
-        // Dvorak the `P` position types `l`, which is somebody's `l`.
-        assert_eq!(mnemonic(K::KeyP, Some("l"), false), None);
     }
 
     /// **Programmer Dvorak, where the digit row is shifted by default.** The
@@ -347,9 +340,7 @@ mod tests {
         assert_eq!(digit(K::Digit0), Some(0));
         // Where the backtick sits, that key types `$` — and nothing else in
         // the client wants it, so the position still resets the shape.
-        assert_eq!(mnemonic(K::Backquote, Some("$"), false), Some(Mnemonic::Shape));
         // And so does whichever key does type a backtick.
-        assert_eq!(mnemonic(K::Digit4, Some("`"), true), Some(Mnemonic::Shape));
     }
 
     /// The layout the game was written on, where character and position agree.
@@ -359,7 +350,6 @@ mod tests {
         assert_eq!(mnemonic(K::KeyR, Some("R"), true), Some(Mnemonic::Turn));
         assert_eq!(mnemonic(K::KeyF, Some("f"), false), Some(Mnemonic::Mirror));
         assert_eq!(mnemonic(K::Slash, Some("?"), true), Some(Mnemonic::Help));
-        assert_eq!(mnemonic(K::Backquote, Some("`"), false), Some(Mnemonic::Shape));
     }
 
     /// **Dvorak keeps the character binding**, which is what the fallback must
@@ -368,15 +358,7 @@ mod tests {
     #[test]
     fn dvorak_binds_the_letter_and_not_the_place() {
         assert_eq!(mnemonic(K::KeyP, Some("r"), false), Some(Mnemonic::Turn), "r is r");
-        // And the R position, which types `p` on Dvorak, is **play** — because
-        // `p` is play wherever `p` is typed. That is the rule working rather
-        // than a collision: this asserted `None` while nothing was bound to
-        // `p`, and what changed is the vocabulary, not the binding.
-        assert_eq!(
-            mnemonic(K::KeyR, Some("p"), false),
-            Some(Mnemonic::Play),
-            "the R position types p there, and p is p"
-        );
+        assert_eq!(mnemonic(K::KeyR, Some("p"), false), None, "the R position types p there");
         assert_eq!(mnemonic(K::KeyU, Some("f"), false), Some(Mnemonic::Mirror));
         assert_eq!(mnemonic(K::KeyY, Some("f"), false), Some(Mnemonic::Mirror));
     }
@@ -394,15 +376,13 @@ mod tests {
     }
 
     /// **A dead key types nothing**, which is what `~` is on the Spanish,
-    /// Portuguese and Nordic layouts — so a shape reset bound to that
-    /// character had no key there even though the alphabet is Latin and every
-    /// label was in place. It is bound to the backtick now, which is the
-    /// unshifted half of the same key and is never dead.
+    /// Portuguese and Nordic layouts — so the shape control, bound to that
+    /// character and then to the backtick beside it, was the least reachable
+    /// key in the game on one of its most ordinary actions. It is a shifted
+    /// digit now, with the rest of the bar, and this is what is left of that
+    /// lesson: a binding by character is only as good as the character.
     #[test]
-    fn a_dead_tilde_still_resets_the_shape() {
-        assert_eq!(mnemonic(K::Backquote, Some("`"), false), Some(Mnemonic::Shape));
-        assert_eq!(mnemonic(K::Backquote, Some("~"), true), Some(Mnemonic::Shape), "the old label");
-        assert_eq!(mnemonic(K::Backquote, None, false), Some(Mnemonic::Shape));
+    fn a_key_that_is_somewhere_else_still_works_by_position() {
         // And where `?` is somewhere else entirely, the position still works.
         assert_eq!(mnemonic(K::Slash, None, true), Some(Mnemonic::Help));
         // Shift matters for `?`: the unshifted key is `/` and means nothing.
@@ -414,7 +394,8 @@ mod tests {
     #[test]
     fn an_ordinary_key_means_none_of_them() {
         for (code, typed) in
-            [(K::KeyA, "a"), (K::KeyW, "w"), (K::Digit1, "1"), (K::Space, " "), (K::KeyG, "g")]
+            // Space is play now, so it is no longer one of the ordinary keys.
+            [(K::KeyA, "a"), (K::KeyW, "w"), (K::Digit1, "1"), (K::KeyG, "g")]
         {
             assert_eq!(mnemonic(code, Some(typed), false), None, "{typed}");
         }

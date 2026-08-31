@@ -80,6 +80,42 @@ Three more reasons to drop the search, beyond not needing it:
 
 **And the numbers do not fit.** "Payloads with a fuse of less than 14 will be set to 14" — the age field is three bits, so a fuse is nought to seven and fourteen is not a number it can hold. That is what a design written beside the code rather than in it eventually does.
 
+### Where it goes off, which is not always where it is
+
+**A blast wasted on its owner's own ground is a blast wasted.** The rule above
+says a square brought to life takes the owner already on it, so a detonation
+inside your own country turns your own patterns into your own noise — and a
+second one over ground you have already scrambled adds nothing to what is
+already scrambled. Both are the same mistake, and a player standing a payload
+deep in their own territory is making it by accident rather than on purpose.
+
+So the blast **walks outward** until it is worth something: search rings at
+increasing distance from the payload for a centre whose disc is not already
+its owner's, take the nearest, and break a tie with a seeded roll. Which is
+`turret_target` again, in shape and in code — the nearest square that answers a
+question, with the tie broken so a volley does not always favour one direction.
+
+Two things make the search cheap enough to be a pass rather than a search.
+
+**What it is looking for is a count, not a cost.** How many squares in the
+candidate disc are already this player's — the same question
+[`crowding`](../src/net/mod.rs) asks when it seats a latecomer, and one pass
+over a disc rather than a scored optimisation over every cell in it.
+
+**And it is bounded.** `PAYLOAD_THROW` is the furthest a centre may be
+displaced, so a payload in the middle of a large country lobs itself at the
+nearest frontier and not across the map. Unbounded, it would be a homing weapon
+with a range of the whole world, which is a different thing entirely and a much
+worse one.
+
+What that buys, and it is worth stating because it makes the piece playable
+rather than merely correct: **a payload does not have to be placed exactly.**
+Placing is confined to your own influence, so without this the only useful
+payload is one laid on the exact square of your border nearest something worth
+hitting — which is a precision the interface does not really support and a
+frontier that moves every generation anyway. Walking outward means "somewhere
+near my edge" is good enough, and the rule finds the rest.
+
 ### The chain, which is the best idea in it
 
 The one part of the scoring design worth keeping outright, and it needs no score: **on detonation, every payload within reach has its fuse set to full**, so it goes off the next generation. A line of them is then a fuse, and a cluster is one blast a generation wide rather than one big one.
@@ -118,7 +154,7 @@ Worth checking rather than assuming, because a weapon that deletes a screen of s
 
 ### The numbers, which are not decided
 
-`PAYLOAD_COST`, `PAYLOAD_REACH`, `PAYLOAD_DENSITY` and the fuse chance. `examples/balance.rs` is where they should be argued out, the way [turrets](#turrets) says its own numbers should be.
+`PAYLOAD_COST`, `PAYLOAD_REACH`, `PAYLOAD_DENSITY`, `PAYLOAD_THROW` and the fuse chance. `examples/balance.rs` is where they should be argued out, the way [turrets](#turrets) says its own numbers should be.
 
 The one with a shape already: **density**. Conway's classic soup is a half, which mostly burns down; a third is where a random field produces the most that goes on happening. So `PAYLOAD_DENSITY` around twenty-four in sixty-four, and it wants playing with rather than deriving.
 

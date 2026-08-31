@@ -337,18 +337,11 @@ pub mod hotbar {
     /// it is the one key on the bar that does something rather than selecting
     /// something.
     ///
-    /// Written as the character it produces rather than as the chord that
-    /// produces it, and as the **unshifted** half of that key: one press
-    /// rather than two, and `~` is a dead key on the Spanish, Portuguese and
-    /// Nordic layouts, where it produces no text at all and left this
-    /// unreachable. `~` is still accepted; this is what the square says.
-    pub const FLIP_KEY: &str = "`";
-
     pub const CAPTURE: &str = "Grab";
     /// The square that opens the library.
     pub const LIBRARY: &str = "Stamps";
-    /// The character, not the chord, for the reason `FLIP_KEY` is: it is bound
-    /// by what it types, so the label is right on every layout.
+    /// The character, not the chord: it is bound by what it types, so the
+    /// label is right on every layout.
     pub const HELP: &str = "?";
     pub const HELP_HINT: &str = "Every key, on one screen";
 }
@@ -577,7 +570,6 @@ pub mod help {
     pub const TOOLS: &str = "Pick a tool: life, mine, turret, ice";
     /// The shape axis has one key and it goes to the default; the other shape
     /// is a click away on the bar. See `hotbar::Held::defaulted`.
-    pub const SHAPE: &str = "back to the usual shape";
     /// **So a glider is one stamp and not four.** Turning is held rather than
     /// saved, so it changes nothing in the library.
     pub const TURN: &str = "turn what you are holding";
@@ -634,25 +626,30 @@ pub mod help {
         }
 
         pub const PAN_FAST: &str = "shift";
-        pub const PAN_DRAG: &str = "space or middle drag";
+        /// **Middle drag only.** Space held used to do this too, which is
+        /// the convention in a drawing tool and is the weaker claim on the
+        /// key: panning also has the walk cluster and the arrows, and a pause
+        /// has nowhere else obvious to live. The cost is real and worth
+        /// knowing — a trackpad with no middle button has no drag-to-pan.
+        pub const PAN_DRAG: &str = "middle drag";
         pub const ZOOM: &str = "wheel / pinch";
-        /// What a US keyboard prints, which is the guess until somebody has
-        /// pressed one of them.
-        pub const TOOLS: &str = "shift + 1-4";
-        /// Ten of them, and the tenth is `0` — the key `input::digit` was
-        /// missing, so the hotbar's tenth square named a key that did nothing.
-        pub const STAMPS: &str = "1-9, 0";
+        /// **Only reached if a key has no label at all**, which since the
+        /// digit row is seeded means never. Kept, and said without a count,
+        /// because the shifted row grows when a square is added to the bar and
+        /// a number here would go stale the way `shift + 1-4` did — it named
+        /// four keys for a row that had run to six.
+        pub const TOOLS: &str = "shift + a digit";
+        pub const STAMPS: &str = "the digit row";
         /// The unshifted half of the key `~` is on, so it is one press — and
         /// `~` is a dead key on the Spanish, Portuguese and Nordic layouts,
         /// which produces no text at all and left the shape reset unreachable
         /// there. `~` still works; this is what the square says.
-        pub const SHAPE: &str = "`";
         pub const TURN: &str = "R / shift + R";
         pub const MIRROR: &str = "F";
         pub const DRAG: &str = "drag";
         /// Return, and a full stop. Golly's, because somebody who wants a
         /// pause button has almost certainly used Golly.
-        pub const PLAY: &str = "P";
+        pub const PLAY: &str = "space";
         pub const STEP_ONE: &str = ".";
         pub const WALK: &str = "up / down";
         pub const CHOOSE: &str = "enter";

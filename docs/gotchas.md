@@ -235,3 +235,39 @@ It is only right where the character can be typed. On a Cyrillic, Greek or Hebre
 So `link.is_some()` is not "connected", and the HUD read it as though it were. Worse, the path that arrives from a **link** — `?room=`, or `/room/x` — set no deadline at all, where the menu's own "ask a server for its rooms" has had an eight-second one for as long as it has existed. A client that could not reach its server therefore sat in `Screen::Playing` on the world every session starts with, playing alone, saying "connected", with the failure visible only in the console.
 
 *Symptom:* the game works. That is the whole problem: it is a different game from the one the link was for, and nothing on screen distinguishes them.
+
+## The help screen named keys the keyboard did not have
+
+Every label on the bar and the key list is for a key bound by **position**, so
+only the label is in question — and the label was learned from what that key
+typed when somebody pressed it, seeded with the US answer. Which means a
+Dvorak player saw `WASD` until they had pressed all four, and the four they
+pressed were labelled `,aoe`. AZERTY was worse: its unshifted digit row prints
+`&é"'(-è_çà`, so ten stamp squares named ten keys that layout does not have.
+
+Three separate faults, and they had one root.
+
+**`Digit0` shifted was missing from the seed table**, so a row is drawn
+all-or-nothing — half a row of guessed keycaps is a row nobody can read — and
+the ten-wide stamp row could therefore never complete. The help screen fell
+back to a hard-coded `1-9, 0` for ever, on every layout.
+
+**The stamp squares did not ask at all.** `tool_hint` asked the keyboard and
+`stamp_hint` beside it hard-coded `1`–`9` and `0`, so the help screen was right
+about the digit row and the bar was not, which is worse than both being wrong.
+
+**And the shifted row was named `shift + 1-4`** for a row that had run to six
+the moment a capture and a "more" square joined the four tools. It is asked of
+`hotbar::shifted` now, which is the list the keyboard actually uses.
+
+The real fix is not to guess harder. **`navigator.keyboard.getLayoutMap()`
+answers all of it at once**, with no press, no layout detection, and no table
+of layouts to maintain — the browser reports what each physical key prints on
+the keyboard in front of the player. It gives the unshifted value only, so the
+shifted row is still seeded and still corrected on press, and it is Chromium-only
+behind a permissions policy, so a `get` coming back undefined is a browser
+without it rather than an error. Reached through `Reflect`, because `web-sys`
+has no binding for it.
+
+Native has no equivalent — winit reports what a key typed, and only once it has
+been pressed — so there the seed and the learning are the whole answer.

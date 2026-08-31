@@ -90,7 +90,6 @@ fn groups(keys: &Keys) -> Vec<Group> {
             keys: vec![
                 (tools, words::TOOLS),
                 (stamps, words::STAMPS),
-                (words::keys::SHAPE.into(), words::SHAPE),
                 (words::keys::TURN.into(), words::TURN),
                 (words::keys::MIRROR.into(), words::MIRROR),
                 (words::keys::DRAG.into(), words::DRAG),

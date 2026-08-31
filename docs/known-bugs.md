@@ -28,14 +28,6 @@ Reproduced: three players in a two-team match, one offline at the whistle, rejoi
 
 *Not* dangerous any more. It used to seat them on top of a team's opening and take it — `seat_number` drew team ids and player numbers out of one 1..15 space — which is fixed.
 
-### The hotbar labels its stamp squares with keys a keyboard may not have
-
-`game::hotbar::tool_hint` asks the keyboard what shift and a digit type here, and falls back to `S1`–`S4` until somebody has pressed one. `game::hotbar::stamp_hint` beside it hard-codes `1`–`9` and `0`.
-
-*You would see:* on a French keyboard, ten stamp squares labelled `1`–`0` whose keys type ``&é"'(-è_çà``. The help screen is right about this and the bar is not, which is worse than both being wrong.
-
-*Still here because* the machinery is all there — `Views::label(code, false)` answers it, and the help screen was taught to ask in the same pass that found this — and it is a small change to a file that was not otherwise being touched.
-
 ### A pinned stamp is pinned per client, not per person
 
 The library is written to this client's own store, so pinning is a fact about the browser or the machine rather than about the player. Somebody who plays on a phone and a laptop has two libraries, and the person `net::auth` now names has nothing to do with where their stamps live.

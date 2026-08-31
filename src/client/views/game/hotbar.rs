@@ -222,6 +222,20 @@ pub enum Key {
     Kind(usize),
     /// The stamps that did not fit.
     More,
+    /// The shape square: pencil and pane are one choice with two answers, so
+    /// this is the other one.
+    ///
+    /// **On the shifted row rather than on a key of its own.** It was the
+    /// backtick — which is a dead key on the Spanish, Portuguese and Nordic
+    /// layouts, so the least reachable key in the game was on one of its most
+    /// ordinary actions — and the key and the square disagreed besides: the
+    /// key put the shape back to the kind's usual and a click on the square
+    /// toggled. One action now, and it is the square's, because the square is
+    /// the thing that shows which answer is current.
+    ///
+    /// A `Key` rather than a `Shape`, because which shape it means depends on
+    /// which is held, and `shifted` is a fixed list.
+    Flip,
 }
 
 /// **The digits are the stamps.** `1` to `9` then `0`, which is ten and is why
@@ -248,7 +262,15 @@ pub fn shifted(_library: &Library) -> Vec<Key> {
     // **Derived from [`KINDS`], not listed beside it.** It was a hand-written
     // list once and went out by one the moment a tool was added, so the bar
     // labelled its squares from its own layout and the keyboard disagreed.
-    (0..KINDS.len()).map(Key::Kind).chain([Key::Shape(Shape::Capture), Key::More]).collect()
+    // **In the order the squares sit on the bar**, which is now the whole
+    // row: the shape square used to be the one control with a key outside this
+    // list, so the bar read left to right and the keyboard skipped a square in
+    // the middle of it. `Flip` goes where it is drawn, and capture and more
+    // shuffle along.
+    (0..KINDS.len())
+        .map(Key::Kind)
+        .chain([Key::Flip, Key::Shape(Shape::Capture), Key::More])
+        .collect()
 }
 
 /// Which of those shift and this digit picks.
@@ -258,12 +280,21 @@ pub fn shifted_for_digit(digit: u32, library: &Library) -> Option<Key> {
 }
 
 /// What a stamp's square shows in its corner.
-fn stamp_hint(index: usize) -> Option<String> {
-    match index {
-        0..=8 => Some(format!("{}", index + 1)),
-        9 => Some("0".into()),
-        _ => None,
-    }
+///
+/// **Asked of the keyboard, like the row above it.** This hard-coded `1`-`9`
+/// and `0` while `tool_hint` beside it asked — so on AZERTY, whose unshifted
+/// digit row prints ``&é"'(-è_çà``, ten squares were labelled with ten keys
+/// that layout does not have, and the help screen was right about it while the
+/// bar was not. Which is worse than both being wrong.
+fn stamp_hint(index: usize, plain: &Typed) -> Option<String> {
+    let digit = match index {
+        0..=8 => index as u32 + 1,
+        9 => 0,
+        _ => return None,
+    };
+    // The US guess is seeded, so this only falls through on a keyboard nothing
+    // has been able to name — and a digit is a better guess than nothing.
+    Some(plain(digit).unwrap_or_else(|| digit.to_string()))
 }
 
 /// What a tool's square shows: whatever shift and that digit types on the
@@ -296,6 +327,10 @@ pub struct Look<'a> {
     pub player: PlayerId,
     /// What shift and a digit types here.
     pub typed: &'a Typed<'a>,
+    /// And what the digit types on its own, which is what a stamp square
+    /// shows. Two closures rather than one taking a shift flag, because every
+    /// call site knows which row it is drawing.
+    pub plain: &'a Typed<'a>,
 }
 
 pub fn show(
@@ -368,11 +403,12 @@ pub fn show(
                         look,
                         Face::Text(shown.name()),
                         shown.name(),
-                        Some(words::FLIP_KEY.to_string()),
+                        tool_hint(shift, typed),
                         true,
                     ) {
-                        picked = Some(Key::Shape(shown.other()));
+                        picked = Some(Key::Flip);
                     }
+                    shift += 1;
                     rule(ui, theme);
                     // The capture square: it is where a library comes from, so
                     // it cannot be behind having one.
@@ -411,7 +447,7 @@ pub fn show(
                             look,
                             Face::Pattern(stamp),
                             &stamp.name,
-                            stamp_hint(slot),
+                            stamp_hint(slot, look.plain),
                             held.shape == Shape::Stamp(i),
                         ) {
                             picked = Some(Key::Shape(Shape::Stamp(i)));
@@ -716,10 +752,22 @@ mod tests {
                 tool.name
             );
         }
+        // Then the shape square, which used to be the one control on the bar
+        // with a key outside this row -- so the bar read left to right and the
+        // keyboard skipped a square in the middle of it. Capture and more
+        // shuffled along to make room.
         let after = KINDS.len() as u32;
-        assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Shape(Shape::Capture)));
-        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::More));
-        assert_eq!(shifted_for_digit(after + 3, &few), None);
+        assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Flip));
+        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::Shape(Shape::Capture)));
+        assert_eq!(shifted_for_digit(after + 3, &few), Some(Key::More));
+        assert_eq!(shifted_for_digit(after + 4, &few), None);
+
+        // And the row fits the digits it is named by, which is what the help
+        // screen prints across: one keycap per square, none left over.
+        assert!(
+            shifted(&few).len() <= 10,
+            "the shifted row has outgrown the digits, so some square has no key"
+        );
 
         // And not one of them moves when a pattern is captured.
         let many = library(ON_THE_BAR + 1);

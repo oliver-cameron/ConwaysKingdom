@@ -104,24 +104,174 @@ pub struct Views {
 /// nobody can be wrong about.
 fn common_labels() -> std::collections::HashMap<(winit::keyboard::KeyCode, bool), String> {
     use winit::keyboard::KeyCode as K;
-    const SHIFTED_DIGITS: [(K, &str); 9] = [
-        (K::Digit1, "!"),
-        (K::Digit2, "@"),
-        (K::Digit3, "#"),
-        (K::Digit4, "$"),
-        (K::Digit5, "%"),
-        (K::Digit6, "^"),
-        (K::Digit7, "&"),
-        (K::Digit8, "*"),
-        (K::Digit9, "("),
+    /// The digit row, in the order the bar and the help screen read it.
+    ///
+    /// Ten, not nine. `Digit0` was missing from the shifted half, so a row of
+    /// ten keycaps could never be complete and the help screen fell back to a
+    /// hard-coded `1-9, 0` for ever.
+    const DIGITS: [(K, &str, &str); 10] = [
+        (K::Digit1, "1", "!"),
+        (K::Digit2, "2", "@"),
+        (K::Digit3, "3", "#"),
+        (K::Digit4, "4", "$"),
+        (K::Digit5, "5", "%"),
+        (K::Digit6, "6", "^"),
+        (K::Digit7, "7", "&"),
+        (K::Digit8, "8", "*"),
+        (K::Digit9, "9", "("),
+        (K::Digit0, "0", ")"),
     ];
     const WALKING: [(K, &str); 4] =
         [(K::KeyW, "W"), (K::KeyA, "A"), (K::KeyS, "S"), (K::KeyD, "D")];
-    SHIFTED_DIGITS
+    DIGITS
         .into_iter()
-        .map(|(code, label)| ((code, true), label.to_string()))
+        .flat_map(|(code, plain, shifted)| {
+            [((code, false), plain.to_string()), ((code, true), shifted.to_string())]
+        })
         .chain(WALKING.into_iter().map(|(code, label)| ((code, false), label.to_string())))
         .collect()
+}
+
+/// What the browser says each physical key prints, once it has answered.
+///
+/// A global because the answer arrives on a promise and the thing that wants
+/// it is behind a `RefCell` on the app. Drained rather than read, so the merge
+/// happens once.
+#[cfg(target_arch = "wasm32")]
+static FROM_THE_BROWSER: std::sync::Mutex<Option<Vec<(String, String)>>> =
+    std::sync::Mutex::new(None);
+
+/// **Ask the keyboard what it prints, rather than waiting to be told.**
+///
+/// Every label here is bound by position and learned from a press, which means
+/// a Dvorak player sees `WASD` on the help screen until they have pressed all
+/// four — and the four they press are labelled `,aoe`, which is the answer
+/// they needed before they pressed anything. AZERTY is worse: its unshifted
+/// digit row prints ``&é"'(-è_çà``, so ten stamp squares were labelled with
+/// ten keys that layout does not have.
+///
+/// `navigator.keyboard.getLayoutMap()` answers all of it at once and needs no
+/// press, no layout detection and no table of layouts to keep — which is the
+/// point, because a table would be a guess about which layouts exist and this
+/// is the browser reporting the one in front of the player. It gives the
+/// **unshifted** value only, so the shifted row is still seeded and still
+/// corrected on press.
+///
+/// Reached through `Reflect` rather than through `web-sys`, which has no
+/// binding for it: it is behind a permissions policy and is Chromium-only so
+/// far, and a `get` that comes back undefined is a browser without it rather
+/// than an error.
+#[cfg(target_arch = "wasm32")]
+pub fn ask_the_keyboard() {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else { return };
+    let navigator = window.navigator();
+    let Ok(keyboard) = js_sys::Reflect::get(&navigator, &"keyboard".into()) else { return };
+    if keyboard.is_undefined() || keyboard.is_null() {
+        log::debug!("no navigator.keyboard; key labels will be learned as they are pressed");
+        return;
+    }
+    let Ok(get) = js_sys::Reflect::get(&keyboard, &"getLayoutMap".into()) else { return };
+    let Ok(get) = get.dyn_into::<js_sys::Function>() else { return };
+    let Ok(promise) = get.call0(&keyboard) else { return };
+    let Ok(promise) = promise.dyn_into::<js_sys::Promise>() else { return };
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let Ok(map) = wasm_bindgen_futures::JsFuture::from(promise).await else { return };
+        let Ok(get) = js_sys::Reflect::get(&map, &"get".into()) else { return };
+        let Ok(get) = get.dyn_into::<js_sys::Function>() else { return };
+        let mut found = Vec::new();
+        for (code, shift) in named_keys() {
+            if shift {
+                continue;
+            }
+            let name = format!("{code:?}");
+            if let Ok(value) = get.call1(&map, &name.as_str().into()) {
+                if let Some(text) = value.as_string() {
+                    if !text.is_empty() {
+                        found.push((name, text));
+                    }
+                }
+            }
+        }
+        log::debug!("the browser named {} keys", found.len());
+        if let Ok(mut slot) = FROM_THE_BROWSER.lock() {
+            *slot = Some(found);
+        }
+    });
+}
+
+/// Every physical key the screen puts a name to, so one list decides what is
+/// asked about rather than each caller guessing.
+///
+/// **Bound by position, so only the label is in question.** A key bound by
+/// character needs no entry — `R` is `R` wherever it is — which is why this is
+/// the digit row and the walk cluster and nothing else.
+pub fn named_keys() -> Vec<(winit::keyboard::KeyCode, bool)> {
+    use winit::keyboard::KeyCode as K;
+    const DIGITS: [K; 10] = [
+        K::Digit1,
+        K::Digit2,
+        K::Digit3,
+        K::Digit4,
+        K::Digit5,
+        K::Digit6,
+        K::Digit7,
+        K::Digit8,
+        K::Digit9,
+        K::Digit0,
+    ];
+    DIGITS
+        .into_iter()
+        .flat_map(|code| [(code, false), (code, true)])
+        .chain([K::KeyW, K::KeyA, K::KeyS, K::KeyD].map(|code| (code, false)))
+        .collect()
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use winit::keyboard::KeyCode as K;
+
+    /// **Every key the screen names has a label from the first frame.**
+    ///
+    /// A row is drawn all-or-nothing — half a row of keycaps with the rest
+    /// guessed is a row nobody can read — so one missing entry silently falls
+    /// the whole help screen back to a hard-coded string. `Digit0` shifted was
+    /// missing, so the ten-wide stamp row could never complete and the screen
+    /// said `1-9, 0` for ever, on every layout, including the ones where that
+    /// names ten keys the keyboard does not have.
+    #[test]
+    fn every_named_key_starts_with_a_label() {
+        let labels = common_labels();
+        for key in named_keys() {
+            assert!(labels.contains_key(&key), "{key:?} has no label to start from");
+        }
+    }
+
+    /// The seed is the US answer, which is the layout most people have and is
+    /// what every one of these is corrected away from — by a press, or by the
+    /// browser saying what this keyboard actually prints.
+    #[test]
+    fn the_seed_is_the_layout_it_was_written_on() {
+        let labels = common_labels();
+        assert_eq!(labels.get(&(K::Digit1, false)).map(String::as_str), Some("1"));
+        assert_eq!(labels.get(&(K::Digit1, true)).map(String::as_str), Some("!"));
+        assert_eq!(labels.get(&(K::Digit0, false)).map(String::as_str), Some("0"));
+        assert_eq!(labels.get(&(K::Digit0, true)).map(String::as_str), Some(")"));
+        assert_eq!(labels.get(&(K::KeyW, false)).map(String::as_str), Some("W"));
+    }
+
+    /// The names asked of the browser are the ones `KeyboardEvent.code` uses,
+    /// because that is what `getLayoutMap` is keyed by. `Debug` on a
+    /// `KeyCode` happens to spell them, and this is what says so out loud —
+    /// it is a coincidence worth a test rather than a comment.
+    #[test]
+    fn a_keycode_spells_its_own_web_name() {
+        assert_eq!(format!("{:?}", K::KeyW), "KeyW");
+        assert_eq!(format!("{:?}", K::Digit0), "Digit0");
+        assert_eq!(format!("{:?}", K::Space), "Space");
+    }
 }
 
 /// Borrowed out so the match arm above reads as one thing. `KeyEvent::state`
@@ -292,7 +442,13 @@ impl Views {
             finger: None,
             dragging_widget: false,
             start: 0.0,
-            learned: common_labels(),
+            learned: {
+                // Asked once, here, so the answer is on its way before the
+                // first frame that needs it.
+                #[cfg(target_arch = "wasm32")]
+                ask_the_keyboard();
+                common_labels()
+            },
             // No depth buffer and one sample, matching the world's pipeline;
             // egui has to agree with it because they share a pass.
             renderer: egui_wgpu::Renderer::new(
@@ -328,6 +484,29 @@ impl Views {
         self.learned.get(&(code, shift)).map(String::as_str)
     }
 
+    /// Take what the browser said about this keyboard, if it has answered.
+    ///
+    /// Called each frame and does nothing on all but one of them. A press is
+    /// still stronger evidence and still wins, because a press arrives later
+    /// and overwrites; both are right, so which wins does not matter.
+    pub fn take_what_the_browser_said(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let Some(found) = FROM_THE_BROWSER.lock().ok().and_then(|mut s| s.take()) else {
+                return;
+            };
+            for (code, shift) in named_keys() {
+                if shift {
+                    continue;
+                }
+                let name = format!("{code:?}");
+                if let Some((_, text)) = found.iter().find(|(key, _)| *key == name) {
+                    self.learned.insert((code, false), text.clone());
+                }
+            }
+        }
+    }
+
     /// What shift and this digit type here, for the squares on the hotbar.
     pub fn shifted_digit(&self, digit: u32) -> Option<&str> {
         use winit::keyboard::KeyCode as K;
@@ -343,6 +522,27 @@ impl Views {
             K::Digit9,
         ];
         self.label(*DIGITS.get((digit as usize).checked_sub(1)?)?, true)
+    }
+
+    /// What this digit types on its own, which is what a stamp's square shows.
+    ///
+    /// Zero included, unlike [`Self::shifted_digit`]: the tenth stamp is `0`,
+    /// and the shifted row has never run that far.
+    pub fn plain_digit(&self, digit: u32) -> Option<&str> {
+        use winit::keyboard::KeyCode as K;
+        const DIGITS: [K; 10] = [
+            K::Digit0,
+            K::Digit1,
+            K::Digit2,
+            K::Digit3,
+            K::Digit4,
+            K::Digit5,
+            K::Digit6,
+            K::Digit7,
+            K::Digit8,
+            K::Digit9,
+        ];
+        self.label(*DIGITS.get(digit as usize)?, false)
     }
 
     /// Whether the interface, rather than the world, should get the keyboard.
