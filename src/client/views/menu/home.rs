@@ -117,20 +117,6 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.small(note);
     }
 
-    // A laboratory is a third way to play rather than a setting on the other
-    // two, so it sits with them.
-    ui.add_space(m.item_spacing);
-    if ui
-        .add_sized(
-            [ui.available_width(), m.button_height],
-            egui::Button::new(egui::RichText::new(words::lab::TITLE).size(m.text_body)),
-        )
-        .clicked()
-    {
-        menu.page = Page::Experiments;
-    }
-    ui.small(words::lab::NOTE);
-
     // **At the foot, and behind a press.** Everything above this is a way to
     // play; a player key is not one, and it used to sit here as an editable
     // field — which put the most destructive control in the client directly

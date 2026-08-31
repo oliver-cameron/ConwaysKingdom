@@ -382,6 +382,21 @@ pub(super) fn make_column(
     // refusing was the wrong answer to a filled-in description of a world:
     // every question on it — how big, does it end, how — is answerable
     // without anybody else, and the client is its own authority offline.
+    // **Under the form, on both screens that carry one.** A laboratory is a
+    // world you describe too, so it belongs at the foot of the description
+    // rather than beside the ways in — and it is the answer to the question
+    // the form leaves somebody with, which is "what if I do not want any of
+    // this to be a game".
+    let m = theme.metrics;
+    ui.add_space(m.item_spacing * 2.0);
+    if ui.small_button(words::lab::TITLE).clicked() {
+        menu.page = Page::Experiments;
+    }
+    ui.colored_label(
+        theme.palette.text_dim,
+        egui::RichText::new(words::lab::NOTE).size(m.text_small),
+    );
+
     match made {
         Some(Chose::Create { shape, victory, .. }) if !reached => {
             draft.asking = false;

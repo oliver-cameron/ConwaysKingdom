@@ -11,6 +11,7 @@ pub mod hud;
 pub mod input;
 pub mod lobby;
 pub mod overlay;
+mod rules;
 pub mod stamp;
 pub mod start;
 
@@ -248,6 +249,9 @@ struct Ui {
     /// on more than one and a player who wants them does not know which screen
     /// they are supposed to ask from.
     helping: bool,
+    /// Whether the rules panel is open — a laboratory's two switches, which
+    /// are questions about the *game* rather than about the world.
+    showing_rules: bool,
     /// Why the last attempt to start or leave a match was refused.
     ///
     /// Beside the lobby rather than in [`Self::notice`], which is drawn in the
@@ -446,17 +450,21 @@ pub struct GameApp {
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate rather than a log line — see [`crate::client::desync`].
     geiger: crate::client::desync::Geiger,
-    /// **A laboratory**: place anywhere, and for nothing.
+    /// **A laboratory's two rules**, and they are two.
     ///
-    /// The two questions that are the *game* rather than the simulation —
-    /// `net::may_place` and `net::price` — and the only two an experiment has
-    /// to take off, because [liveness is exactly B3/S23] whatever else is
-    /// true. Offline only, and cleared on a `Welcome`: a client that predicted
-    /// placements a server would refuse is a client that resyncs every time it
-    /// draws.
+    /// `net::may_place` is about where your influence reaches and `net::price`
+    /// is about what you can afford — separate rules with separate reasons, so
+    /// an experiment may reasonably want the map open and the economy on, or
+    /// the reverse. They were one flag until there was a panel to put them on.
+    ///
+    /// The only two an experiment has to take off, because [liveness is
+    /// exactly B3/S23] whatever else is true. Offline only, and cleared on a
+    /// `Welcome`: a client predicting placements a server would refuse resyncs
+    /// every time it draws.
     ///
     /// [liveness is exactly B3/S23]: crate::sim::World::step
-    free_hand: bool,
+    place_anywhere: bool,
+    place_free: bool,
     /// **The world is stopped**, which only means anything offline.
     ///
     /// A connected client advances when the server says a generation happened
@@ -877,7 +885,8 @@ impl GameApp {
                     // time in, and it is not keeping time in this one -- and a
                     // laboratory's rules are off in a world nobody else is in.
                     self.paused = false;
-                    self.free_hand = false;
+                    self.place_anywhere = false;
+                    self.place_free = false;
                     self.world = crate::net::sane_world(
                         world,
                         self.room.as_ref().expect("the room was just set"),
@@ -924,7 +933,8 @@ impl GameApp {
                     // time in, and it is not keeping time in this one -- and a
                     // laboratory's rules are off in a world nobody else is in.
                     self.paused = false;
-                    self.free_hand = false;
+                    self.place_anywhere = false;
+                    self.place_free = false;
                     self.world = crate::net::sane_world(
                         world,
                         self.room.as_ref().expect("the room was just set"),
@@ -1704,12 +1714,12 @@ impl GameApp {
     /// One question in one place, so a laboratory takes the rule off
     /// everywhere it is asked rather than at three of the four call sites.
     fn may_place_at(&self, row: i32, col: i32) -> bool {
-        self.free_hand || crate::net::may_place(&self.world, self.player(), row, col)
+        self.place_anywhere || crate::net::may_place(&self.world, self.player(), row, col)
     }
 
     /// What an action costs, which in a laboratory is nothing.
     fn price(&self, stamped: &Stamped) -> i32 {
-        if self.free_hand {
+        if self.place_free {
             0
         } else {
             crate::net::value_delta(&self.world, stamped)
@@ -1778,6 +1788,11 @@ impl GameApp {
             Key::Kind(kind) => self.held.kind = kind,
             Key::More => self.ui.picking_stamp = !self.ui.picking_stamp,
             Key::Help => self.ui.helping = !self.ui.helping,
+            // The same two the keys reach, so a square and a key cannot come
+            // to mean different things.
+            Key::Run => self.toggle_running(),
+            Key::Step => self.step_one(),
+            Key::Rules => self.ui.showing_rules = !self.ui.showing_rules,
             // The one place flipping happens, so the key and the square
             // cannot drift apart -- which they did, the key putting the shape
             // back to the kind's usual while a click toggled. The turn goes
@@ -2161,7 +2176,8 @@ impl GameApp {
             // while you draw into it is a world eating what you drew.
             menu::Chose::Experiment { free_hand } => {
                 self.play_alone_on(crate::sim::WorldKind::Infinite, None);
-                self.free_hand = free_hand;
+                self.place_anywhere = free_hand;
+                self.place_free = free_hand;
                 self.paused = true;
                 self.last_action = Some(words::help::PAUSED.into());
             }
@@ -2550,6 +2566,7 @@ impl App for GameApp {
                 editing_stamp: None,
                 picking_stamp: false,
                 helping: false,
+                showing_rules: false,
                 refused_start: None,
             },
             camera: camera::Camera::new(home, START_ZOOM),
@@ -2589,7 +2606,8 @@ impl App for GameApp {
             plays_as: None,
             said_where: None,
             applied_early: Vec::new(),
-            free_hand: false,
+            place_anywhere: false,
+            place_free: false,
             paused: false,
             step_once: false,
             forfeited: false,
@@ -2807,6 +2825,7 @@ impl App for GameApp {
             selection: self.selection_mark(),
         };
         let mut picked = None;
+        let mut told_rules = rules::Did::default();
         let mut from_library = stamp::Picked::Nothing;
         let picking = self.ui.picking_stamp;
         let mut chose = menu::Chose::Nothing;
@@ -2821,6 +2840,11 @@ impl App for GameApp {
         let standing = self.standing.clone();
         let generation = self.world.generation;
         let paused = self.paused;
+        // Offline, this client is the clock; connected, the server is and
+        // there is nothing on the bar to press.
+        let own_clock = self.link.is_none();
+        let showing_rules = self.ui.showing_rules;
+        let (place_anywhere, place_free) = (self.place_anywhere, self.place_free);
         // What the client already is, which the menu cannot see for itself.
         let at = menu::Where {
             now: self.elapsed,
@@ -2900,6 +2924,9 @@ impl App for GameApp {
                         });
                         let what = held.placement().unwrap_or(crate::net::Placement::Life);
                         let look = hotbar::Look {
+                            own_clock,
+                            paused,
+                            showing_rules,
                             theme: &theme,
                             what,
                             sheet,
@@ -2909,6 +2936,15 @@ impl App for GameApp {
                         };
                         let bar = hotbar::show(ctx, &look, held, &self.stamps, &status);
                         picked = bar.did;
+                        // Over the bar rather than instead of it: the square
+                        // that opens it has to stay pressable.
+                        let rules_rect = if showing_rules && own_clock {
+                            let shown = rules::show(ctx, &theme, place_anywhere, place_free);
+                            told_rules = shown.did;
+                            shown.rect
+                        } else {
+                            None
+                        };
                         // Over the world rather than instead of it: a match that has
                         // not started looks exactly like a game that is broken, since
                         // nothing moves and nothing a player does appears.
@@ -2939,15 +2975,20 @@ impl App for GameApp {
                                 editing,
                             );
                             from_library = shown.did;
-                            return [hud_rect, bar.rect, shown.rect, waiting, clock_rect]
-                                .into_iter()
-                                .flatten()
-                                .collect();
+                            return [
+                                hud_rect, bar.rect, shown.rect, waiting, clock_rect, rules_rect,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .collect();
                         }
                         // Each panel on its own. Folding them together first would
                         // claim everything between them, and they sit in opposite
                         // corners.
-                        [hud_rect, bar.rect, waiting, clock_rect].into_iter().flatten().collect()
+                        [hud_rect, bar.rect, waiting, clock_rect, rules_rect]
+                            .into_iter()
+                            .flatten()
+                            .collect()
                     }
                 }
             })();
@@ -2966,6 +3007,16 @@ impl App for GameApp {
         self.chose(chose);
         if let Some(key) = picked {
             self.pick(key);
+        }
+        // The two rules, and the press that shuts the panel.
+        if let Some(on) = told_rules.anywhere {
+            self.place_anywhere = on;
+        }
+        if let Some(on) = told_rules.free {
+            self.place_free = on;
+        }
+        if told_rules.close {
+            self.ui.showing_rules = false;
         }
         match from_library {
             stamp::Picked::Nothing => {}
@@ -3164,8 +3215,23 @@ impl App for GameApp {
     ///
     /// This was all positional, which is invisible on the layout it was
     /// written on and wrong on every other.
-    fn on_key(&mut self, code: winit::keyboard::KeyCode, typed: Option<&str>, pressed: bool) {
+    fn on_key(
+        &mut self,
+        code: winit::keyboard::KeyCode,
+        named: Option<winit::keyboard::NamedKey>,
+        typed: Option<&str>,
+        pressed: bool,
+    ) {
         use winit::keyboard::KeyCode as K;
+        use winit::keyboard::NamedKey as N;
+        // **What a key means, where it means something.** Escape, shift and
+        // the arrows are bound to their meaning rather than to where they sit,
+        // because a player who has mapped caps lock to escape sends the escape
+        // *meaning* from the caps lock *position* — and a binding on the
+        // position never fires, which is exactly what happened. The walk
+        // cluster and the digits stay positional, because those are a shape on
+        // the board rather than a meaning.
+        let escape = named == Some(N::Escape);
         // **Every screen has a key that leaves it**, which is the habit taken
         // from chess-tui — `b` for the menu there, escape here because that is
         // what escape means everywhere else. Handled before the guard below,
@@ -3179,15 +3245,11 @@ impl App for GameApp {
         // sit**, resolved in one place — see [`input::mnemonic`], which is
         // also where the fallback for a keyboard that cannot type them is and
         // where all of it is tested without a window.
-        if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift, self.ctrl)) {
+        if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift)) {
             match what {
                 input::Mnemonic::Help => self.ui.helping = !self.ui.helping,
                 input::Mnemonic::Play => self.toggle_running(),
                 input::Mnemonic::StepOne => self.step_one(),
-                // Through the browser's history rather than by changing screen
-                // here, so a key and the back button are one path and cannot
-                // disagree about where back is.
-                input::Mnemonic::Back => crate::client::route::go_back(),
                 // **A pattern and the same pattern turned are one pattern.**
                 // Without this the library fills up with its own reflections —
                 // four gliders, and four more that are their mirror image, and
@@ -3212,11 +3274,11 @@ impl App for GameApp {
             }
             return;
         }
-        if pressed && code == K::Escape && self.ui.helping {
+        if pressed && escape && self.ui.helping {
             self.ui.helping = false;
             return;
         }
-        if pressed && code == K::Escape && !self.playing() {
+        if pressed && escape && !self.playing() {
             if let Screen::Menu(m) = &mut self.ui.screen {
                 // The form is a column rather than something opened, so there
                 // is no rung for it: a field lets go of the keyboard (handled
@@ -3254,28 +3316,43 @@ impl App for GameApp {
             return;
         }
         match code {
-            K::ShiftLeft | K::ShiftRight => {
+            _ if named == Some(N::Shift) => {
                 self.shift = pressed;
                 return;
             }
-            K::ControlLeft | K::ControlRight => {
+            _ if named == Some(N::Control) => {
                 self.ctrl = pressed;
                 return;
             }
             // Abandon whatever is being drawn. A rectangle you have decided
             // against otherwise has to be shrunk back to one cell to be made
             // harmless, and that still places a cell.
-            K::Escape if pressed => {
+            //
+            // **`ctrl+[` is escape**, which is what it is: the ASCII escape
+            // code, and what a terminal sends for it. Bound to the *keycode*
+            // rather than as a control of its own, so it does whatever escape
+            // does wherever escape does it and cannot drift from it — and so
+            // it needs no row on the key list, because somebody who reaches
+            // for it already knows what it is.
+            K::BracketLeft if pressed && self.ctrl => {
+                self.cancel_gesture();
+                return;
+            }
+            _ if escape && pressed => {
                 self.cancel_gesture();
                 return;
             }
             _ => {}
         }
         let slot = match code {
-            K::ArrowLeft | K::KeyA => 0,
-            K::ArrowRight | K::KeyD => 1,
-            K::ArrowUp | K::KeyW => 2,
-            K::ArrowDown | K::KeyS => 3,
+            _ if named == Some(N::ArrowLeft) => 0,
+            _ if named == Some(N::ArrowRight) => 1,
+            _ if named == Some(N::ArrowUp) => 2,
+            _ if named == Some(N::ArrowDown) => 3,
+            K::KeyA => 0,
+            K::KeyD => 1,
+            K::KeyW => 2,
+            K::KeyS => 3,
             _ => return,
         };
         self.pan[slot] = pressed;

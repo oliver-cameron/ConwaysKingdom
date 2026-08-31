@@ -289,3 +289,30 @@ it collides with nothing — on a Mac the browser already does it, and binding i
 too would call `history.back()` beside the browser's own and go back twice.
 `views::on_a_mac` asks the browser rather than `cfg!(target_os)`, which on a
 wasm build says `unknown` and would be wrong for everybody.
+
+## Escape did not work for anybody who had moved it
+
+Caps lock mapped to escape is a common enough thing to do that it should have
+been the first test, and it did nothing. The client bound `KeyCode::Escape`,
+which is winit's **physical** key — where escape sits — and a keysym-level
+remap keeps the key where it is and changes what it *means*. So the event
+arrives as `physical_key: CapsLock`, `logical_key: Escape`, and a binding on
+the position never fires.
+
+Which is the same lesson as the layout labels, from the other side, and the
+rule falls out of putting the two together:
+
+**A key bound to what it *means* is bound logically. A key bound to where it
+*sits* is bound physically.** Escape, shift and the arrows mean something, so
+they are `NamedKey` now. The walk cluster and the digit row are a shape on the
+board rather than a meaning, so they stay `KeyCode` — and *their* problem is
+the label, which is why the layout map exists.
+
+`App::on_key` carries both halves for this reason: `code` is where the key sits
+and `named` is what it means, and a binding picks the one its own answer
+depends on.
+
+The general version of this is that defaults cannot be right, which is now
+[a roadmap entry](planned.md#keys-the-player-chooses): three separate faults
+have come out of this same place, each fixed by guessing better rather than by
+letting the player say.

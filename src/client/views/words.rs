@@ -364,6 +364,29 @@ pub mod hotbar {
     /// it is the one key on the bar that does something rather than selecting
     /// something.
     ///
+    /// The clock section. Words rather than glyphs, because the sheet has no
+    /// art for any of them and a triangle painted by hand is a decision about
+    /// a whole icon set — see `icons::back`, which is the precedent and the
+    /// argument for eventually doing it.
+    pub const RUN: &str = "Run";
+    pub const RUN_HINT: &str = "Let the world run";
+    pub const STOP: &str = "Stop";
+    pub const STOP_HINT: &str = "Hold the world still";
+    pub const STEP: &str = "+1";
+    pub const STEP_HINT: &str = "One generation, and stay stopped";
+    pub const RULES: &str = "Rules";
+    pub const RULES_HINT: &str = "What the game's rules are doing here";
+    pub const CLOSE: &str = "Close";
+    pub const ANYWHERE: &str = "Place outside your territory";
+    pub const ANYWHERE_NOTE: &str =
+        "Off, you may only build where your own influence reaches, as in a game.";
+    pub const FREE: &str = "Place without paying";
+    pub const FREE_NOTE: &str = "Off, everything costs what it costs and a purse can run out.";
+    /// The keys these squares teach, which live with the rest of the key
+    /// labels — `help::keys` is where a key's name is decided, and a second
+    /// spelling here would be a square and a key list disagreeing.
+    pub use super::help::keys::{PLAY as RUN_KEY, STEP_ONE as STEP_KEY};
+
     pub const CAPTURE: &str = "Grab";
     /// The square that opens the library.
     pub const LIBRARY: &str = "Stamps";

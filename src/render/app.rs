@@ -77,7 +77,20 @@ pub trait App: 'static {
     /// Which one a binding wants is a question about what the binding means,
     /// and getting it wrong is invisible on the layout it was written on. See
     /// `client::views::game::on_key`, where the rule is written down.
-    fn on_key(&mut self, _code: winit::keyboard::KeyCode, _typed: Option<&str>, _pressed: bool) {}
+    /// `named` is the key's **meaning** where it has one — escape, shift, an
+    /// arrow — and `code` is where it **sits**. Which one a binding wants is
+    /// the same question as character-versus-position one level down, and
+    /// getting it wrong is invisible to whoever wrote the binding: a player
+    /// who has mapped caps lock to escape sends `physical_key: CapsLock` and
+    /// `logical_key: Escape`, so a binding on the position never fires.
+    fn on_key(
+        &mut self,
+        _code: winit::keyboard::KeyCode,
+        _named: Option<winit::keyboard::NamedKey>,
+        _typed: Option<&str>,
+        _pressed: bool,
+    ) {
+    }
     /// A wheel or trackpad scroll. `zoom_gesture` is set when the platform
     /// reports it as a pinch rather than a scroll — browsers and most desktop
     /// environments send a trackpad pinch as ctrl+wheel.
@@ -474,7 +487,14 @@ impl<A: App> ApplicationHandler for Harness<A> {
                 // the only way to bind a mnemonic. `to_text` is `None` for a
                 // key that types nothing -- shift, escape, the arrows.
                 let typed = logical_key.to_text();
-                r.app.on_key(code, typed, state == ElementState::Pressed);
+                // And what it *means*, for the keys that mean something rather
+                // than typing something. A remapped key keeps its meaning and
+                // moves its position, so this is the half that survives one.
+                let named = match logical_key {
+                    winit::keyboard::Key::Named(named) => Some(*named),
+                    _ => None,
+                };
+                r.app.on_key(code, named, typed, state == ElementState::Pressed);
             }
             WindowEvent::ModifiersChanged(state) => r.ctrl = state.state().control_key(),
             WindowEvent::MouseWheel { delta, .. } if !consumed => {

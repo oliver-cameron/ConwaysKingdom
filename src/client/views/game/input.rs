@@ -246,12 +246,6 @@ pub(crate) enum Mnemonic {
     Play,
     /// One generation, and stay stopped.
     StepOne,
-    /// Back a screen, through the browser's own history.
-    ///
-    /// `ctrl+[` is the ASCII escape code and is "back" in enough editors to be
-    /// a habit — and it is *not* browser-back outside macOS, where that is
-    /// `alt+left`. So it is bound here rather than left to the browser.
-    Back,
 }
 
 /// Whether this key types a Latin letter — which is the question that decides
@@ -288,7 +282,6 @@ pub(crate) fn mnemonic(
     code: winit::keyboard::KeyCode,
     typed: Option<&str>,
     shift: bool,
-    ctrl: bool,
 ) -> Option<Mnemonic> {
     use winit::keyboard::KeyCode as K;
     let says = |what: &str| typed.is_some_and(|t| t.eq_ignore_ascii_case(what));
@@ -299,20 +292,15 @@ pub(crate) fn mnemonic(
         _ if says("?") => Mnemonic::Help,
         _ if says("r") => Mnemonic::Turn,
         _ if says("f") => Mnemonic::Mirror,
+        _ if says(" ") => Mnemonic::Play,
         _ if says(".") => Mnemonic::StepOne,
         K::Slash if shift => Mnemonic::Help,
         K::KeyR if unreachable => Mnemonic::Turn,
         K::KeyF if unreachable => Mnemonic::Mirror,
-        // Positional, and there is no character to bind: the space bar prints
-        // a space on every layout there is, so its position is never a
-        // surprise and its label never has to be learned.
+        // A space is a space on every layout there is, so there is no label to
+        // learn — but it is bound by *character* rather than by position, so
+        // a keyboard whose space bar has been moved keeps it.
         K::Space => Mnemonic::Play,
-        // **Ctrl only, and deliberately not the command key.** `ctrl+[` is not
-        // a browser shortcut on Linux or Windows, so binding it adds one that
-        // was missing. On macOS `cmd+[` *is* browser-back already — binding it
-        // here as well would call `history.back()` beside the browser's own
-        // and go back twice. A bare `[` stays a character somebody may type.
-        K::BracketLeft if ctrl => Mnemonic::Back,
         // A full stop falls back unconditionally: both positions are bound to
         // nothing else here and neither can collide.
         K::Period | K::NumpadDecimal => Mnemonic::StepOne,
@@ -325,26 +313,17 @@ mod tests {
     use super::*;
     use winit::keyboard::KeyCode as K;
 
-    /// `ctrl+[` is back, and a bare `[` is a character somebody may type.
-    #[test]
-    fn ctrl_and_a_bracket_goes_back() {
-        assert_eq!(mnemonic(K::BracketLeft, Some("["), false, true), Some(Mnemonic::Back));
-        assert_eq!(mnemonic(K::BracketLeft, Some("["), false, false), None, "a bare bracket");
-        // The position, not the character: on AZERTY that key types `^`.
-        assert_eq!(mnemonic(K::BracketLeft, Some("^"), false, true), Some(Mnemonic::Back));
-    }
-
     /// Golly's two, and both are reachable on a keyboard this client cannot
     /// read a character from — return types nothing anywhere, and a layout
     /// whose full stop is somewhere else still has the key where `.` sits.
     #[test]
     fn the_clock_keys_are_reachable_on_any_layout() {
-        assert_eq!(mnemonic(K::Space, Some(" "), false, false), Some(Mnemonic::Play));
-        assert_eq!(mnemonic(K::Space, None, false, false), Some(Mnemonic::Play));
-        assert_eq!(mnemonic(K::Period, Some("."), false, false), Some(Mnemonic::StepOne));
+        assert_eq!(mnemonic(K::Space, Some(" "), false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Space, None, false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Period, Some("."), false), Some(Mnemonic::StepOne));
         // A full stop by character wherever it has moved to.
-        assert_eq!(mnemonic(K::Semicolon, Some("."), false, false), Some(Mnemonic::StepOne));
-        assert_eq!(mnemonic(K::Period, None, false, false), Some(Mnemonic::StepOne));
+        assert_eq!(mnemonic(K::Semicolon, Some("."), false), Some(Mnemonic::StepOne));
+        assert_eq!(mnemonic(K::Period, None, false), Some(Mnemonic::StepOne));
     }
 
     /// **Programmer Dvorak, where the digit row is shifted by default.** The
@@ -355,8 +334,8 @@ mod tests {
     /// because it reads the labels off the keyboard rather than assuming.
     #[test]
     fn programmer_dvorak_finds_its_keys() {
-        assert_eq!(mnemonic(K::KeyP, Some("r"), false, false), Some(Mnemonic::Turn));
-        assert_eq!(mnemonic(K::KeyU, Some("f"), false, false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::KeyP, Some("r"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyU, Some("f"), false), Some(Mnemonic::Mirror));
         // The digit row is positional, so it is untouched by any of this.
         assert_eq!(digit(K::Digit1), Some(1));
         assert_eq!(digit(K::Digit0), Some(0));
@@ -368,10 +347,10 @@ mod tests {
     /// The layout the game was written on, where character and position agree.
     #[test]
     fn a_us_keyboard_is_unchanged() {
-        assert_eq!(mnemonic(K::KeyR, Some("r"), false, false), Some(Mnemonic::Turn));
-        assert_eq!(mnemonic(K::KeyR, Some("R"), true, false), Some(Mnemonic::Turn));
-        assert_eq!(mnemonic(K::KeyF, Some("f"), false, false), Some(Mnemonic::Mirror));
-        assert_eq!(mnemonic(K::Slash, Some("?"), true, false), Some(Mnemonic::Help));
+        assert_eq!(mnemonic(K::KeyR, Some("r"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyR, Some("R"), true), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyF, Some("f"), false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::Slash, Some("?"), true), Some(Mnemonic::Help));
     }
 
     /// **Dvorak keeps the character binding**, which is what the fallback must
@@ -379,14 +358,10 @@ mod tests {
     /// the key that types `r` rather than under one nothing tells you about.
     #[test]
     fn dvorak_binds_the_letter_and_not_the_place() {
-        assert_eq!(mnemonic(K::KeyP, Some("r"), false, false), Some(Mnemonic::Turn), "r is r");
-        assert_eq!(
-            mnemonic(K::KeyR, Some("p"), false, false),
-            None,
-            "the R position types p there"
-        );
-        assert_eq!(mnemonic(K::KeyU, Some("f"), false, false), Some(Mnemonic::Mirror));
-        assert_eq!(mnemonic(K::KeyY, Some("f"), false, false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::KeyP, Some("r"), false), Some(Mnemonic::Turn), "r is r");
+        assert_eq!(mnemonic(K::KeyR, Some("p"), false), None, "the R position types p there");
+        assert_eq!(mnemonic(K::KeyU, Some("f"), false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::KeyY, Some("f"), false), Some(Mnemonic::Mirror));
     }
 
     /// **And a keyboard with no Latin letters falls back to the place**, which
@@ -394,11 +369,11 @@ mod tests {
     /// so rotate, flip and the help screen naming them were unreachable.
     #[test]
     fn a_non_latin_keyboard_falls_back_to_where_the_key_sits() {
-        assert_eq!(mnemonic(K::KeyR, Some("\u{43a}"), false, false), Some(Mnemonic::Turn));
-        assert_eq!(mnemonic(K::KeyF, Some("\u{430}"), false, false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::KeyR, Some("\u{43a}"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyF, Some("\u{430}"), false), Some(Mnemonic::Mirror));
         // Greek and Hebrew are the same argument.
-        assert_eq!(mnemonic(K::KeyR, Some("\u{3c1}"), false, false), Some(Mnemonic::Turn));
-        assert_eq!(mnemonic(K::KeyF, Some("\u{5db}"), false, false), Some(Mnemonic::Mirror));
+        assert_eq!(mnemonic(K::KeyR, Some("\u{3c1}"), false), Some(Mnemonic::Turn));
+        assert_eq!(mnemonic(K::KeyF, Some("\u{5db}"), false), Some(Mnemonic::Mirror));
     }
 
     /// **A dead key types nothing**, which is what `~` is on the Spanish,
@@ -410,9 +385,9 @@ mod tests {
     #[test]
     fn a_key_that_is_somewhere_else_still_works_by_position() {
         // And where `?` is somewhere else entirely, the position still works.
-        assert_eq!(mnemonic(K::Slash, None, true, false), Some(Mnemonic::Help));
+        assert_eq!(mnemonic(K::Slash, None, true), Some(Mnemonic::Help));
         // Shift matters for `?`: the unshifted key is `/` and means nothing.
-        assert_eq!(mnemonic(K::Slash, Some("/"), false, false), None);
+        assert_eq!(mnemonic(K::Slash, Some("/"), false), None);
     }
 
     /// Nothing else is one of the four. A key that means something is a key
@@ -423,7 +398,7 @@ mod tests {
             // Space is play now, so it is no longer one of the ordinary keys.
             [(K::KeyA, "a"), (K::KeyW, "w"), (K::Digit1, "1"), (K::KeyG, "g")]
         {
-            assert_eq!(mnemonic(code, Some(typed), false, false), None, "{typed}");
+            assert_eq!(mnemonic(code, Some(typed), false), None, "{typed}");
         }
     }
 

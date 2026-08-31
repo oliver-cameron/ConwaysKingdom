@@ -100,7 +100,6 @@ fn groups(keys: &Keys) -> Vec<Group> {
             keys: vec![
                 (words::keys::PLAY.into(), words::PLAY),
                 (words::keys::STEP_ONE.into(), words::STEP_ONE),
-                (words::keys::back_key(crate::client::views::on_a_mac()).into(), words::GO_BACK),
             ],
         },
         Group {

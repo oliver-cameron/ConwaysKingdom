@@ -222,6 +222,12 @@ pub enum Key {
     Kind(usize),
     /// The stamps that did not fit.
     More,
+    /// Run the world, or stop it.
+    Run,
+    /// One generation, and stay stopped.
+    Step,
+    /// Open the laboratory's settings: what the game's rules are doing.
+    Rules,
     /// The shape square: pencil and pane are one choice with two answers, so
     /// this is the other one.
     ///
@@ -331,6 +337,13 @@ pub struct Look<'a> {
     /// shows. Two closures rather than one taking a shift flag, because every
     /// call site knows which row it is drawing.
     pub plain: &'a Typed<'a>,
+    /// Whether this client keeps its own time, which is to say whether it is
+    /// offline. Connected, the server is the clock and the section is not
+    /// drawn — a stopped board would be a lie about a world that is moving.
+    pub own_clock: bool,
+    pub paused: bool,
+    /// Whether the rules panel is open, so its square reads as pressed.
+    pub showing_rules: bool,
 }
 
 pub fn show(
@@ -471,6 +484,47 @@ pub fn show(
                         picked = Some(Key::More);
                     }
                     shift += 1;
+
+                    // **The clock, in a section of its own.** It is not about
+                    // what you are holding or what you are drawing with — it
+                    // is about the world, which is a third thing — and it is
+                    // on the bar rather than only on a key because a control
+                    // nobody can see is a control nobody finds. Offline only:
+                    // connected, the server keeps time and there is nothing
+                    // here to press.
+                    if look.own_clock {
+                        rule(ui, theme);
+                        if square(
+                            ui,
+                            look,
+                            Face::Text(if look.paused { words::RUN } else { words::STOP }),
+                            if look.paused { words::RUN_HINT } else { words::STOP_HINT },
+                            Some(words::RUN_KEY.to_string()),
+                            look.paused,
+                        ) {
+                            picked = Some(Key::Run);
+                        }
+                        if square(
+                            ui,
+                            look,
+                            Face::Text(words::STEP),
+                            words::STEP_HINT,
+                            Some(words::STEP_KEY.to_string()),
+                            false,
+                        ) {
+                            picked = Some(Key::Step);
+                        }
+                        if square(
+                            ui,
+                            look,
+                            Face::Text(words::RULES),
+                            words::RULES_HINT,
+                            None,
+                            look.showing_rules,
+                        ) {
+                            picked = Some(Key::Rules);
+                        }
+                    }
 
                     // Last, and outside the rule with the library: it is not
                     // about stamps, it is about the bar.

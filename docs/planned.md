@@ -35,6 +35,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | a person exists; a *safe* one does not, and discovery is not started |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Experiments](#experiments) | Part built | a page, a laboratory world, the clock and the rules off; RLE and reset are not |
+| [Keys the player chooses](#keys-the-player-chooses) | Decided | defaults cannot be right; three faults have come out of that |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
@@ -688,6 +689,32 @@ Worth stating rather than leaving to be discovered, because "why is this slower 
 And it is **not multiplayer**. A shared laboratory is a shared world with the rules off, which is a room anybody can edit anywhere; that is a different feature with a different argument behind it.
 
 The order: RLE first, since it stands alone and is worth the most; then pause, step and reset, which is a derive and three buttons; then speed and rulestrings; then the placing flag; then panes.
+
+## Keys the player chooses
+
+**Decided.** Every binding in the client is the one it was written with, and the whole of what a player can do about it is nothing.
+
+The argument for it is not preference, it is that **defaults cannot be right**. Three separate faults have now come out of the same place, and each was fixed by guessing better rather than by asking:
+
+- a binding by **character** is unreachable on a layout that cannot type the character — `R` types `к` on a Cyrillic keyboard, and `~` is a dead key on three Latin ones;
+- a binding by **position** is wrong for anybody who has moved the key — caps lock mapped to escape sends the escape *meaning* from the caps lock *position*, so escape simply did not work;
+- and a **label** is a guess about a keyboard nobody here can see, which is why `navigator.keyboard.getLayoutMap` exists and why it is Chromium-only.
+
+Each fix made the defaults better and none of them makes a default right for somebody who wants `hjkl`, or who plays one-handed, or whose muscle memory is another game's.
+
+### What it needs
+
+**A table from action to binding**, which is most of the way there already: `input::Mnemonic` is the vocabulary of actions, `hotbar::Key` is the rest of it, and `views::words::keys` is what each is *called*. What does not exist is the map being data rather than a `match`.
+
+**Kept per person, not per client**, which is the [stamp library's problem](known-bugs.md#a-pinned-stamp-is-pinned-per-client-not-per-person) exactly: `net::keep` is a browser's `localStorage`, so a player rebinding on a laptop rebinds nothing on their phone. It waits on the same identity everything else does.
+
+**And a screen to edit it**, which is the part that is real work: a list of actions, a press to capture, and a refusal when a key is already spoken for. `help` is the list already — it is generated from `groups`, so a rebinding screen is that list with each row pressable.
+
+### What it must not become
+
+**A second vocabulary the key list cannot describe.** `help` exists so that the game's whole vocabulary is one screen, and it is generated from the bindings rather than written beside them — see the note on `groups`, which says a list that drifts out of step with the keys is worse than no list. A rebinding table has to be the thing `help` reads, not a layer over the thing it reads.
+
+**A way to bind a key the client cannot see.** A browser does not deliver every chord — `ctrl+W` closes the tab and never arrives — so capturing a press has to be able to say "that one does not reach here" rather than recording a binding that will never fire.
 
 ## Better interfaces
 

@@ -168,7 +168,10 @@ pub fn ask_the_keyboard() {
     let navigator = window.navigator();
     let Ok(keyboard) = js_sys::Reflect::get(&navigator, &"keyboard".into()) else { return };
     if keyboard.is_undefined() || keyboard.is_null() {
-        log::debug!("no navigator.keyboard; key labels will be learned as they are pressed");
+        log::info!(
+            "no navigator.keyboard here, so key labels are learned as keys are pressed. \
+             That is every browser but Chromium's."
+        );
         return;
     }
     let Ok(get) = js_sys::Reflect::get(&keyboard, &"getLayoutMap".into()) else { return };
@@ -194,11 +197,29 @@ pub fn ask_the_keyboard() {
                 }
             }
         }
-        log::debug!("the browser named {} keys", found.len());
+        log::info!("the browser named {} of this keyboard's keys", found.len());
         if let Ok(mut slot) = FROM_THE_BROWSER.lock() {
             *slot = Some(found);
         }
     });
+
+    // **And again whenever the layout changes.** Somebody testing this is
+    // almost certainly *switching* to Dvorak with the page already open, which
+    // is the one case a query at startup cannot answer: it asked while the
+    // keyboard was still QWERTY and there was nothing to ask again. Chromium
+    // fires `layoutchange` on `navigator.keyboard` for exactly this.
+    let again = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+        log::info!("the keyboard layout changed; asking again");
+        ask_the_keyboard();
+    });
+    let listened = js_sys::Reflect::get(&keyboard, &"addEventListener".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .map(|f| f.call2(&keyboard, &"layoutchange".into(), again.as_ref()));
+    if listened.is_none() {
+        log::debug!("no layoutchange to listen for");
+    }
+    again.forget();
 }
 
 /// Whether this is a Mac, for the labels whose key is spelled differently
