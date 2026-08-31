@@ -222,22 +222,44 @@ fn grid_tint(cell_in_chunk: vec2<f32>, n: f32) -> vec3<f32> {
     return vec3<f32>(0.0);
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let n = cam.chunk_n;
+/// How many samples a side one pixel is worth, at this zoom.
+///
+/// **A cell is sixteen texels of art**, so aliasing starts long before a pixel
+/// covers more than one cell: at one pixel per texel — zoom sixteen — a point
+/// sample is exact, and every step out from there is one pixel standing for
+/// four texels, then sixteen, then more. `textureLoad` and a `Nearest` sampler
+/// pick one of them, so a pattern shimmers as the camera moves and thin
+/// structures wink in and out at some zooms and not others.
+///
+/// So the footprint is measured in **texels**, which makes one rule cover both
+/// halves of the problem: inside a tile it antialiases the art, and past one it
+/// averages over the cells a pixel covers. Nothing has to know which case it is
+/// in.
+///
+/// Capped, because this is `k²` loads and samples a fragment. Four is exact
+/// down to zoom four and progressively under-sampled below it, which is where
+/// a level of detail takes over — see
+/// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#zooming-out-without-lying).
+/// It is a dial: raise it for a better picture at low zoom, lower it if the
+/// fragment cost ever shows up.
+const MAX_AA: i32 = 4;
 
-    // Unloaded ground is ground where every cell is dead, and `chunks` holds a
-    // layer of exactly that -- see ChunkStore::init_unloaded_layer. So the
-    // backdrop is not a special case with a pattern of its own: it is one quad
-    // spanning thousands of chunks, with the world position wrapped onto that
-    // one dead chunk. Everything below then runs unchanged, which is what puts
-    // a dead cell's sprite on unloaded ground. Drawing the chunk ring and
-    // nothing else left it blank however the dead sprite was drawn.
-    var local = in.local;
-    if in.kind == KIND_BACKDROP {
-        local = (in.world - floor(in.world / n) * n) * f32(TILE_N);
-    }
+fn aa_side() -> i32 {
+    // Texels one pixel covers on a side. `cam.zoom` is pixels per cell and a
+    // cell is TILE_N texels.
+    let texels_per_pixel = f32(TILE_N) / cam.zoom;
+    return clamp(i32(ceil(texels_per_pixel)), 1, MAX_AA);
+}
 
+/// The colour of one point, in texels across a chunk.
+///
+/// Everything that was the body of `fs_main` and is now called `k²` times.
+/// Each sample recomputes its own cell and its own tile, which is what keeps a
+/// footprint that straddles two cells honest — averaging inside one tile's
+/// sheet coordinates instead would blend a cell's art into its neighbour's,
+/// because the sheet is an atlas and adjacent tiles are unrelated pictures.
+/// It is also why the sheet cannot simply be given mipmaps.
+fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     // local is in texels across the chunk; the cell is that divided by a
     // tile's width, and where we are inside the cell is the remainder.
     let cell_coord = vec2<i32>(floor(local / f32(TILE_N)));
@@ -245,20 +267,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // r is the owner byte, g the tile byte -- and the tile byte *is* the index
     // into the sheet, kind and alive and ice already folded into it. Nothing
-    // to look up and nothing to branch on, which is what keeps this one
-    // unconditional sample: WGSL forbids implicit derivatives in non-uniform
-    // control flow, so a sample inside an `if` on what a cell is would be
-    // undefined on the GL path and rejected outright by Tint.
-    let texel = textureLoad(chunks, cell_coord, i32(in.layer), 0);
+    // to look up and nothing to branch on.
+    let texel = textureLoad(chunks, cell_coord, i32(layer), 0);
     let tile = f32(texel.g);
 
     // Low nibble across the sheet, high nibble down it.
     let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
     let sheet_uv = (tile_xy + within / f32(TILE_N)) / SHEET_TILES;
-    let sprite = textureSample(sprites, sprite_sampler, sheet_uv);
+    // **An explicit level, not an implicit one.** `textureSample` needs
+    // derivatives, and derivatives may not be taken in non-uniform control
+    // flow -- which a loop and a branch on the quad's kind both are. The sheet
+    // has one mip and a `Nearest` sampler, so level zero is exactly what the
+    // implicit path chose anyway and nothing about the picture changes.
+    let sprite = textureSampleLevel(sprites, sprite_sampler, sheet_uv, 0.0);
 
     var colour = grid_tint(vec2<f32>(cell_coord), n);
-
     let player = texel.r >> PLAYER_SHIFT;
 
     colour = mix(
@@ -296,12 +319,74 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             + (f32((sides & 8u) == 0u) * step(within.x, edge));
         colour = mix(colour, colour * EDGE_SHADE, min(open, 1.0) * sprite.a);
     }
+    return colour;
+}
+
+/// Where in the chunk texture a sample `offset` cells away from this fragment
+/// lands, in texels.
+///
+/// Two routes, because the two quads address the texture differently.
+///
+/// Unloaded ground is ground where every cell is dead, and `chunks` holds a
+/// layer of exactly that -- see ChunkStore::init_unloaded_layer. So the
+/// backdrop is not a special case with a pattern of its own: it is one quad
+/// spanning thousands of chunks, with the world position wrapped onto that one
+/// dead chunk. Everything else then runs unchanged, which is what puts a dead
+/// cell's sprite on unloaded ground.
+///
+/// A chunk quad **clamps** rather than wrapping. A sample that fell off the
+/// edge would read zeros -- the texture returns them out of bounds -- which is
+/// a dead unowned cell, so the outer ring of every chunk would darken towards
+/// empty ground at low zoom and make the seam worse rather than better.
+/// Clamping repeats the edge cell, which at the zooms this runs at is a
+/// fraction of a pixel.
+fn sample_local(in: VsOut, offset: vec2<f32>, n: f32) -> vec2<f32> {
+    if in.kind == KIND_BACKDROP {
+        let world = in.world + offset;
+        return (world - floor(world / n) * n) * f32(TILE_N);
+    }
+    let span = n * f32(TILE_N);
+    return clamp(in.local + offset * f32(TILE_N), vec2<f32>(0.0), vec2<f32>(span - 0.5));
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let n = cam.chunk_n;
+    let k = aa_side();
+
+    var colour: vec3<f32>;
+    if k == 1 {
+        // One pixel to a texel or better, where a point sample is exact and
+        // the loop below would take the same reading sixteen times.
+        colour = point_colour(sample_local(in, vec2<f32>(0.0), n), in.layer, n);
+    } else {
+        // A `k` by `k` grid on the pixel's own footprint, averaged in shaded
+        // colour rather than in cell bytes. **Averaging the bytes would be
+        // meaningless**: they are bit fields, so half of one kind and half of
+        // another is a third kind with its own art, and a player number
+        // between two players is a third player.
+        let cells_per_pixel = 1.0 / cam.zoom;
+        var acc = vec3<f32>(0.0);
+        for (var i = 0; i < k; i = i + 1) {
+            for (var j = 0; j < k; j = j + 1) {
+                // Centres of an even grid over the footprint, so the samples
+                // are symmetric about the pixel and none sits on its edge.
+                let at = (vec2<f32>(f32(j), f32(i)) + 0.5) / f32(k) - 0.5;
+                acc = acc + point_colour(sample_local(in, at * cells_per_pixel, n), in.layer, n);
+            }
+        }
+        colour = acc / f32(k * k);
+    }
 
     // Encoded here only when the surface will not do it. On an sRGB surface
     // this is skipped and the hardware converts; on a plain Unorm one the
     // linear numbers would otherwise reach the display as though they were
     // already encoded, which costs a mid grey more than half the light it
     // should emit and reads as a dark, muddy picture.
+    //
+    // After the average, not inside it: light averages in linear and colours
+    // do not, so encoding each sample and then averaging would brighten every
+    // edge in the picture.
     if cam.encode != 0.0 {
         colour = linear_to_srgb(colour);
     }

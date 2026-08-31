@@ -133,6 +133,51 @@ impl ChunkTexture {
     }
 }
 
+/// What a viewport needs drawn, and what has to be resident to draw it.
+///
+/// **Two different numbers**, which is the whole point of separating them. A
+/// quad is cheap and there is one per position on screen; a texture layer is
+/// scarce and there is one per *distinct* chunk. On a plane the two are equal.
+/// On a torus they are not, and that is what makes a wrapping world cost the
+/// same however far anybody pans.
+pub struct Covered {
+    /// Every chunk position the viewport covers, in global coordinates. One
+    /// quad each, and bounded by the screen.
+    pub positions: Vec<Coord>,
+    /// The distinct chunks behind them, folded onto what the world actually
+    /// holds. One texture layer each, and on a torus bounded by the world.
+    pub chunks: HashSet<Coord>,
+}
+
+/// Which chunks a viewport covers, and which of them are distinct.
+///
+/// **A wrapping world is drawn by folding, not by tiling.** Every position the
+/// viewport covers is asked which chunk actually fills it, which on a torus is
+/// many-to-one — so the world repeats for as far as anyone can pan, one copy
+/// is uploaded however many times it appears, and a viewport straddling the
+/// seam costs one extra quad rather than one extra resident.
+///
+/// Pure, and out here rather than inline in [`ChunkStore::sync`], because it
+/// is the one arithmetic in this module that decides what is on screen and
+/// there was no way to reach it without a device.
+///
+/// **It also says where low zoom stops working**, which is worth reading off
+/// rather than discovering: `positions` grows as the square of zooming out,
+/// so a 1920x1080 screen covers about `8100 / zoom²` of them. Against
+/// [`ChunkTexture::LAYER_BUDGET`] that runs out at about zoom five, and
+/// against [`MAX_INSTANCES`] at about zoom three. Below that a screen is
+/// mostly backdrop however good the sampling is — see
+/// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#zooming-out-without-lying).
+pub fn covered(world: &World, visible: ((i32, i32), (i32, i32))) -> Covered {
+    let positions = World::chunks_covering(visible.0, visible.1);
+    let chunks = positions
+        .iter()
+        .map(|&c| world.canonical(c))
+        .filter(|c| world.chunk_at(*c).is_some())
+        .collect();
+    Covered { positions, chunks }
+}
+
 /// A chunk as the GPU wants it: its two cell bytes, and what is next to it.
 ///
 /// **This is the pass that used to be a memcpy**, and everything a
@@ -316,6 +361,9 @@ pub struct ChunkStore {
     free: Vec<u32>,
     instances: Vec<Instance>,
     buffer: wgpu::Buffer,
+    /// What the last "does not fit" line said, so an unchanged view says it
+    /// once rather than four times a second.
+    told: Option<(usize, usize)>,
 }
 
 impl ChunkStore {
@@ -334,7 +382,36 @@ impl ChunkStore {
             free: Vec::new(),
             instances: Vec::with_capacity(MAX_INSTANCES),
             buffer,
+            told: None,
         }
+    }
+
+    /// Say once, and again only when the numbers change, that a frame did not
+    /// fit.
+    ///
+    /// **Not a failure and not rare.** One layer per chunk against a
+    /// guaranteed floor of 256 of them means a screen wider than sixteen
+    /// chunks cannot be fully resident, whatever else is true — see
+    /// [`covered`]. What is missing is drawn as backdrop, which is empty
+    /// ground, so the picture is wrong rather than broken and the log is how
+    /// anybody finds out.
+    fn report_budget(&mut self, chunks: usize, positions: usize, short_by: usize) {
+        let over = positions.saturating_sub(MAX_INSTANCES);
+        if short_by == 0 && over == 0 {
+            self.told = None;
+            return;
+        }
+        if self.told == Some((short_by, over)) {
+            return;
+        }
+        self.told = Some((short_by, over));
+        log::warn!(
+            "the view does not fit: {positions} chunk positions over {chunks} chunks, \
+             {short_by} without a layer ({} of {}) and {over} without a quad ({MAX_INSTANCES}). \
+             The rest is drawn as empty ground.",
+            self.layers.len(),
+            self.texture.layers,
+        );
     }
 
     /// Zero layer zero once. It stays dead for the life of the app.
@@ -373,12 +450,7 @@ impl ChunkStore {
         // infinite world hides -- it holds only what life has reached -- and a
         // torus does not: a 20x20 torus stores four hundred chunks whether you
         // are looking at them or not, and asked for a layer for each.
-        let (min, max) = visible;
-        let wanted: HashSet<Coord> = World::chunks_covering(min, max)
-            .into_iter()
-            .map(|c| world.canonical(c))
-            .filter(|c| world.chunk_at(*c).is_some())
-            .collect();
+        let Covered { positions, chunks: wanted } = covered(world, visible);
 
         let free = &mut self.free;
         self.layers.retain(|coord, layer| {
@@ -389,6 +461,11 @@ impl ChunkStore {
             keep
         });
 
+        // Counted rather than logged per chunk. Running out is the ordinary
+        // state below about zoom five on a large screen -- see [`covered`] --
+        // so a line per chunk per frame is thousands a second, and the number
+        // that matters is how many were missed rather than which.
+        let mut short_by = 0usize;
         for (coord, chunk) in world.stored().into_iter().filter(|(c, _)| wanted.contains(c)) {
             let layer = match self.layers.get(&coord) {
                 Some(&l) => l,
@@ -400,7 +477,7 @@ impl ChunkStore {
                             fresh
                         })
                     }) else {
-                        log::warn!("layer budget exhausted; chunk {coord:?} not drawn");
+                        short_by += 1;
                         continue;
                     };
                     self.layers.insert(coord, l);
@@ -410,6 +487,7 @@ impl ChunkStore {
             self.texture.upload(queue, layer, &texels(world, coord, chunk));
         }
 
+        self.report_budget(wanted.len(), positions.len(), short_by);
         self.instances.clear();
 
         // First, so the chunks drawn after it paint over it. There is no depth
@@ -427,12 +505,11 @@ impl ChunkStore {
 
         // The same positions the layers were chosen from, so anything with a
         // layer has a quad and anything without one is left to the backdrop.
-        for global in World::chunks_covering(min, max) {
+        for global in positions {
             let Some(&layer) = self.layers.get(&world.canonical(global)) else {
                 continue;
             };
             if self.instances.len() == MAX_INSTANCES {
-                log::warn!("instance budget exhausted; some chunks not drawn");
                 break;
             }
             self.instances.push(Instance {
@@ -459,6 +536,82 @@ mod tests {
         for &(r, c) in cells {
             world.set_cell_at(r, c, Cell::alive(PlayerId(who)));
         }
+    }
+
+    /// **A torus is drawn by folding.** A viewport wider than the world covers
+    /// the same chunks over and over, and each of them is one resident with
+    /// several quads — so the texture cost is bounded by the world while the
+    /// quad cost is bounded by the screen.
+    #[test]
+    fn a_wrapping_world_repeats_without_repeating_its_textures() {
+        // Every chunk stored and non-empty, so residency is about folding
+        // rather than about what the world happens to hold.
+        let mut world = World::toroidal_empty(4, 4);
+        for r in 0..4 * CHUNK_N as i32 {
+            for c in 0..4 * CHUNK_N as i32 {
+                alive(&mut world, &[(r, c)], 1);
+            }
+        }
+
+        // Three worlds across and three down, starting off the origin so the
+        // seam falls inside the view rather than on its edge.
+        let n = CHUNK_N as i32;
+        let wide = covered(&world, ((-2 * n, -2 * n), (10 * n - 1, 10 * n - 1)));
+
+        assert_eq!(wide.positions.len(), 12 * 12, "one quad per position on screen");
+        assert_eq!(wide.chunks.len(), 4 * 4, "and one layer per chunk the world actually has");
+        assert!(
+            wide.chunks.iter().all(|&(r, c)| (0..4).contains(&r) && (0..4).contains(&c)),
+            "every resident should be a folded coordinate"
+        );
+
+        // Panning does not grow it. This is the property the whole thing is
+        // for: how far somebody has walked stops being a cost.
+        let far = covered(&world, ((1000 * n, 1000 * n), (1012 * n - 1, 1012 * n - 1)));
+        assert_eq!(far.chunks, wide.chunks, "panning a thousand worlds along found new chunks");
+    }
+
+    /// A plane folds nothing, so the two numbers are the same and residency is
+    /// bounded by the screen alone.
+    #[test]
+    fn a_boundless_world_has_one_layer_per_position_it_holds() {
+        let mut world = World::infinite_empty();
+        let n = CHUNK_N as i32;
+        for c in 0..3 {
+            alive(&mut world, &[(0, c * n)], 1);
+        }
+        let seen = covered(&world, ((0, 0), (n - 1, 5 * n - 1)));
+        assert_eq!(seen.positions.len(), 5, "five positions across");
+        assert_eq!(seen.chunks.len(), 3, "and only the three the world holds");
+    }
+
+    /// **Where low zoom stops working, in numbers.** One layer per chunk
+    /// against a guaranteed floor of 256 means a view wider than sixteen
+    /// chunks each way cannot be fully resident — which on an ordinary screen
+    /// is reached well inside the zoom range, long before sampling is what is
+    /// wrong. Pinned here because it is the argument for a coarse level of
+    /// detail rather than a better sampler.
+    #[test]
+    fn a_screen_at_low_zoom_wants_more_layers_than_there_are() {
+        let n = CHUNK_N as f32;
+        let chunks_on_screen =
+            |w: f32, h: f32, zoom: f32| ((w / zoom / n).ceil() * (h / zoom / n).ceil()) as usize;
+        let (w, h) = (1920.0, 1080.0);
+
+        assert!(
+            chunks_on_screen(w, h, 16.0) < ChunkTexture::LAYER_BUDGET as usize,
+            "the zoom the client opens at should fit"
+        );
+        assert!(
+            chunks_on_screen(w, h, 5.0) > ChunkTexture::LAYER_BUDGET as usize,
+            "and about zoom five should already not"
+        );
+        assert!(
+            chunks_on_screen(w, h, crate::client::views::game::camera::ZOOM_RANGE.0) > 8000,
+            "at the zoom floor a 1080p screen covers over eight thousand chunks, \
+             against {} layers and {MAX_INSTANCES} quads",
+            ChunkTexture::LAYER_BUDGET,
+        );
     }
 
     /// North, east, south, west, in that order, and only where the neighbour
