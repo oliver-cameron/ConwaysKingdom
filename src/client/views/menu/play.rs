@@ -373,15 +373,18 @@ fn rooms_column(
 fn make_column(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, reached: bool) -> Option<Chose> {
     let draft = menu.draft.get_or_insert_with(Draft::default);
     let made = make_form(ui, theme, draft, reached);
-    // Refused here rather than by the form being missing: somebody who has
-    // filled it in should be told what it is waiting for, not left wondering
-    // where it went.
-    if made.is_some() && !reached {
-        draft.asking = false;
-        draft.note = Some(words::make::NO_SERVER.into());
-        return None;
+    // **With no server, the same form plays it here.** It used to refuse, and
+    // refusing was the wrong answer to a filled-in description of a world:
+    // every question on it — how big, does it end, how — is answerable
+    // without anybody else, and the client is its own authority offline.
+    match made {
+        Some(Chose::Create { shape, victory, .. }) if !reached => {
+            draft.asking = false;
+            draft.note = None;
+            Some(Chose::Alone { shape, victory })
+        }
+        other => other,
     }
-    made
 }
 
 /// What a room row was clicked for. Two things can be done with a room, so a
@@ -412,7 +415,11 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // server generates. A field being quietly discarded is worse than
             // one that is not there — the same rule that hides the size on a
             // boundless world.
-            if !draft.private {
+            // A world nobody else can reach needs no name, no listing and no
+            // sides: there is one player. Hidden rather than disabled, because
+            // a field that cannot be wrong is a field that should not be
+            // asked about.
+            if reached && !draft.private {
                 ui.label(egui::RichText::new(words::make::NAME).size(m.text_small));
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.name)
@@ -435,7 +442,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // Teams, on a world as much as on a match: a team is people
             // playing as one player, which is worth having without a result
             // to win.
-            {
+            if reached {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
                 let mut together = draft.together;
@@ -467,25 +474,27 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 }
             }
 
-            ui.add_space(m.item_spacing);
-            ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
-            let mut private = draft.private;
-            toggles(
-                ui,
-                theme,
-                &mut private,
-                &[(false, words::make::LISTED), (true, words::make::UNLISTED)],
-            );
-            draft.private = private;
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(if draft.private {
-                    words::make::UNLISTED_NOTE
-                } else {
-                    words::make::LISTED_NOTE
-                })
-                .size(m.text_small),
-            );
+            if reached {
+                ui.add_space(m.item_spacing);
+                ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
+                let mut private = draft.private;
+                toggles(
+                    ui,
+                    theme,
+                    &mut private,
+                    &[(false, words::make::LISTED), (true, words::make::UNLISTED)],
+                );
+                draft.private = private;
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(if draft.private {
+                        words::make::UNLISTED_NOTE
+                    } else {
+                        words::make::LISTED_NOTE
+                    })
+                    .size(m.text_small),
+                );
+            }
 
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::ENDS).size(m.text_small));
@@ -545,12 +554,16 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 .add_sized(
                     [ui.available_width(), m.action_height],
                     egui::Button::new(
-                        egui::RichText::new(words::make::MAKE)
-                            .size(m.text_action)
-                            // The accent is for the thing you are meant to
-                            // press next, and until a server has answered that
-                            // is not this one.
-                            .color(if reached { p.ground } else { p.text }),
+                        egui::RichText::new(if reached {
+                            words::make::MAKE
+                        } else {
+                            words::make::ALONE
+                        })
+                        .size(m.text_action)
+                        // The accent is for the thing you are meant to
+                        // press next, and until a server has answered that
+                        // is not this one.
+                        .color(if reached { p.ground } else { p.text }),
                     )
                     .fill(if reached { p.accent } else { p.surface }),
                 )

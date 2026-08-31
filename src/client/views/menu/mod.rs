@@ -181,9 +181,23 @@ pub enum Chose {
     /// every few seconds; this is for the moment somebody has just made a room
     /// on the other screen and does not want to wait out the interval.
     Refresh,
-    /// Play with no server at all. The simulation is deterministic, so this is
-    /// a whole game rather than a broken one — just a solitary one.
+    /// Play with no server at all, on whatever world the command line asked
+    /// for. The simulation is deterministic, so this is a whole game rather
+    /// than a broken one — just a solitary one.
     Offline,
+    /// The same, on a world described here.
+    ///
+    /// **The make-a-world form, pointed somewhere else.** Its questions —
+    /// how big, does it end, how — are the same questions whether or not a
+    /// server is going to hold the answer, and asking them twice in two forms
+    /// would be two places for "boundless" to mean something slightly
+    /// different. What a server adds is a name, a listing and other people,
+    /// which is exactly what the form hides when there is nobody to ask.
+    Alone {
+        shape: WorldKind,
+        /// `None` is a sandbox, which is what playing alone has always been.
+        victory: Option<Victory>,
+    },
     /// Reach this server and ask what rooms it has.
     Connect(String),
     /// Join this room on the server already reached. An **id**, not a name:

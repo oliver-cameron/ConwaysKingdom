@@ -168,7 +168,14 @@ pub fn default_address() -> &'static str {
 /// Shared by [`App::init`] and by pressing play alone, because the two have to
 /// produce the same thing and did not. See [`GameApp::play_alone`].
 pub(crate) fn solo_world() -> (World, (f32, f32)) {
-    let mut world = chosen_world().build();
+    solo_world_of(chosen_world())
+}
+
+/// The same, on a world somebody described rather than one the command line
+/// asked for — see the make-a-world form, which points here when there is no
+/// server to point at.
+pub(crate) fn solo_world_of(kind: WorldKind) -> (World, (f32, f32)) {
+    let mut world = kind.build();
     if crate::net::too_cramped_for_grants(&world) {
         log::warn!("this world is too small for every player to get a square of their own");
     }

@@ -722,6 +722,45 @@ impl GameApp {
         self.subscribe_to_view();
     }
 
+    /// Settle a solitary match, if there is one and it is done.
+    ///
+    /// **The same two conditions the server settles**, read off the same
+    /// `net::standings` this client already counts each generation — offline
+    /// it holds the whole world, so its count is the server's count rather
+    /// than a guess about a viewport.
+    ///
+    /// Only offline. Connected, a phase arrives in `ServerMessage::Match` and
+    /// this must never invent one: two authorities deciding one match is the
+    /// bug the whole design is arranged to avoid.
+    fn decide_alone(&mut self) {
+        if self.link.is_some() {
+            return;
+        }
+        let Some(lobby) = &mut self.lobby else { return };
+        let (Some(victory), crate::net::MatchPhase::Running { from }) =
+            (lobby.victory, lobby.phase.clone())
+        else {
+            return;
+        };
+        let leader = self.standing.first();
+        let held = leader.map_or(0, |h| h.score as usize);
+        let done = match victory {
+            crate::net::Victory::Timer { generations } => {
+                self.world.generation.saturating_sub(from) >= generations
+            }
+            crate::net::Victory::Territory { squares } => held >= squares,
+        };
+        if !done {
+            return;
+        }
+        lobby.phase = crate::net::MatchPhase::Over {
+            winner: leader.map(|h| h.who),
+            held,
+            at: self.world.generation,
+        };
+        log::info!("a solitary match ended at generation {}", self.world.generation);
+    }
+
     /// Fold a generation's mining into the predicted purse, floored at zero
     /// the way the server floors the real one.
     ///
@@ -1873,7 +1912,24 @@ impl GameApp {
     /// The seat itself was already given up on the way here: `back_to_menu`
     /// sends `Leave`. This is the connection going, and the world with it.
     fn play_alone(&mut self) {
-        log::info!("playing alone");
+        self.play_alone_on(start::chosen_world(), None)
+    }
+
+    /// Playing alone on a described world, with a way to win it if one was
+    /// asked for.
+    ///
+    /// **The client is the authority offline**, which is what makes a win
+    /// condition possible with no server: there is one world, one clock and
+    /// one player, so `MatchPhase` is a thing this can hold and decide for
+    /// itself. It is the same `Victory` the server settles, read by the same
+    /// `net::standings` — and it is not a match anybody could cheat, because
+    /// there is nobody to cheat.
+    fn play_alone_on(
+        &mut self,
+        shape: crate::sim::WorldKind,
+        victory: Option<crate::net::Victory>,
+    ) {
+        log::info!("playing alone on {shape:?} ({victory:?})");
         self.file_game();
         // Dropping it closes it — see the `Drop` on the browser's `Link`, and
         // the socket thread that ends with its channel on native.
@@ -1893,8 +1949,21 @@ impl GameApp {
         self.geiger.reset();
         // What the server had issued belonged to the seat that was given up.
         self.value = Player::STARTING_VALUE;
-        let (world, home) = solo_world();
+        let (world, home) = start::solo_world_of(shape);
         self.world = world;
+        // A lobby of one, so the clock along the top has something to read.
+        // `None` for a sandbox, which is what playing alone has always been
+        // and what the form's "never" means.
+        self.lobby = victory.map(|victory| Lobby {
+            phase: crate::net::MatchPhase::Running { from: 0 },
+            victory: Some(victory),
+            players: vec![(PlayerId(1), String::new())],
+            teams: Vec::new(),
+            owner: None,
+            started_by: None,
+            code: None,
+        });
+        self.paused = false;
         self.camera.centre = home;
         // The chunk store still holds the room's world, and a dirty camera is
         // what makes `update` sync it against this one.
@@ -1987,6 +2056,7 @@ impl GameApp {
         match chose {
             menu::Chose::Nothing => {}
             menu::Chose::Offline => self.play_alone(),
+            menu::Chose::Alone { shape, victory } => self.play_alone_on(shape, victory),
             // The list refreshes itself; this is for somebody who has just
             // made a room elsewhere and does not want to wait out the
             // interval. Asking again is one small message.
@@ -2478,7 +2548,12 @@ impl App for GameApp {
             // banks elapsed time against the span, so not calling it is the
             // whole of pausing: no time accumulates, and letting go does not
             // release a burst of generations that built up while stopped.
-            let mined = match (self.paused, std::mem::take(&mut self.step_once)) {
+            // A decided match stops, the way a room does. `stepping` is the
+            // same question the server asks, so a solitary match ends on the
+            // generation it was won rather than running on with the result
+            // already settled.
+            let stopped = self.lobby.as_ref().is_some_and(|l| !l.phase.stepping());
+            let mined = match (self.paused || stopped, std::mem::take(&mut self.step_once)) {
                 (false, _) => self.world.update(dt, GENERATION_SPAN),
                 (true, true) => self.world.step(),
                 (true, false) => crate::sim::Mined::default(),
@@ -2498,6 +2573,7 @@ impl App for GameApp {
             if self.world.generation != self.counted_at {
                 self.counted_at = self.world.generation;
                 self.standing = crate::net::standings(&self.world);
+                self.decide_alone();
             }
         }
         if self.world.dirty {

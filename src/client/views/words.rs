@@ -213,6 +213,10 @@ pub mod menu {
     ///
     /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
     pub mod make {
+        /// The action, when there is no server to ask. The same form, so the
+        /// same questions; a different place for the answer to go.
+        pub const ALONE: &str = "Play alone";
+
         /// Opens the form. Says "world" rather than "room" because that is
         /// what you get and what the game calls it everywhere else; "room" is
         /// the machinery's word.
