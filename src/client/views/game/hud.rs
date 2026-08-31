@@ -333,7 +333,7 @@ fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, stat
 
 /// How many bars fit before the panel is a leaderboard rather than a HUD.
 ///
-/// Thirty-one players can have been through a world, and a column of thirty-one
-/// bars is a screen of its own. Whoever is winning is at the top, and you are
-/// interested in the rest of the field only once you are in it.
+/// Fifteen players can have been through a world, and a column of fifteen bars
+/// is most of a panel. Whoever is winning is at the top, and you are interested
+/// in the rest of the field only once you are in it.
 const SHOWN: usize = 6;

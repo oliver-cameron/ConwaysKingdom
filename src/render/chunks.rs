@@ -33,10 +33,9 @@ pub const KIND_BACKDROP: u32 = 1;
 
 /// Chunk store: a 2D array texture with one chunk per layer.
 ///
-/// `Rg8Uint`: R is the cell's owner byte, G its tile byte. Two
-/// bytes is also the narrowest storage-capable size, so moving the simulation
-/// to a compute shader later stays a dispatch change rather than a storage
-/// rewrite.
+/// `Rgba8Uint`: R is the cell's owner byte, G its tile byte, B a neighbour
+/// mask this layer derives, A spare. See [`ChunkTexture::FORMAT`] for why it is
+/// four bytes and not the cell's two.
 pub struct ChunkTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,

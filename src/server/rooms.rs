@@ -360,11 +360,6 @@ impl Rooms {
 
     /// Which room a client asking for this one gets, or why it gets none.
     ///
-    /// The error is written to be read by a player: it says what they asked
-    /// for and what is actually here, because with no menu yet this reply is
-    /// the only way anybody finds out what a server holds.
-    /// Which room a client asking for this one gets, or why it gets none.
-    ///
     /// Three things can be typed and all three reach a room: its **id**, which
     /// is what a client that has seen the listing sends back; its **name**,
     /// which is what a person types on a command line or in a link; and its

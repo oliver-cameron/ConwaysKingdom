@@ -462,6 +462,29 @@ pub enum Action {
     Erase { cells: Vec<(i32, i32)>, placement: Placement },
 }
 
+/// The most cells one action may name.
+///
+/// **Because the work is unbounded and the message is not.** A coordinate pair
+/// is two bytes on the wire, so a frame the transport happily accepts holds
+/// tens of millions of them — and every one is priced, applied, cloned into an
+/// `Acted`, broadcast, and applied again by every client in the room, on the
+/// one task that owns every world. `Erase` over ground nobody holds prices at
+/// nothing, so affordability is no bound at all.
+///
+/// A rectangle at one pixel per cell already covers millions, which is why the
+/// client stops a stroke here; this is the same number enforced where it has
+/// to be. Far above any gesture and far below anything that hurts.
+pub const MOST_CELLS_AT_ONCE: usize = 4096;
+
+impl Action {
+    /// The cells this names, whichever it is.
+    pub fn cells(&self) -> &[(i32, i32)] {
+        match self {
+            Self::Paint { cells, .. } | Self::Erase { cells, .. } => cells,
+        }
+    }
+}
+
 /// An action stamped with who did it and when, which is what makes replay on
 /// another peer produce the same result.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1056,25 +1079,15 @@ pub const SPAWN_N: i32 = 12;
 /// How much of `player`'s influence reaches this square, nought to
 /// [`crate::sim::bits::MAX_LEVEL`].
 ///
-/// Nought where the square is somebody else's or nobody's — a square carries
-/// one owner, so two players' influence never sits on the same one. Which is
-/// also why this is a lookup rather than a sum: the contest was settled by the
-/// rule when the square was last worked out.
+/// A lookup rather than a sum: a square carries one owner, so the contest was
+/// settled by the rule the last time that square worked itself out. Nought
+/// where it is somebody else's, nobody's, or in a chunk this peer does not
+/// hold — the honest answer, since guessing would let a client predict a
+/// cheaper price than the server charges.
 ///
-/// Unheld ground reads as nought, which is the honest answer rather than a
-/// hopeful one: a client cannot know what it does not hold, and guessing would
-/// let it predict a cheaper price than the server charges.
-pub fn influence(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
-    reach(world, player, row, col)
-}
-
-/// The same question with allies counted: how much influence **this player's
-/// side** has on this square.
-///
-/// Territory is still contested per player — two allies keep a border between
-/// their ground, and the rule in `sim` knows nothing about teams — so this is
-/// a lookup plus one comparison rather than a sum. What a team changes is not
-/// what a square holds; it is who that counts for.
+/// There was an `influence` beside this that forwarded to it unchanged, from
+/// when the two were "mine" and "my side's". A side is a player now, so they
+/// were one question with two names.
 pub fn reach(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
     world.cell_at(row, col).filter(|c| c.player() == player).map(|c| c.influence()).unwrap_or(0)
 }
@@ -1099,8 +1112,8 @@ pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     reach(world, player, row, col) > 0
 }
 
-/// How many grants sit along one edge of a **torus's** grid. Six covers all 31
-/// players a five-bit field can hold.
+/// How many grants sit along one edge of a **torus's** grid. Six across is
+/// thirty-six seats, comfortably over the fifteen a four-bit owner field holds.
 ///
 /// Only the torus needs a fixed figure. Its ground is finite and has to be
 /// divided whatever the roster turns out to be, so the grid is sized for the
@@ -1706,6 +1719,39 @@ mod tests {
         );
     }
 
+    /// **Priced before it is applied, or it is free.** Every placement is an
+    /// idempotent setter, so once an action is down every cell it names
+    /// already reads as what it would put there — which is exactly the test
+    /// `value_delta` skips a cell on. Both sides of the wire depend on the
+    /// order: the client's `Acted` arm applied first and charged nothing, so
+    /// a teammate's spending never moved the purse it shares.
+    #[test]
+    fn pricing_an_action_after_applying_it_is_free() {
+        let me = PlayerId(1);
+        for placement in [Placement::Life, Placement::Mine, Placement::Turret, Placement::Ice] {
+            let mut world = World::infinite_empty();
+            let cells = vec![(0, 0), (0, 1)];
+            hold(&mut world, &cells, me);
+
+            let lay = paint(cells.clone(), placement);
+            assert!(value_delta(&world, &lay) < 0, "{placement:?} costs nothing to lay");
+            apply(&mut world, &lay);
+            assert_eq!(value_delta(&world, &lay), 0, "{placement:?} priced after it was applied");
+
+            if placement.can_be_taken() {
+                let take = Stamped {
+                    tick: 0,
+                    player: me,
+                    seat: me,
+                    action: Action::Erase { cells: cells.clone(), placement },
+                };
+                assert!(value_delta(&world, &take) > 0, "{placement:?} reclaims nothing");
+                apply(&mut world, &take);
+                assert_eq!(value_delta(&world, &take), 0, "{placement:?} erased twice");
+            }
+        }
+    }
+
     /// Life and a mine are different things to hold, so a click holding one
     /// over the other replaces the kind rather than killing the cell — which
     /// is what `is_on` answers and what `remove_from` could not, since both
@@ -1956,7 +2002,7 @@ mod tests {
 
         // And a square nothing of yours reaches is not for sale at any price.
         assert!(!may_place(&world, me, 0, 5));
-        assert_eq!(influence(&world, me, 0, 5), 0);
+        assert_eq!(reach(&world, me, 0, 5), 0);
     }
 
     /// Somebody else's ground is not yours however strong their claim is:
@@ -1967,8 +2013,8 @@ mod tests {
         let mut world = World::infinite_empty();
         let (me, them) = (PlayerId(1), PlayerId(2));
         hold(&mut world, &[(0, 0)], them);
-        assert_eq!(influence(&world, them, 0, 0), crate::sim::bits::MAX_LEVEL);
-        assert_eq!(influence(&world, me, 0, 0), 0);
+        assert_eq!(reach(&world, them, 0, 0), crate::sim::bits::MAX_LEVEL);
+        assert_eq!(reach(&world, me, 0, 0), 0);
         assert!(!may_place(&world, me, 0, 0));
     }
 
@@ -2502,6 +2548,6 @@ mod tests {
         // client cannot know what it does not hold, and reading unheld ground
         // as its own would predict a placement the server refuses.
         assert!(!may_place(&world, PlayerId(1), far[0].0, far[0].1));
-        assert_eq!(influence(&world, PlayerId(1), far[0].0, far[0].1), 0);
+        assert_eq!(reach(&world, PlayerId(1), far[0].0, far[0].1), 0);
     }
 }

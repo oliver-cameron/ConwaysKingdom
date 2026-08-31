@@ -1,4 +1,4 @@
-// One instanced quad per visible chunk. Cells come from an R16Uint array
+// One instanced quad per visible chunk. Cells come from an Rgba8Uint array
 // texture read with textureLoad, so scaling is nearest-neighbour by
 // construction and there is no sampler to configure.
 
@@ -137,11 +137,10 @@ fn shade(lightness: f32, saturation: f32, hue: f32) -> vec3<f32> {
 /// A player's hue, looked up rather than worked out.
 ///
 /// It used to be `fract(player * HUE_STEP)`, which is right for a free-for-all
-/// and cannot be right for teams: allies need a **family** of hue, and where a
-/// member sits in their family depends on who else is on their team — which is
-/// not a thing one player's number can answer. So the client works out the
-/// whole table and hands it over, and the shader does the one thing a shader
-/// should do with it.
+/// A table rather than arithmetic here because the client draws the same
+/// swatch beside a name in the lobby, and two derivations of one number are two
+/// chances for the board and the lobby to disagree about who is who. Teams need
+/// nothing extra: a team is a player, so it is one number and one hue.
 ///
 /// Nothing else about a cell changes with the player. The sprite, its
 /// lightness and its coverage all come from the sheet; the player contributes
@@ -150,14 +149,15 @@ fn player_hue(player: u32) -> f32 {
     return cam.hues[player / 4u][player % 4u] * TAU;
 }
 
-/// Saturation is a second axis for telling players apart, because five bits of
-/// player leaves 31 of them and hue alone gets crowded: the closest pair ends
-/// up 0.026 apart in OKLab, which is not much.
+/// Saturation is a second axis for telling players apart, because hue alone
+/// gets crowded: over the 31 players the owner field used to hold, the closest
+/// pair ended up 0.026 apart in OKLab.
 ///
 /// Two tiers, alternating, so neighbouring player numbers differ in saturation
-/// as well as hue. Measured over 31 players that lifts the closest pair to
-/// 0.037, and over the first eight -- the case that actually happens -- to
-/// 0.119. Spreading saturation smoothly instead is worse than doing nothing,
+/// as well as hue. That lifted the closest pair to 0.037 over 31 and to 0.119
+/// over the first eight. The field is four bits now, so the crowding it was
+/// measured against is gone and the alternation is cheap insurance rather than
+/// a fix. Spreading saturation smoothly instead is worse than doing nothing,
 /// since lowering it shrinks the chroma radius and pulls colours together.
 fn player_saturation(player: u32) -> f32 {
     // Player zero is nobody. Unclaimed ground has no colour of its own, so it

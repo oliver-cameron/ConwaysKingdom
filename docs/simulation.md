@@ -235,7 +235,11 @@ Ice is exempt either way, and a turret under a pane does not fire at all. A pane
 
 `DECAY` at two in sixty-four eats N/32 of what is held, so each square flipped per generation holds about thirty — a turret settles at roughly `30 × TURRET_POWER`, and the block it is really bought as at four times that. Against a neighbour's living colony it is far weaker, and that is the number `TURRET_POWER` is really setting: `SPREAD` gives their life the square straight back at forty in sixty-four, so what a turret holds of contested ground is about `TURRET_POWER × 64 / SPREAD` — one and a half squares at one, six at four. **Below about four a turret claims empty land and cannot press on ground anything is alive on.**
 
-Which means a turret inside its owner's ground finds everything within reach already theirs and idles. It only ever works from a frontier, and nothing had to be written to make that true.
+A turret whose whole disc is already its owner's has nothing to take, and falls back to **reinforcing**: the nearest square of theirs that is not at full influence, planted to `rule::TURRET_PUSH`. That square then feeds its neighbours as strongly as life does until the rule works it out again, so a turret in the middle of a country pushes the border through the sum rather than at it.
+
+The order is the whole of why that is safe. Reinforcing as the *only* rule was tried when levels arrived and ruined the piece — influence falls off, so the nearest thin square is a step away and a turret spent its life topping up ground it already held. Asked second, it only fires when there was nobody to push on.
+
+The rule for taking has never changed; the world around it did. Before territory was a level a player's halo was tight, so ground that was not theirs sat within six cells of anywhere they would stand a turret, and the case barely arose. Granted ground is a source now and a country reaches much further.
 
 ### Fours
 

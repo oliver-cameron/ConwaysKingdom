@@ -551,8 +551,23 @@ fn outward_address(port: u16) -> Option<SocketAddr> {
     (!addr.ip().is_loopback()).then_some(addr)
 }
 
+/// The largest frame this server will read.
+///
+/// The default is tens of megabytes, which is the transport being generous
+/// about something it cannot judge. Nothing a client sends is large: the
+/// longest is a `Subscribe` or a `Checkpoint`, and both are capped in messages
+/// -- [`MOST_CHUNKS_AT_ONCE`] chunks at twelve bytes a row is under fifty
+/// kilobytes. This is the same argument made where the bytes arrive, so a
+/// frame that could only be an attack is dropped before it is decoded into
+/// something with a length to check.
+///
+/// [`MOST_CHUNKS_AT_ONCE`]: crate::server::MOST_CHUNKS_AT_ONCE
+const MOST_BYTES_AT_ONCE: usize = 1 << 20;
+
 async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(|socket| connection(socket, state))
+    ws.max_message_size(MOST_BYTES_AT_ONCE)
+        .max_frame_size(MOST_BYTES_AT_ONCE)
+        .on_upgrade(|socket| connection(socket, state))
 }
 
 /// What the browser client is served from, and nothing else.

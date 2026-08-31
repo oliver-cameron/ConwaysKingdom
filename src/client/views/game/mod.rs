@@ -113,12 +113,15 @@ const HOVER_MIN_ZOOM: f32 = 4.0;
 /// would be listed, priced, applied and put on the wire. A stroke stops
 /// growing when it reaches this and says so, rather than being trimmed at the
 /// end where nobody would see what was lost.
-const MAX_DRAG_CELLS: i64 = 4096;
+///
+/// [`crate::net::MOST_CELLS_AT_ONCE`] rather than a number of its own, because
+/// the server refuses anything longer: a client that stopped somewhere else
+/// would either draw shapes the server drops or refuse ones it would take.
+const MAX_DRAG_CELLS: i64 = crate::net::MOST_CELLS_AT_ONCE as i64;
 
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
 const VIEW_MARGIN: i32 = CHUNK_N as i32;
-/// of the GPU.
 /// A join that has been decided on and not yet sent.
 ///
 /// The room and the name; the token and the signature are looked up at the
@@ -135,13 +138,14 @@ enum Screen {
     Playing,
 }
 
+/// How often the room list is asked for again while it is on screen.
+const ROOM_LIST_REFRESH: f64 = 3.0;
+
 /// How long to wait for a server to say what rooms it has before giving up.
 ///
 /// Generous, because it covers a connection being made as well as answered,
 /// and short enough that a wrong address is a mistake you correct rather than
 /// a page you reload.
-/// How often the room list is asked for again while it is on screen.
-const ROOM_LIST_REFRESH: f64 = 3.0;
 const ROOM_LIST_TIMEOUT: f64 = 8.0;
 
 /// What the pointer is doing.
@@ -445,9 +449,8 @@ pub struct GameApp {
 }
 
 impl GameApp {
-    /// A fixed camera. Autoscrolling is gone: the view no longer chases the
-    /// live pattern, so what is on screen is whatever `VIEW_CENTRE` and
-    /// `VIEW_ZOOM` say. Panning and zooming will be driven by input.
+    /// Hand the shader the camera and the hue table.
+    ///
     /// The shader encodes sRGB itself exactly when the surface will not.
     ///
     /// Read from the negotiated format every frame rather than cached: it is
@@ -1114,11 +1117,20 @@ impl GameApp {
                 // was made, which is the same thing a round trip earlier.
                 ServerMessage::Acted(stamped) => {
                     if Some(stamped.seat) != self.me {
-                        crate::net::apply(&mut self.world, &stamped);
+                        // **Priced before it is applied**, as in the `Step`
+                        // arm above and for the same reason: `value_delta`
+                        // reads what is on the square *now*, and the server
+                        // priced it against that. Applied first, every cell
+                        // compares equal to what the placement would put
+                        // there -- `apply_to` and `remove_from` are
+                        // idempotent -- so the delta was always exactly zero
+                        // and a teammate's spending never moved this client's
+                        // purse until the next `Purse` corrected it.
                         if Some(stamped.player) == self.plays_as {
                             let delta = crate::net::value_delta(&self.world, &stamped);
                             self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
                         }
+                        crate::net::apply(&mut self.world, &stamped);
                         self.applied_early.push(stamped);
                     }
                 }

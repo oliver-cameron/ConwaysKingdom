@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::cell::bits;
 
 /// A player's number. Zero means unowned, so a zeroed cell is dead and
-/// unclaimed. The cell only has five bits for this, hence [`PlayerId::MAX`].
+/// unclaimed. The cell has four bits for this, hence [`PlayerId::MAX`].
 #[repr(transparent)]
 #[derive(
     Clone,
@@ -31,7 +31,8 @@ pub struct PlayerId(pub u8);
 
 impl PlayerId {
     pub const UNOWNED: Self = Self(0);
-    /// Five bits in the cell, so 1..=31 are real players.
+    /// Four bits in the cell, so 1..=15 are real players. It was five until
+    /// the level took a bit off the owner byte; see [`bits::PLAYER_WIDTH`].
     pub const MAX: u8 = (1 << bits::PLAYER_WIDTH) - 1;
     /// Every number a cell can carry, zero included. The width of anything
     /// kept per player and indexed by the number the cell holds.

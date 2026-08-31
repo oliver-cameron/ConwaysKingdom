@@ -110,7 +110,7 @@ So this is consistent rather than broken: matches do not survive a restart, and 
 
 `PlayerId` is four bits in the cell, so a world can tell fifteen players apart, and teams come out of the same pool. A match with `n` teams seats `15 - n` people, and `MAX_TEAMS` is seven because a team nobody can sit on is not a team — seven teams and eight seats is exactly fifteen.
 
-That is the price of a team being a player, and it is the right price: what it buys is that a team and a seat can never be the same number, which is what the old scheme got wrong. But it is a real ceiling and [planned.md](planned.md#a-seat-is-not-a-person) already wants to lift it by making a seat something other than a cell's owner byte.
+That is the price of a team being a player, and it is the right price: what it buys is that a team and a seat can never be the same number, which is what the old scheme got wrong. But it is a real ceiling and [planned.md](planned.md#fifteen-slots-and-more-than-fifteen-clients) already wants to lift it by making a seat something other than a cell's owner byte.
 
 ### A world too small to seat everybody still admits everybody
 

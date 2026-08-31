@@ -43,7 +43,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Auto-mining](#auto-mining) | Built | |
 | [Turrets](#turrets) | Built | |
 | [Stamps](#stamps) | Built | a shape; what it is made of is the hotbar's other axis |
-| [Territory as a level, not a flag](#territory-as-a-level-not-a-flag) | Built | |
+| [Territory as a level, not a flag](#territory-as-a-level-not-a-flag) | Built | what is left is drawing it |
+| [Fifteen slots, and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients) | **Open** | a room that has met fifteen people is full for ever |
 | [Matches](#matches) | Built | |
 | [Type, and the numbers that jitter](#type-and-the-numbers-that-jitter) | Decided | |
 | [A minimap](#a-minimap) | Decided | |
@@ -534,7 +535,7 @@ Also unsettled: **a mine under ice**. A pane freezes what it covers, so a frozen
 
 **Built** — see [game.md](game.md#turrets) and [simulation.md](simulation.md#turrets). A turret claims ground at range: every generation it takes the nearest square that is not its owner's, out to `rule::TURRET_REACH`, and a dead one runs that backwards over the ground behind it. It is a pass after the rules in absolute coordinates, beside `break_ice_from`, because every rule in `sim::rule` sees one cell and its eight neighbours and no halo can answer "the nearest square that is not mine".
 
-Two things fell out rather than being designed, and both are better than what was planned here. **A live cell must have an owner**, so taking a square away from its owner kills whatever stands on it — the dead turret's killing is that invariant rather than a rule about killing. And a turret inside its owner's ground finds everything within reach already theirs and idles, so **it only works from a frontier** and needed no rule about where it may be placed.
+Two things fell out rather than being designed, and both are better than what was planned here. **A live cell must have an owner**, so taking a square away from its owner kills whatever stands on it — the dead turret's killing is that invariant rather than a rule about killing. And a turret needed no rule about where it may be placed: its first choice is always ground that is not its owner's, so it reaches past a frontier from anywhere behind one.
 
 The inheritance problem was answered by splitting kinds into those a birth inherits and those it does not, which is now `kinds!` in `sim::cell` — one list writing `Kind::ALL`, the count and `Kind::inherits`, the way `rules!` writes the rule chain and its names. A kind that does not inherit passes over ownership alone, so a birth beside a turret is ordinary life owned by the turret's owner and a gun is not a turret factory. That made the rest of what was planned here unnecessary: a turret never spreads, so it needs no bill to stop it sprawling, and its balance is its purchase price and its claim rate and nothing emergent.
 
@@ -542,9 +543,9 @@ What is left is numbers rather than mechanism.
 
 **The balance is argued, not measured.** `TURRET_COST` at fifteen, `TURRET_REACH` at six and `TURRET_DECAY` at four in sixty-four were reasoned off the decay arithmetic — a claim a generation against `DECAY` settles at about thirty squares, so a block of four holds about a hundred and thirty — and nothing has run to check it. `examples/balance.rs` is the harness that answered this for mines and prints nothing about turrets. It should, and the shapes to put in it are the block against a lone turret against a turret dropped into a glider, since those are the three things a player will try.
 
-**Under [territory levels](#territory-as-a-level-not-a-flag) a turret plants influence rather than flipping a square**, and `TURRET_POWER` becomes how much level it moves. That is a better shape than a count of squares: it contests properly with everything else pushing on the same ground, instead of overwriting the answer.
+**Half of this landed with territory levels.** A turret plants influence rather than flipping a flag: `rule::TURRET_PUSH` is what it puts on a square it takes, and it plants at full rather than nudging, because the rule assigns a square the strongest claim reaching it rather than adding to what is there — a push of three would be wiped the next time that square worked itself out. What did *not* change is `TURRET_POWER`, which is still a count of squares. Making it a quantity of level instead is the version that contests properly with everything else pushing on the same ground, and it is still worth doing.
 
-**Whether a turret should press on a living neighbour is a number now rather than a rewrite.** `rule::TURRET_POWER` is how many squares it flips a generation, and against a living colony `SPREAD` hands them back at forty in sixty-four, so what it holds of contested ground is about `TURRET_POWER × 64 / SPREAD` — one and a half squares at one, six at four. It sits at **one**, which is the reaching tool rather than the weapon. Moving it is the experiment, and `examples/balance.rs` is where the answer should be printed rather than argued about.
+**Whether a turret should press on a living neighbour is a number rather than a rewrite.** `rule::TURRET_POWER` is how many squares it takes a generation and sits at **one**, which makes it the reaching tool rather than the weapon. The arithmetic that used to be here was written against `SPREAD`, a constant the level rule deleted; what a turret now holds against a living colony is whatever `LEVEL_SPREAD` and `LEVEL_EBB` give back, and that has not been measured. `examples/balance.rs` is where the answer should be printed rather than argued about.
 
 **A turret under ice** is the same open question as a mine under ice, and sharper. A frozen turret does not fire, so a pane is a cheap way to switch off somebody's territory engine without taking any ground from them. Whether that is a feature or a hole is for whoever sets the rate.
 
@@ -552,7 +553,7 @@ What is left is numbers rather than mechanism.
 
 **A turret should not also kill, and the reason is that a claim is contested and a kill is not.** Ground a turret takes is taken straight back by `SPREAD` at forty in sixty-four, which is why it cannot touch ground anything is alive on and why one square a generation is nearly nothing. Nothing does that to a kill: a dead cell stays dead unless Conway hands it back. So the same "one a generation, forever" that is almost nothing for claiming is decisive for killing — and a turret is a **still life**, four cells, immortal, free after purchase and unreachable without flying something into it. A block of them killing four cells a generation forever is not a territory tool, it is area denial with no answer.
 
-It would also cost the two things that make a turret readable. The dead turret's kill is not a rule about killing — it is the `Cell::alive` invariant showing through, since unowning a live square kills what stands on it — and that reads as a mirror only while the live turret does not kill. And a turret inside its owner's ground idles, which is what makes it a frontier piece placed without a rule about placement; one that kills always has something to shoot at, and that goes.
+It would also cost the two things that make a turret readable. The dead turret's kill is not a rule about killing — it is the `Cell::alive` invariant showing through, since unowning a live square kills what stands on it — and that reads as a mirror only while the live turret does not kill. And a turret that finds no frontier in reach falls back to reinforcing its own thin ground, which is a slow indirect push; one that kills always has something to shoot at, wherever it stands, and that distinction goes.
 
 So: **another kind**, and the interesting question is what powers it, because "stands there and fires" is exactly what the turret does and exactly what should not have a kill attached. The shape that fits this game is a kind that spends a **birth** — a cell that, when one of its kind is born, kills the nearest enemy life. Its rate is then your pattern's birth rate, which is what the game already rewards building; a gun feeds it and a block does not; and it is counted where `Halo::step_into` already counts a mine's births, holding each cell before and after in one breath. That makes killing something you run a machine for rather than something you park.
 
@@ -580,83 +581,21 @@ What is left:
 
 ## Territory as a level, not a flag
 
-**Nothing built.** Ownership on a dead cell becomes a small number — how much of a player's influence reaches that square — instead of a yes or no. Partly inspired by Minecraft's water, which is the same problem: a field with sources, a falloff, and a boundary that has to settle somewhere without anybody deciding where.
+**Built.** Ownership on a dead square is a level rather than a flag, `sim::rule::territory` is one rule where there were three, and granted ground is a source rather than a carve-out. The design, the measurements behind every constant, and why a sum needs a cap are in [simulation.md](simulation.md#territory) — this section used to hold all of it as a proposal and said "nothing built" for weeks after it shipped.
 
-### Why the current rule cannot be fixed as it stands
+The owner byte is player four bits, level three, `HOME` one. That cost a bit off the player field, which is what the entry below is about. The save format went to version 5 with no migration: a flag carries no level.
 
-[simulation.md](simulation.md#territory) records the measurement that killed every threshold rule: **a corner of a solid region and a cell just outside a straight edge both have exactly three owned neighbours.** No count can tell them apart, so any rule built on one either erodes every blob from its corners or grows every edge outward forever. That is not a tuning failure. A boolean field has no gradient, so a cell genuinely cannot tell inside from outside, and no amount of arithmetic on eight booleans invents the information.
+Two things are left.
 
-A level field has a gradient, and those two cells stop looking alike: the corner is surrounded by high numbers and the cell outside the edge by low ones. The decision becomes local *and* correct, which is what the current rule has never managed.
-
-It also collapses three rules into one. `SPREAD`, `CREEP` and `DECAY` are three constants and two disjoint branches, and the names lie — spread does not spread, creep does, which took a documented investigation to establish. One field update replaces all of it.
-
-### The model
-
-**Living cells are sources.** A dead cell's level is the strongest claim reaching it: the best of its neighbours' levels, less a fall per step, with a living cell counting as full. That is Minecraft's water exactly, and it buys the same three things:
-
-- a **bounded** halo with no rule about radius — the fall does it;
-- a field that is a pure function of where the life is, so it cannot drift or ratchet;
-- a front between two players that settles where the two claims are equal, which is the midpoint, without anything having to compute a midpoint.
-
-The fall is the knob the whole feel hangs on. At one, a source reaches seven squares and a lone blinker holds a disc of about a hundred and fifty; at two it reaches three and holds about thirty. That is the number that answers "a blinker should spread its influence a bit and not gain territory everywhere".
-
-### Strongest claim, or signed sum
-
-Two readings of "look at the neighbours", and they are different games.
-
-**The strongest claim** is Minecraft's: take the best incoming level per player, and the highest wins the square. It is a distance field, so ground goes to whoever's life is *nearest*. Two colonies meet at the line equidistant between them, and a small one holds its half of that line against a large one.
-
-**The signed sum** — Hugh's, and add opponents as negative — is a mass field. A cell with six of your neighbours and two of theirs goes to you by four. Fronts then move on how much is pressing rather than how far away it is, so a big colony pushes a small one back rather than meeting it in the middle.
-
-The sum has a geometry problem worth knowing before choosing it: summing all eight makes a diagonal neighbour count as much as an orthogonal one, so a field built on sums grows as a **square** rather than a disc, and the number stops being a distance, so nothing about it can be read off the screen.
-
-The synthesis is probably: **winner by strongest claim, magnitude by the sum.** Who holds a square is a question about distance; how firmly they hold it is a question about mass. That keeps the field legible and still lets weight matter.
-
-### What the randomness is for now
-
-It changes job, and this is the part most worth getting right. Today the roll decides the **outcome** — which owner a cell takes. Under levels it should decide the **rate**: a cell re-evaluates on some chance per generation, and otherwise keeps what it has.
-
-Recomputed every generation for every cell, the field would be a perfect distance transform that snaps the instant anything moves, so a glider would drag a geometrically exact halo behind it. Updating a fraction per generation makes the field lag and smear, which is what makes it look like a country rather than a Voronoi diagram — and a cell that is not updating costs one roll and nothing else.
-
-### The bits, and the one thing that does not fit
-
-Byte 0 is `player` five bits and three spare, one of which is `HOME`. A nibble each for player and level fills it exactly and leaves **nowhere for `HOME`**.
-
-Two things to say about that. First, it is **fifteen players, not sixteen**: zero has to keep meaning unowned, because `Cell::alive` asserts a live cell has an owner and a zeroed cell has to stay a valid empty one. Second, the kind byte cannot help — it has spare bits, but byte 1 *is* the tile index, so a flag there doubles the sprite sheet.
-
-So: **player four, level three, home one.** Levels nought to seven.
-
-And `HOME` stops being an exception. Today it is "the one square that does not decay", a carve-out bolted beside the rule; under levels it is a **source that is not alive** — a spring, in the same vocabulary as everything else. A granted patch projects a live gradient whether or not anything survives on it, which is the floor expressed as a rule rather than as an escape from one.
-
-The save format is a version bump, from four to five. Chunk bytes are a raw cast, so a version-four file read as version five is not a corrupt world but a plausible one, wrong in every cell — which is exactly what the version byte exists to stop. There is no honest migration: a boolean owner carries no level, so either old worlds load with every owned square at full and settle from there, or version five starts fresh.
-
-### What it costs elsewhere
-
-The territory rule goes back to being **purely local** — one cell and its eight neighbours — so it fits `Halo` exactly, with none of the trouble the turret pass has. Levels ride in the neighbours the halo already copies.
-
-`PlayerId::MAX` is derived from `bits::PLAYER_WIDTH`, so narrowing is one constant and every per-player array shrinks with it. The shader still extracts the player with a bare shift, four instead of five.
-
-The renderer gains the most visible part of this: **the level wants drawing.** A gradient nobody can see is a gradient nobody can play against, so unclaimed-to-yours becomes a shade rather than a switch, and the map starts showing where the pressure is instead of only where the border ended up. That is probably the reason to do the whole thing.
-
-A turret fits better under levels than it does now. It flips a square today; it would **plant influence** instead, and a dead one would drain it — so `TURRET_POWER` becomes how much level it moves rather than how many squares it flips, which is a dial rather than a count and contests properly with everything else pushing on the same ground.
-
-### Placing outside your own ground
-
-**Settled, and settled twice.** Placing anywhere for ten times the price was tried and is out — it was no obstacle at all to anybody with a mine running, and it made the map somewhere you bought your way into rather than somewhere you grew into. Grading that price by how thin your influence was went with it, for a reason worth keeping: once ground stopped being shaded by its level there was nothing on screen to read the price off, and a cost the player cannot see is a cost they cannot play around.
-
-So `net::may_place` is a wall again, at influence nought. What makes that safe where the same wall was not safe before levels is that a granted patch is a **source** — a player whose life has gone out still has a live gradient around their home, and can always build somewhere.
-
-If the level is ever drawn, the graded price is worth reconsidering and not before: the two stand or fall together.
-
-Removing it outright also becomes safe again, if that is what playtesting wants. The reason it was made a price was that a wall left a player whose life went out with nothing they could ever do; home-as-a-source fixes that directly, because everybody always has a patch with a live gradient on it.
+**The level is not drawn.** A gradient nobody can see is a gradient nobody can play against, and this was named as probably the reason to do the whole thing. Ground reads as claimed or not, so what is on screen is where a border ended up rather than where the pressure is. Shading it also brings back the graded price — placing costing more where your influence is thin — which was abandoned for exactly this reason: a cost the player cannot see is a cost they cannot play around. The two stand or fall together and neither should be tried alone.
 
 ### Fifteen slots, and more than fifteen clients
 
-A `PlayerId` stops being a player and becomes a **seat in one world**. A person becomes a UUID, and the mapping from person to seat is per room — which is what the rejoin token already half is, since it is filed per room.
+**Open.** A `PlayerId` is four bits, so a room can tell fifteen players apart, and a number is never reused because it is written into every cell its owner claimed. Thirty-one was comfortable as "players a room has ever seen". Fifteen is not: a room that has met fifteen people is full for ever.
 
-Thirty-one was comfortable as "players a world has ever seen". Fifteen is not, and that is the real work in this part: a world that has met fifteen people is full for ever unless seats can be **reclaimed**. A seat is free when its player is offline and their number appears nowhere — no life, no ice, no ground. `Server::territory` already counts per player in one pass; widen it to count life and panes too and the question is answered by a scan the world is nearly doing anyway.
+A person is a keypair now and `Server::join_with` looks a seat up by it, so the mapping from person to seat exists and the token is gone. What does not exist is **reclaiming** a seat. One is free when its player is offline and their number appears nowhere — no life, no ice, no ground — and `Server::territory` already counts per player in one pass, so widening it to count life and panes answers the question with a scan the world is nearly doing anyway.
 
-Nothing about this reaches the cell. The UUID lives in the server's player table and in what a client keeps, and `Join` already carries a token — so the token can *be* the identity, or be looked up to one. What it buys beyond the seat count is that a person in three rooms becomes one person with three seats, where [server.md](server.md#rooms) currently has to say a player in two rooms is two players.
+Nothing about this reaches the cell, which is the point: the person lives in the server's table and the seat stays four bits.
 
 ## Matches
 
@@ -698,7 +637,7 @@ The middle one is the recommendation, with the first worth trying as a variant b
 
 ### Scoring
 
-Nothing counts ground per player. The `territory` example's `survey` does it for one player by walking every stored chunk, and a scoreboard is that for all thirty-one: one pass over the world, the same cost as `ice_cells` or `turrets`, of which there are already two a generation. Fine once a second, not fine every step.
+Nothing counts ground per player. The `territory` example's `survey` does it for one player by walking every stored chunk, and a scoreboard is that for all fifteen: one pass over the world, the same cost as `ice_cells` or `turrets`, of which there are already two a generation. Fine once a second, not fine every step.
 
 It must also be the **same number for everyone**, and a client cannot compute it — it only holds the chunks it subscribed to, so it can count its own screen and nothing else. So the server counts and broadcasts, which is a new message and the first thing in the protocol that is about a match rather than about a world.
 
@@ -708,7 +647,7 @@ Granted ground never decays, so a player whose life is wiped out still holds the
 
 ### What the lobby actually buys
 
-More than it looks. Grants are laid out on a fixed grid at a fixed pitch sized for thirty-one players, whether two turn up or twenty, and `spawn_for` derives a position from a player number alone. With the roster known before the world starts, the grid can be packed to the players actually in it — everybody the same distance from their neighbours, and no advantage in having joined early or late. That is a change to `spawn_for`, and it is the one place a match touches something that already works.
+More than it looks. Grants are laid out on a fixed grid at a fixed pitch sized for every number the cell can hold, whether two turn up or twelve, and `spawn_for` derives a position from a player number alone. With the roster known before the world starts, the grid can be packed to the players actually in it — everybody the same distance from their neighbours, and no advantage in having joined early or late. That is a change to `spawn_for`, and it is the one place a match touches something that already works.
 
 ### What is left over
 
@@ -752,7 +691,7 @@ What is left is the layout rather than the plumbing. The HUD is a desktop panel:
 
 ## Known, and left alone
 
-- **Thirty-one players is a ceiling on players a world has ever seen**, not on players connected at once, because a number is written into every cell its owner claimed and so can never be reused. Reclaiming numbers whose territory has gone would lift it; widening the field costs a bit from the kind. Rooms make this less pressing than it was — thirty-one is per room now — and no easier to fix.
+- **Fifteen players is a ceiling on players a room has ever seen**, not on players connected at once, because a number is written into every cell its owner claimed and so can never be reused. It was thirty-one until the level took a bit off the owner byte. Reclaiming numbers whose territory has gone would lift it; widening the field costs a bit from the kind. See [fifteen slots](#fifteen-slots-and-more-than-fifteen-clients).
 - **Territory creeps and decays now**, so ground is traded and lost as well as won, with granted ground exempt as the floor. What is unsettled is the floor: "your home patch is permanent" is a strong promise, and it also means an opponent who grows over it keeps a square that will never decay for them either.
 - **Building large structures** is still done by freezing ground with ice, which works but is not what ice is for. Deferred deliberately — schematics, a blueprint region, or players simply learning to work within the rules.
 - **`client::views::game` is 1900 lines doing five jobs.** The camera came out of it because it was pure arithmetic that could not be tested without a window; the same argument now applies twice over. The gesture machine — `Gesture`, `Drag`, `Pending`, the stroke and rectangle arithmetic — is already tested without a GPU at the bottom of that file. The session — `pump_link`, `advance_to`, `send_checkpoint`, `subscribe_to_view`, `chose`, `to_menu`, and the `me`, `room`, `value`, `screen` and `subscribed` fields — is everything about talking to a server and nothing about drawing. The menu made that worse rather than better: the screen the client is on and the connection it is holding are the same state machine, and it now lives in the same struct as the sprite atlas.

@@ -741,15 +741,6 @@ fn toggles<T: Copy + PartialEq>(
     });
 }
 
-/// One room: what it is called, whether anybody is in it, and whether it ends.
-/// One room: what it is called, whether anybody is in it, and whether it ends
-/// — with the two things that can be done to it.
-///
-/// Watching is a small button rather than a second full-width row, because it
-/// is the rarer of the two and a list where every entry is two equal choices
-/// is a list twice as long to read. It is offered on every room and not only
-/// on matches: **no late joining is a rule about players**, so a match already
-/// running is exactly the room whose only way in is to watch.
 /// One room in the list: what it is called, whether anybody is in it, whether
 /// it ends — and, **if it is the one selected**, what can be done with it.
 ///

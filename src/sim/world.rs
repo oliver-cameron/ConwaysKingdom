@@ -634,13 +634,21 @@ impl World {
     ) -> ([(i32, i32); rule::TURRET_POWER], usize) {
         let mut chosen = [(0, 0); rule::TURRET_POWER];
         let mut hit = 0;
+        // A live turret asks for ground that is not its owner's, and only when
+        // there is none within reach does it fall back to reinforcing its own.
+        // Falling back once rather than per shot, so a volley that ran out of
+        // frontier finishes on the thin ground behind it.
+        let mut aim = if live { Aim::Take } else { Aim::Give };
         while hit < rule::TURRET_POWER {
             let shot = super::seed::mix(seed, hit as u64);
-            let Some(next) = self.turret_target(at, owner, live, shot, &chosen[..hit]) else {
-                break;
-            };
-            chosen[hit] = next;
-            hit += 1;
+            match self.turret_target(at, owner, aim, shot, &chosen[..hit]) {
+                Some(next) => {
+                    chosen[hit] = next;
+                    hit += 1;
+                }
+                None if aim == Aim::Take => aim = Aim::Reinforce,
+                None => break,
+            }
         }
         (chosen, hit)
     }
@@ -667,7 +675,7 @@ impl World {
         &self,
         at: (i32, i32),
         owner: PlayerId,
-        live: bool,
+        aim: Aim,
         seed: u64,
         taken: &[(i32, i32)],
     ) -> Option<(i32, i32)> {
@@ -683,7 +691,7 @@ impl World {
                 if taken.contains(&(at.0 + dr, at.1 + dc)) {
                     continue;
                 }
-                if !self.turret_wants((at.0 + dr, at.1 + dc), owner, live) {
+                if !self.turret_wants((at.0 + dr, at.1 + dc), owner, aim) {
                     continue;
                 }
                 if d < best {
@@ -706,7 +714,7 @@ impl World {
                     continue;
                 }
                 let target = (at.0 + dr, at.1 + dc);
-                if taken.contains(&target) || !self.turret_wants(target, owner, live) {
+                if taken.contains(&target) || !self.turret_wants(target, owner, aim) {
                     continue;
                 }
                 if nth == 0 {
@@ -718,41 +726,38 @@ impl World {
         unreachable!("the second pass walks the same squares the first counted")
     }
 
-    /// Whether a turret will act on this square.
+    /// Whether a turret will act on this square, for the [`Aim`] it is asking
+    /// with.
     ///
-    /// A live turret takes **ground**, so it wants a dead square that is not
-    /// its owner's — dead because claiming a living cell would hand its owner
-    /// the cell itself rather than the square under it, there being one owner
-    /// field, and territory has never worked that way. Unheld ground counts:
-    /// an absent chunk is dead and unowned, which is exactly what a turret is
-    /// for reaching.
+    /// **Dead squares only**, for both of a live turret's aims: claiming a
+    /// living cell would hand its owner the cell itself rather than the square
+    /// under it, there being one owner field, and territory has never worked
+    /// that way. Unheld ground counts as dead and unowned, which is exactly
+    /// what an absent chunk reads as and exactly what a turret is for
+    /// reaching.
     ///
-    /// A dead turret is the mirror and takes its owner's own squares, alive or
-    /// not. `HOME` is exempt for the same reason it never decays: it is the
-    /// ground its owner can still build on at the base rate, and a machine of
-    /// theirs that failed should not be what takes that away.
+    /// A **dead** turret is the mirror and takes its owner's own squares,
+    /// alive or not. `HOME` is exempt for the same reason it never decays: it
+    /// is the ground its owner can still build on at the base rate, and a
+    /// machine of theirs that failed should not be what takes that away.
     ///
-    /// Ice is exempt either way. A pane stops time over what it covers, and a
-    /// pane's cover is not claimed out from under it.
-    fn turret_wants(&self, at: (i32, i32), owner: PlayerId, live: bool) -> bool {
+    /// `HOME` is exempt from reinforcing too, and needs no arm saying so:
+    /// granted ground is a source, so [`Cell::influence`] already reads it as
+    /// full and there is nothing to top up.
+    ///
+    /// Ice is exempt from all three. A pane stops time over what it covers,
+    /// and a pane's cover is not claimed out from under it.
+    fn turret_wants(&self, at: (i32, i32), owner: PlayerId, aim: Aim) -> bool {
         let cell = self.cell_at(at.0, at.1).unwrap_or(Cell::DEAD);
         if cell.is_ice() {
             return false;
         }
-        if live {
-            // **The nearest square that is not this player's**, which from the
-            // middle of their own ground is the frontier — and reaching the
-            // frontier from anywhere inside your own country is most of what a
-            // turret is for.
-            //
-            // Not "the nearest square I do not hold at full", which was tried
-            // when levels arrived and quietly ruined it: influence falls off,
-            // so from the middle of a country the nearest thin square is a few
-            // steps away and a turret would spend its life topping up ground
-            // it already held instead of pushing on anybody.
-            !cell.is_alive() && cell.player() != owner
-        } else {
-            cell.player() == owner && !cell.is_home()
+        match aim {
+            Aim::Take => !cell.is_alive() && cell.player() != owner,
+            Aim::Reinforce => {
+                !cell.is_alive() && cell.player() == owner && cell.influence() < rule::TURRET_PUSH
+            }
+            Aim::Give => cell.player() == owner && !cell.is_home(),
         }
     }
 
@@ -916,6 +921,35 @@ impl World {
     }
 }
 
+/// What a turret is looking for on one shot.
+///
+/// A live turret has **two** aims and takes them in order, which is what
+/// makes it work from the middle of a country as well as from its edge.
+/// The rule here has never changed; the world around it did. Before
+/// territory was a level, a player's ground was a tight halo, so ground
+/// that was not theirs was within six cells of anywhere they would put a
+/// turret. Now granted ground is a source and a country reaches much
+/// further, so a turret standing inside one finds its whole disc already
+/// owned and had nothing to do.
+///
+/// Reinforcing is strictly the fallback, and that is the whole of why it
+/// is safe. Making it the only rule was tried when levels arrived and
+/// quietly ruined the piece: influence falls off, so from the middle of a
+/// country the nearest thin square is a step or two away and a turret
+/// spent its life topping up ground it already held instead of pushing on
+/// anybody. Asked second, it only ever fires when there was nobody to push
+/// on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Aim {
+    /// A live turret's first choice: ground that is not its owner's.
+    Take,
+    /// Its fallback: its owner's own thinnest ground, planted back up to
+    /// full, which feeds the frontier through the sum rather than at it.
+    Reinforce,
+    /// A dead turret, running the first backwards.
+    Give,
+}
+
 /// Can anything on the edge facing `dir` change the chunk beyond it?
 ///
 /// Life can, by causing a birth. **So can ownership**, now that territory
@@ -1057,17 +1091,24 @@ mod tests {
         w.set_cell_at(0, 3, Cell::DEAD);
         w.set_cell_at(0, 5, Cell::DEAD);
 
-        let first = w.turret_target((0, 0), me, true, 0, &[]).expect("a gap within reach");
+        let first = w.turret_target((0, 0), me, Aim::Take, 0, &[]).expect("a gap within reach");
         assert_eq!(first, (0, 3), "the nearer gap");
-        let second = w.turret_target((0, 0), me, true, 0, &[first]).expect("and the one past it");
+        let second =
+            w.turret_target((0, 0), me, Aim::Take, 0, &[first]).expect("and the one past it");
         assert_eq!(second, (0, 5), "once the nearer one is spoken for");
     }
 
-    /// A turret inside its owner's ground finds everything within reach
-    /// already theirs and does nothing, so it only ever works from a frontier.
-    /// That is also what pins the reach: own the whole disc and it idles.
+    /// **A turret in the middle of a country still works.** With nobody to
+    /// push on it reinforces instead: it takes nobody's ground, and plants its
+    /// owner's thinnest square back up to full, which feeds the frontier
+    /// through the sum rather than at it.
+    ///
+    /// Before territory was a level this case could barely arise, because a
+    /// player's halo was tight enough that ground which was not theirs sat
+    /// within reach of anywhere they would stand one. A country reaches much
+    /// further now, and the turret had nothing to do.
     #[test]
-    fn a_turret_inside_its_owners_ground_idles() {
+    fn a_turret_inside_its_owners_ground_reinforces_it() {
         let mut w = World::infinite_empty();
         let me = PlayerId(1);
         let r = rule::TURRET_REACH;
@@ -1075,8 +1116,49 @@ mod tests {
         w.set_cell_at(0, 0, turret(me));
 
         let before = owned_by(&w, me);
+        let thin = |w: &World| {
+            owned_by(w, me)
+                .into_iter()
+                .filter(|&(r, c)| {
+                    w.cell_at(r, c).is_some_and(|x| x.influence() >= rule::TURRET_PUSH)
+                })
+                .count()
+        };
+        let full_before = thin(&w);
         w.fire_turrets();
-        assert_eq!(owned_by(&w, me), before, "nothing within reach was anyone else's");
+
+        assert_eq!(owned_by(&w, me), before, "nothing within reach was anyone else's to take");
+        assert_eq!(
+            thin(&w),
+            full_before + rule::TURRET_POWER,
+            "a turret with no frontier in reach should have planted on its own thin ground"
+        );
+    }
+
+    /// Reinforcing is strictly the **fallback**. Making it the only rule was
+    /// tried when levels arrived and ruined the piece: from inside a country
+    /// the nearest thin square is a step away, so a turret would top up ground
+    /// it already held rather than push on anybody.
+    #[test]
+    fn a_turret_with_a_frontier_in_reach_pushes_rather_than_reinforcing() {
+        let mut w = World::infinite_empty();
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        // The whole disc is its owner's and every square of it is thin --
+        // unowned ground would be takeable, so the box has to cover the reach
+        // -- with one square of somebody else's four cells out, further than
+        // the thin ground going begging right beside it.
+        let r = rule::TURRET_REACH;
+        own_ground(&mut w, (-r, r), (-r, r), me);
+        w.set_cell_at(0, 0, turret(me));
+        w.set_cell_at(0, 4, Cell::DEAD.with_player(them));
+
+        w.fire_turrets();
+
+        assert_eq!(
+            w.cell_at(0, 4).map(|c| c.player()),
+            Some(me),
+            "the frontier is what a turret goes for, thin ground beside it or not"
+        );
     }
 
     /// A turret takes **ground**, so it wants a dead square that is not its
@@ -1092,11 +1174,14 @@ mod tests {
         w.set_cell_at(0, 3, Cell::DEAD.with_player(me));
         w.set_cell_at(0, 4, Cell::DEAD.with_player(them).with_ice(true));
 
-        assert!(w.turret_wants((0, 1), me, true), "their ground is what a turret takes");
-        assert!(!w.turret_wants((0, 2), me, true), "their life is not");
-        assert!(!w.turret_wants((0, 3), me, true), "nor is what is already theirs");
-        assert!(!w.turret_wants((0, 4), me, true), "a pane's cover is not claimed from under it");
-        assert!(w.turret_wants((5, 5), me, true), "and ground nobody holds counts");
+        assert!(w.turret_wants((0, 1), me, Aim::Take), "their ground is what a turret takes");
+        assert!(!w.turret_wants((0, 2), me, Aim::Take), "their life is not");
+        assert!(!w.turret_wants((0, 3), me, Aim::Take), "nor is what is already theirs");
+        assert!(
+            !w.turret_wants((0, 4), me, Aim::Take),
+            "a pane's cover is not claimed from under it"
+        );
+        assert!(w.turret_wants((5, 5), me, Aim::Take), "and ground nobody holds counts");
     }
 
     /// A live cell must have an owner, so taking a square away from its owner

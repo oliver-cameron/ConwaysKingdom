@@ -160,7 +160,7 @@ A torus without a size is refused rather than given a default: how big a wrappin
 
 ## Players
 
-The lowest unused number, from 1. Zero is reserved for unowned cells, and the cell has five bits, so **31 players** is the capacity — a full server refuses rather than truncating a number into a cell.
+The lowest unused number, from 1. Zero is reserved for unowned cells, and the cell has four bits, so **15 players** is the capacity — a full server refuses rather than truncating a number into a cell. It was 31 until the level took a bit off the owner byte; see [simulation.md](simulation.md#fifteen-players).
 
 Joins and departures are logged:
 

@@ -98,13 +98,13 @@ Written for blue, which is hue. `cnvt` writes it because it is the honest decomp
 
 ## Colour
 
-Sprites carry **no hue**. A texel is saturation, lightness and coverage; the hue arrives at draw time from the cell's player, so one set of art serves all 31 players.
+Sprites carry **no hue**. A texel is saturation, lightness and coverage; the hue arrives at draw time from the cell's player, so one set of art serves every player.
 
 OKLab, not HSV: HSV's hues are not perceptually even — its yellows read far brighter than its blues at equal value, so players would not look equally prominent.
 
-Asking for more chroma than sRGB can show is the *normal* case at useful saturations. Clamping fixes the range but bends hue, because red clips before blue, so two players drift towards each other — which defeats the point of choosing distinct hues. The chroma is **bisected down until it fits**, eight steps, keeping hue and lightness exactly. Across 31 players at four lightnesses nothing goes out of gamut; clamping at less than half the chroma still clipped 16 of 124 combinations.
+Asking for more chroma than sRGB can show is the *normal* case at useful saturations. Clamping fixes the range but bends hue, because red clips before blue, so two players drift towards each other — which defeats the point of choosing distinct hues. The chroma is **bisected down until it fits**, eight steps, keeping hue and lightness exactly. Across the 31 players the owner field held when this was measured, at four lightnesses, nothing goes out of gamut; clamping at less than half the chroma still clipped 16 of 124 combinations. The field is four bits now, so the measurement covers twice the range that exists.
 
-Player colour has two axes. Hue is spaced by the golden ratio; saturation alternates between two tiers. Hue alone left the closest of 31 players 0.026 apart in OKLab; the tiers lift that to 0.037 over all 31 and 0.119 over the first eight. Spreading saturation *smoothly* measured worse than doing nothing, because lowering it shrinks the chroma radius and pulls colours together — the alternation is the point.
+Player colour has two axes. Hue is spaced by the golden ratio; saturation alternates between two tiers. Hue alone left the closest of 31 players 0.026 apart in OKLab; the tiers lifted that to 0.037 over all 31 and 0.119 over the first eight. At fifteen players the crowding that motivated it is gone, and the alternation is kept as cheap insurance rather than as a fix. Spreading saturation *smoothly* measured worse than doing nothing, because lowering it shrinks the chroma radius and pulls colours together — the alternation is the point.
 
 `client::views::hue::player_colour` reproduces the same arithmetic on the CPU so a swatch and the board cannot disagree. It sits beside the hue table it converts, rather than in the HUD, so that a screen wanting a swatch does not have to depend on the HUD to get one.
 

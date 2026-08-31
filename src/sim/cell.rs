@@ -495,7 +495,7 @@ impl Chunk {
         Self { cells: [Cell::DEAD; CHUNK_CELLS] }
     }
 
-    /// Nothing here worth keeping: no life, and no structure either.
+    /// Nothing here worth keeping: no life, no ice, and nobody's ground.
     ///
     /// Not simply "nothing alive". A chunk holding only panes still holds
     /// something, and dropping it would destroy them for good, since a
@@ -506,7 +506,6 @@ impl Chunk {
     /// Those are inert -- nothing counts a dead cell, and a birth takes its
     /// owner from live neighbours -- so discarding them changes nothing, and
     /// refusing to would let an infinite world grow without bound again.
-    /// Nothing here worth keeping: no life, no ice, and nobody's ground.
     ///
     /// Ownership counts because territory lives on dead cells. Without it a
     /// chunk holding nothing but claimed ground reads as empty, and `prune`

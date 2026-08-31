@@ -63,16 +63,13 @@ pub fn table() -> [f32; PlayerId::COUNT] {
     hues
 }
 
-/// The colour the shader gives a player, computed the same way so the HUD
-/// swatch matches the cells on the board. OKLab with the chroma bisected down
-/// until it fits sRGB, which keeps hue and lightness exactly rather than
-/// bending them the way clamping would.
 /// What the shader draws a sheet texel as, for this player.
 ///
 /// The sheet carries no hue: a texel is saturation and lightness, and the hue
-/// comes from the player's number. Mirrors `shade` and `player_hue` in
-/// `grid.wgsl`, which is the one that has to be right — this only has to agree
-/// with it.
+/// comes from the player's number. OKLab with the chroma bisected down until it
+/// fits sRGB, which keeps hue and lightness exactly rather than bending them
+/// the way clamping would. Mirrors `shade` and `player_hue` in `grid.wgsl`,
+/// which is the one that has to be right — this only has to agree with it.
 pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) {
     shade_at(
         lightness,

@@ -96,7 +96,7 @@ pub struct Server {
 /// connection's unbounded channel. A viewport with its margin covers a few
 /// hundred at the widest zoom, so this is far above anything a client asks for
 /// and far below anything that hurts.
-const MOST_CHUNKS_AT_ONCE: usize = 4096;
+pub(crate) const MOST_CHUNKS_AT_ONCE: usize = 4096;
 
 /// How often the standings go out, in generations.
 ///
@@ -411,7 +411,7 @@ impl Server {
     /// Who holds how much, most first, as a client is told it.
     ///
     /// Players holding nothing are left out rather than sent as zero: on a
-    /// world that has seen thirty-one people, most of the list is nobody, and
+    /// world that has seen fifteen people, most of the list is nobody, and
     /// a bar of length zero says nothing a missing row does not.
     pub fn standing(&self) -> ServerMessage {
         ServerMessage::Standing { tick: self.tick(), held: crate::net::standings(&self.world) }
@@ -658,16 +658,15 @@ impl Server {
         self.players.values()
     }
 
-    /// The lowest unused number. Zero is reserved for unowned cells, and the
-    /// cell only has room for [`PlayerId::MAX`], so a full server refuses.
-    /// The lowest number nobody has ever been given here.
+    /// The lowest number nobody has ever been given here, or `None` when the
+    /// room is full.
     ///
     /// Never reused, even once its player has gone. A number is written into
     /// every cell they own, so reissuing one hands their territory to a
-    /// stranger — and the ground stays after the connection does not. Thirty
-    /// one numbers is therefore a limit on players a world has ever seen, not
-    /// on players connected at once, which is what a bearer token is for: a
-    /// returning player asks for the number they already have.
+    /// stranger — and the ground stays after the connection does not. So
+    /// [`PlayerId::MAX`] is a limit on players a room has ever seen, not on
+    /// players connected at once; a returning person asks for the number they
+    /// already have.
     fn next_player_id(&self) -> Option<PlayerId> {
         (1..=PlayerId::MAX).map(PlayerId).find(|id| !self.players.contains_key(id))
     }
@@ -790,12 +789,11 @@ impl Server {
         Ok(id)
     }
 
-    /// Claim a player's starting ground, so they have somewhere to place.
+    /// Give this player their opening patch, if they have not had it.
     ///
     /// Granted again on a rejoin, deliberately: a player whose life was wiped
     /// out while they were away would otherwise come back with nowhere to
     /// stand, and re-marking ground they already hold costs nothing.
-    /// Give this player their opening patch, if they have not had it.
     ///
     /// Safe to call more than once — `net::grant` is idempotent — which is
     /// what the rejoin path relies on: a player coming back is granted again
@@ -934,11 +932,6 @@ impl Server {
                 // their cells, and a connection with no seat at all — a
                 // spectator — could act as everybody.
                 //
-                // Checked here rather than by rewriting `stamped.player` to
-                // `from`, because the two disagreeing is a client that is
-                // wrong or lying and neither should be quietly obeyed under a
-                // corrected name.
-                //
                 // **Against the sender's side, not their seat**, because in a
                 // match the cells carry the side's number and that is what the
                 // client stamps. `plays_as` is the seat's own number outside a
@@ -959,6 +952,22 @@ impl Server {
                         from,
                         stamped.seat,
                         stamped.player
+                    );
+                    return Vec::new();
+                }
+                // **Before anything walks the list.** Pricing and applying are
+                // both linear in it, the whole action is cloned into an
+                // `Acted` and broadcast, and every client in the room applies
+                // it too -- so an unbounded list is unbounded work on the one
+                // task that owns every world, amplified to the room. Cost is
+                // no bound: an `Erase` over ground nobody holds prices at
+                // nothing however long it is.
+                if stamped.action.cells().len() > crate::net::MOST_CELLS_AT_ONCE {
+                    log::warn!(
+                        "dropped an action from {:?} naming {} cells, over the {} allowed",
+                        from,
+                        stamped.action.cells().len(),
+                        crate::net::MOST_CELLS_AT_ONCE
                     );
                     return Vec::new();
                 }
@@ -1145,11 +1154,6 @@ impl Server {
     /// Apply everything queued for this tick, advance one generation, and hand
     /// back what every client needs to stay in step.
     pub fn step(&mut self) -> Vec<ServerMessage> {
-        // A match that has not started yet, or is over, holds still — and
-        // nothing is pending either, since `handle` takes no actions in those
-        // phases. Emptied rather than left, so an action that arrived in the
-        // same breath as the whistle cannot be applied a phase later than it
-        // was priced.
         // Asleep is a whole stop: no generation, and no actions applied
         // either, since an action applied to a world that is not moving would
         // land on a tick that has not happened.
@@ -1179,6 +1183,10 @@ impl Server {
             lobby.push(ServerMessage::Resync { tick: self.tick(), chunks });
         }
 
+        // A match that has not started yet, or is over, holds still. Pending
+        // is emptied rather than left, so an action that arrived in the same
+        // breath as the whistle cannot be applied a phase later than it was
+        // priced.
         if !self.phase.stepping() {
             self.pending.clear();
             return lobby;
@@ -1634,7 +1642,7 @@ mod tests {
     ///
     /// The order has to be the same on every peer or rows swap places at a tie
     /// and the bars jump about; leaving out the empty is what stops a world
-    /// that has seen thirty-one people showing a column of mostly nobody.
+    /// that has seen fifteen people showing a column of mostly nobody.
     #[test]
     fn the_standing_is_most_first_and_leaves_out_the_empty() {
         let mut s = Server::named("arena", World::infinite_empty());
@@ -2563,6 +2571,58 @@ mod tests {
         );
         s.step();
         assert_eq!(s.value_of(b), Some(before - 1), "taking ground is not free");
+    }
+
+    /// **Cost is no bound on length.** An `Erase` over ground nobody holds
+    /// prices at nothing however many cells it names, so affordability would
+    /// let a single message spend the room's whole tick — and then the room's
+    /// whole broadcast, since every client applies it too. Refused on the
+    /// length before anything walks the list.
+    #[test]
+    fn an_action_naming_more_cells_than_allowed_is_dropped() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        let over = crate::net::MOST_CELLS_AT_ONCE + 1;
+        let before = s.value_of(me).unwrap();
+
+        let out = s.handle(
+            Some(me),
+            None,
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: me,
+                seat: me,
+                // Far from anything, and free at any length: the point is that
+                // nothing about the price would have stopped it.
+                action: Action::Erase {
+                    cells: (0..over as i32).map(|c| (100_000, c)).collect(),
+                    placement: Placement::Life,
+                },
+            }),
+        );
+        assert!(out.is_empty());
+        assert!(s.take_announcements().is_empty(), "an over-long action was broadcast");
+        s.step();
+        assert_eq!(s.value_of(me), Some(before), "and nothing was charged for it");
+
+        // One cell under the cap goes through, so it is the length being
+        // refused rather than the shape of the message.
+        s.handle(
+            Some(me),
+            None,
+            ClientMessage::Act(Stamped {
+                tick: s.tick(),
+                player: me,
+                seat: me,
+                action: Action::Erase {
+                    cells: (0..crate::net::MOST_CELLS_AT_ONCE as i32)
+                        .map(|c| (100_000, c))
+                        .collect(),
+                    placement: Placement::Life,
+                },
+            }),
+        );
+        assert!(!s.take_announcements().is_empty(), "an action within the cap was dropped");
     }
 
     #[test]
