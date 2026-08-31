@@ -368,12 +368,10 @@ pub mod hotbar {
     /// art for any of them and a triangle painted by hand is a decision about
     /// a whole icon set — see `icons::back`, which is the precedent and the
     /// argument for eventually doing it.
-    pub const RUN: &str = "Run";
     pub const RUN_HINT: &str = "Let the world run";
-    pub const STOP: &str = "Stop";
     pub const STOP_HINT: &str = "Hold the world still";
-    pub const STEP: &str = "+1";
     pub const STEP_HINT: &str = "One generation, and stay stopped";
+    /// The panel's own heading. The square that opens it is an icon.
     pub const RULES: &str = "Rules";
     pub const RULES_HINT: &str = "What the game's rules are doing here";
     pub const CLOSE: &str = "Close";

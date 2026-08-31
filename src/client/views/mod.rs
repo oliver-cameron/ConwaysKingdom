@@ -31,6 +31,7 @@
 //! clipboard handling that egui-winit exists for is not in play.
 
 pub mod game;
+pub mod glyph;
 pub mod hue;
 pub mod icons;
 pub mod menu;
@@ -421,6 +422,7 @@ fn install_fonts(ctx: &egui::Context) {
     for (name, bytes) in [
         ("plex", &include_bytes!("../../../assets/fonts/IBMPlexSans-Regular.ttf")[..]),
         ("plex-mono", &include_bytes!("../../../assets/fonts/IBMPlexMono-Regular.ttf")[..]),
+        (glyph::FAMILY, ICON_FONT),
     ] {
         fonts.font_data.insert(name.into(), std::sync::Arc::new(FontData::from_static(bytes)));
     }
@@ -429,7 +431,111 @@ fn install_fonts(ctx: &egui::Context) {
     // worse than a glyph in the wrong face.
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "plex".into());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "plex-mono".into());
+    // **A family of its own**, and nothing else in it. Put among the
+    // proportional fallbacks instead, an icon's codepoint would be looked for
+    // in Plex first — which has nothing in the private use area, so it would
+    // work — and a *letter* would be looked for in the icon font, which is
+    // fine until somebody subsets it. Its own family means an icon is only
+    // ever asked of the font that has icons.
+    fonts.families.insert(FontFamily::Name(glyph::FAMILY.into()), vec![glyph::FAMILY.into()]);
     ctx.set_fonts(fonts);
+}
+
+/// The icon face, embedded the way the two text faces are.
+///
+/// Phosphor regular, MIT, in `PHOSPHOR-LICENSE.txt` beside it. The whole face
+/// rather than a subset — see [`glyph`] for what that costs and for the script
+/// that cuts it down.
+pub const ICON_FONT: &[u8] = include_bytes!("../../../assets/fonts/Phosphor-Regular.ttf");
+
+/// Every codepoint a font has a glyph for, read out of its `cmap`.
+///
+/// **So a test can check the font rather than trust it.** A named icon whose
+/// glyph is not in the file draws a blank box, silently, on whichever screen
+/// uses it — which is exactly what a subset built from a stale list produces,
+/// and exactly the failure `tools/subset-icons.sh` could otherwise introduce.
+///
+/// Formats 4 and 12, which is what a modern font's Unicode table is; anything
+/// else is skipped rather than guessed at, and the test asserts it found a
+/// plausible number so a silent nought cannot pass.
+#[cfg(test)]
+fn font_codepoints(font: &[u8]) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let be16 = |at: usize| -> Option<u32> {
+        Some(u16::from_be_bytes(font.get(at..at + 2)?.try_into().ok()?) as u32)
+    };
+    let be32 = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(font.get(at..at + 4)?.try_into().ok()?))
+    };
+
+    // The table directory: a 12-byte header, then 16 bytes per table.
+    let Some(tables) = be16(4) else { return out };
+    let mut cmap = None;
+    for i in 0..tables as usize {
+        let at = 12 + i * 16;
+        if font.get(at..at + 4) == Some(b"cmap") {
+            cmap = be32(at + 8).map(|o| o as usize);
+        }
+    }
+    let Some(cmap) = cmap else { return out };
+
+    let Some(subtables) = be16(cmap + 2) else { return out };
+    for i in 0..subtables as usize {
+        let rec = cmap + 4 + i * 8;
+        let Some(offset) = be32(rec + 4) else { continue };
+        let sub = cmap + offset as usize;
+        match be16(sub) {
+            // Segment mapping to delta values: four parallel arrays.
+            Some(4) => {
+                let Some(seg2) = be16(sub + 6) else { continue };
+                let segs = (seg2 / 2) as usize;
+                let ends = sub + 14;
+                let starts = ends + seg2 as usize + 2;
+                let deltas = starts + seg2 as usize;
+                let ranges = deltas + seg2 as usize;
+                for s in 0..segs {
+                    let (Some(end), Some(start), Some(delta), Some(range)) = (
+                        be16(ends + s * 2),
+                        be16(starts + s * 2),
+                        be16(deltas + s * 2),
+                        be16(ranges + s * 2),
+                    ) else {
+                        continue;
+                    };
+                    if start == 0xFFFF {
+                        continue;
+                    }
+                    for c in start..=end {
+                        let glyph = if range == 0 {
+                            (c + delta) & 0xFFFF
+                        } else {
+                            let at = ranges + s * 2 + range as usize + (c - start) as usize * 2;
+                            match be16(at) {
+                                Some(0) | None => continue,
+                                Some(g) => (g + delta) & 0xFFFF,
+                            }
+                        };
+                        if glyph != 0 {
+                            out.insert(c);
+                        }
+                    }
+                }
+            }
+            // Segmented coverage: groups of (start, end, first glyph).
+            Some(12) => {
+                let Some(groups) = be32(sub + 12) else { continue };
+                for g in 0..groups as usize {
+                    let at = sub + 16 + g * 12;
+                    let (Some(start), Some(end)) = (be32(at), be32(at + 4)) else { continue };
+                    for c in start..=end.min(start + 0xFFFF) {
+                        out.insert(c);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// What a view drew, and what it was told while drawing it.

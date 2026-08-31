@@ -22,6 +22,7 @@
 //! Programmer Dvorak, and nothing but the keyboard can say which.
 
 use crate::client::views::game::stamp::{Library, Stamp};
+use crate::client::views::glyph;
 use crate::client::views::icons::{self, Icons};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::hotbar as words;
@@ -494,10 +495,14 @@ pub fn show(
                     // here to press.
                     if look.own_clock {
                         rule(ui, theme);
+                        // Icons rather than words, which is what the icon font
+                        // is for: these three are the most universally drawn
+                        // symbols there are, and a square wide enough for
+                        // "Stop" is a square that shoves the bar along.
                         if square(
                             ui,
                             look,
-                            Face::Text(if look.paused { words::RUN } else { words::STOP }),
+                            Face::Icon(if look.paused { glyph::PLAY } else { glyph::PAUSE }),
                             if look.paused { words::RUN_HINT } else { words::STOP_HINT },
                             Some(words::RUN_KEY.to_string()),
                             look.paused,
@@ -507,7 +512,7 @@ pub fn show(
                         if square(
                             ui,
                             look,
-                            Face::Text(words::STEP),
+                            Face::Icon(glyph::STEP),
                             words::STEP_HINT,
                             Some(words::STEP_KEY.to_string()),
                             false,
@@ -517,7 +522,7 @@ pub fn show(
                         if square(
                             ui,
                             look,
-                            Face::Text(words::RULES),
+                            Face::Icon(glyph::GEAR),
                             words::RULES_HINT,
                             None,
                             look.showing_rules,
@@ -654,6 +659,8 @@ enum Face<'a> {
     Camera,
     /// Words, for the square that has no picture.
     Text(&'a str),
+    /// An icon, from the face that has icons — see [`glyph`].
+    Icon(&'a str),
 }
 
 /// One square: a picture of what it does, the key that picks it, and its name
@@ -704,6 +711,17 @@ fn square(
         Face::Pattern(stamp) => stamp.draw(painter, inner, look.what, look.player, look.sheet),
         Face::Camera => icons::camera(painter, inner, ink),
         Face::Text(text) => draw_text(painter, inner, text, ink),
+        // Larger than a word, because a glyph drawn at a word's size in a
+        // square meant for a sprite reads as a speck.
+        Face::Icon(icon) => shadowed_in(
+            painter,
+            inner.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            inner.height() * 0.62,
+            ink,
+            egui::FontFamily::Name(glyph::FAMILY.into()),
+        ),
     }
 
     if let Some(key) = key {
@@ -746,7 +764,22 @@ fn shadowed(
     size: f32,
     colour: egui::Color32,
 ) {
-    let font = egui::FontId::proportional(size);
+    shadowed_in(painter, at, align, text, size, colour, egui::FontFamily::Proportional)
+}
+
+/// The same, in a named family — which is how an icon is drawn, since an icon
+/// is only ever asked of the font that has icons.
+#[allow(clippy::too_many_arguments)]
+fn shadowed_in(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    align: egui::Align2,
+    text: impl std::fmt::Display,
+    size: f32,
+    colour: egui::Color32,
+    family: egui::FontFamily,
+) {
+    let font = egui::FontId::new(size, family);
     let text = text.to_string();
     painter.text(
         at + egui::vec2(1.0, 1.0),
