@@ -29,7 +29,17 @@ pub fn show(
     phase: &MatchPhase,
     victory: Option<Victory>,
     standing: &[crate::net::Holding],
+    paused: bool,
 ) -> crate::client::views::Shown<()> {
+    // **A stopped world says so, and nothing else has to.** A board that is
+    // not moving is indistinguishable from one that has settled, and settling
+    // is a thing patterns actually do — so without this the first minute of an
+    // experiment is spent wondering which it was. Here rather than in the HUD
+    // for the reason the rest of this strip is: it is a fact about the room
+    // and not about the player.
+    if paused {
+        return pill(ctx, theme, words::paused_at(generation));
+    }
     // Only while it is running. A gathering match has its lobby and a decided
     // one has its result, and both of those say more than a clock could.
     let MatchPhase::Running { from } = phase else { return crate::client::views::Shown::nowhere() };
@@ -81,6 +91,24 @@ pub fn show(
                     // without reading anything.
                     let ink = if across > 0.9 { p.warn } else { p.accent };
                     ui.painter().rect_filled(filled, 3.0, ink);
+                });
+        });
+    crate::client::views::Shown::new(area.response.rect, ())
+}
+
+/// One line in the strip, with nothing under it.
+fn pill(ctx: &egui::Context, theme: &Theme, text: String) -> crate::client::views::Shown<()> {
+    let (p, m) = (theme.palette, theme.metrics);
+    let area = egui::Area::new("clock".into())
+        .anchor(egui::Align2::CENTER_TOP, [0.0, m.margin])
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(p.surface)
+                .stroke(egui::Stroke::new(1.0, p.warn))
+                .corner_radius(m.rounding)
+                .inner_margin(m.panel_padding)
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| ui.colored_label(p.warn, text));
                 });
         });
     crate::client::views::Shown::new(area.response.rect, ())

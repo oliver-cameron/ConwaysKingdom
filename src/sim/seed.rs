@@ -41,6 +41,42 @@ pub const fn mix(seed: u64, value: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// The half of a cell's seed that is the same for every cell this generation.
+///
+/// **Split from [`cell_seed`] for the GPU.** A compute shader dispatches one
+/// thread per cell, and the only thing a thread knows cheaply is its own
+/// coordinates — so a seed that had to be derived through a chunk, or through
+/// anything a thread would have to look up, is a seed a thread cannot compute.
+/// Splitting it here makes that split explicit rather than accidental: this
+/// half is one value per dispatch, passed in a uniform, and [`cell_seed`] is
+/// the **one** mix a thread does for itself.
+///
+/// `world` is the game's own id, so two rooms holding the same cells do not
+/// roll the same dice — see [`crate::sim::World::seed`]. It is not a secret
+/// and it is not meant to be: every peer in a room has to know it or they
+/// disagree about the first contested birth.
+#[inline]
+pub const fn generation_seed(world: u64, generation: u64) -> u64 {
+    mix(world, generation)
+}
+
+/// One cell's seed, from where it is and nothing else.
+///
+/// **Absolute cell coordinates**, not a chunk and an offset inside it. The
+/// chunk was never part of the question — it is how the CPU stores the world,
+/// and a cell's dice should not change because the storage did. Keying on the
+/// cell's own position means the answer survives a change to `CHUNK_N`, is the
+/// same on a torus and a plane for the same square, and is computable by
+/// anything that knows where it is.
+///
+/// Packed into one `u64` rather than mixed twice, so this is a single [`mix`]:
+/// two multiplies and three shifts, which is what a fragment or a compute
+/// thread can afford per cell.
+#[inline]
+pub const fn cell_seed(generation: u64, row: i32, col: i32) -> u64 {
+    mix(generation, ((row as u32 as u64) << 32) | (col as u32 as u64))
+}
+
 /// One cell's dice for one generation.
 ///
 /// Copy, and every method takes `self` by value, because there is no state to

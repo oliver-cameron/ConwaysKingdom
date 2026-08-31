@@ -5,7 +5,7 @@ use super::player::PlayerId;
 use super::rule::{
     next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM, UPKEEP_STREAM,
 };
-use super::seed::{mix, Roll};
+use super::seed::Roll;
 use std::ops::{Index, IndexMut};
 
 pub const CHUNK_N: usize = 16;
@@ -547,7 +547,7 @@ impl Chunk {
     pub fn step(&self, next: &mut Chunk) {
         let mut halo = Halo::dead();
         halo.set_centre(self);
-        halo.step_into(next, 0, &mut Mined::default());
+        halo.step_into(next, 0, (0, 0), &mut Mined::default());
     }
 }
 
@@ -588,19 +588,22 @@ impl Halo {
         }
     }
 
-    /// Step every cell. `seed` identifies this chunk at this tick; each cell
-    /// mixes its own position in, so the pseudo-randomness a birth uses is the
-    /// same on every peer without any of them exchanging a number.
+    /// Step every cell. `generation` is [`super::seed::generation_seed`] for
+    /// this world at this tick and `at` is the chunk's top-left cell, so each
+    /// cell's dice come from its **absolute position** and nothing else — the
+    /// same number a compute thread could work out from its own coordinates,
+    /// and one that does not change if the chunking does.
     ///
     /// `mined` is added to, never cleared: a caller sums a whole world into one
     /// tally. Counted here because this is the one place that holds a cell
     /// before and after in the same breath, so a birth costs a comparison and
     /// no second pass over the world.
-    pub fn step_into(&self, next: &mut Chunk, seed: u64, mined: &mut Mined) {
+    pub fn step_into(&self, next: &mut Chunk, generation: u64, at: (i32, i32), mined: &mut Mined) {
         for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 let (hr, hc) = (row + 1, col + 1);
-                let cell_seed = mix(seed, (row as u64) << 32 | col as u64);
+                let cell_seed =
+                    super::seed::cell_seed(generation, at.0 + row as i32, at.1 + col as i32);
                 let before = self.get(hr, hc);
                 let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
                 if after.kind() == Kind::MINE && after.player().is_owned() {

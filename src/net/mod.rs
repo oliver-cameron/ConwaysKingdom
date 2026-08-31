@@ -91,6 +91,32 @@ impl std::borrow::Borrow<str> for RoomId {
     }
 }
 
+/// This room's number, for the dice its world rolls.
+///
+/// **Derived, so it needs no field on the wire and no version in the save.**
+/// Both peers already know which room they are in — `Welcome` names it, and it
+/// is the save file's own name — so a number computed from the id is a number
+/// both sides have without anybody sending it. A field would be a third thing
+/// about a room that could be wrong, and this cannot be.
+///
+/// From the [`RoomId`] rather than the name, because the id never changes and
+/// a name can: renaming a room must not re-roll its dice, which would be a
+/// world quietly becoming a different world.
+///
+/// FNV-1a, for the reason [`crate::sim::World::digest`] gives — `DefaultHasher`
+/// is explicitly not stable across Rust versions, and a client and server built
+/// at different times would disagree about every contested birth.
+pub fn world_seed(room: &RoomId) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = OFFSET;
+    for &b in room.as_str().as_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    h
+}
+
 /// What a room is **called**: what a player reads in the list and types to
 /// reach it. Unique on a server, so that typing one is unambiguous, and not
 /// what anything durable keys off — see [`RoomId`].
@@ -1375,14 +1401,19 @@ pub fn too_cramped_for_grants(world: &World) -> bool {
 /// client's browser tab with it. Falling back to a boundless world means the
 /// client goes on playing and disagrees with the server, which the checkpoint
 /// will say out loud; the alternative is a page that closes itself.
-pub fn sane_world(kind: crate::sim::WorldKind) -> World {
-    match kind.checked() {
+pub fn sane_world(kind: crate::sim::WorldKind, room: &RoomId) -> World {
+    let mut world = match kind.checked() {
         Ok(kind) => kind.build(),
         Err(why) => {
             log::error!("the server named a world this client will not build ({why})");
             World::infinite_empty()
         }
-    }
+    };
+    // Taken from the room rather than left to the caller, because forgetting
+    // it is a client that rolls different dice from its server and finds out
+    // at the first contested birth -- which looks like a desync and is not one.
+    world.set_seed(world_seed(room));
+    world
 }
 
 /// Every chunk a grant at this position touches, folded onto the chunks the

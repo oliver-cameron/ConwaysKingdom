@@ -446,6 +446,20 @@ pub struct GameApp {
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate rather than a log line — see [`crate::client::desync`].
     geiger: crate::client::desync::Geiger,
+    /// **The world is stopped**, which only means anything offline.
+    ///
+    /// A connected client advances when the server says a generation happened
+    /// and never on its own clock, so there is nothing here for a pause to
+    /// stop — see `advance_to`. Held on the app rather than in `Ui` because it
+    /// is a fact about the world and not about the interface, which is the
+    /// same line `world`, `link` and `value` are on the far side of.
+    paused: bool,
+    /// One generation asked for while stopped, taken on the next frame.
+    ///
+    /// A request rather than a step taken in the key handler, so that stepping
+    /// happens exactly where stepping happens — one place that banks what was
+    /// mined and recounts the standings, rather than two that have to agree.
+    step_once: bool,
 }
 
 impl GameApp {
@@ -686,7 +700,15 @@ impl GameApp {
     /// for the same reason, and the blank moment before the chunks land is the
     /// one that path already has.
     fn resync_everything(&mut self, tick: crate::net::Tick) {
+        // **Keeping the seed**, which the shape does not carry: `build` makes a
+        // world that has not been told which game it is, and a client rolling
+        // from nought against a server rolling from the room's number
+        // disagrees at the first contested birth. That reads as a desync, so
+        // it resyncs, so it rebuilds, so it disagrees again -- which is what
+        // `examples/two` caught the moment this was wired up.
+        let seed = self.world.seed();
         self.world = self.world.kind().build();
+        self.world.set_seed(seed);
         self.world.set_generation(tick);
         self.world.dirty = true;
         // Cleared, or `subscribe_to_view` would take this client's word for
@@ -794,7 +816,13 @@ impl GameApp {
                     // can see says whether the ground ends, so this is the only
                     // way it can know.
                     self.applied_early.clear();
-                    self.world = crate::net::sane_world(world);
+                    // A pause is a fact about a world this client was keeping
+                    // time in, and it is not keeping time in this one.
+                    self.paused = false;
+                    self.world = crate::net::sane_world(
+                        world,
+                        self.room.as_ref().expect("the room was just set"),
+                    );
                     // A birth's owner is seeded from the generation, so a
                     // client simulating at a different tick would make
                     // different choices from identical cells.
@@ -833,7 +861,13 @@ impl GameApp {
                     self.asked_at = None;
                     self.say_where();
                     self.applied_early.clear();
-                    self.world = crate::net::sane_world(world);
+                    // A pause is a fact about a world this client was keeping
+                    // time in, and it is not keeping time in this one.
+                    self.paused = false;
+                    self.world = crate::net::sane_world(
+                        world,
+                        self.room.as_ref().expect("the room was just set"),
+                    );
                     self.world.set_generation(tick);
                     self.subscribed.clear();
                     self.geiger.reset();
@@ -1611,6 +1645,44 @@ impl GameApp {
     }
 
     /// What the hotbar is holding, for the HUD and for a drag's label.
+    /// Run, or stop running. Offline only.
+    ///
+    /// **Said rather than ignored** when there is a link. A key that does
+    /// nothing and explains nothing reads as broken, where "the server keeps
+    /// time here" reads as the rule it is — and it is a rule worth learning,
+    /// because it is the same one that makes prediction work.
+    fn toggle_running(&mut self) {
+        if self.link.is_some() {
+            self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
+            return;
+        }
+        self.paused = !self.paused;
+        self.notice = None;
+        self.last_action = Some(if self.paused {
+            words::help::PAUSED.into()
+        } else {
+            words::help::RUNNING.into()
+        });
+    }
+
+    /// One generation, and stay stopped.
+    ///
+    /// Stopping first if it was running, which is what somebody pressing this
+    /// means: a single step out of a moving world is a step you cannot look
+    /// at.
+    fn step_one(&mut self) {
+        if self.link.is_some() {
+            self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
+            return;
+        }
+        self.paused = true;
+        self.step_once = true;
+        self.notice = None;
+        // The generation it will be on once the step is taken, since that is
+        // the number somebody stepping wants to read.
+        self.last_action = Some(words::help::stepped_to(self.world.generation + 1));
+    }
+
     fn holding(&self) -> &str {
         // Both axes, because both are what you are holding: a pane of ice and
         // a pencil of ice are different things to be about to do.
@@ -2332,6 +2404,8 @@ impl App for GameApp {
             plays_as: None,
             said_where: None,
             applied_early: Vec::new(),
+            paused: false,
+            step_once: false,
             forfeited: false,
             in_play: None,
             geiger: Default::default(),
@@ -2400,7 +2474,15 @@ impl App for GameApp {
         // generation happened, and never on this client's own clock -- see
         // `advance_to`.
         if self.link.is_none() {
-            let mined = self.world.update(dt, GENERATION_SPAN);
+            // **Stopped means stopped, and one means one.** `World::update`
+            // banks elapsed time against the span, so not calling it is the
+            // whole of pausing: no time accumulates, and letting go does not
+            // release a burst of generations that built up while stopped.
+            let mined = match (self.paused, std::mem::take(&mut self.step_once)) {
+                (false, _) => self.world.update(dt, GENERATION_SPAN),
+                (true, true) => self.world.step(),
+                (true, false) => crate::sim::Mined::default(),
+            };
             self.bank(&mined);
             // **And its own standings**, which nothing else was producing:
             // they arrive in a `ServerMessage::Standing` and offline there is
@@ -2526,6 +2608,7 @@ impl App for GameApp {
         let lobby = self.lobby.clone();
         let standing = self.standing.clone();
         let generation = self.world.generation;
+        let paused = self.paused;
         // What the client already is, which the menu cannot see for itself.
         let at = menu::Where {
             now: self.elapsed,
@@ -2598,8 +2681,10 @@ impl App for GameApp {
                         // How much of the match is left, which is the one thing on
                         // screen that is about the room rather than about a player.
                         let clock_rect = lobby.as_ref().and_then(|l| {
-                            clock::show(ctx, &theme, generation, &l.phase, l.victory, &standing)
-                                .rect
+                            clock::show(
+                                ctx, &theme, generation, &l.phase, l.victory, &standing, paused,
+                            )
+                            .rect
                         });
                         let what = held.placement().unwrap_or(crate::net::Placement::Life);
                         let look =
@@ -2875,6 +2960,8 @@ impl App for GameApp {
         if let (true, Some(what)) = (pressed, input::mnemonic(code, typed, self.shift)) {
             match what {
                 input::Mnemonic::Help => self.ui.helping = !self.ui.helping,
+                input::Mnemonic::Play => self.toggle_running(),
+                input::Mnemonic::StepOne => self.step_one(),
                 // **The shape axis has one key, and it always lands in one
                 // place.** It puts the shape back to whatever the held
                 // material is usually wanted in — a pencil for life, mines and

@@ -125,6 +125,22 @@ impl Server {
         Self::named(DEFAULT_ROOM, world)
     }
 
+    /// Give this room's world the dice that belong to its **id**.
+    ///
+    /// Here rather than in [`Self::named`], which takes a display name: the id
+    /// is what never changes, and a rename must not re-roll a world's dice.
+    /// `Rooms` is the only thing that knows both, so it is the only thing that
+    /// can do this — a `Server` on its own is one world with a name on it.
+    ///
+    /// A room that never goes through here rolls from nought, which is a
+    /// perfectly good number and is what a test and an offline game get. What
+    /// matters is only that both peers agree, and both derive it the same way
+    /// from the same id. See [`crate::net::world_seed`].
+    pub fn seeded_by(mut self, id: &crate::net::RoomId) -> Self {
+        self.world.set_seed(crate::net::world_seed(id));
+        self
+    }
+
     pub fn named(room: impl Into<RoomName>, world: World) -> Self {
         Self {
             room: room.into(),

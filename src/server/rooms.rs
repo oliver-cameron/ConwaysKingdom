@@ -252,7 +252,7 @@ impl Rooms {
                             format!("room \"{name}\" ({}): {e}", path.display()),
                         )
                     })?;
-                rooms.insert(RoomId(name.clone()), server);
+                rooms.insert(RoomId(name.clone()), server.seeded_by(&RoomId(name.clone())));
                 names.insert(RoomId(name.clone()), name);
             }
         }
@@ -268,7 +268,9 @@ impl Rooms {
             let name = crate::net::room_name(raw)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
             let id = RoomId(name.clone());
-            rooms.entry(id.clone()).or_insert_with(|| Server::named(name.clone(), shape.build()));
+            rooms
+                .entry(id.clone())
+                .or_insert_with(|| Server::named(name.clone(), shape.build()).seeded_by(&id));
             names.insert(id, name);
         }
 
@@ -804,7 +806,7 @@ impl Rooms {
         if self.rooms.contains_key(&id) {
             return Err(format!("there is already a room called \"{name}\""));
         }
-        let server = Server::named(name.clone(), shape.build());
+        let server = Server::named(name.clone(), shape.build()).seeded_by(&id);
         let path = save_path(&self.dir, &id);
         if !self.dir.as_os_str().is_empty() {
             server.save(&path).map_err(|e| format!("could not write {}: {e}", path.display()))?;
@@ -839,7 +841,7 @@ impl Rooms {
         if self.rooms.contains_key(&id) {
             return Err(format!("there is already a room called \"{name}\""));
         }
-        let mut server = Server::named(name.clone(), shape.build());
+        let mut server = Server::named(name.clone(), shape.build()).seeded_by(&id);
         server.make_match(victory);
         log::info!("made match \"{name}\": {}", victory.describe());
         self.rooms.insert(id.clone(), server);
@@ -901,7 +903,7 @@ impl Rooms {
             return Err(format!("there is already a room called \"{name}\""));
         }
         let id = self.free_id()?;
-        let mut server = Server::named(name.clone(), shape.build());
+        let mut server = Server::named(name.clone(), shape.build()).seeded_by(&id);
         if let Some(victory) = victory {
             server.make_match(victory);
         }

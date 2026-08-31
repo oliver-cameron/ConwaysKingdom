@@ -236,6 +236,16 @@ pub(crate) enum Mnemonic {
     Shape,
     Turn,
     Mirror,
+    /// Run, or stop running.
+    ///
+    /// **Not Golly's return**, which is what this wanted to be: return is
+    /// already how a list is chosen here, and `help`'s own test says so before
+    /// anybody can ship two meanings for one key. `P` says what it does and
+    /// binds the way `R` and `F` do. A full stop for one generation is Golly's
+    /// though, near enough — it uses space, which is the pan modifier here.
+    Play,
+    /// One generation, and stay stopped.
+    StepOne,
 }
 
 /// Whether this key types a Latin letter — which is the question that decides
@@ -285,10 +295,16 @@ pub(crate) fn mnemonic(
         _ if says("`") || says("~") => Mnemonic::Shape,
         _ if says("r") => Mnemonic::Turn,
         _ if says("f") => Mnemonic::Mirror,
+        _ if says("p") => Mnemonic::Play,
+        _ if says(".") => Mnemonic::StepOne,
         K::Slash if shift => Mnemonic::Help,
         K::Backquote => Mnemonic::Shape,
         K::KeyR if unreachable => Mnemonic::Turn,
         K::KeyF if unreachable => Mnemonic::Mirror,
+        K::KeyP if unreachable => Mnemonic::Play,
+        // A full stop falls back unconditionally: both positions are bound to
+        // nothing else here and neither can collide.
+        K::Period | K::NumpadDecimal => Mnemonic::StepOne,
         _ => return None,
     })
 }
@@ -297,6 +313,24 @@ pub(crate) fn mnemonic(
 mod tests {
     use super::*;
     use winit::keyboard::KeyCode as K;
+
+    /// Golly's two, and both are reachable on a keyboard this client cannot
+    /// read a character from — return types nothing anywhere, and a layout
+    /// whose full stop is somewhere else still has the key where `.` sits.
+    #[test]
+    fn the_clock_keys_are_reachable_on_any_layout() {
+        assert_eq!(mnemonic(K::KeyP, Some("p"), false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Period, Some("."), false), Some(Mnemonic::StepOne));
+        // By character wherever they have moved to.
+        assert_eq!(mnemonic(K::KeyR, Some("p"), false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Semicolon, Some("."), false), Some(Mnemonic::StepOne));
+        // And by position on a keyboard that types no Latin letter there.
+        assert_eq!(mnemonic(K::KeyP, Some("з"), false), Some(Mnemonic::Play));
+        assert_eq!(mnemonic(K::Period, None, false), Some(Mnemonic::StepOne));
+        // Where the letter *is* reachable, the position is not stolen: on
+        // Dvorak the `P` position types `l`, which is somebody's `l`.
+        assert_eq!(mnemonic(K::KeyP, Some("l"), false), None);
+    }
 
     /// **Programmer Dvorak, where the digit row is shifted by default.** The
     /// letters sit where Dvorak puts them, so `r` and `f` are found by
@@ -334,7 +368,15 @@ mod tests {
     #[test]
     fn dvorak_binds_the_letter_and_not_the_place() {
         assert_eq!(mnemonic(K::KeyP, Some("r"), false), Some(Mnemonic::Turn), "r is r");
-        assert_eq!(mnemonic(K::KeyR, Some("p"), false), None, "the R position types p there");
+        // And the R position, which types `p` on Dvorak, is **play** — because
+        // `p` is play wherever `p` is typed. That is the rule working rather
+        // than a collision: this asserted `None` while nothing was bound to
+        // `p`, and what changed is the vocabulary, not the binding.
+        assert_eq!(
+            mnemonic(K::KeyR, Some("p"), false),
+            Some(Mnemonic::Play),
+            "the R position types p there, and p is p"
+        );
         assert_eq!(mnemonic(K::KeyU, Some("f"), false), Some(Mnemonic::Mirror));
         assert_eq!(mnemonic(K::KeyY, Some("f"), false), Some(Mnemonic::Mirror));
     }

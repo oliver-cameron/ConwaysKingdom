@@ -97,6 +97,13 @@ fn groups(keys: &Keys) -> Vec<Group> {
             ],
         },
         Group {
+            heading: words::THE_CLOCK,
+            keys: vec![
+                (words::keys::PLAY.into(), words::PLAY),
+                (words::keys::STEP_ONE.into(), words::STEP_ONE),
+            ],
+        },
+        Group {
             heading: words::GETTING_ABOUT,
             keys: vec![
                 (words::keys::WALK.into(), words::WALK),

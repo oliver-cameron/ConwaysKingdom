@@ -116,6 +116,23 @@ impl WorldKind {
 
 pub struct World {
     storage: Storage,
+    /// **This game's own number**, mixed into every roll — see
+    /// [`super::seed::generation_seed`].
+    ///
+    /// So two rooms holding identical cells do not roll identical dice, and a
+    /// pattern carried from one to the other is contested differently even
+    /// though it *lives* identically: the dice decide ownership, upkeep and
+    /// tie-breaks, and [liveness is exactly B3/S23] whatever they say. That is
+    /// what keeps a per-room seed compatible with reading somebody else's
+    /// pattern and expecting it to behave.
+    ///
+    /// Derived from the room's id rather than sent, so it needs no field on
+    /// the wire and no version in the save: `Welcome` already names the room,
+    /// and a client that knows the room knows the number. See
+    /// [`crate::net::world_seed`].
+    ///
+    /// [liveness is exactly B3/S23]: World::step
+    seed: u64,
     /// Reused between generations so stepping allocates nothing.
     scratch: Vec<Halo>,
     active: Vec<Coord>,
@@ -215,12 +232,27 @@ impl World {
     fn new(storage: Storage) -> Self {
         Self {
             storage,
+            seed: 0,
             scratch: Vec::new(),
             active: Vec::new(),
             elapsed: 0.0,
             generation: 0,
             dirty: true,
         }
+    }
+
+    /// Adopt this game's number, so its dice are its own.
+    ///
+    /// Set by whoever knows which room this is — the server from the room it
+    /// named, a client from the room its `Welcome` named. Nought is a world
+    /// nobody has said anything about, which is what a test and an offline
+    /// game get, and is a perfectly good number to roll from.
+    pub fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     /// Adopt a generation number. A birth's owner is seeded from it, so a
@@ -427,17 +459,19 @@ impl World {
             self.scratch.push(halo);
         }
 
+        // **Once for the generation, not once per chunk.** Everything a
+        // cell's dice need that is not the cell: this world's number and the
+        // tick. Each cell then mixes in its own absolute position, so a birth's
+        // owner is chosen the same way on every peer without exchanging
+        // anything, and the choice does not depend on how the world is stored.
+        let generation = super::seed::generation_seed(self.seed, self.generation);
+
         let mut mined = Mined::default();
         for (i, &coord) in active.iter().enumerate() {
             let halo = self.scratch[i];
-            // Seeded by generation and chunk, so a birth's owner is chosen the
-            // same way on every peer without exchanging a random number.
-            let seed = super::seed::mix(
-                super::seed::mix(0x0C01_1FE0, self.generation),
-                (coord.0 as u32 as u64) << 32 | coord.1 as u32 as u64,
-            );
+            let at = (coord.0 * CHUNK_N as i32, coord.1 * CHUNK_N as i32);
             if let Some(chunk) = self.chunk_at_mut(coord) {
-                halo.step_into(chunk, seed, &mut mined);
+                halo.step_into(chunk, generation, at, &mut mined);
             }
         }
 
@@ -540,12 +574,6 @@ impl World {
         }
     }
 
-    /// Distinct from the constant the step is seeded with, so a turret's
-    /// tie-break cannot correlate with a birth's choice of parent at the same
-    /// position and generation. Any two different numbers would do; these are
-    /// two.
-    const TURRET_SEED: u64 = 0x7E44_E757;
-
     /// Every turret takes the nearest square it acts on, all at once.
     ///
     /// A pass rather than a rule, and for the same reason shattering ice is
@@ -566,14 +594,15 @@ impl World {
             return;
         }
 
+        // The same seed a cell's own rules roll from, at the same position
+        // and generation. It does not have to be a different number, because a
+        // turret asks on its own **stream** — which is what streams are for,
+        // and is stronger than two constants nobody can check are unrelated.
+        let generation = super::seed::generation_seed(self.seed, self.generation);
+
         let mut shots = Vec::new();
         for (at, owner, live) in turrets {
-            // Seeded from the generation and the turret's own position, so
-            // every peer breaks the same tie without exchanging a number.
-            let seed = super::seed::mix(
-                super::seed::mix(Self::TURRET_SEED, self.generation),
-                (at.0 as u32 as u64) << 32 | at.1 as u32 as u64,
-            );
+            let seed = super::seed::cell_seed(generation, at.0, at.1);
             let (targets, hit) = self.turret_targets(at, owner, live, seed);
             for &target in &targets[..hit] {
                 let cell = self.cell_at(target.0, target.1).unwrap_or(Cell::DEAD);
@@ -1265,6 +1294,55 @@ mod tests {
         w.set_cell_at(0, 0, turret(PlayerId(1)));
         w.step();
         assert!(!w.cell_at(0, 0).unwrap().is_alive());
+    }
+
+    /// **A world's number changes its dice and not its life.**
+    ///
+    /// Which is what makes a seed per room safe. The dice decide who owns a
+    /// birth, when a square works out what reaches it, and which of several
+    /// tied squares a turret takes — none of which is whether a cell lives. So
+    /// two rooms holding the same pattern watch it do the same thing and
+    /// disagree about whose it is, and a pattern carried in from somewhere
+    /// else behaves the way it is written down.
+    ///
+    /// The pair of assertions is the point. Either alone would pass for the
+    /// wrong reason: identical liveness with identical ownership means the
+    /// seed is doing nothing, and different ownership with different liveness
+    /// means it is doing far too much.
+    #[test]
+    fn a_worlds_own_number_changes_its_dice_and_not_its_life() {
+        let build = |seed: u64| {
+            let mut w = World::infinite_empty();
+            w.set_seed(seed);
+            // Two players growing into each other, so births are contested and
+            // there is something for the dice to decide.
+            for (r, c) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
+                w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
+                w.set_cell_at(r, c + 6, Cell::alive(PlayerId(2)));
+            }
+            w
+        };
+        let (mut a, mut b) = (build(0), build(0x9E37_79B9_7F4A_7C15));
+        for _ in 0..60 {
+            a.step();
+            b.step();
+        }
+
+        assert_eq!(a.live_cells(), b.live_cells(), "the seed changed which cells are alive");
+
+        // Over the **ground**, not over the life. Whose a live cell is comes
+        // from its parents, and two patterns far enough apart never share one,
+        // so the roll that picks a parent has nothing to pick between. Where
+        // the dice show is territory: `rule::LEVEL_ADJUST` decides *when* a
+        // square works out what reaches it, so the two fields settle along
+        // different paths even where they would settle the same in the end.
+        let held = |w: &World| {
+            (-8..24)
+                .flat_map(|r| (-8..24).map(move |c| (r, c)))
+                .map(|(r, c)| w.cell_at(r, c).unwrap_or(Cell::DEAD).0[0])
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(held(&a), held(&b), "the seed changed nothing about who holds what");
     }
 
     /// **The liveness of this world is plain Conway, exactly.**

@@ -389,6 +389,13 @@ pub mod stamps {
 
 /// How much of a match is left.
 pub mod clock {
+    /// A stopped world, and where it stopped. The generation is the point — a
+    /// paused board with no number on it cannot be stepped *to* anywhere, and
+    /// stepping to somewhere is what a laboratory is for.
+    pub fn paused_at(generation: u64) -> String {
+        format!("paused  ·  generation {generation}")
+    }
+
     pub fn generations_left(generations: u64, seconds: u64) -> String {
         if generations == 0 {
             return "time".into();
@@ -573,6 +580,20 @@ pub mod help {
     pub const MIRROR: &str = "mirror it, which no rotation can do";
     pub const STAMPS: &str = "Pick a stamp you have kept";
     pub const DRAG: &str = "Lay a run of cells, or a rectangle";
+    /// **The clock, and it is yours only when you are alone.** Connected, a
+    /// generation happens when the server says one did — see
+    /// `networking.md` — so these say what they did rather than doing
+    /// nothing, which is the difference between a rule and a broken key.
+    pub const THE_CLOCK: &str = "The clock";
+    pub const PLAY: &str = "run, or stop running (playing alone)";
+    pub const STEP_ONE: &str = "one generation, and stay stopped";
+    /// Said when either is pressed in a room somebody else is keeping time in.
+    pub const SERVER_KEEPS_TIME: &str = "the server keeps time here; the clock is yours alone";
+    pub const PAUSED: &str = "paused";
+    pub const RUNNING: &str = "running";
+    pub fn stepped_to(generation: u64) -> String {
+        format!("stepped to generation {generation}")
+    }
 
     pub const WALK: &str = "Walk a list";
     pub const CHOOSE: &str = "Take what is picked";
@@ -625,6 +646,10 @@ pub mod help {
         pub const TURN: &str = "R / shift + R";
         pub const MIRROR: &str = "F";
         pub const DRAG: &str = "drag";
+        /// Return, and a full stop. Golly's, because somebody who wants a
+        /// pause button has almost certainly used Golly.
+        pub const PLAY: &str = "P";
+        pub const STEP_ONE: &str = ".";
         pub const WALK: &str = "up / down";
         pub const CHOOSE: &str = "enter";
         pub const MOVE_ON: &str = "tab";
