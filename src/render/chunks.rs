@@ -436,13 +436,6 @@ pub struct CameraUniform {
     /// In what was the pad, because the struct has to be a multiple of sixteen
     /// bytes and this is a flag.
     pub coarse_wraps: f32,
-    /// The world rect the coarse texture holds: top-left row and column, then
-    /// how many rows and columns. Cells throughout.
-    ///
-    /// The shader needs it to turn a world position into a coarse texel, and
-    /// needs the size to wrap — which is what makes a torus held whole repeat
-    /// for as far as anybody pans, out of one texture and one quad.
-    pub coarse: [f32; 4],
     /// A hue per player, as a turn in `0..1`, indexed by `PlayerId`.
     ///
     /// Worked out on the client — see `client::views::hue` — because where a
@@ -453,6 +446,13 @@ pub struct CameraUniform {
     /// Four to a `vec4` because a uniform array of scalars has a 16-byte
     /// stride in WGSL: `array<f32, 16>` would spend 256 bytes carrying 64.
     pub hues: [[f32; 4]; 4],
+    /// The world rect the coarse texture holds: top-left row and column, then
+    /// how many rows and columns. Cells throughout.
+    ///
+    /// The shader needs it to turn a world position into a coarse texel, and
+    /// needs the size to wrap — which is what makes a torus held whole repeat
+    /// for as far as anybody pans, out of one texture and one quad.
+    pub coarse: [f32; 4],
 }
 
 const _: () = {
@@ -791,6 +791,82 @@ mod tests {
         for &(r, c) in cells {
             world.set_cell_at(r, c, Cell::alive(PlayerId(who)));
         }
+    }
+
+    /// **The camera uniform's fields are in the same order as the shader's.**
+    ///
+    /// Which the size assert beside the struct cannot tell you, and did not:
+    /// `coarse` and `hues` were the wrong way round for a while and both
+    /// orders are 112 bytes, so nothing complained. What the shader read as
+    /// the hue table was the coarse rect, so player one's hue came out as the
+    /// window's row — nought, which is red — and the whole board went pink.
+    ///
+    /// Parsed out of the WGSL rather than written down twice, because a copy
+    /// of the layout is a third thing to keep in step. Offsets are computed by
+    /// WGSL's own uniform rules: `f32` aligns to 4, `vec2` to 8, `vec4` and an
+    /// array of them to 16.
+    #[test]
+    fn the_camera_uniform_matches_the_shader() {
+        let body = SHADER_SOURCE
+            .split_once("struct Camera {")
+            .expect("no Camera struct in the shader")
+            .1
+            .split_once("};")
+            .expect("unterminated Camera struct")
+            .0;
+
+        let mut at = 0usize;
+        let mut seen: Vec<(String, usize)> = Vec::new();
+        for line in body.lines() {
+            let line = line.split("//").next().unwrap_or("").trim().trim_end_matches(',');
+            let Some((name, kind)) = line.split_once(':') else { continue };
+            let (name, kind) = (name.trim(), kind.trim());
+            if name.is_empty() || kind.is_empty() {
+                continue;
+            }
+            let (align, size) = match kind {
+                "f32" => (4, 4),
+                "vec2<f32>" => (8, 8),
+                "vec4<f32>" => (16, 16),
+                k if k.starts_with("array<vec4<f32>,") => {
+                    let n: usize = k
+                        .trim_start_matches("array<vec4<f32>,")
+                        .trim_end_matches('>')
+                        .trim()
+                        .parse()
+                        .expect("array length");
+                    (16, 16 * n)
+                }
+                other => panic!("the test does not know how to size {other:?}"),
+            };
+            at = at.next_multiple_of(align);
+            seen.push((name.to_string(), at));
+            at += size;
+        }
+
+        // The shader's names, in its order, against the Rust field each one
+        // is. Two differ by name and the pairing is what says so out loud.
+        let rust = [
+            ("origin", std::mem::offset_of!(CameraUniform, origin)),
+            ("viewport", std::mem::offset_of!(CameraUniform, viewport)),
+            ("zoom", std::mem::offset_of!(CameraUniform, zoom)),
+            ("chunk_n", std::mem::offset_of!(CameraUniform, chunk_n)),
+            ("encode", std::mem::offset_of!(CameraUniform, encode_srgb)),
+            ("wraps", std::mem::offset_of!(CameraUniform, coarse_wraps)),
+            ("hues", std::mem::offset_of!(CameraUniform, hues)),
+            ("coarse", std::mem::offset_of!(CameraUniform, coarse)),
+        ];
+
+        assert_eq!(
+            seen.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            rust.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            "the shader's fields are not the ones this expects, in that order"
+        );
+        for ((name, wgsl), (_, ours)) in seen.iter().zip(rust) {
+            assert_eq!(*wgsl, ours, "{name} is at {ours} in Rust and {wgsl} in the shader");
+        }
+        // And the whole thing is the size the struct says it is.
+        assert_eq!(at.next_multiple_of(16), size_of::<CameraUniform>());
     }
 
     /// **The world collapses into itself, not into the backdrop.**
