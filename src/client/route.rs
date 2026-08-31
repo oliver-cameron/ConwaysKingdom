@@ -38,6 +38,21 @@ pub enum Route {
     Home,
     /// A server and what is on it.
     Play,
+    /// Describing a world to play in on your own.
+    Alone,
+    /// In a solitary world.
+    ///
+    /// **A screen with no room in it, which is why it needed a route of its
+    /// own.** Playing alone reported `Home`, so the address bar said `/home`
+    /// while you were in a world — and since the way in was a button on the
+    /// home screen that built one immediately, the whole solitary game lived
+    /// at `/home` and nothing about the address ever changed.
+    ///
+    /// It names no world, deliberately. There is no id to name, and a shape
+    /// in the address would be a link that builds a world rather than one that
+    /// reaches a world somebody is in — which is what every other route here
+    /// is. Following it opens the form.
+    Solo,
     /// In a world, playing.
     Room(RoomId),
     /// Waiting in a match's lobby, before the whistle.
@@ -74,6 +89,8 @@ impl Route {
         match self {
             Self::Home => format!("{SCREEN}=home"),
             Self::Play => format!("{SCREEN}=play"),
+            Self::Alone => format!("{SCREEN}=alone"),
+            Self::Solo => format!("{SCREEN}=solo"),
             Self::Room(id) => format!("{ROOM}={id}"),
             Self::Lobby(id) => format!("{LOBBY}={id}"),
             Self::Watch(id) => format!("{WATCH}={id}"),
@@ -85,6 +102,8 @@ impl Route {
         match self {
             Self::Home => "/home".into(),
             Self::Play => "/play".into(),
+            Self::Alone => "/alone".into(),
+            Self::Solo => "/solo".into(),
             Self::Room(id) => format!("/room/{id}"),
             Self::Lobby(id) => format!("/lobby/{id}"),
             Self::Watch(id) => format!("/watch/{id}"),
@@ -99,6 +118,8 @@ impl Route {
         match (head, tail) {
             ("home", _) => Some(Self::Home),
             ("play", _) => Some(Self::Play),
+            ("alone", _) => Some(Self::Alone),
+            ("solo", _) => Some(Self::Solo),
             ("room", Some(id)) => Some(Self::Room(RoomId(id))),
             ("lobby", Some(id)) => Some(Self::Lobby(RoomId(id))),
             ("watch", Some(id)) => Some(Self::Watch(RoomId(id))),
@@ -141,6 +162,8 @@ impl Route {
         match find(SCREEN) {
             Some("play") => Some(Self::Play),
             Some("home") => Some(Self::Home),
+            Some("alone") => Some(Self::Alone),
+            Some("solo") => Some(Self::Solo),
             _ => None,
         }
     }
@@ -153,7 +176,7 @@ impl Route {
     pub fn to_join(&self) -> Option<&RoomId> {
         match self {
             Self::Room(id) | Self::Lobby(id) => Some(id),
-            Self::Home | Self::Play | Self::Watch(_) => None,
+            Self::Home | Self::Play | Self::Alone | Self::Solo | Self::Watch(_) => None,
         }
     }
 }
@@ -202,23 +225,117 @@ fn decode(raw: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
+/// Where the browser last took us with back or forward, waiting to be acted
+/// on.
+///
+/// A global for the reason the keyboard layout is one: the event arrives on a
+/// listener and the thing that can act on it is behind a `RefCell` on the app.
+#[cfg(target_arch = "wasm32")]
+static WENT_BACK: std::sync::Mutex<Option<Route>> = std::sync::Mutex::new(None);
+
+/// The route the address bar is showing, so a repeat is not a history entry.
+#[cfg(target_arch = "wasm32")]
+static SHOWING: std::sync::Mutex<Option<Route>> = std::sync::Mutex::new(None);
+
 /// Say where we are, in the address bar.
 ///
-/// **Replaces rather than pushes.** A client that pushed every screen change
-/// would fill the history with the six presses it took to get into a game, and
-/// the back button would walk them in reverse rather than leaving — which is
-/// not what a back button means to somebody who wants out. What this buys is
-/// the address being copyable and refreshable, which is what was actually
-/// missing.
+/// **Pushes when the screen changes and replaces when it does not**, which is
+/// what makes back a way through the client rather than a way out of it.
+///
+/// It replaced unconditionally once, on the reasoning that pushing every
+/// change would fill the history with the six presses it took to get into a
+/// game. That fear was about the wrong thing: a `Route` is already coarse —
+/// there is one for each *screen* and none for typing an address, refreshing a
+/// list or picking a room — so the entries this actually makes are the three
+/// somebody walked through. What it cost was that back could never move
+/// between screens, which is the whole reason a client has addresses at all.
+///
+/// The same route twice is still a replace, because a screen that reports
+/// itself every frame would otherwise bury the history in copies of itself.
 #[cfg(target_arch = "wasm32")]
 pub fn show(route: &Route) {
     let Some(window) = web_sys::window() else { return };
     let Ok(history) = window.history() else { return };
     let url = route.path();
+
+    let moved = {
+        let mut showing = match SHOWING.lock() {
+            Ok(showing) => showing,
+            Err(_) => return,
+        };
+        let moved = showing.as_ref() != Some(route);
+        *showing = Some(route.clone());
+        moved
+    };
+
     // Failing is a nuisance and nothing more: some embeddings forbid touching
     // history, and the game plays perfectly well with a stale address.
-    if history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url)).is_err() {
+    let null = wasm_bindgen::JsValue::NULL;
+    let wrote = if moved {
+        history.push_state_with_url(&null, "", Some(&url))
+    } else {
+        history.replace_state_with_url(&null, "", Some(&url))
+    };
+    if wrote.is_err() {
         log::debug!("could not set the address to {url}");
+    }
+}
+
+/// Listen for the back and forward buttons.
+///
+/// **The other half of pushing**, and useless without it: the browser changes
+/// the address and expects the page to follow, and a single-page client that
+/// does not listen shows the old screen under the new address — which is worse
+/// than not having addresses, because now they lie.
+///
+/// Called once at startup. What arrives is drained by [`went_back`].
+#[cfg(target_arch = "wasm32")]
+pub fn follow_the_back_button() {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else { return };
+    let listener = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+        let Some(window) = web_sys::window() else { return };
+        let location = window.location();
+        let path = location.pathname().unwrap_or_default();
+        let query = location.search().unwrap_or_default();
+        let Some(route) = Route::of(&path, &query) else { return };
+        // What the address bar is showing is now this, whoever moved it —
+        // otherwise the next `show` would push a duplicate of the screen the
+        // browser has just gone back to.
+        if let Ok(mut showing) = SHOWING.lock() {
+            *showing = Some(route.clone());
+        }
+        if let Ok(mut went) = WENT_BACK.lock() {
+            *went = Some(route);
+        }
+    });
+    if window
+        .add_event_listener_with_callback("popstate", listener.as_ref().unchecked_ref())
+        .is_err()
+    {
+        log::debug!("could not listen for the back button");
+        return;
+    }
+    // Handed to the browser for the life of the page. There is nothing to
+    // detach it from: the listener outlives every frame that would drop it.
+    listener.forget();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn follow_the_back_button() {}
+
+/// Where back or forward has just taken us, if anywhere.
+///
+/// Drained, so acting on it happens once. Called each frame and answers `None`
+/// on all but the ones somebody pressed a button on.
+pub fn went_back() -> Option<Route> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        WENT_BACK.lock().ok().and_then(|mut went| went.take())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
     }
 }
 
@@ -238,6 +355,8 @@ mod tests {
         for route in [
             Route::Home,
             Route::Play,
+            Route::Alone,
+            Route::Solo,
             Route::Room(RoomId::from("arena")),
             Route::Room(RoomId::from("r-t6n98x")),
             Route::Lobby(RoomId::from("cup")),

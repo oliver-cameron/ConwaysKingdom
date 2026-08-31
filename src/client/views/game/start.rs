@@ -112,6 +112,9 @@ pub(crate) fn startup() -> Start {
             Start::Join { url, name, room: route.to_join().map(|r| r.0.clone()), watch: false }
         }
         Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play },
+        // A solitary world names none, so `/solo` opens the form rather than
+        // building something nobody described — see `Route::Solo`.
+        Some(Route::Alone | Route::Solo) => Start::Menu { address: url, page: menu::Page::Alone },
         _ => Start::Menu { address: url, page: menu::Page::Home },
     }
 }

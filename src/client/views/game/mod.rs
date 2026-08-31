@@ -402,7 +402,7 @@ pub struct GameApp {
     counted_at: crate::net::Tick,
     /// The address last written down, so it is written again only when it
     /// would say something different.
-    said_where: Option<(bool, bool, bool, Option<crate::net::RoomId>)>,
+    said_where: Option<(bool, bool, bool, bool, Option<crate::net::RoomId>)>,
     /// Actions taken from an [`Acted`] before the `Step` that carries them.
     ///
     /// Emptied every `Step`, because an action belongs to one generation and
@@ -1988,22 +1988,76 @@ impl GameApp {
 
     /// What the address would say, as something comparable — so it is written
     /// again only when it would say something different.
-    fn here(&self) -> Option<(bool, bool, bool, Option<crate::net::RoomId>)> {
+    fn here(&self) -> Option<(bool, bool, bool, bool, Option<crate::net::RoomId>)> {
         Some((
             matches!(self.ui.screen, Screen::Playing),
             match &self.ui.screen {
                 Screen::Menu(m) => m.page == menu::Page::Play,
                 Screen::Playing => self.watching,
             },
+            matches!(&self.ui.screen, Screen::Menu(m) if m.page == menu::Page::Alone),
             self.gathering(),
             self.room.clone(),
         ))
+    }
+
+    /// What to join as: what is typed on the menu, or what was remembered.
+    fn my_name(&self) -> String {
+        match &self.ui.screen {
+            Screen::Menu(m) => m.name.clone(),
+            Screen::Playing => crate::net::keep::name().unwrap_or_else(|| "player".into()),
+        }
+    }
+
+    /// Follow the back or forward button, if it has just been pressed.
+    ///
+    /// **The other half of pushing an address.** The browser moves the address
+    /// and expects the page to follow; a client that only *writes* addresses
+    /// shows the old screen under the new one, which is worse than having no
+    /// addresses because now they lie.
+    ///
+    /// A room is joined the way a link into one is, because it is the same
+    /// request. Everything else is a screen to be on, and going back to a
+    /// screen means leaving whatever world you were in — which `back_to_menu`
+    /// already does properly, giving up the seat rather than abandoning it.
+    fn follow_history(&mut self) {
+        use crate::client::route::Route;
+        let Some(route) = crate::client::route::went_back() else { return };
+        log::info!("the back button asked for {route:?}");
+        match route {
+            Route::Watch(room) => {
+                self.back_to_menu();
+                self.watching = true;
+                self.ask_to_join(Joining { name: self.my_name(), room: Some(room) });
+            }
+            Route::Room(room) | Route::Lobby(room) => {
+                self.back_to_menu();
+                self.watching = false;
+                self.ask_to_join(Joining { name: self.my_name(), room: Some(room) });
+            }
+            Route::Home => self.show_menu_page(menu::Page::Home),
+            Route::Play => self.show_menu_page(menu::Page::Play),
+            // Both, because a solitary world names no shape and so cannot be
+            // rebuilt from an address. The form is where you say what it was.
+            Route::Alone | Route::Solo => self.show_menu_page(menu::Page::Alone),
+        }
+    }
+
+    /// Leave whatever is on screen for a page of the menu.
+    fn show_menu_page(&mut self, page: menu::Page) {
+        if matches!(self.ui.screen, Screen::Playing) {
+            self.back_to_menu();
+        }
+        if let Screen::Menu(m) = &mut self.ui.screen {
+            m.page = page;
+        }
     }
 
     fn say_where(&self) {
         use crate::client::route::Route;
         let route = match (&self.ui.screen, &self.room) {
             (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
+            (Screen::Menu(m), _) if m.page == menu::Page::Alone => Route::Alone,
             (Screen::Menu(_), _) => Route::Home,
             (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
             // A lobby is a screen of its own, so it says so. Following either
@@ -2011,8 +2065,11 @@ impl GameApp {
             // whichever screen the phase calls for.
             (Screen::Playing, Some(room)) if self.gathering() => Route::Lobby(room.clone()),
             (Screen::Playing, Some(room)) => Route::Room(room.clone()),
-            // Offline: there is no room to name and no link to hand anybody.
-            (Screen::Playing, None) => Route::Home,
+            // Offline. It has no room to name and is no link to hand
+            // anybody, and it is still a screen you are on rather than the
+            // home screen — which is what this said, so a solitary game spent
+            // the whole of itself at `/home`.
+            (Screen::Playing, None) => Route::Solo,
         };
         crate::client::route::show(&route);
     }
@@ -2283,6 +2340,9 @@ impl GameApp {
 
 impl App for GameApp {
     fn init(gpu: &GpuState) -> Self {
+        // The other half of writing addresses: the browser moves the address
+        // on back and forward and expects the page to follow it.
+        crate::client::route::follow_the_back_button();
         // **Who this client is, before it is anything else.** Minted here
         // rather than on the first join, because the key is what a record and
         // a stamp library are filed against and both of those exist before a
@@ -2499,6 +2559,10 @@ impl App for GameApp {
     }
 
     fn update(&mut self, gpu: &GpuState, dt: f32) {
+        // Back or forward, if either has just been pressed — before anything
+        // else, so the whole frame is built for the screen the address now
+        // says rather than for the one it said last frame.
+        self.follow_history();
         // **A join set up before the first frame goes out on it.** `init` puts
         // one here for a link that named a room, and it used to be sent when
         // the server's challenge arrived — which was the only thing that ever

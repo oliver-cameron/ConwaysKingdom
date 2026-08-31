@@ -212,6 +212,14 @@ pub mod menu {
     /// the decision it belongs to is live — see [inspiration.md].
     ///
     /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
+    pub mod alone {
+        pub const TITLE: &str = "Play alone";
+        /// Said once, at the top, rather than beside every field: the whole
+        /// page is about a world nobody else is in.
+        pub const NOTE: &str =
+            "No server, no other players. The simulation is the same one a match runs.";
+    }
+
     pub mod make {
         /// The action, when there is no server to ask. The same form, so the
         /// same questions; a different place for the answer to go.

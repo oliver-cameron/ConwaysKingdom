@@ -370,7 +370,12 @@ fn rooms_column(
 /// under the list, because a form there pushed the list off the screen; in a
 /// column of its own there is nothing to push, and a button whose only job is
 /// to reveal what would fit anyway is a press that buys nothing.
-fn make_column(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, reached: bool) -> Option<Chose> {
+pub(super) fn make_column(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    menu: &mut Menu,
+    reached: bool,
+) -> Option<Chose> {
     let draft = menu.draft.get_or_insert_with(Draft::default);
     let made = make_form(ui, theme, draft, reached);
     // **With no server, the same form plays it here.** It used to refuse, and

@@ -104,7 +104,14 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         )
         .clicked()
     {
-        chose = if at.waiting_in_a_match { Chose::Resume } else { Chose::Offline };
+        // **To the form, not into a world.** This used to build whatever the
+        // command line had said and drop you in it, so a solitary game could
+        // not be a small torus and could not end.
+        if at.waiting_in_a_match {
+            chose = Chose::Resume;
+        } else {
+            menu.page = Page::Alone;
+        }
     }
     if let Some(note) = note {
         ui.small(note);

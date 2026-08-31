@@ -596,6 +596,8 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
         // so that `/src/main.rs` is a 404 and not a copy of the page.
         .route_service("/home", index())
         .route_service("/play", index())
+        .route_service("/alone", index())
+        .route_service("/solo", index())
         .route_service("/room/{id}", index())
         .route_service("/lobby/{id}", index())
         .route_service("/watch/{id}", index())

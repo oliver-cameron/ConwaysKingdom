@@ -18,6 +18,7 @@
 //! list arrives from `ServerMessage::Rooms` and the menu shows nothing until
 //! it does, rather than offering a name that might be there.
 
+mod alone;
 pub mod draft;
 mod home;
 mod play;
@@ -84,6 +85,14 @@ pub enum Page {
     Home,
     /// A server, its rooms, a code, and the form that makes one.
     Play,
+    /// Describing a world to play in on your own.
+    ///
+    /// **A page rather than a button.** "Play alone" went straight into a
+    /// world built from whatever the command line had said, so a solitary game
+    /// could not be a small torus or have a way to win, and the form that asks
+    /// those questions was only reachable by going to the server screen and
+    /// finding it under a room list nobody had asked for.
+    Alone,
 }
 
 pub struct Menu {
@@ -435,6 +444,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                 match menu.page {
                                     Page::Home => chose = home(ui, theme, menu, at),
                                     Page::Play => chose = play(ui, theme, menu, at),
+                                    Page::Alone => chose = alone::show(ui, theme, menu),
                                 }
                             });
                             ui.add_space(m.margin * 2.0);
