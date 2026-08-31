@@ -38,7 +38,7 @@ Reproduced: three players in a two-team match, one offline at the whistle, rejoi
 
 ### A pinned stamp is pinned per client, not per person
 
-The library is written to this client's own store, so pinning is a fact about the browser or the machine rather than about the player. Somebody who plays on a phone and a laptop has two libraries, and a key that identifies them across servers — which `net::auth` now mints — has nothing to do with where their stamps live.
+The library is written to this client's own store, so pinning is a fact about the browser or the machine rather than about the player. Somebody who plays on a phone and a laptop has two libraries, and the person `net::auth` now names has nothing to do with where their stamps live.
 
 *Still here because* it is the same gap [rating](planned.md#rating) has: a client keeps things per client, and a person is a newer idea than the store is. The rejoin token had it too and is gone; this is what is left of it.
 

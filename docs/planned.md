@@ -32,11 +32,12 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Built | one seat, one platform and one purse to a side |
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
-| [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | identity is in; discovery is not |
+| [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | a person exists; a *safe* one does not, and discovery is not started |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Experiments](#experiments) | Decided | a laboratory rather than a match: pause, step, save, reset |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
+| [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
 | [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Designed | the one place the architecture does not hold |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
@@ -69,23 +70,25 @@ This makes the surrounding area more random.
 
 A reading of the rest of this file, in the order the things depend on each other rather than in the order they were thought of. Nothing here is new; what it adds is which one unblocks the most.
 
-**1. [Player profiles](#player-profiles).** Three separate entries are waiting on the same missing idea — a person who is not a seat. [Rating](#rating) has nowhere to key a leaderboard; the rejoin token is filed per room and per client, so two servers with a room called `main` share one secret; the stamp library is per browser, so playing on a laptop and a phone is two libraries. `net::auth` already mints a keypair and `server::people` is already a table to key by. This is the one that turns three half-features into one.
+**1. [An identity a server cannot take](#identity-is-a-keypair-and-today-it-is-not).** `people.tsv` holds a plaintext secret per person, and a secret is a bearer credential — so every server that has met you can be you on every other server that has met you, and that file is the thing on the machine worth stealing. `net::auth::person` says so itself and says it has to change before there are two servers. It is first not because anything is broken today but because it is the only item here that gets **worse** the more the project succeeds, and because everything social — a directory, friends, inviting somebody in particular, a leaderboard that means anything — is built on top of who somebody is.
 
-**2. [The session comes out of the game view](#the-session-comes-out-of-the-game-view).** `client::views::game` is the largest file in the crate and none of the part that talks to a server is testable, because it shares a struct with the sprite atlas. `Ui` came out of it recently and that was the easy half. Everything else on this list that touches the client is harder for as long as this is undone.
+**2. [A level of detail](#zooming-out-without-lying).** Low zoom does not work and it is not the sampling: one chunk is one texture array layer against a guaranteed floor of 256, so a 1080p screen is mostly backdrop below about zoom five and an island in a sea of nothing at the floor. The answer is the cell without its art — one texel a cell, one quad, no sheet lookup — and it is **one piece of work with four uses**: zooming out, a minimap, a world overview, and a spectator following a player. Three of those are separate entries in this file.
 
-**3. [Depleted mines](#depleted-mines).** The economy has no ceiling that is not the blunt one — `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. This is a small change with a real effect on how the game plays, and it needs nothing else first.
+**3. `World: Clone`.** One derive, and it is what [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), a bot that chooses rather than follows a book, and an [experiment's](#experiments) pause-step-reset are all waiting on. The step is already a pure function of state and tick, so a copy diverges cleanly; there is simply no way to step a world that is not the world. Nothing else on this list has a ratio like it.
 
-**4. [Payloads](#payloads).** The age field exists for this and nothing uses it. It is the first *new* thing the cell can do since ice, and unlike most of this list it is a rule rather than plumbing.
+**4. [The session comes out of the game view](#the-session-comes-out-of-the-game-view).** `client::views::game` is 3,400 lines, 51 fields and about 70 methods on one struct, and none of the part that talks to a server is testable because it shares that struct with the sprite atlas. `Ui` came out of it recently and that was the easy half. Everything else here that touches the client — [better interfaces](#better-interfaces), [mobile](#mobile), a minimap — is harder for as long as this is undone.
 
-**5. [The mercy rule](#the-mercy-rule).** Now cheaper than it was: forfeiting already turns a seat off, `Server::still_in` already asks whether a number has anybody playing it, and what is left is noticing that somebody *cannot* act rather than waiting for them to say so.
+**5. [Depleted mines](#depleted-mines).** The economy has no ceiling that is not the blunt one, `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. Small, needs nothing first, and `Kind::inherits` already makes it a row in a table rather than a rule.
 
-Not next, and worth saying why. [The simulation on the GPU](#the-simulation-on-the-gpu) is a large piece of work whose benefit begins at a world size nobody has run. [A leaderboard](#rating) is behind profiles. [Mobile](#mobile) is a layout problem that wants the interface to stop moving first, and it has been moving all week.
+Worth saying what is **closer than this file implies**. [A leaderboard](#a-leaderboard) says it waits on a person being a keypair; per server it does not, because `server::ratings` is already keyed by `PersonId` and already saved — what is left is a message answerable without a seat and a screen. Only a leaderboard that spans servers needs item 1.
+
+And what is not next. [The simulation on the GPU](#the-simulation-on-the-gpu) is a large piece of work whose benefit begins at a world size nobody has run, and the level of detail above removes the one argument that was pulling it forward. [Mobile](#mobile) is a layout problem that wants the interface to stop moving first.
 
 ## Player profiles
 
 **A person, rather than a seat in one room.** Everything a player accumulates is currently filed against something that does not survive what it should: a `PlayerId` is a seat in one world, a rejoin token is per room, a rating is per server, and a stamp library is per browser. Somebody who plays two games on two machines is four different people to this code.
 
-The identity exists already. `net::auth` mints an ed25519 keypair, the client keeps it — **at startup now, not at the first join**, because a record and a stamp library both exist before a server has been reached and both want an owner — and `Join` carries a signature over the server's challenge. A server can already say *which person* is asking. What is missing is everything that should be filed against the answer.
+The identity exists already, in the weak form. `net::auth` mints a `Secret`, the client keeps it — **at startup now, not at the first join**, because a record and a stamp library both exist before a server has been reached and both want an owner — and `Join` carries it. A server can already say *which person* is asking. Two things are missing: everything that should be filed against the answer, and a way of asking that does not hand the server a credential it could reuse elsewhere — see [identity is a keypair, and today it is not](#identity-is-a-keypair-and-today-it-is-not).
 
 ### It subtracts before it adds
 
@@ -116,7 +119,7 @@ Four hex characters is enough for a room of fifteen and is not meant to be enoug
 
 ### What a profile screen shows
 
-**Yours.** Name, editable. Fingerprint beside it. The public key, and the control that exports the secret one — which is already the most important control in the client, because losing the key is losing the person and there is no recovery. Rating, marked *provisional* until enough games. Your record. Your stamps.
+**Yours.** Name, editable. Fingerprint beside it. Your devices, and the control that authorises another — which is the most important control in the client, because losing every device is losing the person and there is no recovery. Not an *export*: see [an identity is a set of devices](#so-an-identity-is-a-set-of-devices), which is what replaces copying a key about. Rating, marked *provisional* until enough games. Your record. Your stamps.
 
 **Somebody else's**, from the lobby or the standings: name and fingerprint, their colour, their rating, and what they have done **on this server**. Not their key file, not their stamps, not their record from elsewhere — a server can only vouch for what happened on it.
 
@@ -389,7 +392,7 @@ What is left is the sentence below, and it is all of what is left.
 
 Most of the rest exists. A match already has a winner, `Victory` already says how it was decided, and `client::record` already keeps what this client has played — so the *client* half of showing a rating is nearly free.
 
-What it ran into was that a rating is a fact about a person and this game had no people. **That is answered now**: a person is a keypair, `sim::Player` records who is sitting in each seat, and `server::people` is the table to key by — see [identity](#identity-which-is-the-real-unlock). What is left is the table itself and the call, which is one `rating::deltas` at `MatchPhase::Over`.
+What it ran into was that a rating is a fact about a person and this game had no people. **That is answered**: a person is something the server can name across rooms, `sim::Player` records who is sitting in each seat, and `server::people` is the table to key by — see [identity](#identity-is-a-keypair-and-today-it-is-not), which is about making that naming safe rather than about whether it exists. What is left is the table itself and the call, which is one `rating::deltas` at `MatchPhase::Over`.
 
 Two more, both real:
 
@@ -397,7 +400,7 @@ Two more, both real:
 
 **Elo is for two players.** A match here is up to fifteen, and multiplayer Elo is a genuine choice rather than a formula: treat the result as every pairwise outcome (everybody you beat, everybody who beat you), or score against the field average, or rate only the winner. The pairwise reading is the usual answer and is what a free-for-all wants, and it falls out naturally once [teams](#teams) exist, because a team result is one pairwise outcome per opposing pair.
 
-The order that makes sense is identity, then teams, then this. Doing it before identity means building a rating on a number that gets handed to somebody else next week — and the identity in question is the keypair in [many servers](#many-servers-and-what-must-not-be-decentralised), which is the same missing piece seen from a different side.
+The order that makes sense is identity, then teams, then this. Doing it before identity means building a rating on a number that gets handed to somebody else next week — and the identity in question is the one in [many servers](#many-servers-and-what-must-not-be-decentralised), which is the same missing piece seen from a different side.
 
 [A leaderboard](#a-leaderboard) is the other half of this and waits on exactly the same thing; the tiers, the placement matches and the decay are written up there rather than here, because they are what a rating is *shown* as and this is what it is.
 
@@ -409,21 +412,95 @@ Start with what does **not** move, because it is the constraint everything else 
 
 So what decentralises is **discovery and identity**. Three pieces, in the order they depend on each other.
 
-### Identity, which is the real unlock
+### Identity is a keypair, and today it is not
 
-Today a player is a `PlayerId` — a seat in one room, reused when a world forgets somebody — plus a **rejoin token**, which is a secret the *server* issues and the client files under a room name. That has a bug in it already: the token is keyed by room and not by server, so two servers both holding a room called `main` share one secret and visiting the second costs you your player on the first. `client::record` has the same hole from the other end: it files a game under a room's display name, so two servers' `arena` are one line of history.
+**Open, and this entry said Built.** Correcting the record first, because the claim that was here is the kind that matters: it said the client mints a keypair, never sends it, and signs a challenge, and that `server::people` "holds no secrets at all". None of that is true of the code.
 
-**Built.** The token is joined by a **keypair the client generates and never sends** — `net::auth::person`. Joining is: the server offers a challenge on the socket's first word, the client signs it, and the server knows who it is talking to without ever having issued them anything. That inverts who owns an identity, and everything else here follows from it:
+What is true is in [`net::auth::person`](../src/net/auth/person.rs) and [`server::people`](../src/server/people.rs), both of which say so plainly. The ed25519 scheme was **removed**: a `Secret` is now sixteen random bytes that the client sends on every join, and the server stores it beside the id it issued, in `people.tsv`, in plaintext. So today:
 
-- **A person is the same person on every server**, with no registry, no account, and nothing to federate. This is the whole of what "decentralised identity" needs to mean here.
-- **A seat becomes something a person holds**, which is the missing piece [fifteen slots and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients) and [rating](#rating) are both waiting on.
-- **The store keys by server**, because a public key needs no room to be filed under. The two bugs above stop being bugs rather than being fixed.
+- a secret is a **bearer credential** — whoever holds it is you, and the server it is presented to holds it;
+- `people.tsv` is the file on the machine worth stealing, because every line in it is a player somebody can be;
+- and a server that has met you can be you **on every other server that has met you**.
 
-What it cost was a signature scheme in a crate that builds for wasm32 — `ed25519-dalek`, which does — plus a decision about what happens when somebody loses their key, which is that they are somebody new. That is said out loud on screen now, in the settings drawer and again in the dialogue that asks before either press that can destroy one.
+`person.rs` calls that a single-server design and says it has to change before there are two. That is exactly right, and it is the first thing in this entry rather than a footnote to it: everything below assumes an identity a server cannot take.
 
-Two things worth recording, because both were the opposite of the first attempt at this. **A key this server has never seen is a person, not an impostor**, so the answer to a new one is to write it down — the reverse of a server-minted secret, where an unknown id had to be refused or the first machine to claim one would own it. And **`server::people` holds no secrets at all** now: a join is checked by arithmetic rather than by looking anything up, so there is nothing in that file worth stealing.
+### What has to be true
 
-What is left of this entry is `client::record`, which still files a game under a room's *display name*, so two servers' `arena` are one line of history. The store keys by server for its rooms and by nothing for the key, which is right; the record has not caught up.
+**Three properties, and the third is the one that is easy to lose.**
+
+1. **A server verifies rather than looks up.** A join is a signature it checks by arithmetic, so there is nothing in a server's files worth stealing and nothing to leak.
+2. **The private half never leaves the device it was made on.** Not "is not sent" — cannot be read, by the page or by anything on it.
+3. **The central service cannot be you either.** A directory that could impersonate its users is a server with a bigger blast radius, not a solution.
+
+### The scheme, and the one detail worth getting right
+
+ed25519, back where it was: the server offers a nonce on the socket's first word and the client signs. `PersonId` becomes a **fingerprint of the public key** rather than something a server issues — derived, so every server calls you the same thing, which is the whole point and is also what makes `people.tsv` a table with nothing secret in it.
+
+**Sign more than the nonce.** A signature over a bare challenge is replayable sideways: server A, which you are joining honestly, hands your signature to server B and is you there. So the signed message names **the server and the room** as well as the nonce — a signature is then evidence about one join to one place, and a relay has nothing to relay. This is the bug the previous scheme would have had and nobody would have found until there were two servers, which is to say until it mattered.
+
+A server's identity is its own keypair, so "which server" is a public key rather than a hostname somebody could take. That also gives the client something to pin, which is what stops a room list from sending you to an impostor.
+
+Migration is a version 4 line in `people.tsv` holding a public key. A person whose version 3 line holds a secret cannot be re-keyed, because the thing that would key them was never on that machine — their rating starts again. One line in a release note, which is the same answer this file already gives for records filed under a room's display name.
+
+### Non-extractable keys, which is what "never leaves the device" needs
+
+A secret in `net::keep` is hex in `localStorage` on the web, and any script on the page can read it — including one that got there by accident. The settings screen prints it on purpose. That is the sense in which the key is too easy to reach: it is not that it is exposed, it is that nothing prevents it.
+
+**WebCrypto has the answer and it is not a library.** `crypto.subtle.generateKey({name: "Ed25519"}, false, ["sign"])` returns a `CryptoKey` whose private half JavaScript never holds — the `false` is `extractable`, and the browser enforces it. Store the handle in IndexedDB and the page can **use** the key while it is open and can never **take** it. That is a large difference and it costs one API.
+
+Ed25519 in WebCrypto is recent enough to need a fallback; ECDSA P-256 has been there for a decade and is the obvious one, with an algorithm tag on the wire so a server knows which it is verifying. Natively this is a file at `0600` and the same discipline.
+
+**What it costs is export**, and that is the trade rather than a detail. A key that cannot be read cannot be carried to another machine, and carrying it is how somebody is the same person on their phone and their laptop today. The answer is not to make it extractable.
+
+### So an identity is a set of devices
+
+**One identity key, and a device key per machine.**
+
+The identity key **is** you. It signs, and otherwise sits still — written down once as a recovery phrase, or kept non-extractable on the first device with the phrase as the only copy. A device key is made on the machine that will use it, is never extractable, and is authorised by a signature from the identity key.
+
+**Adding a device moves no key material.** The new one shows its public key as a short code or a QR; a device already authorised signs it; the pair is published. Nothing secret crosses the gap, so it does not matter what the gap is — a photograph of a screen is fine.
+
+**Removing one is a revocation** signed by the identity key. A server checks three things on a join: the signature is by a device key, that key chains to an identity key, and it is not revoked.
+
+**And that is what transferring ownership is.** You do not hand somebody a key. You authorise theirs and revoke yours, which is the same mechanism as getting a new laptop and has the property that the moment of handover is a signed statement rather than a copied file. It is also the only version that is honest, because a copied key means two people are permanently the same person and neither can undo it.
+
+### Where the big server fits, and where it must not
+
+**A directory, not an authority.** This is the load-bearing claim of the whole design: once identity is a keypair, a game server verifies you by arithmetic, so a central service is **never in the authentication path**. It can be down and you can still play. It can be malicious and it still cannot be you, cannot forge a result, and cannot refuse you a game — because everything it serves is signed by the key it is about, so the worst it can do is **withhold**.
+
+That is what makes it acceptable to have one at all, and it is worth stating as a rule rather than an outcome: *anything the directory holds must be either public, or signed by the person it is about, or worthless if it is wrong.*
+
+What it holds:
+
+| | why it needs a centre |
+|---|---|
+| name → public key | uniqueness is inherently central, and nothing else here is |
+| a key's device set and revocations | publishing, not vouching: each entry is signed by the identity key |
+| friends | a list of public keys, signed by you, so an edited list is detectable |
+| presence and invites | routing between two people who are not connected to each other |
+| the server list | the tracker this entry already describes |
+
+What it must never hold: a private key, or a rating. A rating that travels between servers needs servers to trust each other's arithmetic, which is a much larger thing than a keypair — see [rating](#rating).
+
+**Names are a claim, not a fact.** A registered name is a statement signed by the key and timestamped by the directory. Show `alice` where a directory the client trusts vouches for it, and `alice·3f2a` where nothing does — which is what the client does for everybody today, so a player who trusts no directory sees exactly what they see now and nothing stops working.
+
+### Friends, searching, and inviting somebody in particular
+
+**Friends** are a list of public keys, signed by you and stored by the directory. One-way is enough and is simpler than mutual: what the list is for is "where is Alice playing", and that wants following rather than a handshake.
+
+**Search** is a name prefix against the directory's table. It is also the entry's one real abuse surface — enumeration, and unwanted contact — and the answer is the directory's rather than the game's: rate limits, and a person who has not registered a name is not in it.
+
+**Presence is opt-in**, and that is the only line in this entry that is about something other than engineering. A game server telling a directory "this key is in this room" is the one piece of the design that is genuinely about being watched rather than about being found, and it should be off until somebody turns it on.
+
+**An invite names a key, and that is what makes it better than a code.** A private room today is reached by a six-character code, which is a *bearer* credential: whoever it is forwarded to gets in, and the room cannot tell. An invite is a signed statement — *this key admits that key to this room on this server until this time* — so forwarding it achieves nothing, because the far end signs as somebody else.
+
+The room side is small: `Rooms` gains a set of admitted keys per private room, and `Join` already carries a signature, so the check is a set lookup. Delivery is through the directory when both are connected and a link when they are not — and the link is then not a bearer token, because it names you.
+
+**Codes stay.** They are good at the thing they are good at, which is reading six characters out loud to somebody sitting next to you, and that case wants no directory and no account.
+
+### Room ownership should be keyed by person
+
+`Rooms::owner` is a `PlayerId`, which is deliberate and survives a reconnect — a seat is per room and comes back. What it does not survive is a restart, and it cannot mean anything on a second server. Keyed by `PersonId` it is one fact everywhere, which is what "close the room you opened" and "hand this room to somebody else" both need, and it falls out of the identity work rather than being separate from it.
 
 ### Multi-homing the client
 
@@ -486,7 +563,9 @@ So the shape of the work is mostly subtraction, and it lands in three places.
 
 Two things it is not. It is not a second renderer: split panes are several viewports onto several worlds, and `render::app` holds one surface and one camera, so the cost is a camera and a viewport per pane rather than a second pipeline. And it is not multiplayer — a shared laboratory is a shared world with the rules off, which is a room anybody can edit anywhere, and that is a different feature with a different argument behind it.
 
-The order that makes sense is RLE first, since it stands alone; then pause and step, which is a button and a flag; then the rules flag; then panes, which is the only part that is real work.
+**Pause, step and reset are one derive between them.** Stepping on a button is what the offline path already does, and what it lacks is a way *back* — which is a kept copy of the world put in place again. That is `World: Clone`, and it is the same line [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) and a searching bot are both waiting on. Reset is then restore, and "save what is on screen" is a clone with a name on it, which is most of the way to a scratch library that is not the stamp library.
+
+The order that makes sense is RLE first, since it stands alone; then pause, step and reset, which is a derive and three buttons; then the rules flag; then panes, which is the only part that is real work.
 
 ## Better interfaces
 
@@ -518,9 +597,60 @@ Three things it does need.
 
 **Something to play.** This is the interesting part and the reason it is worth doing. `examples/balance.rs` already measured what the economy rewards: a blinker pays, a glider bleeds, a sprawl bleeds badly. So a competent bot is not a search — it is a small book of shapes and a rule about where to put them. Compact oscillators inside its own ground to earn, life at the frontier where territory is contested, and ice on anything it wants to keep. Difficulty is then how often it acts and how well it chooses, which are two dials rather than an algorithm.
 
+**The book is the right first version, and a search is the second.** A bot that places from a small book of shapes needs nothing that does not exist. A bot that *chooses* — try a placement, step a copy of the world, score what happened — needs a world it can step without stepping the real one, which is the same `World: Clone` [a prediction wants](#predicting-a-match-and-what-it-shares-with-bots-and-experiments). Doing them in that order means the second is a better evaluator behind the same interface rather than a rewrite, and it means difficulty stops being two dials and becomes how deep the search goes.
+
 What it runs into: **a bot that plays well makes a match unwinnable, and one that plays badly is a candidate for [the mercy rule](#the-mercy-rule)** — which would oust it, freeing its seat mid-match, which is either exactly right or very confusing and has not been played enough to say.
 
 Determinism is not a problem, which is worth stating because it looks like one. A bot's choices are made once, on the server, and reach every client as ordinary actions at a stated tick — so two clients never disagree about what it did, and a bot may use whatever randomness it likes without touching `sim::seed`.
+
+## Predicting a match, and what it shares with bots and experiments
+
+**Decided, not costed.** A live estimate of who is going to win.
+
+### Why it is cheap here and expensive everywhere else
+
+Games estimate a result with a model fitted to past games, because they cannot run the game forward. **This one can.** `sim` is a deterministic cellular automaton, a step is a pure function of state and tick, and `examples/headless` already runs it with no GPU — so the honest way to say who is winning is to step a copy of the world forward and look. No model, no training data, and right by construction for the assumption it makes.
+
+One rollout per victory condition, and both read off machinery that exists. **Timer:** step a copy to the deadline and read `net::standings`. **Territory:** step until somebody crosses the line, or a bound is reached.
+
+### What it assumes, which is the interesting part
+
+A rollout with nobody acting answers *who wins if everybody stops playing*, and that is a **bad predictor in a game where income compounds**. A player with mines running and money in hand is exactly the one whose position keeps improving, and a no-input rollout scores them as though they had already spent everything they were going to.
+
+So there are two versions and they differ by one thing.
+
+**Nobody acts.** Cheap, and honest if it is labelled as what it is — *if nothing more is placed*. Worth having on its own, because it answers a question a player actually has, which is whether they are ahead or whether it merely looks that way while a shape of theirs is about to die.
+
+**Everybody keeps playing**, which needs somebody to play them. That is a bot. So the good predictor **is** a bot run against a copy of the world, and the two stop being separate pieces of work.
+
+### The missing object all three want
+
+Every one of these needs to step a world without stepping *the* world, and nothing can today.
+
+`World` is not `Clone`. That is one derive — `Storage` is a `HashMap<Coord, Chunk>` or a `Box<[Chunk]>`, and `scratch` and `active` are working space — and the step is already pure in state and tick, so a copy diverges cleanly and cannot reach back. `Server::step` owns the only world there is, and a rollout must touch neither the pending actions, nor the purses, nor the tick.
+
+So the whole of the machinery is: derive `Clone`, and a rollout is a clone stepped *n* times with `net::standings` read off the end. What that one derive buys:
+
+| | |
+|---|---|
+| a prediction | a clone stepped to the deadline |
+| a bot that searches rather than follows a book | a clone per candidate placement, scored |
+| an experiment's **reset** | keep the clone, put it back |
+| an experiment's **step one generation** | the offline path already does this; the clone is what makes it undoable |
+
+Four things this file lists separately, waiting on one line.
+
+### Where it runs
+
+**The server**, for the same reason `Standing` is the server's: a client holds the chunks its viewport covers, so a client-side rollout predicts its own screen rather than the world. On the `STANDING_EVERY` cadence, since it is a clone and *n* steps, and a figure that moved four times a second would be unreadable anyway.
+
+Cost is the honest question and it has an honest answer. A rollout to the end of a two-thousand-generation match, four times a second, is not affordable — and does not have to be, because the useful claim is not the final score. A hundred generations says whether the leader is **pulling away**, which is what somebody watching wants to know and is twenty times cheaper.
+
+### What it changes about the game
+
+**A prediction tells you when to give up**, and that is not a neutral thing to add. It meets [the mercy rule](#the-mercy-rule) — the server deciding somebody cannot act — and forfeiting, which is a player deciding it. A figure saying four per cent makes conceding a reasonable act rather than a rude one, and it therefore makes it happen more often. Whether that is wanted is a playtest question, and it is much easier to ask before it is on everybody's screen than after.
+
+There is a way to have it without asking yet: **show it to a spectator and not to a player.** A spectator wants exactly this figure and has no decision for it to distort, and [spectating](#spectating) is already built.
 
 ## A leaderboard
 
