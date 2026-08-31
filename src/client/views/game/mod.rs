@@ -474,8 +474,15 @@ impl GameApp {
         // Recomputed here rather than cached, because `write_camera` runs
         // only when the camera has moved -- not every frame -- and a pass over
         // sixteen players is nothing beside the buffer write it rides on.
-        let uniform =
-            self.camera.uniform(!gpu.config.format.is_srgb(), &crate::client::views::hue::table());
+        let uniform = self.camera.uniform(
+            !gpu.config.format.is_srgb(),
+            &crate::client::views::hue::table(),
+            // Where the coarse texture is looking, so the shader can turn a
+            // world position into one of its texels. A window of nothing when
+            // the fine path is drawing, which the shader never reads.
+            self.chunks.coarse_window().unwrap_or(((0, 0), (0, 0))),
+            self.chunks.coarse_wraps(&self.world),
+        );
         gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
@@ -2435,7 +2442,7 @@ impl App for GameApp {
         let mut chunks = ChunkStore::new(&gpu.device);
         let atlas = Atlas::new(&gpu.device, &gpu.queue);
         chunks.init_unloaded_layer(&gpu.queue);
-        chunks.sync(&gpu.queue, &world, ((0, 0), (0, 0)));
+        chunks.sync(&gpu.queue, &world, ((0, 0), (0, 0)), START_ZOOM);
 
         let camera_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera"),
@@ -2461,6 +2468,10 @@ impl App for GameApp {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&atlas.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(chunks.coarse_view()),
                 },
             ],
         });
@@ -2652,7 +2663,8 @@ impl App for GameApp {
         }
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);
-            self.chunks.sync(&gpu.queue, &self.world, visible);
+            self.chunks.sync(&gpu.queue, &self.world, visible, self.camera.zoom);
+            self.write_camera(gpu);
             self.world.dirty = false;
         }
         self.elapsed += dt as f64;
@@ -3044,12 +3056,16 @@ impl App for GameApp {
         *self.ui_output.borrow_mut() = Some(output);
 
         if self.camera.dirty {
-            self.write_camera(gpu);
             self.camera.dirty = false;
             // Panning changes the region the backdrop has to cover, so the
             // instance list follows the camera.
             let visible = self.camera.visible_cells(VIEW_MARGIN);
-            self.chunks.sync(&gpu.queue, &self.world, visible);
+            self.chunks.sync(&gpu.queue, &self.world, visible, self.camera.zoom);
+            // **After the sync, not before.** The uniform carries the coarse
+            // window, and `sync` is what decides it — written first, the frame
+            // that swaps to the coarse path draws it against last frame's
+            // window, or against no window at all.
+            self.write_camera(gpu);
         }
     }
 

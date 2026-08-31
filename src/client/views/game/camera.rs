@@ -12,9 +12,24 @@
 use crate::render::chunks::CameraUniform;
 use crate::sim::CHUNK_N;
 
-/// Zoom is clamped to this. Never below one: point sampling drops sparse cells
-/// under one pixel per cell, so they would flicker out rather than shrink.
-pub const ZOOM_RANGE: (f32, f32) = (1.0, 64.0);
+/// Zoom is clamped to this.
+///
+/// **The floor came down when there was something to draw at it.** It was one
+/// pixel per cell, because below that a point sample drops sparse cells and
+/// they flicker out rather than shrinking — and because the fine path cannot
+/// be *resident* down there anyway: one chunk is one texture array layer, the
+/// guaranteed floor is 256 of them, and a 1080p screen wants thousands under
+/// about zoom five. So zooming out further only ever bought more backdrop.
+///
+/// Both are answered now. `render::chunks::CoarseTexture` draws the world as
+/// one texel a cell out of one quad, so a wrapping world **collapses into
+/// itself repeating** rather than into empty ground; and the antialiasing
+/// averages the cells a pixel covers rather than picking one of them.
+///
+/// A quarter is four cells to a pixel, which is where four samples a side stop
+/// covering the footprint exactly. Lower wants a second coarse level, which is
+/// the same trick again rather than a new idea.
+pub const ZOOM_RANGE: (f32, f32) = (0.25, 64.0);
 
 /// Seconds for a released pan to decay to a third of its speed. A flick
 /// coasts roughly `speed * GLIDE` cells and stops. Zero turns it off.
@@ -218,15 +233,19 @@ impl Camera {
         &self,
         encode_srgb: bool,
         hues: &[f32; crate::sim::PlayerId::COUNT],
+        coarse: ((i32, i32), (i32, i32)),
+        coarse_wraps: bool,
     ) -> CameraUniform {
         let (ox, oy) = self.origin();
+        let ((row, col), (rows, cols)) = coarse;
         CameraUniform {
             origin: [ox, oy],
             viewport: [self.viewport.0, self.viewport.1],
             zoom: self.zoom,
             chunk_n: CHUNK_N as f32,
             encode_srgb: if encode_srgb { 1.0 } else { 0.0 },
-            _pad: 0.0,
+            coarse_wraps: if coarse_wraps { 1.0 } else { 0.0 },
+            coarse: [col as f32, row as f32, cols as f32, rows as f32],
             // Four to a row, which is what the shader indexes and what a
             // uniform array's stride costs if it is not.
             hues: std::array::from_fn(|row| std::array::from_fn(|col| hues[row * 4 + col])),

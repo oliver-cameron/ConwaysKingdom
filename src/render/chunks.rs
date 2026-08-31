@@ -178,6 +178,167 @@ pub fn covered(world: &World, visible: ((i32, i32), (i32, i32))) -> Covered {
     Covered { positions, chunks }
 }
 
+/// `meta.y` of an instance: one quad standing in for the whole world, drawn
+/// from the coarse texture rather than from a chunk.
+pub const KIND_COARSE: u32 = 2;
+
+/// Below this many pixels per cell, the world is drawn coarsely.
+///
+/// Four is where the antialiasing stops being exact — `MAX_AA` is four samples
+/// a side and a cell is sixteen texels — so it is also where the sprite stops
+/// being legible, which is the thing the coarse path drops. Above it the fine
+/// path is exact; below it the fine path cannot even be *resident*, since one
+/// chunk is one array layer and a 1080p screen wants more than 256 of them
+/// under about zoom five.
+pub const COARSE_BELOW: f32 = 4.0;
+
+/// And back to the fine path only above this.
+///
+/// **Hysteresis, because two paths and one threshold flicker.** A scroll wheel
+/// resting on the boundary would swap every frame, and the two paths do not
+/// draw identically — one has sprites and outlines and the other has flat
+/// colour — so the swap is visible and must not happen twice a second.
+pub const FINE_ABOVE: f32 = 5.0;
+
+/// The world as one texel a cell: the cell without its art.
+///
+/// **What low zoom actually needs.** The fine path spends 16x16 texels of
+/// sprite on every cell, which is the whole reason residency is one array
+/// layer per chunk and the whole reason it runs out — and below about four
+/// pixels a cell that sprite is not legible anyway. So this drops the art and
+/// keeps the cell: one ordinary 2D texture, one quad, no sheet lookup, and a
+/// count that stops growing with how far out anybody is.
+///
+/// `Rg8Uint`, which is the cell's own two bytes and nothing derived: R is the
+/// owner byte, so `>> PLAYER_SHIFT` is the player exactly as the fine path
+/// reads it, and G is the tile byte, whose bit 0 is alive and bit 1 is ice.
+/// Nothing here is summarised, averaged or reduced, so there is nothing that
+/// can disagree with what the fine path would have drawn.
+pub struct CoarseTexture {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    /// What the texture currently holds: the world rect it covers, in cells,
+    /// as (row, col) of its top-left and its size.
+    pub(crate) window: Option<((i32, i32), (i32, i32))>,
+    /// The generation that window was filled at, so a still world is filled
+    /// once rather than every frame.
+    filled_at: u64,
+}
+
+impl CoarseTexture {
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Uint;
+    pub const STRIDE: usize = 2;
+
+    /// Cells a side. 1024 is two megabytes and covers a 64x64-chunk world
+    /// whole, which is the largest a client may ask for — see
+    /// `menu::draft::MAX_CHUNKS` — so any torus somebody makes fits in one
+    /// texture with no window to scroll and no seam to get wrong.
+    pub const SIDE: u32 = 1024;
+
+    pub fn new(device: &wgpu::Device) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("coarse world"),
+            size: wgpu::Extent3d {
+                width: Self::SIDE,
+                height: Self::SIDE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self { texture, view, window: None, filled_at: u64::MAX }
+    }
+
+    /// Which world rect the coarse texture should hold, given what is on
+    /// screen.
+    ///
+    /// **A torus that fits is held whole**, which is the case worth optimising
+    /// for and the one that makes a wrapping world repeat visibly: there is no
+    /// window to recentre, no strips to upload as somebody pans, and the
+    /// shader's wrap is the world's own. Anything larger, and any boundless
+    /// world, gets a window centred on the view.
+    pub fn window_for(
+        world: &World,
+        visible: ((i32, i32), (i32, i32)),
+    ) -> ((i32, i32), (i32, i32)) {
+        let side = Self::SIDE as i32;
+        if let Some((height, width)) = world.size_in_cells() {
+            if height <= side && width <= side {
+                return ((0, 0), (height, width));
+            }
+        }
+        let ((r0, c0), (r1, c1)) = visible;
+        let middle = ((r0 + r1) / 2, (c0 + c1) / 2);
+        ((middle.0 - side / 2, middle.1 - side / 2), (side, side))
+    }
+
+    /// Fill it, if what it holds is not already what is wanted.
+    ///
+    /// Skipped when the window and the generation both match, so a still world
+    /// is uploaded once. Two megabytes at four generations a second is the
+    /// worst case and only while zoomed out, which is the frame with nothing
+    /// else to do.
+    pub fn fill(&mut self, queue: &wgpu::Queue, world: &World, window: ((i32, i32), (i32, i32))) {
+        if self.window == Some(window) && self.filled_at == world.generation {
+            return;
+        }
+        self.window = Some(window);
+        self.filled_at = world.generation;
+
+        let ((row0, col0), (rows, cols)) = window;
+        let mut texels = vec![0u8; (rows * cols) as usize * Self::STRIDE];
+        // Walked by stored chunk rather than cell by cell: an infinite world
+        // holds only what life has reached, so this is the resident set and
+        // not the window. A torus holds everything, and then it is the world.
+        for (at, chunk) in world.stored() {
+            let base = (at.0 * CHUNK_N as i32, at.1 * CHUNK_N as i32);
+            for cr in 0..CHUNK_N as i32 {
+                for cc in 0..CHUNK_N as i32 {
+                    let (row, col) = (base.0 + cr, base.1 + cc);
+                    // Folded onto the window the same way the world folds, so
+                    // a torus held whole needs no special case here either.
+                    let (r, c) = (row - row0, col - col0);
+                    let (r, c) = match world.size_in_cells() {
+                        Some((h, w)) if rows == h && cols == w => {
+                            (r.rem_euclid(h), c.rem_euclid(w))
+                        }
+                        _ => (r, c),
+                    };
+                    if r < 0 || c < 0 || r >= rows || c >= cols {
+                        continue;
+                    }
+                    let cell = chunk[(cr as usize, cc as usize)];
+                    let at = ((r * cols + c) as usize) * Self::STRIDE;
+                    let bytes = bytemuck::bytes_of(&cell);
+                    texels[at] = bytes[0];
+                    texels[at + 1] = bytes[1];
+                }
+            }
+        }
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cols as u32 * Self::STRIDE as u32),
+                rows_per_image: Some(rows as u32),
+            },
+            wgpu::Extent3d { width: cols as u32, height: rows as u32, depth_or_array_layers: 1 },
+        );
+    }
+}
+
 /// A chunk as the GPU wants it: its two cell bytes, and what is next to it.
 ///
 /// **This is the pass that used to be a memcpy**, and everything a
@@ -267,7 +428,21 @@ pub struct CameraUniform {
     /// fragment shader, fixed for the life of the surface, and the alternative
     /// is compiling the shader twice to change its last line.
     pub encode_srgb: f32,
-    pub _pad: f32,
+    /// Non-zero when the coarse window **is** the world, so the shader wraps
+    /// it and a torus repeats for as far as anybody pans out of one texture
+    /// and one quad. Zero for a window on a boundless world, which tiles
+    /// nothing because there is nothing to tile.
+    ///
+    /// In what was the pad, because the struct has to be a multiple of sixteen
+    /// bytes and this is a flag.
+    pub coarse_wraps: f32,
+    /// The world rect the coarse texture holds: top-left row and column, then
+    /// how many rows and columns. Cells throughout.
+    ///
+    /// The shader needs it to turn a world position into a coarse texel, and
+    /// needs the size to wrap — which is what makes a torus held whole repeat
+    /// for as far as anybody pans, out of one texture and one quad.
+    pub coarse: [f32; 4],
     /// A hue per player, as a turn in `0..1`, indexed by `PlayerId`.
     ///
     /// Worked out on the client — see `client::views::hue` — because where a
@@ -283,7 +458,7 @@ pub struct CameraUniform {
 const _: () = {
     // Must match `Camera` and the instance attributes in shaders/grid.wgsl.
     // WGSL requires a uniform struct's size to be a multiple of 16.
-    assert!(size_of::<CameraUniform>() == 96);
+    assert!(size_of::<CameraUniform>() == 112);
     assert!(size_of::<Instance>() == 32);
 };
 
@@ -325,6 +500,19 @@ pub fn world_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 },
                 count: None,
             },
+            // The world as one texel a cell, for low zoom. `Uint` and
+            // fetched, like the chunk texture and for the same reason: these
+            // are bit fields, and a blended kind is not a kind.
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
             // The sprite sheet, filtered: a cell is a 16x16 image, so it is
             // sampled rather than fetched, unlike the cell data itself.
             wgpu::BindGroupLayoutEntry {
@@ -354,6 +542,11 @@ pub fn world_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 /// matters because an infinite world drops chunks the moment life leaves them.
 pub struct ChunkStore {
     texture: ChunkTexture,
+    coarse: CoarseTexture,
+    /// Whether the last frame drew coarsely, so the swap has hysteresis and a
+    /// zoom resting on the threshold does not flicker between two paths that
+    /// do not look alike.
+    was_coarse: bool,
     /// Canonical chunk coordinate -> array layer. Canonical, so a torus chunk
     /// drawn at nine global positions still occupies one layer.
     layers: HashMap<Coord, u32>,
@@ -376,6 +569,8 @@ impl ChunkStore {
         });
         Self {
             texture: ChunkTexture::new(device, ChunkTexture::LAYER_BUDGET),
+            coarse: CoarseTexture::new(device),
+            was_coarse: false,
             layers: HashMap::new(),
             // Layer zero is reserved, so allocation starts above it.
             next_free: UNLOADED_LAYER + 1,
@@ -423,6 +618,25 @@ impl ChunkStore {
         &self.texture.view
     }
 
+    pub fn coarse_view(&self) -> &wgpu::TextureView {
+        &self.coarse.view
+    }
+
+    /// Whether the world is being drawn coarsely, and the window it is drawn
+    /// from — which the camera uniform has to carry so the shader can map a
+    /// world position onto a texel.
+    pub fn coarse_window(&self) -> Option<((i32, i32), (i32, i32))> {
+        self.was_coarse.then(|| self.coarse.window).flatten()
+    }
+
+    /// Whether that window is the whole world, and so wraps.
+    pub fn coarse_wraps(&self, world: &World) -> bool {
+        match (self.coarse.window, world.size_in_cells()) {
+            (Some((_, (rows, cols))), Some((h, w))) => rows == h && cols == w,
+            _ => false,
+        }
+    }
+
     pub fn instance_buffer(&self) -> &wgpu::Buffer {
         &self.buffer
     }
@@ -444,7 +658,48 @@ impl ChunkStore {
     /// the original, which meant panning off the third copy fell into blank
     /// space forever, and a large torus paid for nine copies of every chunk
     /// whether or not any of them were on screen.
-    pub fn sync(&mut self, queue: &wgpu::Queue, world: &World, visible: ((i32, i32), (i32, i32))) {
+    pub fn sync(
+        &mut self,
+        queue: &wgpu::Queue,
+        world: &World,
+        visible: ((i32, i32), (i32, i32)),
+        zoom: f32,
+    ) {
+        // **Which path, with hysteresis.** Two thresholds rather than one,
+        // because the two paths do not draw alike -- one has sprites and
+        // outlines and the other has flat colour -- so a zoom resting on a
+        // single boundary would swap them back and forth every frame.
+        self.was_coarse = if self.was_coarse { zoom < FINE_ABOVE } else { zoom < COARSE_BELOW };
+
+        if self.was_coarse {
+            // One quad for the whole world, out of one texture. **This is what
+            // low zoom collapses to instead of the backdrop**: the fine path
+            // cannot be resident at these zooms -- a 1080p screen wants
+            // thousands of array layers under about zoom five and there are
+            // 256 -- so what used to happen was that most of the screen fell
+            // back to empty ground.
+            let window = CoarseTexture::window_for(world, visible);
+            self.coarse.fill(queue, world, window);
+            // Every layer goes back: the fine path holds none of them while
+            // this is what is drawn, and holding them would make zooming out
+            // and back in the thing that exhausts the budget.
+            self.free.extend(self.layers.values().copied());
+            self.layers.clear();
+            self.instances.clear();
+            let ((min_row, min_col), (max_row, max_col)) = visible;
+            self.instances.push(Instance {
+                rect: [
+                    min_col as f32,
+                    min_row as f32,
+                    (max_col - min_col + 1) as f32,
+                    (max_row - min_row + 1) as f32,
+                ],
+                meta: [UNLOADED_LAYER, KIND_COARSE, 0, 0],
+            });
+            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.instances));
+            return;
+        }
+
         // Only what is on screen gets a layer. Uploading every stored chunk
         // made the budget a limit on the size of the *world*, which an
         // infinite world hides -- it holds only what life has reached -- and a
@@ -536,6 +791,63 @@ mod tests {
         for &(r, c) in cells {
             world.set_cell_at(r, c, Cell::alive(PlayerId(who)));
         }
+    }
+
+    /// **The world collapses into itself, not into the backdrop.**
+    ///
+    /// Which is the whole point of the coarse path. A torus small enough to
+    /// hold whole is held whole, so there is no window to recentre and no seam
+    /// to get wrong, and the shader wraps it — one texture, one quad, and the
+    /// world repeats for as far as anybody pans.
+    #[test]
+    fn a_torus_that_fits_is_the_coarse_window() {
+        let world = World::toroidal_empty(12, 12);
+        let (at, size) = CoarseTexture::window_for(&world, ((-500, -500), (500, 500)));
+        assert_eq!(at, (0, 0), "a world held whole starts where the world does");
+        assert_eq!(size, (192, 192), "and is exactly the world");
+
+        // Anything larger gets a window on the view instead, because it cannot
+        // be held whole — 1024 cells is 64 chunks and that is the largest a
+        // client may ask for, so this is the case that does not arise from the
+        // menu and does from a command line.
+        let big = World::toroidal_empty(80, 80);
+        let (at, size) = CoarseTexture::window_for(&big, ((0, 0), (99, 99)));
+        assert_eq!(size, (CoarseTexture::SIDE as i32, CoarseTexture::SIDE as i32));
+        assert_ne!(at, (0, 0), "a window is centred on what is being looked at");
+    }
+
+    /// A boundless world has no size, so it is always a window — and what the
+    /// window does not cover reads as dead, which is what the backdrop is.
+    #[test]
+    fn a_boundless_world_gets_a_window_on_the_view() {
+        let world = World::infinite_empty();
+        let visible = ((100, 200), (300, 400));
+        let ((row, col), size) = CoarseTexture::window_for(&world, visible);
+        assert_eq!(size, (CoarseTexture::SIDE as i32, CoarseTexture::SIDE as i32));
+        // Centred on the middle of what is on screen.
+        let side = CoarseTexture::SIDE as i32;
+        assert_eq!((row + side / 2, col + side / 2), (200, 300));
+    }
+
+    /// **The swap has hysteresis**, or a zoom resting on the threshold flips
+    /// between two paths that do not draw alike.
+    #[test]
+    fn the_two_paths_do_not_flicker_at_the_boundary() {
+        assert!(COARSE_BELOW < FINE_ABOVE, "one threshold is not hysteresis");
+        // Coming down: fine until below COARSE_BELOW.
+        let mut coarse = false;
+        for zoom in [8.0, 5.0, 4.5, 4.0, 3.9] {
+            coarse = if coarse { zoom < FINE_ABOVE } else { zoom < COARSE_BELOW };
+        }
+        assert!(coarse, "never became coarse on the way down");
+        // And going back up: coarse until above FINE_ABOVE, so the band
+        // between them holds whichever it already was.
+        for zoom in [4.5, 4.9] {
+            coarse = if coarse { zoom < FINE_ABOVE } else { zoom < COARSE_BELOW };
+            assert!(coarse, "swapped back inside the band");
+        }
+        coarse = if coarse { 5.1 < FINE_ABOVE } else { 5.1 < COARSE_BELOW };
+        assert!(!coarse, "never came back to the fine path");
     }
 
     /// **A torus is drawn by folding.** A viewport wider than the world covers

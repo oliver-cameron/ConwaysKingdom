@@ -19,7 +19,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
 | [Player profiles](#player-profiles) | Designed | a person, rather than a seat in one room |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
-| [Zooming out without lying](#zooming-out-without-lying) | Part built | antialiasing is in; the level of detail is what low zoom actually needs |
+| [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
 | [Payloads](#payloads) | Designed | a cell that counts down and scrambles the ground around it |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
@@ -279,9 +279,9 @@ Three things about it are load-bearing:
 
 The [brightness difference between a loaded chunk and the backdrop](known-bugs.md#loaded-chunks-read-differently-from-the-backdrop) should be much reduced by this and is not proved gone: both routes now converge on the area average of their footprint, which is the same number, but they still reach it by different arithmetic. It wants looking at rather than reasoning about.
 
-### The real bound on low zoom is residency, not sampling
+### The real bound on low zoom was residency, not sampling
 
-Worth stating plainly, because the whole entry used to assume otherwise. **One chunk is one texture array layer, and the guaranteed floor for `max_texture_array_layers` is 256.** A 1920x1080 screen covers about `8100 / zoom²` chunk positions, so:
+Worth keeping, because it is why the level of detail is the shape it is. **One chunk is one texture array layer, and the guaranteed floor for `max_texture_array_layers` is 256.** A 1920x1080 screen covers about `8100 / zoom²` chunk positions, so:
 
 | zoom | chunks on screen | fits in 256 layers | fits in 1024 quads |
 |---|---|---|---|
@@ -289,42 +289,44 @@ Worth stating plainly, because the whole entry used to assume otherwise. **One c
 | 8 | 160 | yes | yes |
 | 5 | 336 | **no** | yes |
 | 3 | 875 | no | yes |
-| 1 (the floor) | 8100 | no | **no** |
+| 1 (the old floor) | 8100 | no | **no** |
 
-So a screen is already mostly backdrop below about zoom five, and at the floor it is a 16x16-chunk island of real cells in a sea of empty ground. That is `render::chunks::covered`, which is pure and has the arithmetic pinned in a test. Better sampling makes a mostly-empty screen smoother; it does not put the world back on it.
+So a screen was already mostly backdrop below about zoom five, and at the floor it was a 16x16-chunk island in a sea of empty ground. Better sampling made a mostly-empty screen smoother; it did not put the world back on it. `render::chunks::covered` is that arithmetic, pure and with the numbers pinned in a test.
 
-### So the level of detail is the cell without its art
+**Which is also why a wrapping world never visibly repeated.** The folding has worked since "A wrapping world that wraps" — one layer per distinct chunk, a quad per position — but seeing a torus come round again means seeing more than one world-width at once, and for any torus worth playing that is a zoom at which residency had already collapsed. The repeat was correct and unobservable.
 
-The old plan here was a reduction chain over the cell texture, which wanted a compute pass, which wanted the [format change](#the-simulation-on-the-gpu) first. That is the wrong shape twice over. The problem is not that the cell texture is too detailed — it is that there are only 256 of them and a quad each. And a *reduction* answers a question nobody asked: at low zoom a player does not want a summary of sixteen cells, they want the cells.
+### The level of detail is the cell without its art
 
-What they stop wanting is the **art**. A cell is 16x16 texels of sprite, and that is the entire reason residency is one array layer per chunk: sixteen texels a side is what a sheet lookup needs. Below about four pixels per cell the sprite is not legible and is costing 256 texels per cell to draw as a blur.
+**Built.** The problem was never that the cell texture is too detailed — it is that there are only 256 of them and a quad each. And a *reduction*, which the plan here used to call for, answers a question nobody asked: at low zoom a player does not want a summary of sixteen cells, they want the cells. What they stop wanting is the **art**.
 
-So the coarse level is **one texel per cell**, in a plain 2D texture over a window of the world, drawn as **one quad**, with no sheet lookup at all. What each texel holds is exactly what stays legible at that size, and it is not a new format — it is the cell:
+A cell is 16x16 texels of sprite, and that is the entire reason residency is one array layer per chunk. Below about four pixels a cell the sprite is not legible and is costing 256 texels a cell to draw as a blur. So `render::chunks::CoarseTexture` is **one texel per cell**, in a plain 2D texture, drawn as **one quad**, with no sheet lookup at all — and what each texel holds is not a new format, it is the cell:
 
 | | | |
 |---|---|---|
-| R | the owner byte, unchanged | `>> PLAYER_SHIFT` is the player, so the hue table is read exactly as it is today |
+| R | the owner byte, unchanged | `>> PLAYER_SHIFT` is the player, so the hue table is read exactly as the fine path reads it |
 | G | the tile byte, unchanged | bit 0 is alive, bit 1 is ice; kind and age ride along free and are ignored |
 
-Which is `Rg8Uint`, the cell's own two bytes, cast straight out of a `Chunk` the way the fine texture used to be before the neighbour mask joined it. Nothing is derived, nothing is summarised, and nothing has to agree with anything.
+`Rg8Uint`, the cell's own two bytes cast straight out of a `Chunk`. Nothing is derived, summarised or averaged, so there is nothing that can disagree with what the fine path would have drawn.
 
-**What it draws** is a flat colour a cell: the player's hue for whose it is, light or dark for alive or dead, and a tint for ice. That is the whole shading path — three reads off two bytes and one hue lookup, against a sheet sample and an edge mask on the fine path. A world at one pixel per cell reads as a map of who holds what, with life as texture on it, which is what somebody zoomed out is looking for.
+**It draws lightness for state and hue for owner**, which is the division the sprite sheet already makes — a texel there is saturation and lightness and the hue arrives from the player — so a coarse cell is that with the sheet's variation dropped rather than a second colour scheme. Player zero is unowned and `player_saturation` already answers nought for it, so unheld ground comes out grey with no arm saying so.
 
-### What it costs, and where it stops
+**A torus that fits is held whole**, which is the case that matters: 1024 cells a side is 64 chunks, and 64 is the largest a client may ask for — `menu::draft::MAX_CHUNKS` — so any world somebody makes from the menu is one texture with no window to recentre and no seam to get wrong. The shader wraps it, and *that* is what makes a wrapping world visibly repeat: zoomed out, the world collapses **into itself** rather than into the backdrop. Anything larger, and any boundless world, gets a window centred on the view.
 
-**Coverage is the interesting number.** A 2048x2048 texture is 8 MB and covers 2048 cells a side, against 256 chunks — 4096 cells' worth spread over whatever is on screen — for the array. On a 1920-pixel screen that is the full width at one pixel per cell with room to spare, and it runs out around a quarter of a pixel per cell, where the screen wants 7680. So one coarse level takes the floor from 1 down to about 0.25 and no further, and a second level below it is the same trick again rather than a new idea.
+**A boundless world draws only the chunks it has.** `fill` walks `world.stored()` rather than the window, so an infinite world's coarse texture is exactly its resident set and everywhere else reads as a dead unowned cell — which is what the backdrop is. Unloaded ground draws as unloaded ground for nothing.
 
-**The window has to move.** A 2D texture over a window is re-centred when the camera leaves its middle, and re-uploading 8 MB per frame while panning is not free. The standard answer applies: address it with a wrap, and upload only the rows and columns newly exposed — the same scrolling window a clipmap uses. On a torus the wrap is `World::canonical` and the window can simply *be* the world once the world is smaller than the window.
+**And the backdrop goes flat.** It is one quad wrapping the world onto a single dead chunk, so what is on it is the dead sprite and the ring `grid_tint` puts round every chunk — one cell in sixteen. Below a couple of pixels a cell neither is visible and both are moiré, so under `BACKDROP_FLAT` it draws the same grey the coarse path gives unheld ground. The two then agree exactly where they meet, which also takes most of [the brightness difference](known-bugs.md#loaded-chunks-read-differently-from-the-backdrop) with it.
 
-**The swap wants hysteresis.** Two paths with one threshold flicker between them when the zoom sits on it. Swap out at four pixels per cell and back in at five, so a scroll wheel resting on the boundary picks one.
+The antialiasing carries across unchanged, which is what its footprint being measured in texels bought: a coarse texel is a cell, so below one pixel per cell it averages over cells exactly as it averages over sprite texels above.
 
-**The antialiasing already written carries over unchanged.** Its footprint is measured in texels, and a coarse texel is a cell, so below one pixel per cell it averages over cells exactly as it averages over sprite texels above — same loop, same `k`, and the continuity across the swap is free.
+### What is left
 
-### And it needs no compute shader
+**The floor is a quarter of a pixel per cell**, which is where four samples a side stop covering the footprint exactly and where a 1024-cell window stops covering a 1080p screen. Lower wants a second coarse level, which is the same trick again rather than a new idea.
 
-Which is the other thing the old plan got wrong. A max-or-count reduction on the GPU is elegant and would want `Rgba8Uint` storage bindings and a compute pass that WebGL2 cannot run at all. Copying two bytes a cell into a second texture is a memcpy the client already affords, it works on every backend, and it does not block on [the simulation on the GPU](#the-simulation-on-the-gpu).
+**A window on a boundless world does not scroll yet** — it is re-filled when the view moves it, rather than uploading the rows and columns newly exposed. Two megabytes at four generations a second is the worst case and only while zoomed out, which is the frame with nothing else to do, so this is a real cost that has not yet been worth paying down.
 
-**This is also what a minimap is**, and what a world overview is, and what a spectator following a player wants — one piece of work with four uses, which is the argument for doing it before any of them.
+**And it needs no compute shader**, which is the other thing the old plan got wrong: a max-or-count reduction on the GPU would want `Rgba8Uint` storage bindings and a compute pass WebGL2 cannot run at all. Copying two bytes a cell is a memcpy the client already affords, works on every backend, and does not block on [the simulation on the GPU](#the-simulation-on-the-gpu).
+
+**This is also what a minimap is**, and a world overview, and what a spectator following a player wants.
 
 ## A torus repeats, so its textures can
 

@@ -34,6 +34,7 @@ const PLAYER_SHIFT: u32 = 4u;   // top of its byte, so no mask is needed
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
+const KIND_COARSE: u32 = 2u;     // one quad standing in for the whole world
 
 // How much of a cell the outline takes, as a fraction of its width, and how
 // far down it takes the colour there. An eighth is one texel at this tile
@@ -48,18 +49,23 @@ struct Camera {
     zoom:     f32,         // screen pixels per cell
     chunk_n:  f32,         // cells per chunk edge
     encode:   f32,         // non-zero when this shader must encode sRGB itself
-    _pad:     f32,
+    wraps:    f32,         // non-zero when the coarse window *is* the world
     // A hue per player, as a turn, worked out on the client -- see
     // client::views::hue. Packed four to a vec4 because a uniform array of
     // scalars has a 16-byte stride in WGSL, so `array<f32, 16>` would be 256
     // bytes to carry 64.
     hues:     array<vec4<f32>, 4>,
+    // The world rect the coarse texture holds -- x, y, width, height, in
+    // cells -- and `encode`'s neighbour says whether it wraps.
+    coarse:   vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var chunks: texture_2d_array<u32>;   // r = owner, g = tile, b = sides
 @group(0) @binding(2) var sprites: texture_2d<f32>;
 @group(0) @binding(3) var sprite_sampler: sampler;
+// One texel a cell: R the owner byte, G the tile byte. See render::chunks.
+@group(0) @binding(4) var coarse: texture_2d<u32>;
 
 // --- colour -----------------------------------------------------------------
 //
@@ -222,6 +228,64 @@ fn grid_tint(cell_in_chunk: vec2<f32>, n: f32) -> vec3<f32> {
     return vec3<f32>(0.0);
 }
 
+/// What a cell looks like when there is no room to draw its art.
+///
+/// **Lightness carries the state and hue carries the owner**, which is the
+/// same division the sprite sheet makes — a texel there is saturation and
+/// lightness and the hue arrives from the player — so a coarse cell is that
+/// with the sheet's variation dropped rather than a different colour scheme.
+///
+/// Player zero is unowned, and `player_saturation` already answers nought for
+/// it, so unheld ground comes out grey at the dead lightness with no arm
+/// saying so. Which is what the backdrop is: **an infinite world's coarse
+/// texture holds only the chunks it has**, and everywhere else reads as a dead
+/// unowned cell, so unloaded ground draws as unloaded ground for free.
+const COARSE_DEAD: f32 = 0.16;
+/// Below this many pixels a cell, the backdrop stops drawing cells at all.
+const BACKDROP_FLAT: f32 = 2.0;
+
+/// Ground nobody holds: no hue, no life, no ring. One colour, and the one both
+/// paths use, so the coarse world and the fine backdrop cannot disagree about
+/// what empty looks like.
+fn ground() -> vec3<f32> {
+    return shade(COARSE_DEAD, 0.0, 0.0);
+}
+const COARSE_ALIVE: f32 = 0.72;
+/// Ice lifts whatever is under it, the way a pane reads as frosted rather than
+/// as a colour of its own.
+const COARSE_ICE: f32 = 0.18;
+
+fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
+    // Where this world position lands in the coarse window, in cells.
+    var rel = at - cam.coarse.xy;
+    // **Wrapped where the window is the world**, which is the whole of how a
+    // torus repeats: one texture, one quad, and the same fold `World::canonical`
+    // makes on the other side of the wire. Not wrapped otherwise, because a
+    // window on a boundless world tiles nothing -- there is nothing to tile.
+    if cam.wraps != 0.0 {
+        rel = rel - floor(rel / cam.coarse.zw) * cam.coarse.zw;
+    }
+
+    var texel = vec2<u32>(0u, 0u);
+    // Outside the window reads as a dead unowned cell, which is what the
+    // backdrop is. `textureLoad` would answer zero out of bounds anyway; this
+    // says so rather than relying on it.
+    if all(rel >= vec2<f32>(0.0)) && all(rel < cam.coarse.zw) {
+        texel = textureLoad(coarse, vec2<i32>(floor(rel)), 0).rg;
+    }
+
+    let tile = texel.g;
+    var light = COARSE_DEAD;
+    if (tile & 1u) != 0u {
+        light = COARSE_ALIVE;
+    }
+    if (tile & 2u) != 0u {
+        light = light + COARSE_ICE;
+    }
+    let player = texel.r >> PLAYER_SHIFT;
+    return shade(light, player_saturation(player), player_hue(player));
+}
+
 /// How many samples a side one pixel is worth, at this zoom.
 ///
 /// **A cell is sixteen texels of art**, so aliasing starts long before a pixel
@@ -349,6 +413,35 @@ fn sample_local(in: VsOut, offset: vec2<f32>, n: f32) -> vec2<f32> {
     return clamp(in.local + offset * f32(TILE_N), vec2<f32>(0.0), vec2<f32>(span - 0.5));
 }
 
+/// One sample, from whichever texture this quad is drawn out of.
+///
+/// The offset is in **cells** either way, which is what lets the antialiasing
+/// carry across the swap unchanged: its footprint is measured in texels and a
+/// coarse texel is a cell, so below one pixel per cell it averages over cells
+/// exactly as it averages over sprite texels above.
+fn shaded(in: VsOut, offset: vec2<f32>, n: f32) -> vec3<f32> {
+    if in.kind == KIND_COARSE {
+        return coarse_colour(in.world + offset);
+    }
+    // **Flat grey once the backdrop's own detail is sub-pixel.** It is one
+    // quad standing in for thousands of chunks, drawn by wrapping the world
+    // onto a single dead chunk — so what is on it is the dead sprite and the
+    // ring `grid_tint` puts round every chunk, and the ring is one cell in
+    // sixteen. Below a couple of pixels a cell neither is anything a reader
+    // can see and both are moire: a field of shimmering grid nobody asked for,
+    // which is worse than the nothing it is drawing.
+    //
+    // The same grey the coarse path gives unheld ground, so the two agree
+    // exactly where they meet rather than stepping — see [known-bugs], which
+    // is about them disagreeing by a shade at low zoom.
+    //
+    // [known-bugs]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/known-bugs.md
+    if in.kind == KIND_BACKDROP && cam.zoom < BACKDROP_FLAT {
+        return ground();
+    }
+    return point_colour(sample_local(in, offset, n), in.layer, n);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = cam.chunk_n;
@@ -358,7 +451,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if k == 1 {
         // One pixel to a texel or better, where a point sample is exact and
         // the loop below would take the same reading sixteen times.
-        colour = point_colour(sample_local(in, vec2<f32>(0.0), n), in.layer, n);
+        colour = shaded(in, vec2<f32>(0.0), n);
     } else {
         // A `k` by `k` grid on the pixel's own footprint, averaged in shaded
         // colour rather than in cell bytes. **Averaging the bytes would be
@@ -372,7 +465,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // Centres of an even grid over the footprint, so the samples
                 // are symmetric about the pixel and none sits on its edge.
                 let at = (vec2<f32>(f32(j), f32(i)) + 0.5) / f32(k) - 0.5;
-                acc = acc + point_colour(sample_local(in, at * cells_per_pixel, n), in.layer, n);
+                acc = acc + shaded(in, at * cells_per_pixel, n);
             }
         }
         colour = acc / f32(k * k);
