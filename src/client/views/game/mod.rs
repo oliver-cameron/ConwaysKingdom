@@ -2005,6 +2005,17 @@ impl GameApp {
         self.value = Player::STARTING_VALUE;
         let (world, home) = start::solo_world_of(shape);
         self.world = world;
+        // **A name it is not asked for.** A world nobody else can reach needs
+        // none of a room's things and the form asks for none of them — but a
+        // name costs nothing to give, is what the HUD reads, is the handle a
+        // saved world would be filed under, and is what `net::world_seed`
+        // turns into this world's own dice. Without one it rolled from nought,
+        // along with every other solitary world.
+        //
+        // `room` stays empty beside it, and that is not an oversight: an id is
+        // what a *server* is holding for this client, and there is no server.
+        self.world.set_seed(crate::net::world_seed(&crate::net::SOLO_ROOM.into()));
+        self.room_name = Some(crate::net::SOLO_ROOM.to_string());
         // A lobby of one, so the clock along the top has something to read.
         // `None` for a sandbox, which is what playing alone has always been
         // and what the form's "never" means.

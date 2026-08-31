@@ -112,6 +112,25 @@ impl Draft {
         // A private room's name is the code the server generates, so there is
         // nothing here to check and nothing to refuse.
         let name = if self.private { String::new() } else { crate::net::room_name(&self.name)? };
+        let (shape, victory) = self.world()?;
+        // Only when asked for; a world may have them as much as a match can.
+        let teams = match self.together {
+            Together::Teams => Some(self.sides()?),
+            Together::Solo => None,
+        };
+        Ok((name, shape, victory, teams))
+    }
+
+    /// The **world** this describes, without the room around it.
+    ///
+    /// A name, a listing and sides are what a *server* adds — they are how
+    /// other people find the room and who they are in it — and a world nobody
+    /// else can reach has none of them. The form already hides those fields
+    /// when there is no server to ask; this is the half of that which was
+    /// missing, and its absence was a refusal about a field that was not on
+    /// screen: `room_name("")` says "a room needs a name", so pressing Play
+    /// alone answered a question nobody had been asked.
+    pub fn world(&self) -> Result<(WorldKind, Option<Victory>), String> {
         let shape = match self.shape {
             Shape::Boundless => WorldKind::Infinite,
             Shape::Wrapping => WorldKind::Toroidal {
@@ -124,12 +143,7 @@ impl Draft {
             Ends::Timer => Some(Victory::Timer { generations: self.number()? }),
             Ends::Territory => Some(Victory::Territory { squares: self.number()? as usize }),
         };
-        // Only when asked for; a world may have them as much as a match can.
-        let teams = match self.together {
-            Together::Teams => Some(self.sides()?),
-            Together::Solo => None,
-        };
-        Ok((name, shape, victory, teams))
+        Ok((shape, victory))
     }
 
     /// How many sides, or what is wrong with the number.
@@ -164,6 +178,58 @@ impl Draft {
             Ends::Timer => crate::net::DEFAULT_TIMER.to_string(),
             Ends::Territory => crate::net::DEFAULT_TERRITORY.to_string(),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A world with nobody in it is not asked for a room's name.**
+    ///
+    /// The form hides the field when there is no server, and for a while the
+    /// *validation* did not follow — so pressing Play alone came back with "a
+    /// room needs a name", about a box that was not on screen. `world` is the
+    /// description without the room around it, and `parse` is that plus the
+    /// things only a server needs.
+    #[test]
+    fn a_solitary_world_needs_no_name_and_a_room_does() {
+        let draft = Draft::default();
+        assert_eq!(draft.name, "", "the form leaves it empty when nobody can be asked");
+
+        let (shape, victory) = draft.world().expect("a world nobody else is in was refused");
+        assert_eq!(shape, WorldKind::Infinite);
+        assert_eq!(victory, None);
+
+        assert!(draft.parse().is_err(), "a room with no name should still be refused");
+    }
+
+    /// And the rest of the description is the same either way, so the two
+    /// cannot come to mean different things about one form.
+    #[test]
+    fn both_read_the_same_description() {
+        let mut draft = Draft::default();
+        draft.name = "arena".into();
+        draft.shape = Shape::Wrapping;
+        draft.rows = "8".into();
+        draft.cols = "6".into();
+        draft.retarget(Ends::Territory);
+
+        let (shape, victory) = draft.world().unwrap();
+        let (name, also_shape, also_victory, _) = draft.parse().unwrap();
+        assert_eq!(name, "arena");
+        assert_eq!(shape, WorldKind::Toroidal { rows: 8, cols: 6 });
+        assert_eq!((shape, victory), (also_shape, also_victory));
+    }
+
+    /// A private room is named by the server, so it is the other case where a
+    /// typed name is not wanted — and it was already right.
+    #[test]
+    fn a_private_room_is_named_by_the_server() {
+        let mut draft = Draft::default();
+        draft.private = true;
+        let (name, _, _, _) = draft.parse().expect("a private room was refused for its name");
+        assert_eq!(name, "", "the code the server generates becomes the name");
     }
 }
 

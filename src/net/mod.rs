@@ -125,6 +125,22 @@ pub type RoomName = String;
 /// The room a client that names none is put in.
 pub const DEFAULT_ROOM: &str = "main";
 
+/// What a solitary world is called.
+///
+/// **Not asked for.** A world nobody else can reach needs none of a room's
+/// things — a name to be found by, a place in a listing, sides — so the form
+/// that describes one hides all three, and refusing it for having no name was
+/// answering a question nobody had been asked.
+///
+/// It has a name anyway, because one costs nothing and buys three: the HUD has
+/// something to read, [`world_seed`] has something to turn into this world's
+/// own dice rather than rolling from nought like every other solitary world,
+/// and a saved world has something to be filed under when there is saving.
+///
+/// One name for now, so there is one slot. Several would want the field back,
+/// which is the change to make when loading exists rather than before.
+pub const SOLO_ROOM: &str = "solo";
+
 /// The longest a room name may be. Short enough to read in a log line and in
 /// the HUD, and long enough to be a word rather than a code.
 pub const ROOM_NAME_MAX: usize = 24;

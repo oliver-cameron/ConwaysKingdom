@@ -378,10 +378,6 @@ pub(super) fn make_column(
 ) -> Option<Chose> {
     let draft = menu.draft.get_or_insert_with(Draft::default);
     let made = make_form(ui, theme, draft, reached);
-    // **With no server, the same form plays it here.** It used to refuse, and
-    // refusing was the wrong answer to a filled-in description of a world:
-    // every question on it — how big, does it end, how — is answerable
-    // without anybody else, and the client is its own authority offline.
     // **Under the form, on both screens that carry one.** A laboratory is a
     // world you describe too, so it belongs at the foot of the description
     // rather than beside the ways in — and it is the answer to the question
@@ -397,14 +393,13 @@ pub(super) fn make_column(
         egui::RichText::new(words::lab::NOTE).size(m.text_small),
     );
 
-    match made {
-        Some(Chose::Create { shape, victory, .. }) if !reached => {
-            draft.asking = false;
-            draft.note = None;
-            Some(Chose::Alone { shape, victory })
-        }
-        other => other,
-    }
+    // **With no server, the same form plays it here** rather than refusing.
+    // Every question on it — how big, does it end, how — is answerable without
+    // anybody else; what a server adds is a name, a listing and other people,
+    // which is exactly what the form hides when there is nobody to ask.
+    // `make_form` decides which of the two it is producing, so there is
+    // nothing to rewrite here.
+    made
 }
 
 /// What a room row was clicked for. Two things can be done with a room, so a
