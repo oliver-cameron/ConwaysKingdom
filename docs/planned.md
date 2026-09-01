@@ -148,7 +148,9 @@ It also needs no new placement rule. `net::may_place` confines you to your own i
 
 `Kind::PAYLOAD`, which is a row in `kinds!` and costs one of eight kind indices — three are used, and [depleted mines](#depleted-mines) wants a fourth, leaving three spare. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
 
-**Not inherited**, for the turret's reason exactly: a payload whose children were payloads would make any gun a bomb factory, and a kind that does not inherit is always precisely the cells somebody paid for.
+**It inherits**, which is the decision that makes it a weapon rather than a mine you cannot eat. A birth copies its parent, so a glider that picks one up carries it — a pattern that crosses a border and goes off inside somebody's country, which is the piece the rest of this entry was missing. The cost is real and worth stating: a gun that catches one is a factory. What limits it is that the **fuse travels too**, so a factory's output goes off near the factory, and that a payload is a live cell like any other — kill the pattern and there is nothing left to inherit.
+
+And it leaves **no corpse**. `Kind::leaves_a_corpse` is the row that says so: a mine's corpse costs its owner and a dead turret fires backwards over the ground behind it, so both go on being what they were, and a fuse that has gone out is ordinary dead ground. An armed corpse would take away the one answer that does not need ice, which is that a payload has to be kept alive to be worth anything.
 
 The payload is **consumed** — it becomes ordinary dead ground, the way a spent mine does.
 

@@ -835,7 +835,21 @@ impl GameApp {
                 self.held.shape = shape;
                 self.ui.picking_stamp = false;
             }
-            Key::Kind(kind) => self.held.kind = kind,
+            // **And the shape it is usually wanted in.** Two axes does not
+            // mean the second never moves: ice is a *pane*, and picking it and
+            // then drawing a pencil line of it is not a thing anybody meant —
+            // the bar even showed a rectangle while the stroke was a line,
+            // which is the display covering for it.
+            //
+            // Only from one plain shape to another, so a stamp survives a
+            // change of material: a glider is still a glider when you decide
+            // it should be made of ice.
+            Key::Kind(kind) => {
+                self.held.kind = kind;
+                if matches!(self.held.shape, hotbar::Shape::Draw | hotbar::Shape::Rect) {
+                    self.held.shape = hotbar::KINDS[kind].usually;
+                }
+            }
             Key::More => self.ui.picking_stamp = !self.ui.picking_stamp,
             Key::Help => self.ui.helping = !self.ui.helping,
             // The same two the keys reach, so a square and a key cannot come

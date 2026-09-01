@@ -374,7 +374,8 @@ macro_rules! kinds {
     ($(
         $(#[$doc:meta])* $name:ident = $n:literal,
         inherited: $inherited:literal,
-        ages: $ages:expr
+        ages: $ages:expr,
+        corpse: $corpse:literal
     ),* $(,)?) => {
         impl Kind {
             $( $(#[$doc])* pub const $name: Self = Self($n); )*
@@ -421,6 +422,25 @@ macro_rules! kinds {
                     _ => Ages::Never,
                 }
             }
+
+            /// **Whether a dead one is still one.**
+            ///
+            /// A mine's corpse costs its owner and a dead turret fires
+            /// backwards over the ground behind it, so both go on being what
+            /// they were for a while. A payload does neither: it is a fuse,
+            /// and a fuse that has gone out is ordinary dead ground. Anything
+            /// whose whole behaviour is what it does *alive* belongs on this
+            /// side of the row.
+            ///
+            /// Said once here rather than as a branch per kind in
+            /// [`Halo::step_into`], which is where three of them had ended up.
+            pub const fn leaves_a_corpse(self) -> bool {
+                match self.0 {
+                    $( $n => $corpse, )*
+                    // A kind nothing can produce leaves nothing behind.
+                    _ => false,
+                }
+            }
         }
     };
 }
@@ -456,7 +476,7 @@ pub enum Ages {
 
 kinds! {
     /// An ordinary living cell.
-    NORMAL = 0, inherited: true, ages: Ages::Never,
+    NORMAL = 0, inherited: true, ages: Ages::Never, corpse: false,
     /// A cell that pays its owner when it is **born**.
     ///
     /// Not a marker on the ground and not a rule about death: income is a
@@ -477,7 +497,7 @@ kinds! {
     /// it.
     ///
     /// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
-    MINE = 1, inherited: true, ages: Ages::Never,
+    MINE = 1, inherited: true, ages: Ages::Never, corpse: true,
     /// A cell that claims ground at range: every generation it takes the
     /// nearest square that is not its owner's and makes it theirs.
     ///
@@ -492,7 +512,7 @@ kinds! {
     /// cheapest thing in Conway that never dies and never gives birth, which
     /// is why a turret is placed in fours. It does not inherit, so a turret
     /// is always exactly the cells somebody paid for.
-    TURRET = 2, inherited: false, ages: Ages::Never,
+    TURRET = 2, inherited: false, ages: Ages::Never, corpse: true,
     /// A cell that counts down and then scrambles the ground around it.
     ///
     /// The **age** field is the fuse — see [`bits::AGE_SHIFT`], which is where
@@ -507,9 +527,17 @@ kinds! {
     /// question eight neighbours can answer, so detonation is a pass — see
     /// [`super::World::detonate`].
     ///
-    /// It does not inherit, for the turret's reason exactly: a payload whose
-    /// children were payloads would make any gun a bomb factory.
-    PAYLOAD = 3, inherited: false, ages: Ages::Fuse(super::rule::PAYLOAD_FUSE),
+    /// **It travels**, which is the whole of what makes it a weapon rather
+    /// than a mine you cannot eat. A birth copies its parent, so a glider that
+    /// picks up a payload carries one — and a fuse carries with it, so what
+    /// arrives is already part burnt. A pattern that reaches somebody's
+    /// country and goes off in it is the piece the design was missing.
+    ///
+    /// The cost, said plainly because it is real: a gun that catches one is a
+    /// factory. What limits it is that the fuse travels too, so a factory's
+    /// output goes off near the factory, and that a payload is a live cell
+    /// like any other — kill the pattern and there is nothing to inherit.
+    PAYLOAD = 3, inherited: true, ages: Ages::Fuse(super::rule::PAYLOAD_FUSE), corpse: false,
 }
 
 /// What each player's mines did in one generation, indexed by the number the
@@ -708,16 +736,16 @@ impl Halo {
                 {
                     after = after.with_kind(Kind::NORMAL);
                 }
-                // **A payload that dies never goes off**, and does not lie
-                // there being a bomb either: it rots on the same terms a dead
-                // turret does. Keeping a corpse armed would mean a payload
-                // could be killed and still detonate, which takes away the one
-                // answer that does not need ice — a payload is a live cell, so
-                // it has to be kept alive to be worth anything.
-                if after.kind() == Kind::PAYLOAD
-                    && !after.is_alive()
-                    && Roll::new(cell_seed).chance(TURRET_ROT_STREAM, TURRET_DECAY)
-                {
+                // **A kind whose corpse is nothing becomes nothing at once**
+                // — see [`Kind::leaves_a_corpse`], which is where that is said
+                // for every kind rather than as a branch each.
+                //
+                // A payload is the one that matters: it never goes off after
+                // it dies, and it does not lie there being a bomb either. An
+                // armed corpse would take away the one answer that does not
+                // need ice, which is that a payload is a live cell and has to
+                // be kept alive to be worth anything.
+                if !after.is_alive() && !after.kind().leaves_a_corpse() {
                     after = after.with_kind(Kind::NORMAL).with_age(0);
                 }
                 next[(row, col)] = after;

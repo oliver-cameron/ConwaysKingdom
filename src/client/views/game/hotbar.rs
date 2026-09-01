@@ -45,8 +45,12 @@ pub struct Tool {
     pub placement: Placement,
     /// The shape this kind is usually wanted in: a pencil for life, a
     /// rectangle for ice, which is a wall and so a thing you say the size of.
-    /// A default, not a constraint — the shape axis still sets to anything.
+    /// Taken when the square is picked — see [`crate::client::views::game::GameApp::pick`]
+    /// — and still overridable afterwards, because the two axes are two.
     pub usually: Shape,
+    /// Whether a rule goes before this square, because what it lays is a
+    /// different sort of thing from what the one before it lays.
+    pub apart: bool,
 }
 
 /// What each tool leaves on a square, which is what its button shows. Built
@@ -67,15 +71,27 @@ const PAYLOADED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::PAYLOAD);
 /// with the stroke chosen separately there is nothing left to separate it by,
 /// and a fourth kind now appears here by existing.
 pub const KINDS: [Tool; 5] = [
-    Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life, usually: Shape::Draw },
-    Tool { name: words::MINE, shows: MINED, placement: Placement::Mine, usually: Shape::Draw },
+    Tool {
+        name: words::LIFE,
+        shows: LIVE,
+        placement: Placement::Life,
+        usually: Shape::Draw,
+        apart: false,
+    },
+    Tool {
+        name: words::MINE,
+        shows: MINED,
+        placement: Placement::Mine,
+        usually: Shape::Draw,
+        apart: false,
+    },
     Tool {
         name: words::TURRET,
         shows: TURRETED,
         placement: Placement::Turret,
         usually: Shape::Draw,
+        apart: false,
     },
-    Tool { name: words::ICE, shows: ICED, placement: Placement::Ice, usually: Shape::Rect },
     // A pencil, not a pane. A payload is placed one at a time and kept alive
     // by what is built round it, so a drag that laid twenty is a gesture
     // nobody wants and could afford even less.
@@ -84,6 +100,17 @@ pub const KINDS: [Tool; 5] = [
         shows: PAYLOADED,
         placement: Placement::Payload,
         usually: Shape::Draw,
+        apart: false,
+    },
+    // **Last, and set apart.** Every square before it puts a cell on a square;
+    // ice puts a pane *over* one, and is the only thing here that is not a
+    // living thing you own. A rule before it says so without a word.
+    Tool {
+        name: words::ICE,
+        shows: ICED,
+        placement: Placement::Ice,
+        usually: Shape::Rect,
+        apart: true,
     },
 ];
 
@@ -248,8 +275,8 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
         out.push(Slot { key, group, press: Press::Shift(shift), rule });
     };
 
-    for i in 0..KINDS.len() {
-        tool(&mut out, Key::Kind(i), Group::Kinds, false);
+    for (i, kind) in KINDS.iter().enumerate() {
+        tool(&mut out, Key::Kind(i), Group::Kinds, kind.apart);
     }
     tool(&mut out, Key::Flip, Group::Shapes, false);
     tool(&mut out, Key::Shape(Shape::Capture), Group::Shapes, true);
@@ -392,11 +419,11 @@ fn face_of<'a>(
             (Face::Pattern(shown), &shown.name, held.shape == Shape::Stamp(i))
         }
         Key::Shape(_) => (Face::Text(""), "", false),
-        // **The library's own icon, not an ellipsis.** Every other square on
-        // the bar shows the thing it does; three dots said "there is more"
-        // without saying more of what, in a row where everything else is a
-        // picture of itself. How many did not fit goes in the hover, which is
-        // where a number nobody has to act on belongs.
+        // **A stamp, because that is what is behind the square.** It was an
+        // ellipsis, in a row where everything else is a picture of what it
+        // does; three dots say "there is more" without saying more of what.
+        // How many did not fit goes in the hover, which is where a number
+        // nobody has to act on belongs.
         Key::More => {
             let over = library.len() - library.on_the_bar();
             *label = if over > 0 {
@@ -404,7 +431,7 @@ fn face_of<'a>(
             } else {
                 words::LIBRARY.to_string()
             };
-            (Face::Icon(glyph::LIBRARY), label, false)
+            (Face::Icon(glyph::STAMP), label, false)
         }
         Key::Run if look.paused => (Face::Icon(glyph::PLAY), words::RUN_HINT, true),
         Key::Run => (Face::Icon(glyph::PAUSE), words::STOP_HINT, false),

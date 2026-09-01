@@ -703,21 +703,29 @@ async fn connection(socket: WebSocket, state: AppState) {
                 match frame {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
-                            // The seat goes here too, or this task would go on
-                            // routing to one the simulation has already freed.
+                            // **Addressed before the seat is given up, not
+                            // after.** This cleared `me` first, so the one
+                            // message whose whole job is to free a seat
+                            // arrived saying its sender was sitting in none —
+                            // `Rooms::handle` reads `caller.seat` to know
+                            // which to free, found nothing, and freed nothing.
+                            // The room went on counting the player online, so
+                            // the listing still showed them in it and coming
+                            // back found them already there.
+                            let from = Caller {
+                                connection: id,
+                                seat: me.clone(),
+                                watching: watching.clone(),
+                            };
+                            // And *then* forgotten here, or this task would go
+                            // on routing a room's broadcasts to a seat the
+                            // simulation has let go.
                             if matches!(msg, ClientMessage::Leave) {
                                 me = None;
                                 watching = None;
                             }
-                            let _ = state.to_sim.send(ToSim::Message {
-                                from: Caller {
-                                    connection: id,
-                                    seat: me.clone(),
-                                    watching: watching.clone(),
-                                },
-                                msg,
-                                reply: reply_tx.clone(),
-                            });
+                            let _ =
+                                state.to_sim.send(ToSim::Message { from, msg, reply: reply_tx.clone() });
                         }
                         Err(e) => log::warn!("undecodable frame: {e}"),
                     },

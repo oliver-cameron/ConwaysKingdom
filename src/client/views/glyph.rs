@@ -46,8 +46,6 @@ pub const GEAR: &str = "\u{e270}";
 pub const BACK: &str = "\u{e058}";
 /// Every key, on one screen.
 pub const HELP: &str = "\u{e63c}";
-/// The stamp library.
-pub const LIBRARY: &str = "\u{e466}";
 /// Take a rectangle of the world as a stamp.
 pub const CAPTURE: &str = "\u{e1d4}";
 /// What a player has to spend.
@@ -68,6 +66,9 @@ pub const RECT: &str = "\u{e3f2}";
 /// Throw a stamp away.
 pub const TRASH: &str = "\u{e4a6}";
 
+/// The stamp library. A stamp, because that is what is behind the square.
+pub const STAMP: &str = "\u{ea48}";
+
 /// Every one of them, for the test and for the subsetter.
 pub const ALL: &[(&str, &str)] = &[
     ("PLAY", PLAY),
@@ -76,7 +77,6 @@ pub const ALL: &[(&str, &str)] = &[
     ("GEAR", GEAR),
     ("BACK", BACK),
     ("HELP", HELP),
-    ("LIBRARY", LIBRARY),
     ("CAPTURE", CAPTURE),
     ("PURSE", PURSE),
     ("CLOCK", CLOCK),
@@ -85,6 +85,7 @@ pub const ALL: &[(&str, &str)] = &[
     ("PENCIL", PENCIL),
     ("RECT", RECT),
     ("TRASH", TRASH),
+    ("STAMP", STAMP),
 ];
 
 /// An icon, sized like the text it sits with.
