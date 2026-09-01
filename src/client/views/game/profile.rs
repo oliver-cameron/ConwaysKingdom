@@ -32,6 +32,13 @@ pub enum Look<'a> {
     Asking,
     /// A person this server has never met, which is a real answer.
     Unknown,
+    /// **Your own, before any server has said anything about you.**
+    ///
+    /// Its own state because it is a different sentence from the other three:
+    /// nobody is asking, nobody has refused, and there is nothing missing —
+    /// you have simply not played anywhere that keeps a number. What there is
+    /// is who you are and what you have played, both of which are yours.
+    Unrated { who: Option<&'a crate::net::PersonId>, yours: &'a crate::client::record::Summary },
     /// What it said.
     Found {
         it: &'a crate::net::Profile,
@@ -66,6 +73,31 @@ pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) ->
                 ui.colored_label(p.text_dim, words::UNKNOWN);
             }
             Look::Found { it, hue, yours } => body(ui, theme, it, *hue, *yours),
+            Look::Unrated { who, yours } => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::net::keep::name().unwrap_or_else(|| {
+                            crate::client::views::words::profile::NOBODY.into()
+                        }))
+                        .size(theme.metrics.text_action)
+                        .color(p.text),
+                    );
+                    if let Some(who) = who {
+                        ui.colored_label(
+                            p.text_dim,
+                            egui::RichText::new(who.short()).size(theme.metrics.text_small),
+                        );
+                    }
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(words::YOU).size(theme.metrics.text_small),
+                    );
+                });
+                ui.add_space(theme.metrics.item_spacing);
+                ui.colored_label(p.text_dim, words::UNRATED);
+                ui.add_space(theme.metrics.item_spacing);
+                mine(ui, theme, yours);
+            }
         },
     )
 }
@@ -130,14 +162,21 @@ fn body(
     // like the same thing and are not: above is what this server has seen you
     // do, below is every game this client has played anywhere. They disagree,
     // and the two headings are what makes that readable rather than a bug.
-    let Some(mine) = yours else { return };
+    let Some(diary) = yours else { return };
     ui.add_space(m.item_spacing * 2.0);
     ui.separator();
+    mine(ui, theme, diary);
+}
+
+/// What this client has played, anywhere. Shared by a profile a server has
+/// something to say about and one it does not, because it is the same diary.
+fn mine(ui: &mut egui::Ui, theme: &Theme, diary: &crate::client::record::Summary) {
+    let (p, m) = (theme.palette, theme.metrics);
     ui.colored_label(p.text_dim, egui::RichText::new(words::EVERYWHERE).size(m.text_small));
     ui.add_space(m.item_spacing);
-    if mine.any() {
-        ui.label(words::played(mine.games, mine.won));
-        ui.label(words::best(mine.best as usize));
+    if diary.any() {
+        ui.label(words::played(diary.games, diary.won));
+        ui.label(words::best(diary.best as usize));
     } else {
         ui.colored_label(p.text_dim, crate::client::views::words::record::NOTHING_YET);
     }

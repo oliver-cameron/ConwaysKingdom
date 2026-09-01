@@ -93,6 +93,20 @@ const MAX_DRAG_CELLS: i64 = crate::net::MOST_CELLS_AT_ONCE as i64;
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
 const VIEW_MARGIN: i32 = CHUNK_N as i32;
+/// Whose profile the panel is open on.
+///
+/// Three states and not two, which is why the field is not an
+/// `Option<PersonId>`: a panel can be open on somebody, open on **you before
+/// any server has named you**, or shut. That middle one is a real thing to be
+/// — a client that has reached nobody still has a name and a record — and
+/// there is no id to stand for it.
+#[derive(Clone, PartialEq, Eq)]
+enum Whose {
+    /// Your own, whether or not a server has ever named you.
+    Mine,
+    Somebody(crate::net::PersonId),
+}
+
 enum Screen {
     /// Choosing a server and a room, or choosing to play alone.
     Menu(menu::Menu),
@@ -177,7 +191,7 @@ struct Ui {
     /// that is "the answer, when it comes". A panel opened on the click and
     /// filled when the answer lands is what makes a slow server a wait rather
     /// than a press that appears to do nothing — see [`profile::Look`].
-    showing_profile: Option<crate::net::PersonId>,
+    showing_profile: Option<Whose>,
     /// Whether the key list is on screen.
     ///
     /// Above every screen rather than on one, because the keys it lists work
@@ -1378,6 +1392,16 @@ impl GameApp {
             }
             // Watching takes no name and keeps no token: there is no player
             // to be remembered as.
+            // Your own, which needs no server and no room — and which was
+            // the missing way in: a profile was reachable from a lobby roster
+            // and a standings bar and from nowhere else, so a player alone
+            // could not look at their own.
+            menu::Chose::Profile => {
+                self.ui.showing_profile = Some(Whose::Mine);
+                if let Some(who) = self.session.profile.as_ref().map(|p| p.who.clone()) {
+                    self.session.look_up(who);
+                }
+            }
             menu::Chose::Watch(room) => {
                 log::info!("watching room \"{room}\"");
                 if !self.session.watch(room) {
@@ -1795,7 +1819,17 @@ impl App for GameApp {
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
         // slow server and a stranger look like the same thing.
-        let profile_look = self.ui.showing_profile.as_ref().map(|who| {
+        let profile_look = self.ui.showing_profile.as_ref().map(|whose| {
+            let who = match whose {
+                Whose::Somebody(who) => Some(who),
+                // Your own is whatever the last server called you, if one has.
+                Whose::Mine => self.session.profile.as_ref().map(|p| &p.who),
+            };
+            // Nobody has named you, so there is nothing to have arrived and
+            // nothing missing — only what is yours.
+            let Some(who) = who else {
+                return profile::Look::Unrated { who: None, yours: &self.record };
+            };
             match self.session.looked_up.as_ref().filter(|found| &found.who == who) {
                 None if self.session.looked_up.is_some() => profile::Look::Unknown,
                 None => profile::Look::Asking,
@@ -2075,7 +2109,7 @@ impl App for GameApp {
                 self.session.forfeited = true;
             }
             hud::Did::Look(who) => {
-                self.ui.showing_profile = Some(who.clone());
+                self.ui.showing_profile = Some(Whose::Somebody(who.clone()));
                 self.session.look_up(who);
             }
             hud::Did::EndMatch => {
@@ -2106,7 +2140,7 @@ impl App for GameApp {
             // that is slow, or one that never replies, would otherwise be a
             // name you can click that does nothing.
             lobby_view::Did::Look(who) => {
-                self.ui.showing_profile = Some(who.clone());
+                self.ui.showing_profile = Some(Whose::Somebody(who.clone()));
                 self.session.look_up(who);
             }
         }

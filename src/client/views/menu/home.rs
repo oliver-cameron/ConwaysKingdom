@@ -63,6 +63,12 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         }
         ui.add_space(m.item_spacing);
     }
+    // **Under the rating, which is the thing it explains.** A number with no
+    // way to ask what is behind it is a number people stop reading.
+    if ui.small_button(words::home::PROFILE).clicked() {
+        chose = Chose::Profile;
+    }
+    ui.add_space(m.item_spacing);
     crate::client::views::record::show(ui, theme, &menu.games, &menu.record);
 
     ui.add_space(m.item_spacing * 2.0);

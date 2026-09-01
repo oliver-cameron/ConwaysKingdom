@@ -255,6 +255,13 @@ pub enum Chose {
     },
     /// Watch this room without taking a seat in it.
     Watch(RoomId),
+    /// Show me my own profile.
+    ///
+    /// **The only way to it that does not need other people.** It was
+    /// reachable from a lobby roster and a standings bar and from nowhere
+    /// else, so a player alone — or one who had simply not joined anything
+    /// yet — could not look at their own.
+    Profile,
 }
 
 impl Menu {

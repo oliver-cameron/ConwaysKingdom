@@ -91,6 +91,7 @@ pub mod menu {
         pub fn rating_change(change: i32) -> String {
             format!("{change:+} from your last match")
         }
+        pub const PROFILE: &str = "Your profile";
         pub const SETTINGS: &str = "Settings";
         pub const SETTINGS_HIDE: &str = "Close settings";
 
@@ -492,6 +493,11 @@ pub mod profile {
     /// headings are what make the two numbers readable rather than a
     /// contradiction.
     pub const EVERYWHERE: &str = "Everywhere you have played:";
+    /// Not "unrated", which reads as a judgement. No server has met you, so
+    /// there is nobody to have an opinion.
+    pub const UNRATED: &str = "No server has met you yet, so nobody has a number for you.";
+    /// A client with no key, which is a browser that cannot keep one.
+    pub const NOBODY: &str = "Nobody in particular";
 
     pub fn played(games: usize, won: usize) -> String {
         let g = if games == 1 { "game" } else { "games" };

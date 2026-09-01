@@ -698,12 +698,19 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
     });
 }
 
-/// One option of a shape row: a toggle-shaped box of a fixed height, with its
-/// label and whatever else belongs to it centred inside.
+/// **One option, anywhere on this form**: a toggle-shaped box of a fixed
+/// height, with its label and whatever else belongs to it inside.
 ///
 /// The box is allocated first and everything is drawn *into* it, so the height
-/// is the height whatever goes in — which is the whole point, and what a
-/// `Frame` cannot promise because a frame grows to fit.
+/// is the height whatever goes in — which a `Frame` cannot promise, because a
+/// frame grows to fit, and which is what made the shape row twice the height
+/// of every other row twice over.
+///
+/// **Left-aligned, and everything here is.** The shape options hold two number
+/// fields beside their label and so cannot be an `egui::Button`, which centres;
+/// the rest were buttons and did. A form where the alignment depends on which
+/// question a row is asking is a form that looks broken, so the cell is the
+/// only option-shaped thing on the screen and it aligns one way.
 fn cell(
     ui: &mut egui::Ui,
     theme: &Theme,
@@ -723,11 +730,11 @@ fn cell(
         egui::StrokeKind::Inside,
     );
     let ink = if on { p.ground } else { p.text };
-    // Centred on both axes, so the label sits where a button's label sits and
-    // the two halves of the row read as a pair.
-    let inner = rect.shrink2(egui::vec2(m.item_spacing, 0.0));
-    let layout =
-        egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center);
+    // Down the middle vertically and against the left edge horizontally, which
+    // is the one alignment a row holding a label *and* two number fields can
+    // keep — and so is the one every row keeps.
+    let inner = rect.shrink2(egui::vec2(m.panel_padding * 0.5, 0.0));
+    let layout = egui::Layout::left_to_right(egui::Align::Center);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(layout));
     child.spacing_mut().item_spacing.x = m.item_spacing * 0.5;
     child.colored_label(ink, egui::RichText::new(label).size(m.text_small));
@@ -749,7 +756,6 @@ fn toggles<T: Copy + PartialEq>(
     value: &mut T,
     options: &[(T, &str)],
 ) {
-    let p = theme.palette;
     let m = theme.metrics;
     // Top-aligned with a stated height, because `ui.horizontal` centres every
     // item against a row height it does not know until the last one is
@@ -759,15 +765,12 @@ fn toggles<T: Copy + PartialEq>(
         let each = (ui.available_width() - m.item_spacing * (options.len() as f32 - 1.0))
             / options.len() as f32;
         for (option, label) in options {
-            let on = *value == *option;
-            let button =
-                egui::Button::new(egui::RichText::new(*label).size(m.text_small).color(if on {
-                    p.ground
-                } else {
-                    p.text
-                }))
-                .fill(if on { p.accent } else { p.surface });
-            if ui.add_sized([each, m.button_height], button).clicked() {
+            // **The same cell every option on this form is.** These were
+            // `egui::Button`s, which centre their label, beside a shape row
+            // that could not be one because it has fields in it — so half the
+            // form was centred and half was not, and no row on it agreed with
+            // the row above. One helper, one alignment.
+            if cell(ui, theme, each, *value == *option, label, |_, _| {}) {
                 *value = *option;
             }
         }
