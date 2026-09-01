@@ -23,6 +23,8 @@ It runs one way, and the build enforces it rather than trusting convention.
 
 Inside `sim`, `rule.rs` is deliberately thin. **Every tunable number in the game is a constant there** — the survival counts, how fast ground changes hands, what everything costs, what mining pays — and every rule is one named entry in an ordered list. Nothing else is: the seeded dice are `sim::seed`, the tests are `sim/rule/tests.rs`, and the list-to-chain macro is `sim/rule/order.rs`. The point is that the rules of the game can be read on one screen and changed by editing a number.
 
+A **room** carries `net::Rules` beside its world: `paused`, `place_anywhere`, `place_free`, and `laboratory`, which says whether the first three are anybody's to change. They are the room's rather than the client's for the reason everything authoritative is — a client that answered "may I place here" for itself would predict placements the server refuses and resync every time it drew, which is what kept a laboratory offline for as long as it was a mode rather than a kind of room. `net::RoomKind` reads a room's kind off those and its victory condition, and is what the make-a-world form asks first.
+
 That includes the **prices**, which used to live in `net` beside the actions that spend them. "Life costs one" is the same kind of statement as "a cell survives on two or three", and somebody balancing the game should not have to look in two files. `net` names the actions and reads the numbers.
 - `net` depends on `sim`.
 - `render` depends on `sim`, and mentions egui nowhere — not in code, not in a comment. An interface is the client's business.

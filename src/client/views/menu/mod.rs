@@ -20,12 +20,11 @@
 
 mod alone;
 pub mod draft;
-mod experiments;
 mod home;
 mod play;
 mod settings;
 
-pub use draft::{Draft, Ends, Shape, Together};
+pub use draft::{Draft, Ends, Kind, Shape, Together};
 
 use home::home;
 use play::play;
@@ -84,10 +83,10 @@ pub enum Stage {
 pub enum Page {
     /// Your name, your record, and the way in.
     Home,
-    /// A server, its rooms, a code, and the form that makes one.
+    /// A server, its rooms, a code, and the form that makes one — a world,
+    /// a match or a laboratory, which is [`Kind`] on that form rather than a
+    /// page of its own.
     Play,
-    /// A laboratory: a world with the game's rules off, driven by hand.
-    Experiments,
     /// Describing a world to play in on your own.
     ///
     /// **A page rather than a button.** "Play alone" went straight into a
@@ -100,8 +99,6 @@ pub enum Page {
 
 pub struct Menu {
     pub name: String,
-    /// Whether a laboratory places anywhere and for nothing.
-    pub lab_free_hand: bool,
     /// Where to connect. Fixed on the web — the page came from a server, so
     /// that is the server — and typed natively, where there is no page to
     /// have come from.
@@ -199,15 +196,7 @@ pub enum Chose {
     /// for. The simulation is deterministic, so this is a whole game rather
     /// than a broken one — just a solitary one.
     Offline,
-    /// Open a laboratory: a boundless world that never ends, with the game's
-    /// rules off if asked.
-    Experiment {
-        /// Place anywhere, and for nothing. The two questions `net::may_place`
-        /// and `net::price` ask, which are the game rather than the
-        /// simulation — see [`super::experiments`].
-        free_hand: bool,
-    },
-    /// The same, on a world described here.
+    /// Play alone, on a world described here.
     ///
     /// **The make-a-world form, pointed somewhere else.** Its questions —
     /// how big, does it end, how — are the same questions whether or not a
@@ -251,6 +240,10 @@ pub enum Chose {
         /// `None` is a free-for-all; `Some(n)` is a match played in n sides.
         teams: Option<u8>,
         private: bool,
+        /// Make it a laboratory: the clock is a control, and the game's two
+        /// placing rules can be switched off inside it. Never true beside a
+        /// `victory` — a match with the rules off is not a match.
+        laboratory: bool,
     },
     /// Watch this room without taking a seat in it.
     Watch(RoomId),
@@ -271,7 +264,6 @@ impl Menu {
         let key = String::new();
         Self {
             name: crate::net::keep::name().unwrap_or_else(|| "player".to_string()),
-            lab_free_hand: true,
             address,
             stage: Stage::Idle,
             page: Page::Home,
@@ -289,6 +281,16 @@ impl Menu {
             asking: None,
             draft: None,
         }
+    }
+
+    /// Open the make-a-world form already describing a kind of room.
+    ///
+    /// `/experiments` is this, and so is the back button landing on it: a
+    /// laboratory is a kind on that form rather than a page, so a link that
+    /// asks for one asks for the form with an answer already given.
+    pub fn describe(&mut self, kind: Kind) {
+        self.page = Page::Play;
+        self.draft.get_or_insert_with(Default::default).kind = kind;
     }
 
     /// The menu, opened on a sentence saying why the client is looking at it.
@@ -459,7 +461,6 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                     Page::Home => chose = home(ui, theme, menu, at),
                                     Page::Play => chose = play(ui, theme, menu, at),
                                     Page::Alone => chose = alone::show(ui, theme, menu),
-                                    Page::Experiments => chose = experiments::show(ui, theme, menu),
                                 }
                             });
                             ui.add_space(m.margin * 2.0);
@@ -531,11 +532,9 @@ mod tests {
     #[test]
     fn a_draft_becomes_a_room_or_says_what_is_wrong() {
         let world = Draft { name: "  Arena ".into(), ..Draft::default() };
-        assert_eq!(
-            world.parse().unwrap(),
-            ("arena".into(), WorldKind::Infinite, None, None),
-            "trimmed and lowercased, the way the server will name it"
-        );
+        let made = world.parse().unwrap();
+        assert_eq!(made.name, "arena", "trimmed and lowercased, the way the server will name it");
+        assert_eq!((made.shape, made.victory, made.teams), (WorldKind::Infinite, None, None));
 
         let torus = Draft {
             name: "ring".into(),
@@ -544,10 +543,11 @@ mod tests {
             cols: "8".into(),
             ..Draft::default()
         };
-        assert_eq!(torus.parse().unwrap().1, WorldKind::Toroidal { rows: 6, cols: 8 });
+        assert_eq!(torus.parse().unwrap().shape, WorldKind::Toroidal { rows: 6, cols: 8 });
 
         let cup = Draft {
             name: "cup".into(),
+            kind: Kind::Match,
             ends: Ends::Territory,
             target: "500".into(),
             // Left behind by a change of mind, and never read, because the
@@ -555,19 +555,20 @@ mod tests {
             rows: "nonsense".into(),
             ..Draft::default()
         };
-        assert_eq!(cup.parse().unwrap().2, Some(Victory::Territory { squares: 500 }));
-        assert_eq!(cup.parse().unwrap().3, None, "a match is solo unless asked otherwise");
+        assert_eq!(cup.parse().unwrap().victory, Some(Victory::Territory { squares: 500 }));
+        assert_eq!(cup.parse().unwrap().teams, None, "a match is solo unless asked otherwise");
 
         // Teams on a match, and on a world too: a team is people playing as
         // one player, which is worth having without a result to win.
         let sided = Draft {
             name: "cup".into(),
+            kind: Kind::Match,
             ends: Ends::Timer,
             together: Together::Teams,
             team_count: "3".into(),
             ..Draft::default()
         };
-        assert_eq!(sided.parse().unwrap().3, Some(3));
+        assert_eq!(sided.parse().unwrap().teams, Some(3));
         let world_with_teams = Draft {
             name: "hall".into(),
             together: Together::Teams,
@@ -575,10 +576,11 @@ mod tests {
             ..Draft::default()
         };
         let made = world_with_teams.parse().unwrap();
-        assert_eq!(made.2, None, "a world still never ends");
-        assert_eq!(made.3, Some(2), "and may still be played in teams");
+        assert_eq!(made.victory, None, "a world still never ends");
+        assert_eq!(made.teams, Some(2), "and may still be played in teams");
         let too_many = Draft {
             name: "cup".into(),
+            kind: Kind::Match,
             ends: Ends::Timer,
             together: Together::Teams,
             team_count: "99".into(),
@@ -614,8 +616,13 @@ mod tests {
         // nothing here to refuse.
         let coded = Draft { name: String::new(), private: true, ..Draft::default() };
         assert!(coded.parse().is_ok(), "a private room needs no typed name");
-        let endless =
-            Draft { name: "cup".into(), ends: Ends::Timer, target: "0".into(), ..Draft::default() };
+        let endless = Draft {
+            name: "cup".into(),
+            kind: Kind::Match,
+            ends: Ends::Timer,
+            target: "0".into(),
+            ..Draft::default()
+        };
         assert!(endless.parse().is_err(), "a match of zero is over already");
     }
 
@@ -625,9 +632,7 @@ mod tests {
     #[test]
     fn the_target_follows_the_win_condition() {
         let mut draft = Draft::default();
-        assert_eq!(draft.ends, Ends::Never);
-
-        draft.retarget(Ends::Timer);
+        assert_eq!(draft.ends, Ends::Timer, "a match is timed unless asked otherwise");
         assert_eq!(draft.target, crate::net::DEFAULT_TIMER.to_string());
         draft.retarget(Ends::Territory);
         assert_eq!(draft.target, crate::net::DEFAULT_TERRITORY.to_string());
@@ -939,6 +944,7 @@ mod tests {
             victory: None,
             players: 0,
             world: WorldKind::Infinite,
+            rules: crate::net::Rules::default(),
         }
     }
 

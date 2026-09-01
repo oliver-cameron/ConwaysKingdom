@@ -149,6 +149,8 @@ A wall was tried before levels and was worse than either, because a player whose
 
 `net::may_place` is the whole rule, and the client refuses on the same terms the server does — instantly, and with the same answer. A drag is all or nothing, so one cell out of reach refuses the stroke rather than trimming it.
 
+Both sides ask it through `net::may_place_under`, which reads the rule and the room's `Rules` together — a laboratory can take it off, and the rule and the switch that takes it off have to be read in one place or a client predicts a placement the server refuses. `net::price_under` is the same arrangement for what an action costs. See [planned.md](planned.md#experiments).
+
 That is what a grant is for. A player who owned nothing could do nothing at all, since there would be nowhere their influence reached — so joining claims a 12×12 patch with a **2×2 block** standing in the middle of it, which is somewhere to build from the moment you arrive.
 
 A grant claims **dead ground whoever held it**. It used to claim only cells nobody held, on the principle that territory is taken by life reaching it rather than handed out over what is already held — and that principle costs a player the game. Territory only ever spreads, so a world with an edge eventually belongs to whoever got there first, and a player joining after that was granted nothing: no ground, and therefore no block, since the block only stands on ground they own. They could place nothing, could never come to own anything, and were locked out of a world they were looking at. On a torus that is not an edge case; it is what happens to the second player to arrive at a world that has been running.

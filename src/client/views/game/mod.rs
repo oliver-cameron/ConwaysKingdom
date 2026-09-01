@@ -404,7 +404,7 @@ pub struct GameApp {
     counted_at: crate::net::Tick,
     /// The address last written down, so it is written again only when it
     /// would say something different.
-    said_where: Option<(bool, bool, bool, bool, bool, Option<crate::net::RoomId>)>,
+    said_where: Option<crate::client::route::Route>,
     /// Actions taken from an [`Acted`] before the `Step` that carries them.
     ///
     /// Emptied every `Step`, because an action belongs to one generation and
@@ -436,27 +436,25 @@ pub struct GameApp {
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate rather than a log line — see [`crate::client::desync`].
     geiger: crate::client::desync::Geiger,
-    /// **A laboratory's two rules**, and they are two: `net::may_place` is about
-    /// where your influence reaches and `net::price` is about what you can
-    /// afford, so an experiment may want the map open and the economy on.
+    /// **What the game is doing in this room** — see [`crate::net::Rules`].
     ///
-    /// Offline only, and cleared on a `Welcome` — a client predicting placements
-    /// a server would refuse resyncs every time it draws.
-    place_anywhere: bool,
-    place_free: bool,
-    /// **The world is stopped**, which only means anything offline.
+    /// Taken from the server rather than decided here, which is the whole
+    /// reason a laboratory is a room: these used to be three client-held flags
+    /// that only meant anything offline, and a client that answers them for
+    /// itself predicts placements a server refuses. Offline this client is the
+    /// server, so it sets them itself and nothing downstream can tell.
     ///
-    /// A connected client advances when the server says a generation happened
-    /// and never on its own clock, so there is nothing here for a pause to
-    /// stop — see `advance_to`. Held on the app rather than in `Ui` because it
-    /// is a fact about the world and not about the interface, which is the
-    /// same line `world`, `link` and `value` are on the far side of.
-    paused: bool,
+    /// Not in `Ui`: a stopped clock is a fact about the world and not about
+    /// the interface, which is the same line `world`, `link` and `value` are
+    /// on the far side of.
+    rules: crate::net::Rules,
     /// One generation asked for while stopped, taken on the next frame.
     ///
     /// A request rather than a step taken in the key handler, so that stepping
     /// happens exactly where stepping happens — one place that banks what was
     /// mined and recounts the standings, rather than two that have to agree.
+    /// Offline only; connected, [`crate::net::ClientMessage::StepOnce`] asks
+    /// the room instead and the generation comes back as a `Step`.
     step_once: bool,
 }
 
@@ -774,6 +772,7 @@ impl GameApp {
                     room,
                     name,
                     world,
+                    rules,
                 } => {
                     self.rating = Some(rating);
                     // Kept first, before anything else can go wrong: the whole
@@ -840,12 +839,10 @@ impl GameApp {
                     // can see says whether the ground ends, so this is the only
                     // way it can know.
                     self.applied_early.clear();
-                    // A pause is a fact about a world this client was keeping
-                    // time in, and it is not keeping time in this one -- and a
-                    // laboratory's rules are off in a world nobody else is in.
-                    self.paused = false;
-                    self.place_anywhere = false;
-                    self.place_free = false;
+                    // **The room's, not this client's.** A pause and a free
+                    // hand are things a *world* does, so they arrive with it
+                    // rather than being carried over from the last one.
+                    self.rules = rules;
                     self.world = crate::net::sane_world(
                         world,
                         self.room.as_ref().expect("the room was just set"),
@@ -873,7 +870,7 @@ impl GameApp {
                     self.camera.dirty = true;
                 }
                 // Watching: the world and its clock, and no player at all.
-                ServerMessage::Watching { room, name, tick, world } => {
+                ServerMessage::Watching { room, name, tick, world, rules } => {
                     log::info!("watching \"{name}\" ({room}) from tick {tick}");
                     self.lobby = None;
                     self.me = None;
@@ -888,12 +885,10 @@ impl GameApp {
                     self.asked_at = None;
                     self.say_where();
                     self.applied_early.clear();
-                    // A pause is a fact about a world this client was keeping
-                    // time in, and it is not keeping time in this one -- and a
-                    // laboratory's rules are off in a world nobody else is in.
-                    self.paused = false;
-                    self.place_anywhere = false;
-                    self.place_free = false;
+                    // **The room's, not this client's.** A pause and a free
+                    // hand are things a *world* does, so they arrive with it
+                    // rather than being carried over from the last one.
+                    self.rules = rules;
                     self.world = crate::net::sane_world(
                         world,
                         self.room.as_ref().expect("the room was just set"),
@@ -995,6 +990,13 @@ impl GameApp {
                     self.ui.refused_start = None;
                     self.lobby =
                         Some(Lobby { teams, phase, victory, players, owner, started_by, code });
+                }
+                // The room's clock or its switches moved, for everybody in it
+                // at once. Taken rather than reconciled: this client may have
+                // predicted its own press, and anybody else's is news.
+                ServerMessage::Rules(rules) => {
+                    log::debug!("the room's rules are now {rules:?}");
+                    self.rules = rules;
                 }
                 ServerMessage::Standing { held, .. } => {
                     if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.plays_as) {
@@ -1637,16 +1639,35 @@ impl GameApp {
     /// One question in one place, so a laboratory takes the rule off
     /// everywhere it is asked rather than at three of the four call sites.
     fn may_place_at(&self, row: i32, col: i32) -> bool {
-        self.place_anywhere || crate::net::may_place(&self.world, self.player(), row, col)
+        crate::net::may_place_under(&self.world, self.player(), row, col, &self.rules)
+    }
+
+    /// **Whether the clock is this client's to press.**
+    ///
+    /// Offline it always is: there is nobody else keeping time. In a room it
+    /// is the laboratory's, and nowhere else — a game's clock belongs to the
+    /// server, which is the rule that makes prediction work at all.
+    fn own_clock(&self) -> bool {
+        self.link.is_none() || self.rules.laboratory
+    }
+
+    /// Change what the game is doing here.
+    ///
+    /// Applied at once **and** sent, the way an action is: the server answers
+    /// with a `Rules` broadcast that everybody in the room gets, and until it
+    /// lands this client's copy is right rather than a round trip behind its
+    /// own press. Offline there is nobody to send to, and this client is the
+    /// authority.
+    fn set_rules(&mut self, rules: crate::net::Rules) {
+        self.rules = rules;
+        if let Some(link) = &self.link {
+            link.send(ClientMessage::SetRules(rules));
+        }
     }
 
     /// What an action costs, which in a laboratory is nothing.
     fn price(&self, stamped: &Stamped) -> i32 {
-        if self.place_free {
-            0
-        } else {
-            crate::net::value_delta(&self.world, stamped)
-        }
+        crate::net::price_under(&self.world, stamped, &self.rules)
     }
 
     /// Run, or stop running. Offline only.
@@ -1656,13 +1677,13 @@ impl GameApp {
     /// time here" reads as the rule it is — and it is a rule worth learning,
     /// because it is the same one that makes prediction work.
     fn toggle_running(&mut self) {
-        if self.link.is_some() {
+        if !self.own_clock() {
             self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
             return;
         }
-        self.paused = !self.paused;
+        self.set_rules(crate::net::Rules { paused: !self.rules.paused, ..self.rules });
         self.notice = None;
-        self.last_action = Some(if self.paused {
+        self.last_action = Some(if self.rules.paused {
             words::help::PAUSED.into()
         } else {
             words::help::RUNNING.into()
@@ -1675,12 +1696,18 @@ impl GameApp {
     /// means: a single step out of a moving world is a step you cannot look
     /// at.
     fn step_one(&mut self) {
-        if self.link.is_some() {
+        if !self.own_clock() {
             self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
             return;
         }
-        self.paused = true;
-        self.step_once = true;
+        self.set_rules(crate::net::Rules { paused: true, ..self.rules });
+        // **Asked for rather than taken**, in a room as much as offline: the
+        // generation comes back as the `Step` everybody else in the laboratory
+        // gets, so one person stepping is not a world only they can see.
+        match self.link.as_ref() {
+            Some(link) => link.send(ClientMessage::StepOnce),
+            None => self.step_once = true,
+        }
         self.notice = None;
         // The generation it will be on once the step is taken, since that is
         // the number somebody stepping wants to read.
@@ -1941,7 +1968,9 @@ impl GameApp {
             started_by: None,
             code: None,
         });
-        self.paused = false;
+        // A solitary world is a plain one. A laboratory is a room now, so
+        // there is nothing here to switch off and nothing for it to mean.
+        self.rules = crate::net::Rules::default();
         self.camera.centre = home;
         // The chunk store still holds the room's world, and a dirty camera is
         // what makes `update` sync it against this one.
@@ -1959,20 +1988,32 @@ impl GameApp {
         matches!(self.lobby.as_ref().map(|l| &l.phase), Some(crate::net::MatchPhase::Gathering))
     }
 
-    /// What the address would say, as something comparable — so it is written
-    /// again only when it would say something different.
-    fn here(&self) -> Option<(bool, bool, bool, bool, bool, Option<crate::net::RoomId>)> {
-        Some((
-            matches!(self.ui.screen, Screen::Playing),
-            match &self.ui.screen {
-                Screen::Menu(m) => m.page == menu::Page::Play,
-                Screen::Playing => self.watching,
-            },
-            matches!(&self.ui.screen, Screen::Menu(m) if m.page == menu::Page::Alone),
-            matches!(&self.ui.screen, Screen::Menu(m) if m.page == menu::Page::Experiments),
-            self.gathering(),
-            self.room.clone(),
-        ))
+    /// **Where the client is, as the address bar says it.**
+    ///
+    /// One function rather than two. This used to be a tuple of five bools and
+    /// a room, beside a `say_where` that built the route out of the same
+    /// fields — two derivations of one fact, and five booleans in a row is
+    /// four chances to swap two of them and have nothing notice.
+    /// [`Route`](crate::client::route::Route) is already the comparable thing,
+    /// so it is the only thing.
+    fn here(&self) -> crate::client::route::Route {
+        use crate::client::route::Route;
+        match (&self.ui.screen, &self.room) {
+            (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
+            (Screen::Menu(m), _) if m.page == menu::Page::Alone => Route::Alone,
+            (Screen::Menu(_), _) => Route::Home,
+            (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
+            // A lobby is a screen of its own, so it says so. Following either
+            // does the same thing — join that room — and what you get is
+            // whichever screen the phase calls for.
+            (Screen::Playing, Some(room)) if self.gathering() => Route::Lobby(room.clone()),
+            (Screen::Playing, Some(room)) => Route::Room(room.clone()),
+            // Offline. It has no room to name and is no link to hand anybody,
+            // and it is still a screen you are on rather than the home screen
+            // — which is what this said, so a solitary game spent the whole of
+            // itself at `/home`.
+            (Screen::Playing, None) => Route::Solo,
+        }
     }
 
     /// What to join as: what is typed on the menu, or what was remembered.
@@ -2009,7 +2050,15 @@ impl GameApp {
             // Both, because a solitary world names no shape and so cannot be
             // rebuilt from an address. The form is where you say what it was.
             Route::Alone | Route::Solo => self.show_menu_page(menu::Page::Alone),
-            Route::Lab => self.show_menu_page(menu::Page::Experiments),
+            // **A laboratory is a kind on the form**, so the link opens the
+            // form on it rather than a page of its own. An entry point and
+            // not a screen — nothing writes this address back.
+            Route::Lab => {
+                self.show_menu_page(menu::Page::Play);
+                if let Screen::Menu(m) = &mut self.ui.screen {
+                    m.describe(menu::Kind::Experiment);
+                }
+            }
         }
     }
 
@@ -2024,25 +2073,7 @@ impl GameApp {
     }
 
     fn say_where(&self) {
-        use crate::client::route::Route;
-        let route = match (&self.ui.screen, &self.room) {
-            (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
-            (Screen::Menu(m), _) if m.page == menu::Page::Alone => Route::Alone,
-            (Screen::Menu(m), _) if m.page == menu::Page::Experiments => Route::Lab,
-            (Screen::Menu(_), _) => Route::Home,
-            (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
-            // A lobby is a screen of its own, so it says so. Following either
-            // does the same thing — join that room — and what you get is
-            // whichever screen the phase calls for.
-            (Screen::Playing, Some(room)) if self.gathering() => Route::Lobby(room.clone()),
-            (Screen::Playing, Some(room)) => Route::Room(room.clone()),
-            // Offline. It has no room to name and is no link to hand
-            // anybody, and it is still a screen you are on rather than the
-            // home screen — which is what this said, so a solitary game spent
-            // the whole of itself at `/home`.
-            (Screen::Playing, None) => Route::Solo,
-        };
-        crate::client::route::show(&route);
+        crate::client::route::show(&self.here());
     }
 
     fn show_menu(&mut self, stage: menu::Stage) {
@@ -2090,16 +2121,6 @@ impl GameApp {
             menu::Chose::Nothing => {}
             menu::Chose::Offline => self.play_alone(),
             menu::Chose::Alone { shape, victory } => self.play_alone_on(shape, victory),
-            // **A laboratory opens stopped.** Golly's habit and the right one:
-            // the first thing anybody does here is draw, and a world running
-            // while you draw into it is a world eating what you drew.
-            menu::Chose::Experiment { free_hand } => {
-                self.play_alone_on(crate::sim::WorldKind::Infinite, None);
-                self.place_anywhere = free_hand;
-                self.place_free = free_hand;
-                self.paused = true;
-                self.last_action = Some(words::help::PAUSED.into());
-            }
             // The list refreshes itself; this is for somebody who has just
             // made a room elsewhere and does not want to wait out the
             // interval. Asking again is one small message.
@@ -2184,13 +2205,20 @@ impl GameApp {
             // Made, then joined -- in two steps, because `Made` only names the
             // room. Joining is the same message the room list sends, so there
             // is one way into a world rather than two.
-            menu::Chose::Create { name, shape, victory, teams, private } => {
+            menu::Chose::Create { name, shape, victory, teams, private, laboratory } => {
                 let Some(link) = &self.link else {
                     self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
                     return;
                 };
                 log::info!("asking for a room called \"{name}\"");
-                link.send(ClientMessage::Create { name, shape, victory, teams, private });
+                link.send(ClientMessage::Create {
+                    name,
+                    shape,
+                    victory,
+                    teams,
+                    private,
+                    laboratory,
+                });
             }
             // Watching takes no name and keeps no token: there is no player
             // to be remembered as.
@@ -2380,13 +2408,20 @@ impl App for GameApp {
                     ),
                 }
             }
-            Start::Menu { address, page } => {
+            Start::Menu { address, page, describing } => {
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
-                // A link to the play screen lands on it, and asks at once —
-                // the same two things pressing Play does.
+                // **The page the address named, whichever it is.** This
+                // honoured `Play` alone, so `/alone` and `/experiments` were
+                // parsed and then dropped and both opened the home screen.
+                m.page = page;
+                // And a link to the play screen asks at once, which is the
+                // other of the two things pressing Play does — a list nobody
+                // has asked for reads as a server with nothing on it.
                 if page == menu::Page::Play {
-                    m.page = page;
                     m.typed_at = Some(0.0);
+                }
+                if let Some(kind) = describing {
+                    m.describe(kind);
                 }
                 (Screen::Menu(m), None)
             }
@@ -2515,9 +2550,7 @@ impl App for GameApp {
             plays_as: None,
             said_where: None,
             applied_early: Vec::new(),
-            place_anywhere: false,
-            place_free: false,
-            paused: false,
+            rules: crate::net::Rules::default(),
             step_once: false,
             forfeited: false,
             in_play: None,
@@ -2600,7 +2633,7 @@ impl App for GameApp {
             // generation it was won rather than running on with the result
             // already settled.
             let stopped = self.lobby.as_ref().is_some_and(|l| !l.phase.stepping());
-            let mined = match (self.paused || stopped, std::mem::take(&mut self.step_once)) {
+            let mined = match (self.rules.paused || stopped, std::mem::take(&mut self.step_once)) {
                 (false, _) => self.world.update(dt, GENERATION_SPAN),
                 (true, true) => self.world.step(),
                 (true, false) => crate::sim::Mined::default(),
@@ -2748,12 +2781,13 @@ impl App for GameApp {
         let lobby = self.lobby.clone();
         let standing = self.standing.clone();
         let generation = self.world.generation;
-        let paused = self.paused;
-        // Offline, this client is the clock; connected, the server is and
-        // there is nothing on the bar to press.
-        let own_clock = self.link.is_none();
+        let paused = self.rules.paused;
+        // Offline this client is the clock, and in a laboratory it is the
+        // room's; in a game the server keeps time and there is nothing on the
+        // bar to press.
+        let own_clock = self.own_clock();
         let showing_rules = self.ui.showing_rules;
-        let (place_anywhere, place_free) = (self.place_anywhere, self.place_free);
+        let rules = self.rules;
         // What the client already is, which the menu cannot see for itself.
         let at = menu::Where {
             now: self.elapsed,
@@ -2847,8 +2881,9 @@ impl App for GameApp {
                         picked = bar.did;
                         // Over the bar rather than instead of it: the square
                         // that opens it has to stay pressable.
-                        let rules_rect = if showing_rules && own_clock {
-                            let shown = rules::show(ctx, &theme, place_anywhere, place_free);
+                        let rules_rect = if showing_rules && rules.laboratory {
+                            let shown =
+                                rules::show(ctx, &theme, rules.place_anywhere, rules.place_free);
                             told_rules = shown.did;
                             shown.rect
                         } else {
@@ -2917,12 +2952,15 @@ impl App for GameApp {
         if let Some(key) = picked {
             self.pick(key);
         }
-        // The two rules, and the press that shuts the panel.
-        if let Some(on) = told_rules.anywhere {
-            self.place_anywhere = on;
-        }
-        if let Some(on) = told_rules.free {
-            self.place_free = on;
+        // The two rules, and the press that shuts the panel. Sent as well as
+        // applied, because the room holds them and everybody in it shares
+        // them — see `set_rules`.
+        if told_rules.anywhere.is_some() || told_rules.free.is_some() {
+            self.set_rules(crate::net::Rules {
+                place_anywhere: told_rules.anywhere.unwrap_or(self.rules.place_anywhere),
+                place_free: told_rules.free.unwrap_or(self.rules.place_free),
+                ..self.rules
+            });
         }
         if told_rules.close {
             self.ui.showing_rules = false;
@@ -3044,8 +3082,8 @@ impl App for GameApp {
         }
         // After the frame, because the menu's own page moves inside it — a
         // press on Play changes a field the client only sees on the way out.
-        if self.said_where != self.here() {
-            self.said_where = self.here();
+        if self.said_where.as_ref() != Some(&self.here()) {
+            self.said_where = Some(self.here());
             self.say_where();
         }
         *self.ui_output.borrow_mut() = Some(output);

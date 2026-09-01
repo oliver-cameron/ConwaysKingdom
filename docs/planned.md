@@ -34,7 +34,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Rating](#rating) | Built | per server, on the home screen; a leaderboard is not |
 | [Many servers](#many-servers-and-what-must-not-be-decentralised) | Being built | a person exists; a *safe* one does not, and discovery is not started |
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
-| [Experiments](#experiments) | Part built | a page, a laboratory world, the clock and the rules off; RLE and reset are not |
+| [Experiments](#experiments) | Part built | a kind of **room**: the clock and the placing rules are the room's, and shared; RLE and reset are not |
 | [Keys the player chooses](#keys-the-player-chooses) | Decided | defaults cannot be right; three faults have come out of that |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
@@ -658,17 +658,21 @@ That also makes "the rules come off" much smaller than it sounded. There is no n
 
 ### What is built
 
-**A page of its own**, at `/experiments`, reached from the home screen beside the other two ways to play — a laboratory is a third of those rather than a setting on one of them. It opens a boundless world that never ends, because both of the alternatives are game answers to game questions: a torus is a shape a *match* wants so its ground is finite and contested, and a victory condition is a way to win. Neither means anything to somebody watching a pattern.
+**A kind of room, which is what it should have been from the start.** `net::RoomKind` is `World`, `Match` or `Experiment`, and the make-a-world form asks that first because it decides which of the other questions are worth asking — a match is the only one with a way to win, an experiment is the only one whose rules are yours. It used to be implied by "ends: never", which told a world and a laboratory apart not at all, because the laboratory was not a room: it was a mode the client went into with no server, reached from a page of its own at `/experiments`. That page is gone; `/experiments` opens the form on `Kind::Experiment`, and `Menu::describe` is the one way in, shared with the back button.
 
-**The rules come off, and it is two questions rather than a second `sim`.** `net::may_place` and `net::price` are the whole of what the game adds to placing, so a laboratory is a flag that answers both — routed through one `may_place_at` and one `price` on the client so it comes off everywhere it is asked rather than at three of the four call sites. Cleared on a `Welcome`, because a client predicting placements a server would refuse resyncs every time it draws.
+**It is multiplayer, and that is what being a room buys.** Several people in one laboratory see one board, one clock and one set of switches. What made it solitary before was that the switches were client-held flags — and a client that answers "may I place here" and "what does this cost" for itself predicts placements a server refuses, so it could only ever be offline.
 
-**And it opens stopped**, which is Golly's habit and the right one: the first thing anybody does here is draw, and a world running while you draw into it is a world eating what you drew. Space runs and stops it; a full stop takes one generation and stays stopped.
+**The rules come off, and it is two questions rather than a second `sim`.** `net::may_place` and `net::price` are the whole of what the game adds to placing, so `net::Rules` is three switches the *room* holds — `paused`, `place_anywhere`, `place_free` — plus `laboratory`, which says whether they are anybody's to change. Both sides ask through `net::may_place_under` and `net::price_under`, so the rule and the switch that takes it off are read together or not at all. A world or a match refuses `SetRules` outright: everywhere but a laboratory these *are* the rules of the game.
+
+**And it opens stopped**, which is Golly's habit and the right one: the first thing anybody does here is draw, and a world running while you draw into it is a world eating what you drew. `Server::step` returns nothing while `rules.paused`, the same whole stop `asleep` is, and `Server::step_once` lifts the pause for exactly one call — a client that unpaused, stepped and paused again would run the world for however long the two round trips took, which at four generations a second is not one step.
+
+A laboratory is still **boundless**, which is a game answer to a game question taken off: a torus is a shape a match wants so its ground is finite and contested, and that means nothing to somebody watching a pattern. Worth revisiting — a bounded universe is an ordinary thing to want in Golly — but it is a decision and not an oversight.
 
 ### What to take from Golly, in order
 
 **RLE, and it stands alone.** This is the single highest-value piece and it is worth doing whether or not the rest happens. RLE and `.cells` are how every pattern anybody has ever published is written down, reading one is an afternoon, and it turns `client::views::game::stamp::Library` from a scratchpad into a way in to fifty years of work. **Writing it matters as much as reading it** — a pattern found here should be able to leave, or this is a place things go into and not a place they come out of.
 
-**Pause, step and reset.** One derive between them; see [predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), which wants the same `World: Clone` and gets reset as restore. The offline path already steps on its own clock, because [the server is the clock](networking.md#the-server-is-the-clock) only applies when there is a server, and an experiment is offline by construction — one authority, which is you.
+**Reset.** Pause and step are built — `ClientMessage::SetRules` and `ClientMessage::StepOnce`, answered by the room and broadcast, so one person stepping is not a world only they can see. Reset is what is left, and it is the derive: see [predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), which wants the same `World: Clone` and gets reset as restore.
 
 **Speed.** Golly's generation slider, and `World::update` already takes a span, so this is a number the interface owns. `MAX_CATCHUP_STEPS` is already the guard against a slider that asks for more than a frame can do.
 
@@ -686,7 +690,7 @@ Worth stating rather than leaving to be discovered, because "why is this slower 
 
 **Panes**, which is the only part that is real work: several viewports onto several worlds. `render::app` holds one surface and one camera, so the cost is a camera and a viewport per pane rather than a second pipeline — and the [level of detail](#zooming-out-without-lying) is what makes a small pane showing a whole world possible at all.
 
-And it is **not multiplayer**. A shared laboratory is a shared world with the rules off, which is a room anybody can edit anywhere; that is a different feature with a different argument behind it.
+It **is** multiplayer, which is what changed. A shared laboratory is a shared world with the rules off, and that turned out to be the simplifying answer rather than a separate feature: it is what let three client-held flags, a page, a `Chose` variant and the whole offline-laboratory path come out at once.
 
 The order: RLE first, since it stands alone and is worth the most; then pause, step and reset, which is a derive and three buttons; then speed and rulestrings; then the placing flag; then panes.
 
@@ -785,7 +789,7 @@ So the whole of the machinery is: derive `Clone`, and a rollout is a clone stepp
 | a prediction | a clone stepped to the deadline |
 | a bot that searches rather than follows a book | a clone per candidate placement, scored |
 | an experiment's **reset** | keep the clone, put it back |
-| an experiment's **step one generation** | the offline path already does this; the clone is what makes it undoable |
+| an experiment's **step one generation** | built, as `Server::step_once`; the clone is what makes it undoable |
 
 Four things this file lists separately, waiting on one line.
 

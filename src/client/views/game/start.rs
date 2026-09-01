@@ -72,7 +72,15 @@ pub(crate) enum Start {
         watch: bool,
     },
     /// Show the menu, with this address filled in and on this page.
-    Menu { address: String, page: menu::Page },
+    Menu {
+        address: String,
+        page: menu::Page,
+        /// What the make-a-world form should already be describing, for a
+        /// link that named a **kind of room** rather than a screen.
+        /// `/experiments` is this: a laboratory is a room now, so asking for
+        /// one is asking for the form with an answer already given.
+        describing: Option<menu::Kind>,
+    },
 }
 
 /// Connect, and ask nothing yet.
@@ -111,12 +119,18 @@ pub(crate) fn startup() -> Start {
         Some(route) if route.to_join().is_some() => {
             Start::Join { url, name, room: route.to_join().map(|r| r.0.clone()), watch: false }
         }
-        Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play },
+        Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play, describing: None },
         // A solitary world names none, so `/solo` opens the form rather than
         // building something nobody described — see `Route::Solo`.
-        Some(Route::Alone | Route::Solo) => Start::Menu { address: url, page: menu::Page::Alone },
-        Some(Route::Lab) => Start::Menu { address: url, page: menu::Page::Experiments },
-        _ => Start::Menu { address: url, page: menu::Page::Home },
+        Some(Route::Alone | Route::Solo) => {
+            Start::Menu { address: url, page: menu::Page::Alone, describing: None }
+        }
+        Some(Route::Lab) => Start::Menu {
+            address: url,
+            page: menu::Page::Play,
+            describing: Some(menu::Kind::Experiment),
+        },
+        _ => Start::Menu { address: url, page: menu::Page::Home, describing: None },
     }
 }
 
@@ -138,14 +152,22 @@ pub(crate) fn query_string() -> String {
 pub(crate) fn startup() -> Start {
     let taken = CONNECTION.lock().unwrap().take();
     let Some(Connection { url, name, room }) = taken else {
-        return Start::Menu { address: DEFAULT_ADDRESS.into(), page: menu::Page::Home };
+        return Start::Menu {
+            address: DEFAULT_ADDRESS.into(),
+            page: menu::Page::Home,
+            describing: None,
+        };
     };
     crate::net::keep::remember_name(&name);
     match url {
         // `--ws` is a command line, which has no way to say "watch" yet and
         // does not need one: somebody at a terminal can pass `--room`.
         Some(url) => Start::Join { url, name, room, watch: false },
-        None => Start::Menu { address: DEFAULT_ADDRESS.into(), page: menu::Page::Home },
+        None => Start::Menu {
+            address: DEFAULT_ADDRESS.into(),
+            page: menu::Page::Home,
+            describing: None,
+        },
     }
 }
 

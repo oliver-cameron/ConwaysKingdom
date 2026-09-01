@@ -13,9 +13,29 @@ use super::words;
 use crate::net::{RoomName, Victory};
 use crate::sim::WorldKind;
 
+/// **What kind of room this describes**, which is the first question because
+/// it decides which of the others are worth asking.
+///
+/// It used to be implied: `Ends::Never` meant a world and anything else meant
+/// a match, and an experiment was not a room at all but a mode the client went
+/// into with no server. Three things a person picks between, asked as one
+/// question — and the two that used to be `Never` are now told apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// Steps forever, anybody may join, nobody wins.
+    World,
+    /// Won somehow, and gathers before it starts.
+    Match,
+    /// A laboratory: the clock is a control and the game's two placing rules
+    /// can be taken off. Multiplayer like any other room — a shared bench,
+    /// not a solitary one.
+    Experiment,
+}
+
+/// How a match is won. Only asked when [`Kind::Match`] is; there is no
+/// `Never` any more, because "does not end" is what the other two kinds are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ends {
-    Never,
     Timer,
     Territory,
 }
@@ -37,6 +57,24 @@ pub enum Shape {
     Wrapping,
 }
 
+/// A room as it was described, once what was typed has been checked.
+///
+/// Named fields rather than the tuple of five this used to be: four of those
+/// are the same two shapes in a row, and two that differ only in order are the
+/// ones that get swapped without anything noticing — the same argument as
+/// [`super::super::Shown`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Described {
+    pub name: RoomName,
+    pub shape: WorldKind,
+    pub victory: Option<Victory>,
+    /// `None` is a free-for-all; `Some(n)` is n sides.
+    pub teams: Option<u8>,
+    /// Make it a laboratory. Never true beside a `victory`: a match with the
+    /// rules off is not a match.
+    pub laboratory: bool,
+}
+
 /// A world being described, before it exists.
 ///
 /// Everything here is what was **typed**, including the numbers: a size and a
@@ -45,6 +83,9 @@ pub enum Shape {
 /// number every keystroke. [`Self::parse`] is where typed becomes chosen.
 pub struct Draft {
     pub name: String,
+    /// A world, a match or an experiment. Everything below is read only where
+    /// it applies to the one chosen.
+    pub kind: Kind,
     pub shape: Shape,
     /// How many chunks tall and wide, read only when the shape is wrapping.
     ///
@@ -55,6 +96,7 @@ pub struct Draft {
     /// number in a labelled box, not a whole size that "is not a size".
     pub rows: String,
     pub cols: String,
+    /// How a match is won. Read only when [`Self::kind`] is a match.
     pub ends: Ends,
     /// Generations or squares, read only when it ends.
     pub target: String,
@@ -81,10 +123,11 @@ impl Default for Draft {
         let (rows, cols) = crate::sim::DEFAULT_TORUS;
         Self {
             name: String::new(),
+            kind: Kind::World,
             shape: Shape::Boundless,
             rows: rows.to_string(),
             cols: cols.to_string(),
-            ends: Ends::Never,
+            ends: Ends::Timer,
             target: crate::net::DEFAULT_TIMER.to_string(),
             together: Together::Solo,
             team_count: crate::net::MIN_TEAMS.to_string(),
@@ -108,7 +151,7 @@ impl Draft {
     /// is selected, or a target typed and then switched to "never", is
     /// somebody changing their mind — refusing on it would be refusing a
     /// number nobody is asking to use.
-    pub fn parse(&self) -> Result<(RoomName, WorldKind, Option<Victory>, Option<u8>), String> {
+    pub fn parse(&self) -> Result<Described, String> {
         // A private room's name is the code the server generates, so there is
         // nothing here to check and nothing to refuse.
         let name = if self.private { String::new() } else { crate::net::room_name(&self.name)? };
@@ -118,7 +161,7 @@ impl Draft {
             Together::Teams => Some(self.sides()?),
             Together::Solo => None,
         };
-        Ok((name, shape, victory, teams))
+        Ok(Described { name, shape, victory, teams, laboratory: self.kind == Kind::Experiment })
     }
 
     /// The **world** this describes, without the room around it.
@@ -131,17 +174,26 @@ impl Draft {
     /// screen: `room_name("")` says "a room needs a name", so pressing Play
     /// alone answered a question nobody had been asked.
     pub fn world(&self) -> Result<(WorldKind, Option<Victory>), String> {
-        let shape = match self.shape {
-            Shape::Boundless => WorldKind::Infinite,
-            Shape::Wrapping => WorldKind::Toroidal {
+        // **A laboratory is boundless**, which is a game answer to a game
+        // question taken off: a torus is a shape a match wants so its ground
+        // is finite and contested, and that means nothing to somebody watching
+        // a pattern. See [planned.md](../../../../docs/planned.md#experiments).
+        let shape = match (self.kind, self.shape) {
+            (Kind::Experiment, _) | (_, Shape::Boundless) => WorldKind::Infinite,
+            (_, Shape::Wrapping) => WorldKind::Toroidal {
                 rows: chunks(&self.rows, words::make::ROWS)?,
                 cols: chunks(&self.cols, words::make::COLS)?,
             },
         };
-        let victory = match self.ends {
-            Ends::Never => None,
-            Ends::Timer => Some(Victory::Timer { generations: self.number()? }),
-            Ends::Territory => Some(Victory::Territory { squares: self.number()? as usize }),
+        // A way to win is the whole of what makes a room a match, so nothing
+        // else has one — and a target typed and then switched away from is
+        // somebody changing their mind rather than a number to refuse.
+        let victory = match (self.kind, self.ends) {
+            (Kind::World | Kind::Experiment, _) => None,
+            (Kind::Match, Ends::Timer) => Some(Victory::Timer { generations: self.number()? }),
+            (Kind::Match, Ends::Territory) => {
+                Some(Victory::Territory { squares: self.number()? as usize })
+            }
         };
         Ok((shape, victory))
     }
@@ -174,7 +226,6 @@ impl Draft {
         }
         self.ends = ends;
         self.target = match ends {
-            Ends::Never => return,
             Ends::Timer => crate::net::DEFAULT_TIMER.to_string(),
             Ends::Territory => crate::net::DEFAULT_TERRITORY.to_string(),
         };
@@ -210,16 +261,45 @@ mod tests {
     fn both_read_the_same_description() {
         let mut draft = Draft::default();
         draft.name = "arena".into();
+        draft.kind = Kind::Match;
         draft.shape = Shape::Wrapping;
         draft.rows = "8".into();
         draft.cols = "6".into();
         draft.retarget(Ends::Territory);
 
         let (shape, victory) = draft.world().unwrap();
-        let (name, also_shape, also_victory, _) = draft.parse().unwrap();
-        assert_eq!(name, "arena");
+        let described = draft.parse().unwrap();
+        assert_eq!(described.name, "arena");
         assert_eq!(shape, WorldKind::Toroidal { rows: 8, cols: 6 });
-        assert_eq!((shape, victory), (also_shape, also_victory));
+        assert_eq!((shape, victory), (described.shape, described.victory));
+    }
+
+    /// **The three kinds, and what each one takes off the form.**
+    ///
+    /// A way to win is the whole of what makes a room a match, and a
+    /// laboratory is boundless — so a target typed under one kind and a size
+    /// typed under another are somebody changing their mind, not numbers to
+    /// refuse.
+    #[test]
+    fn the_kind_decides_which_answers_are_read() {
+        let mut draft = Draft::default();
+        draft.name = "bench".into();
+        draft.retarget(Ends::Timer);
+        draft.shape = Shape::Wrapping;
+
+        assert_eq!(draft.parse().unwrap().victory, None, "a world has no way to win");
+        assert!(!draft.parse().unwrap().laboratory);
+
+        draft.kind = Kind::Match;
+        let described = draft.parse().unwrap();
+        assert_eq!(described.victory, Some(Victory::Timer { generations: 2000 }));
+        assert!(!described.laboratory, "a match is a game, so its rules are not yours");
+
+        draft.kind = Kind::Experiment;
+        let described = draft.parse().unwrap();
+        assert!(described.laboratory);
+        assert_eq!(described.victory, None, "and no way to win, whatever was typed");
+        assert_eq!(described.shape, WorldKind::Infinite, "boundless, whatever was typed");
     }
 
     /// A private room is named by the server, so it is the other case where a
@@ -228,8 +308,8 @@ mod tests {
     fn a_private_room_is_named_by_the_server() {
         let mut draft = Draft::default();
         draft.private = true;
-        let (name, _, _, _) = draft.parse().expect("a private room was refused for its name");
-        assert_eq!(name, "", "the code the server generates becomes the name");
+        let described = draft.parse().expect("a private room was refused for its name");
+        assert_eq!(described.name, "", "the code the server generates becomes the name");
     }
 }
 

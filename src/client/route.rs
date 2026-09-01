@@ -40,7 +40,12 @@ pub enum Route {
     Play,
     /// Describing a world to play in on your own.
     Alone,
-    /// The laboratory's own screen.
+    /// A laboratory.
+    ///
+    /// **An entry point rather than a screen.** A laboratory is a room now,
+    /// and making one is a kind on the make-a-world form — so this opens that
+    /// form on that kind, and nothing writes this address back. It stays
+    /// because `/experiments` is a link people already have.
     Lab,
     /// In a solitary world.
     ///

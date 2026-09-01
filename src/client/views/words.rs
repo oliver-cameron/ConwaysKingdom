@@ -212,25 +212,6 @@ pub mod menu {
     /// the decision it belongs to is live — see [inspiration.md].
     ///
     /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
-    pub mod lab {
-        pub const TITLE: &str = "Experiments";
-        /// Says what it is *for* rather than what it does, because the list of
-        /// what it does is the page underneath.
-        pub const NOTE: &str =
-            "A laboratory, not a match. The same simulation, with the game taken off it.";
-        pub const RULES: &str = "Rules";
-        pub const FREE_HAND: &str = "Place anywhere, for nothing";
-        /// Both halves named, because they are two rules and somebody turning
-        /// this off should know which two come back.
-        pub const FREE_HAND_NOTE: &str =
-            "Off, placing is confined to your own ground and costs money, as in a game.";
-        /// The clock is the other half of a laboratory and it needs no
-        /// setting: it is already yours offline.
-        pub const CLOCK: &str =
-            "Space runs and stops it. A full stop takes one generation and stays stopped.";
-        pub const OPEN: &str = "Open the laboratory";
-    }
-
     pub mod alone {
         pub const TITLE: &str = "Play alone";
         /// Said once, at the top, rather than beside every field: the whole
@@ -295,14 +276,25 @@ pub mod menu {
         pub fn out_of_range(which: &str, most: i32) -> String {
             format!("{which}: between 1 and {most}")
         }
+        /// **The first question, because it decides the rest.** It used to
+        /// be implied by "ends: never", which told a world and a laboratory
+        /// apart not at all — the laboratory was not a room.
+        pub const KIND: &str = "Kind";
+        pub const WORLD: &str = "World";
+        pub const MATCH: &str = "Match";
+        pub const EXPERIMENT: &str = "Experiment";
+        pub const WORLD_NOTE: &str = "Runs forever. Anybody may join at any time, and nobody wins.";
+        pub const MATCH_NOTE: &str = "Gathers, then runs until somebody has won it.";
+        /// Says what it is *for*. The switches themselves are in the room, on
+        /// the bar, because they are things this world does rather than things
+        /// it was made with.
+        pub const EXPERIMENT_NOTE: &str =
+            "A laboratory. The same simulation, with the clock and the game's \
+             placing rules yours to switch.";
+
         pub const ENDS: &str = "Ends";
-        pub const NEVER: &str = "Never";
         pub const TIMER: &str = "Timer";
         pub const TERRITORY: &str = "Territory";
-        /// A world is the ordinary case and a match is the one with a
-        /// condition on it, so "never" is a legal answer rather than a
-        /// separate question about which of the two this is.
-        pub const NEVER_NOTE: &str = "A world with no end. Anybody may join at any time.";
         pub const TIMER_NOTE: &str = "Most ground when the generations run out.";
         pub const TERRITORY_NOTE: &str = "First to hold this many squares wins.";
         pub const GENERATIONS: &str = "Generations";
@@ -458,6 +450,24 @@ pub mod clock {
         format!("{most} of {target} squares")
     }
 }
+
+/// What kind of room this is, for the list somebody picks from.
+///
+/// A world says only its shape, because "world" is what every row on the list
+/// is until it says otherwise. The other two are the exceptions and so are the
+/// ones worth a word.
+pub fn room_kind(kind: crate::net::RoomKind) -> Option<&'static str> {
+    use crate::net::RoomKind::*;
+    match kind {
+        World => None,
+        Match => Some("match"),
+        Experiment => Some("laboratory"),
+    }
+}
+
+/// A laboratory whose clock is stopped, which is the one thing about one that
+/// is worth knowing before you go in.
+pub const STOPPED: &str = "stopped";
 
 /// The screen before a match starts, and the word for what one is doing.
 pub fn phase(phase: &crate::net::MatchPhase) -> &'static str {
@@ -629,10 +639,11 @@ pub mod help {
     /// `networking.md` — so these say what they did rather than doing
     /// nothing, which is the difference between a rule and a broken key.
     pub const THE_CLOCK: &str = "The clock";
-    pub const PLAY: &str = "run, or stop running (playing alone)";
+    pub const PLAY: &str = "run, or stop running (alone, or in a laboratory)";
     pub const STEP_ONE: &str = "one generation, and stay stopped";
-    /// Said when either is pressed in a room somebody else is keeping time in.
-    pub const SERVER_KEEPS_TIME: &str = "the server keeps time here; the clock is yours alone";
+    /// Said when either is pressed in a game — which is every room but a
+    /// laboratory, where the clock belongs to whoever is in it.
+    pub const SERVER_KEEPS_TIME: &str = "the server keeps time in a game; a laboratory's is yours";
     pub const GO_BACK: &str = "back a screen";
     pub const PAUSED: &str = "paused";
     pub const RUNNING: &str = "running";

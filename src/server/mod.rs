@@ -25,7 +25,9 @@ pub mod ws;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::net::{ChunkId, ClientMessage, RoomName, ServerMessage, Stamped, Tick, DEFAULT_ROOM};
+use crate::net::{
+    ChunkId, ClientMessage, RoomName, Rules, ServerMessage, Stamped, Tick, DEFAULT_ROOM,
+};
 use crate::sim::{Player, PlayerId, World};
 use matches::{Phase, Victory};
 
@@ -80,6 +82,14 @@ pub struct Server {
     /// step** — there is no tick to hang "every so often" from, and a lobby
     /// that only refreshed when the world moved would never refresh at all.
     lobby_changed: bool,
+    /// **What the game is doing in this room**, as against what the match is.
+    ///
+    /// [`Rules::default`] everywhere but a laboratory, where the clock is a
+    /// control and the two placing rules can be taken off — see
+    /// [`Self::set_rules`]. Held here rather than on the client because a
+    /// client that answered these for itself would predict placements this
+    /// server refuses.
+    rules: Rules,
     /// Grants made since the last step, waiting to be announced.
     granted: Vec<(PlayerId, (i32, i32))>,
     /// Actions taken since the last drain, to go out **now** rather than with
@@ -153,6 +163,7 @@ impl Server {
             asleep: false,
             started_by: None,
             lobby_changed: false,
+            rules: Rules::default(),
             granted: Vec::new(),
             announce: Vec::new(),
         }
@@ -384,6 +395,35 @@ impl Server {
 
     pub fn is_asleep(&self) -> bool {
         self.asleep
+    }
+
+    pub fn rules(&self) -> Rules {
+        self.rules
+    }
+
+    /// Make this room a laboratory. Only at creation: a world that could be
+    /// turned into one halfway through is a world whose ground was won under
+    /// one set of rules and is being built on under another.
+    pub fn make_laboratory(&mut self) {
+        self.rules.laboratory = true;
+        // Stopped, which is Golly's habit and the right one: the first thing
+        // anybody does here is draw, and a world running while you draw into
+        // it is a world eating what you drew.
+        self.rules.paused = true;
+    }
+
+    /// Change what the game is doing here, if that is a thing this room lets
+    /// anybody do.
+    ///
+    /// The whole set at once, so the answer is one broadcast rather than
+    /// three, and [`Rules::laboratory`] is not among what can be changed —
+    /// see [`Self::make_laboratory`].
+    pub fn set_rules(&mut self, asked: Rules) -> Result<Rules, String> {
+        if !self.rules.laboratory {
+            return Err("this room is a game, so its rules are not yours to change".into());
+        }
+        self.rules = Rules { laboratory: true, ..asked };
+        Ok(self.rules)
     }
 
     pub fn phase(&self) -> &Phase {
@@ -935,6 +975,10 @@ impl Server {
                             // told nothing builds an infinite world and disagrees
                             // with a wrapping server about where everything is.
                             world: self.world.kind(),
+                            // And the same argument: nothing a client can see
+                            // says whether placing here is free, and one that
+                            // guessed would price every action wrongly.
+                            rules: self.rules,
                         }]
                     }
                     Err(reason) => vec![ServerMessage::Rejected { reason }],
@@ -1025,10 +1069,9 @@ impl Server {
                 // client prices and previews it: a paint half applied is a
                 // shape nobody drew.
                 if let crate::net::Action::Paint { cells, .. } = &stamped.action {
-                    if let Some(&(row, col)) = cells
-                        .iter()
-                        .find(|&&(r, c)| !crate::net::may_place(&self.world, stamped.player, r, c))
-                    {
+                    if let Some(&(row, col)) = cells.iter().find(|&&(r, c)| {
+                        !crate::net::may_place_under(&self.world, stamped.player, r, c, &self.rules)
+                    }) {
                         log::info!(
                             "refused {:?}: nothing of theirs reaches ({row}, {col})",
                             stamped.player
@@ -1041,7 +1084,7 @@ impl Server {
                 // client priced it against the same state, so pricing it later
                 // would let the two disagree.
                 if let Some(player) = self.players.get(&stamped.player) {
-                    let delta = crate::net::value_delta(&self.world, &stamped);
+                    let delta = crate::net::price_under(&self.world, &stamped, &self.rules);
                     if player.value + delta < 0 {
                         log::info!(
                             "refused {:?}: costs {} with {} in hand",
@@ -1120,6 +1163,23 @@ impl Server {
                 Ok(()) => Vec::new(),
                 Err(reason) => vec![ServerMessage::NotStarted { reason }],
             },
+            // A laboratory's clock and its two switches. Broadcast rather than
+            // answered to whoever asked: a laboratory is a room several people
+            // are in, and a clock that stopped for one of them would be two
+            // worlds.
+            ClientMessage::SetRules(asked) => match self.set_rules(asked) {
+                Ok(rules) => {
+                    log::info!("\"{}\" is now {rules:?}", self.room);
+                    self.announce.push(ServerMessage::Rules(rules));
+                    Vec::new()
+                }
+                Err(reason) => vec![ServerMessage::NotStarted { reason }],
+            },
+            ClientMessage::StepOnce => {
+                let stepped = self.step_once();
+                self.announce.extend(stepped);
+                Vec::new()
+            }
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.
@@ -1167,13 +1227,33 @@ impl Server {
         })
     }
 
+    /// One generation in a stopped room, and stay stopped.
+    ///
+    /// The pause is lifted for exactly this call rather than toggled around
+    /// it: a client that unpaused, stepped and paused again would run the
+    /// world for however long the two round trips took, which at four
+    /// generations a second is not one step.
+    pub fn step_once(&mut self) -> Vec<ServerMessage> {
+        if !self.rules.paused {
+            return Vec::new();
+        }
+        self.rules.paused = false;
+        let out = self.step();
+        self.rules.paused = true;
+        out
+    }
+
     /// Apply everything queued for this tick, advance one generation, and hand
     /// back what every client needs to stay in step.
     pub fn step(&mut self) -> Vec<ServerMessage> {
         // Asleep is a whole stop: no generation, and no actions applied
         // either, since an action applied to a world that is not moving would
         // land on a tick that has not happened.
-        if self.asleep {
+        //
+        // A stopped laboratory is the same stop for a different reason —
+        // somebody is drawing into it — and [`Self::step_once`] is the way
+        // past it.
+        if self.asleep || self.rules.paused {
             return Vec::new();
         }
         let mut lobby: Vec<ServerMessage> =
@@ -1297,6 +1377,82 @@ mod tests {
         s.leave(a);
         assert_eq!(s.join("c").unwrap(), PlayerId(3), "a departed player's number is theirs still");
         assert!(!s.players().find(|p| p.id == a).unwrap().online, "and they are marked gone");
+    }
+
+    /// **A laboratory is a room, and its clock is a control.**
+    ///
+    /// It used to be a mode the client was in with no server at all, which is
+    /// what made the two placing rules client-held flags — and a client that
+    /// answers those for itself predicts placements a server refuses. Held
+    /// here, several people can be in one laboratory and the answer is the
+    /// same for all of them.
+    #[test]
+    fn a_laboratory_opens_stopped_and_steps_when_it_is_told_to() {
+        let mut s = Server::new(World::infinite());
+        s.make_laboratory();
+        assert!(s.rules().paused, "the first thing anybody does here is draw");
+
+        let at = s.tick();
+        assert!(s.step().is_empty(), "a stopped world does not step on the clock");
+        assert_eq!(s.tick(), at);
+
+        assert!(!s.step_once().is_empty(), "and does step when asked");
+        assert_eq!(s.tick(), at + 1, "by exactly one generation");
+        assert!(s.rules().paused, "and stays stopped afterwards");
+    }
+
+    /// The other half: a room that is a game says so rather than quietly
+    /// taking the rules off, because everywhere but a laboratory these *are*
+    /// the rules.
+    #[test]
+    fn only_a_laboratory_may_have_its_rules_changed() {
+        let mut s = Server::new(World::infinite());
+        let free = crate::net::Rules { place_free: true, ..Default::default() };
+        assert!(s.set_rules(free).is_err(), "a world is a game");
+        assert_eq!(s.rules(), crate::net::Rules::default());
+
+        s.make_laboratory();
+        let now = s.set_rules(free).expect("a laboratory's rules are its own");
+        assert!(now.place_free && now.laboratory, "and it stays a laboratory");
+    }
+
+    /// **What the rules being off actually means**, which is two questions and
+    /// not a second simulation: where you may build, and what it costs.
+    #[test]
+    fn a_free_hand_places_off_your_own_ground_for_nothing() {
+        let mut s = Server::new(World::infinite());
+        let me = s.join("me").unwrap();
+        let value = s.value_of(me).unwrap();
+        // A long way from anything granted, so nothing of this player's
+        // influence reaches it. A block rather than a cell, because the
+        // assertion is read after a step and a lone cell dies of loneliness
+        // before it can be looked at.
+        let far = vec![(10_000, 10_000), (10_000, 10_001), (10_001, 10_000), (10_001, 10_001)];
+        let act = |cells: Vec<(i32, i32)>| {
+            ClientMessage::Act(Stamped {
+                tick: 0,
+                player: me,
+                seat: me,
+                action: Action::Paint { cells, placement: Placement::Life },
+            })
+        };
+
+        s.handle(Some(me), None, act(far.clone()));
+        s.step();
+        assert!(!s.world().live_cells().contains(&far[0]), "not yours to build on");
+
+        s.make_laboratory();
+        s.set_rules(crate::net::Rules {
+            paused: true,
+            place_anywhere: true,
+            place_free: true,
+            ..Default::default()
+        })
+        .unwrap();
+        s.handle(Some(me), None, act(far.clone()));
+        s.step_once();
+        assert!(s.world().live_cells().contains(&far[0]), "with the rules off, anywhere");
+        assert_eq!(s.value_of(me), Some(value), "and for nothing");
     }
 
     #[test]

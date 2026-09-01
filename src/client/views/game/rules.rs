@@ -7,9 +7,12 @@
 //! about what you can afford — and an experiment might reasonably want the map
 //! open and the economy on, or the reverse.
 //!
-//! Only offline. Connected, these are the server's rules and a client turning
-//! them off would predict placements the server refuses, which reads as the
-//! game being broken rather than as a setting having no effect.
+//! **Only in a laboratory**, which is a kind of room rather than a mode this
+//! client is in. Everywhere else these are the rules of the game: a client
+//! turning them off on its own would predict placements the server refuses,
+//! which reads as the game being broken rather than as a setting having no
+//! effect. The room holds them, so everybody in one sees the same board —
+//! see [`crate::net::Rules`].
 
 use crate::client::views::theme::Theme;
 use crate::client::views::words::hotbar as words;

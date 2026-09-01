@@ -90,6 +90,7 @@ mod tests {
                 victory: None,
                 teams: None,
                 private: false,
+                laboratory: false,
             },
             ClientMessage::Create {
                 name: "cup".into(),
@@ -97,12 +98,29 @@ mod tests {
                 victory: Some(crate::net::Victory::Timer { generations: 2000 }),
                 teams: Some(2),
                 private: true,
+                laboratory: false,
+            },
+            // A laboratory, which is the third thing the form can ask for.
+            ClientMessage::Create {
+                name: "bench".into(),
+                shape: crate::sim::WorldKind::Infinite,
+                victory: None,
+                teams: None,
+                private: false,
+                laboratory: true,
             },
             ClientMessage::Leave,
             ClientMessage::Start,
             ClientMessage::Watch { room: "r-abc234".into() },
             ClientMessage::JoinTeam { team: PlayerId(2) },
             ClientMessage::NameTeam { team: PlayerId(1), name: "Reds".into() },
+            ClientMessage::SetRules(crate::net::Rules {
+                paused: true,
+                place_anywhere: true,
+                place_free: true,
+                laboratory: true,
+            }),
+            ClientMessage::StepOnce,
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -155,6 +173,7 @@ mod tests {
                 room: "main".into(),
                 name: "main".into(),
                 world: crate::sim::WorldKind::Infinite,
+                rules: crate::net::Rules::default(),
             },
             // The shape of a wrapping world has to survive the round trip, or
             // a client is told the world ends somewhere it does not.
@@ -168,6 +187,12 @@ mod tests {
                 room: "ring".into(),
                 name: "ring".into(),
                 world: crate::sim::WorldKind::Toroidal { rows: 18, cols: 24 },
+                rules: crate::net::Rules {
+                    paused: true,
+                    place_anywhere: true,
+                    place_free: false,
+                    laboratory: true,
+                },
             },
             ServerMessage::Rejected { reason: "full".into() },
             ServerMessage::Step {
@@ -201,7 +226,14 @@ mod tests {
                 name: "arena".into(),
                 tick: 900,
                 world: crate::sim::WorldKind::Infinite,
+                rules: crate::net::Rules::default(),
             },
+            ServerMessage::Rules(crate::net::Rules {
+                paused: false,
+                place_anywhere: true,
+                place_free: true,
+                laboratory: true,
+            }),
             ServerMessage::Rooms {
                 rooms: vec![
                     // A match, so the list can say so before anybody clicks.
@@ -212,6 +244,7 @@ mod tests {
                         phase: crate::net::MatchPhase::Gathering,
                         victory: Some(crate::net::Victory::Territory { squares: 500 }),
                         world: crate::sim::WorldKind::Toroidal { rows: 6, cols: 6 },
+                        rules: crate::net::Rules::default(),
                     },
                     crate::net::RoomInfo {
                         id: "lobby".into(),
@@ -220,6 +253,23 @@ mod tests {
                         phase: crate::net::MatchPhase::Open,
                         victory: None,
                         world: crate::sim::WorldKind::Infinite,
+                        rules: crate::net::Rules::default(),
+                    },
+                    // A laboratory, which the list tells apart from a world by
+                    // these and nothing else.
+                    crate::net::RoomInfo {
+                        id: "r-bench1".into(),
+                        name: "bench".into(),
+                        players: 1,
+                        phase: crate::net::MatchPhase::Open,
+                        victory: None,
+                        world: crate::sim::WorldKind::Infinite,
+                        rules: crate::net::Rules {
+                            paused: true,
+                            place_anywhere: true,
+                            place_free: true,
+                            laboratory: true,
+                        },
                     },
                 ],
             },

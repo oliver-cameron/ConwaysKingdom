@@ -536,6 +536,65 @@ impl Victory {
     }
 }
 
+/// **What the game does in this room**, as against what a match does.
+///
+/// Three switches a laboratory takes off and every other room leaves alone.
+/// They belong to the room rather than to the client because a client that
+/// decided for itself would predict placements the server refuses and resync
+/// every time it drew — which is why a laboratory could only ever be offline,
+/// and why it is a room now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rules {
+    /// The world is stopped.
+    ///
+    /// The one control an experiment has that a world does not: everywhere
+    /// else the server steps on its own clock and there is nothing to press.
+    pub paused: bool,
+    /// Placing is not confined to ground the player's influence reaches.
+    pub place_anywhere: bool,
+    /// Placing costs nothing.
+    pub place_free: bool,
+    /// Whether a client in this room may change the three above. True in an
+    /// experiment and false everywhere else, which is the whole difference
+    /// between a laboratory and a world.
+    pub laboratory: bool,
+}
+
+/// What kind of room this is: the one question the make-a-world form asks, and
+/// the one distinction the room list has to show.
+///
+/// Derived rather than stored, because it is two facts the room already keeps
+/// for other reasons — whether there is a way to win, and whether the rules
+/// are yours to change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoomKind {
+    /// Steps forever, anybody may join, nobody wins.
+    World,
+    /// Won somehow. Gathers, runs, ends.
+    Match,
+    /// A laboratory: the clock is a control, and the game's two placing rules
+    /// come off.
+    Experiment,
+}
+
+impl RoomKind {
+    pub fn of(victory: Option<Victory>, rules: &Rules) -> Self {
+        match (victory, rules.laboratory) {
+            (Some(_), _) => Self::Match,
+            (None, true) => Self::Experiment,
+            (None, false) => Self::World,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::World => "world",
+            Self::Match => "match",
+            Self::Experiment => "experiment",
+        }
+    }
+}
+
 /// A room that now exists: how to reach it, what it is called, and — if it is
 /// private — the code to hand to whoever is playing.
 ///
@@ -569,6 +628,10 @@ pub struct RoomInfo {
     pub phase: MatchPhase,
     /// How it is won, if it is a match.
     pub victory: Option<Victory>,
+    /// What the game is doing in it. With [`Self::victory`] this is what
+    /// [`RoomKind`] reads, which is the one thing somebody picking a room off
+    /// this list is actually choosing between.
+    pub rules: Rules,
     /// Players connected right now, not players the room has ever seen. The
     /// second number is the one the world remembers and the wrong one to
     /// choose a room by.
@@ -681,7 +744,23 @@ pub enum ClientMessage {
         /// generated name is already unique and already what `Join` carries.
         /// `name` is ignored when this is set.
         private: bool,
+        /// Make it a laboratory: the clock is a control and the two placing
+        /// rules can be taken off. With `victory` this is the whole of what
+        /// [`RoomKind`] the form asked for — a match has a way to win, an
+        /// experiment has this, and a world has neither.
+        laboratory: bool,
     },
+    /// Change what the game is doing in this room. Refused unless the room is
+    /// a laboratory, because everywhere else these are the rules of the game.
+    ///
+    /// The whole set rather than one switch, so a client cannot half-apply a
+    /// change and the answer is one broadcast rather than three.
+    SetRules(Rules),
+    /// One generation, in a room that is stopped.
+    ///
+    /// Its own message rather than an unpause and a pause, which would be two
+    /// round trips and a world that ran for however long they took.
+    StepOnce,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,6 +802,10 @@ pub enum ServerMessage {
         /// client that guessed infinite against a toroidal server folded no
         /// coordinates and disagreed the moment anything crossed the seam.
         world: WorldKind,
+        /// What the game is doing here. Sent rather than assumed for the same
+        /// reason the shape is: nothing a client can see says whether placing
+        /// is free, and one that guessed would price every action wrongly.
+        rules: Rules,
     },
     Rejected {
         reason: String,
@@ -742,7 +825,14 @@ pub enum ServerMessage {
         name: RoomName,
         tick: Tick,
         world: WorldKind,
+        rules: Rules,
     },
+    /// The rules of this room changed, to everybody in it at once.
+    ///
+    /// Broadcast rather than answered to whoever asked, because a laboratory
+    /// is a room several people are in and a clock that stopped for one of
+    /// them would be two worlds.
+    Rules(Rules),
     /// The answer to [`ClientMessage::Create`]: what the room is called, or why
     /// there is not one. The name is sent back because [`room_name`] lowercases
     /// and trims, so what was typed and what the room is called differ.
@@ -874,6 +964,18 @@ pub fn reach(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
 /// around their patch. See [docs/game.md#where-you-may-build].
 pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     reach(world, player, row, col) > 0
+}
+
+/// The same question under a room's [`Rules`], which is what both sides
+/// actually ask.
+///
+/// **The rule and the switch that takes it off are read together or not at
+/// all.** Asked separately, a client predicts a placement the server refuses
+/// and resyncs the moment it draws; this is the one call, so a laboratory
+/// takes the rule off everywhere it is asked rather than at three of the four
+/// call sites.
+pub fn may_place_under(world: &World, player: PlayerId, row: i32, col: i32, rules: &Rules) -> bool {
+    rules.place_anywhere || may_place(world, player, row, col)
 }
 
 /// How many grants sit along one edge of a **torus's** grid. Six across is
@@ -1282,6 +1384,17 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
                 None => 0,
             })
             .sum(),
+    }
+}
+
+/// What an action costs under a room's [`Rules`], which in a laboratory is
+/// nothing. The pricing half of [`may_place_under`], and shared for the same
+/// reason.
+pub fn price_under(world: &World, stamped: &Stamped, rules: &Rules) -> i32 {
+    if rules.place_free {
+        0
+    } else {
+        value_delta(world, stamped)
     }
 }
 

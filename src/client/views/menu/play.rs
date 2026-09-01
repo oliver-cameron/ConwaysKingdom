@@ -4,7 +4,7 @@
 //! and share almost nothing: this one is about a machine somewhere and the
 //! worlds on it, and home is about the person in front of the screen.
 
-use super::draft::{Draft, Ends, Shape, Together};
+use super::draft::{Draft, Ends, Kind, Shape, Together};
 use super::{describe, players, words, Chose, Menu, Page, Stage, Where, RETRY_EVERY, SETTLE};
 use crate::client::views::theme::Theme;
 use crate::net::{RoomId, RoomInfo};
@@ -378,20 +378,6 @@ pub(super) fn make_column(
 ) -> Option<Chose> {
     let draft = menu.draft.get_or_insert_with(Draft::default);
     let made = make_form(ui, theme, draft, reached);
-    // **Under the form, on both screens that carry one.** A laboratory is a
-    // world you describe too, so it belongs at the foot of the description
-    // rather than beside the ways in — and it is the answer to the question
-    // the form leaves somebody with, which is "what if I do not want any of
-    // this to be a game".
-    let m = theme.metrics;
-    ui.add_space(m.item_spacing * 2.0);
-    if ui.small_button(words::lab::TITLE).clicked() {
-        menu.page = Page::Experiments;
-    }
-    ui.colored_label(
-        theme.palette.text_dim,
-        egui::RichText::new(words::lab::NOTE).size(m.text_small),
-    );
 
     // **With no server, the same form plays it here** rather than refusing.
     // Every question on it — how big, does it end, how — is answerable without
@@ -444,20 +430,52 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 ui.add_space(m.item_spacing);
             }
 
+            // **What kind of room, asked once and answered before anything
+            // it decides.** A match is the only one with a way to win, and an
+            // experiment is the only one whose rules are yours — so the rows
+            // below it appear or do not according to this.
             ui.add_space(m.item_spacing);
-            ui.label(egui::RichText::new(words::make::SHAPE).size(m.text_small));
-            // **The size lives inside the Wrapping button.** As its own row it
-            // pushed everything under it down the moment the shape changed, so
-            // choosing a shape moved the button you were about to press next —
-            // and on a small screen it pushed the action off the bottom. The
-            // row grows in place instead: the option that has a size is the
-            // one that holds it.
-            shape_row(ui, theme, draft);
+            ui.label(egui::RichText::new(words::make::KIND).size(m.text_small));
+            toggles(
+                ui,
+                theme,
+                &mut draft.kind,
+                &[
+                    (Kind::World, words::make::WORLD),
+                    (Kind::Match, words::make::MATCH),
+                    (Kind::Experiment, words::make::EXPERIMENT),
+                ],
+            );
+            ui.colored_label(
+                p.text_dim,
+                egui::RichText::new(match draft.kind {
+                    Kind::World => words::make::WORLD_NOTE,
+                    Kind::Match => words::make::MATCH_NOTE,
+                    Kind::Experiment => words::make::EXPERIMENT_NOTE,
+                })
+                .size(m.text_small),
+            );
+
+            // **A laboratory is boundless**, so it is not asked: a torus is a
+            // shape a match wants so its ground is finite and contested, which
+            // means nothing to somebody watching a pattern.
+            if draft.kind != Kind::Experiment {
+                ui.add_space(m.item_spacing);
+                ui.label(egui::RichText::new(words::make::SHAPE).size(m.text_small));
+                // **The size lives inside the Wrapping button.** As its own row it
+                // pushed everything under it down the moment the shape changed, so
+                // choosing a shape moved the button you were about to press next —
+                // and on a small screen it pushed the action off the bottom. The
+                // row grows in place instead: the option that has a size is the
+                // one that holds it.
+                shape_row(ui, theme, draft);
+            }
 
             // Teams, on a world as much as on a match: a team is people
             // playing as one player, which is worth having without a result
-            // to win.
-            if reached {
+            // to win. Not in a laboratory, where nobody is playing as
+            // anything.
+            if reached && draft.kind != Kind::Experiment {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
                 let mut together = draft.together;
@@ -511,34 +529,28 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 );
             }
 
-            ui.add_space(m.item_spacing);
-            ui.label(egui::RichText::new(words::make::ENDS).size(m.text_small));
-            let mut ends = draft.ends;
-            toggles(
-                ui,
-                theme,
-                &mut ends,
-                &[
-                    (Ends::Never, words::make::NEVER),
-                    (Ends::Timer, words::make::TIMER),
-                    (Ends::Territory, words::make::TERRITORY),
-                ],
-            );
-            draft.retarget(ends);
+            if draft.kind == Kind::Match {
+                ui.add_space(m.item_spacing);
+                ui.label(egui::RichText::new(words::make::ENDS).size(m.text_small));
+                let mut ends = draft.ends;
+                toggles(
+                    ui,
+                    theme,
+                    &mut ends,
+                    &[(Ends::Timer, words::make::TIMER), (Ends::Territory, words::make::TERRITORY)],
+                );
+                draft.retarget(ends);
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(match draft.ends {
+                        Ends::Timer => words::make::TIMER_NOTE,
+                        Ends::Territory => words::make::TERRITORY_NOTE,
+                    })
+                    .size(m.text_small),
+                );
+            }
 
-            // What the choice above actually means, in a line. The three
-            // words on the buttons are short enough to be guessed wrong.
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(match draft.ends {
-                    Ends::Never => words::make::NEVER_NOTE,
-                    Ends::Timer => words::make::TIMER_NOTE,
-                    Ends::Territory => words::make::TERRITORY_NOTE,
-                })
-                .size(m.text_small),
-            );
-
-            if draft.ends != Ends::Never {
+            if draft.kind == Kind::Match {
                 ui.add_space(m.item_spacing);
                 ui.label(
                     egui::RichText::new(match draft.ends {
@@ -588,15 +600,16 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 // same form: a name that is too long and a name already taken
                 // are the same kind of answer to the player.
                 match draft.parse() {
-                    Ok((name, shape, victory, teams)) => {
+                    Ok(described) => {
                         draft.note = None;
                         draft.asking = true;
                         chose = Some(Chose::Create {
-                            name,
-                            shape,
-                            victory,
-                            teams,
+                            name: described.name,
+                            shape: described.shape,
+                            victory: described.victory,
+                            teams: described.teams,
                             private: draft.private,
+                            laboratory: described.laboratory,
                         });
                     }
                     Err(why) => draft.note = Some(why),
@@ -807,13 +820,20 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
             // this list is the one place the difference has to show — clicking
             // into a match that has already started only to be refused is a
             // worse way to find out.
+            use crate::client::views::words as said;
             let mut under = describe(room.world);
+            let kind = crate::net::RoomKind::of(room.victory, &room.rules);
+            if let Some(name) = said::room_kind(kind) {
+                under = format!("{under} · {name}");
+            }
             if let Some(victory) = room.victory {
-                under = format!(
-                    "{under} · {} · {}",
-                    crate::client::views::words::phase(&room.phase),
-                    crate::client::views::words::describe(victory)
-                );
+                under =
+                    format!("{under} · {} · {}", said::phase(&room.phase), said::describe(victory));
+            }
+            // The one thing about a laboratory worth knowing before going in:
+            // a stopped world looks exactly like a broken one from outside.
+            if room.rules.laboratory && room.rules.paused {
+                under = format!("{under} · {}", said::STOPPED);
             }
             ui.colored_label(
                 if matches!(room.phase, crate::net::MatchPhase::Gathering) {

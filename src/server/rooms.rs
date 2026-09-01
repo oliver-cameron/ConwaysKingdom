@@ -428,7 +428,7 @@ impl Rooms {
         // Answered without a seat for a sharper version of the same reason: it
         // names a room that does not exist, so there is nowhere to have been
         // standing when it was sent.
-        if let ClientMessage::Create { name, shape, victory, teams, private } = msg {
+        if let ClientMessage::Create { name, shape, victory, teams, private, laboratory } = msg {
             return vec![ServerMessage::Made(self.make(
                 caller.connection,
                 &name,
@@ -436,6 +436,7 @@ impl Rooms {
                 victory,
                 teams,
                 private,
+                laboratory,
             ))];
         }
         // Admitted at any generation, and that is the point rather than an
@@ -453,6 +454,7 @@ impl Rooms {
                         name,
                         tick: server.tick(),
                         world: server.world().kind(),
+                        rules: server.rules(),
                     }]
                 }
                 Err(reason) => vec![ServerMessage::Rejected { reason }],
@@ -869,6 +871,7 @@ impl Rooms {
         victory: Option<Victory>,
         teams: Option<u8>,
         private: bool,
+        laboratory: bool,
     ) -> Result<Made, String> {
         // Checked before the name is, so a server that is full says so rather
         // than arguing about a name it was never going to use. Counted over
@@ -906,6 +909,14 @@ impl Rooms {
         let mut server = Server::named(name.clone(), shape.build()).seeded_by(&id);
         if let Some(victory) = victory {
             server.make_match(victory);
+        }
+        // **A laboratory is a room like any other**, which is the whole point:
+        // the clock and the two placing rules are things this room does, so
+        // several people can be in one and there is nothing offline about it.
+        // A way to win takes precedence, because a match with the rules off is
+        // not a match.
+        if laboratory && victory.is_none() {
+            server.make_laboratory();
         }
         // **A world may have teams.** What a team is, is people playing as one
         // player, and that is worth having without a result to win: a world
@@ -1125,6 +1136,7 @@ impl Rooms {
                         victory: server.victory(),
                         players: server.players().filter(|p| p.online).count() as u32,
                         world: server.world().kind(),
+                        rules: server.rules(),
                     },
                     self.unlisted.contains(id),
                 )
@@ -1143,6 +1155,7 @@ impl Rooms {
                 victory: server.victory(),
                 players: server.players().filter(|p| p.online).count() as u32,
                 world: server.world().kind(),
+                rules: server.rules(),
             })
             .collect()
     }
@@ -1516,6 +1529,7 @@ mod tests {
                 victory: None,
                 teams: None,
                 private: false,
+                laboratory: false,
             },
         );
         let [ServerMessage::Made(Ok(made))] = &replies[..] else {
@@ -1545,7 +1559,7 @@ mod tests {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let me = Caller::new(1);
 
-        rooms.make(1, "plain", WorldKind::Infinite, None, None, false).unwrap();
+        rooms.make(1, "plain", WorldKind::Infinite, None, None, false, false).unwrap();
         rooms
             .make(
                 1,
@@ -1553,6 +1567,7 @@ mod tests {
                 WorldKind::Infinite,
                 Some(Victory::Territory { squares: 500 }),
                 None,
+                false,
                 false,
             )
             .unwrap();
@@ -1584,6 +1599,7 @@ mod tests {
                 victory: None,
                 teams: None,
                 private: false,
+                laboratory: false,
             },
         );
         let [ServerMessage::Made(Err(why))] = &replies[..] else {
@@ -1608,12 +1624,13 @@ mod tests {
         rooms.cap_made(2);
         assert_eq!(rooms.len(), 3, "three declared, none of them counted");
 
-        assert!(rooms.make(1, "a", WorldKind::Infinite, None, None, false).is_ok());
-        assert!(rooms.make(1, "b", WorldKind::Infinite, None, None, false).is_ok());
+        assert!(rooms.make(1, "a", WorldKind::Infinite, None, None, false, false).is_ok());
+        assert!(rooms.make(1, "b", WorldKind::Infinite, None, None, false, false).is_ok());
         let (made, cap) = rooms.made_count();
         assert_eq!((made, cap), (2, 2));
 
-        let refused = rooms.make(1, "c", WorldKind::Infinite, None, None, false).unwrap_err();
+        let refused =
+            rooms.make(1, "c", WorldKind::Infinite, None, None, false, false).unwrap_err();
         assert!(refused.contains('2'), "the refusal says how many: {refused}");
         assert!(rooms.get(&RoomId::from("c")).is_none(), "and made none");
 
@@ -1621,7 +1638,7 @@ mod tests {
         // cap's worth would refuse for ever while holding nothing.
         rooms.delete("a").unwrap();
         assert_eq!(rooms.made_count().0, 1);
-        assert!(rooms.make(1, "c", WorldKind::Infinite, None, None, false).is_ok());
+        assert!(rooms.make(1, "c", WorldKind::Infinite, None, None, false, false).is_ok());
     }
 
     /// A private room is reachable by its code and mentioned nowhere else —
@@ -1632,7 +1649,8 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("private"), &["hall".into()], WorldKind::Infinite, true).unwrap();
 
-        let made = rooms.make(3, "friends-only", WorldKind::Infinite, None, None, true).unwrap();
+        let made =
+            rooms.make(3, "friends-only", WorldKind::Infinite, None, None, true, false).unwrap();
         let code = made.code.clone().expect("a private room gets a code");
         assert_eq!(code.len(), CODE_LEN);
         assert_ne!(code, made.id.as_str(), "a code is a credential, not an identity");
@@ -1662,7 +1680,7 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("console-sees"), &["hall".into()], WorldKind::Infinite, true)
                 .unwrap();
-        let made = rooms.make(3, "", WorldKind::Infinite, None, None, true).unwrap();
+        let made = rooms.make(3, "", WorldKind::Infinite, None, None, true, false).unwrap();
         assert!(made.code.is_some(), "a private room gets a code");
 
         let everything = rooms.everything();
@@ -1712,6 +1730,7 @@ mod tests {
                 WorldKind::Infinite,
                 Some(Victory::Timer { generations: 50 }),
                 None,
+                false,
                 false,
             )
             .unwrap();
@@ -1774,6 +1793,7 @@ mod tests {
                     victory: Some(Victory::Timer { generations: 200 }),
                     teams: None,
                     private: false,
+                    laboratory: false,
                 },
             )
             .into_iter()
