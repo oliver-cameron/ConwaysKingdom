@@ -11,6 +11,7 @@
 | [planned.md](planned.md) | What is not built yet, and what is left of what is — a status per entry |
 | [inspiration.md](inspiration.md) | Where the design is borrowed from, and which problem each source solved |
 | [gotchas.md](gotchas.md) | Things that cost a day, so they only cost one |
+| [simplifying.md](simplifying.md) | How to cut this tree back, and what not to cut |
 | [../design-notes/](../design-notes/) | The working behind the decisions: cell layout, residency, topology, compute |
 | [known-bugs.md](known-bugs.md) | What is wrong and not fixed, with what you would see |
 
@@ -98,7 +99,7 @@ The `--profiling` profile is release codegen with the second optimiser switched 
 cargo fmt --check
 ```
 
-Keep all comments concise, replace 5 lines of comments with well-labeled code and links to the documentation where possible.
+Keep comments concise: replace five lines of comment with well-labelled code and a link to the documentation. [simplifying.md](simplifying.md) is the test to apply to one comment, where the cut material goes instead of the bin, and how to find the worst of it.
 
 ## Testing
 
