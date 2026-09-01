@@ -296,6 +296,13 @@ pub enum Placement {
     /// it is bought once per cell, and one dies of loneliness in a generation —
     /// the smallest that works is four in a block.
     Turret,
+    /// A living cell that counts down and then scrambles the ground around it.
+    ///
+    /// Priced by the **emplacement**, like a turret and for the same two
+    /// reasons: it is not inherited, so it is bought once per cell, and one on
+    /// its own dies of loneliness before its fuse burns. What it really costs
+    /// is the pattern you have to build to keep it alive that long.
+    Payload,
 }
 
 impl Placement {
@@ -316,16 +323,28 @@ impl Placement {
                 // mine's corpse would hand you a free mine -- the kind is on
                 // the cell and outlives the life that carried it.
                 .with_kind(Kind::NORMAL),
+            // **From nought**, as a payload is. A mine's age only resets when
+            // it decays, so laying a fresh one over a corpse that had been
+            // rotting would buy a mine already part way through its own.
             Self::Mine => existing
                 .with_alive(true)
                 .with_player(player)
                 .with_level(crate::sim::bits::MAX_LEVEL)
-                .with_kind(Kind::MINE),
+                .with_kind(Kind::MINE)
+                .with_age(0),
             Self::Turret => existing
                 .with_alive(true)
                 .with_player(player)
                 .with_level(crate::sim::bits::MAX_LEVEL)
                 .with_kind(Kind::TURRET),
+            // The same, and here it is a fuse somebody else's cell had
+            // already half burnt.
+            Self::Payload => existing
+                .with_alive(true)
+                .with_player(player)
+                .with_level(crate::sim::bits::MAX_LEVEL)
+                .with_kind(Kind::PAYLOAD)
+                .with_age(0),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
             // cell with it -- deliberate, and the reason a pane costs what it
@@ -347,6 +366,7 @@ impl Placement {
             Self::Life => existing.is_alive() && existing.kind() == Kind::NORMAL,
             Self::Mine => existing.is_alive() && existing.kind() == Kind::MINE,
             Self::Turret => existing.is_alive() && existing.kind() == Kind::TURRET,
+            Self::Payload => existing.is_alive() && existing.kind() == Kind::PAYLOAD,
             Self::Ice => existing.is_ice(),
         }
     }
@@ -363,6 +383,7 @@ impl Placement {
             Self::Ice => ICE_COST,
             Self::Mine => MINE_COST,
             Self::Turret => TURRET_COST,
+            Self::Payload => PAYLOAD_COST,
         }
     }
 
@@ -385,6 +406,10 @@ impl Placement {
             // cannot pick up would make the fourth click of an emplacement a
             // trap rather than a decision.
             Self::Turret => true,
+            // The same again, and it matters more here: a payload is a fuse
+            // you have already lit, so being unable to put one out would make
+            // a misplaced one a countdown you can only watch.
+            Self::Payload => true,
             Self::Ice => false,
         }
     }
@@ -398,6 +423,10 @@ impl Placement {
             // The kind stays on the corpse, as it does when a cell dies of the
             // rule: what is being taken back is the life.
             Self::Life | Self::Mine | Self::Turret => existing.with_alive(false),
+            // And the fuse goes out with it. A corpse that kept its age would
+            // be a bomb somebody could bring back to life at one generation
+            // from going off.
+            Self::Payload => existing.with_alive(false).with_age(0),
             Self::Ice => existing.with_ice(false),
         }
     }
@@ -1415,7 +1444,7 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, RECLAIM, TURRET_COST,
+    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, PAYLOAD_COST, RECLAIM, TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.

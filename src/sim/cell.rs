@@ -2,9 +2,7 @@ use bytemuck::{Pod, Zeroable};
 
 use super::dir::Dir;
 use super::player::PlayerId;
-use super::rule::{
-    next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM, UPKEEP_STREAM,
-};
+use super::rule::{next_cell, Neighbours, MINE_DUE, TURRET_DECAY, TURRET_ROT_STREAM};
 use super::seed::Roll;
 use std::ops::{Index, IndexMut};
 
@@ -15,18 +13,25 @@ pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 ///
 /// ```text
 ///  byte 0 (R)                byte 1 (G)
-/// | player |level|H|       |K2| age  |K1 0|I |A |
-///  7 6 5 4  3 2 1  0        7  6 5 4  3 2  1  0
+/// | player |level|H|       | age  | kind |I |A |
+///  7 6 5 4  3 2 1  0        7 6 5   4 3 2  1  0
 /// ```
 ///
 /// Byte 0 holds the player at the top, so the number extracts with a shift and
 /// no mask, then how much of that player's influence reaches this square, then
 /// whether the square was granted.
 ///
-/// Byte 1 is **the tile this cell draws**: the index straight into the sheet,
-/// low nibble across, high nibble down. The fields are placed so that reads
-/// off the sheet: a kind's four states are four consecutive tiles along a row,
-/// and its eight ages are eight rows down. See [`bits::AGE_SHIFT`].
+/// Byte 1 is what a cell **is**: alive, iced, its kind, and how far through
+/// whatever that kind counts. Every field is contiguous and every one extracts
+/// with a shift and a mask.
+///
+/// **It is not the sheet index.** It was — the fields used to be arranged so
+/// the byte fell out as one, with the kind split around the age to make the
+/// nibbles line up, and reading a kind meant reassembling it from two places.
+/// A byte that is a picture is a byte that cannot be read. The sheet position
+/// is [`Cell::sprite`], which is four operations, and the sheet's layout is
+/// unchanged by the move: a kind's four states are still four columns and its
+/// eight ages still eight rows.
 ///
 /// Uploaded as `Rg8Uint`. Uint rather than Unorm because these are bit fields,
 /// not colours: Unorm hands the shader floats in 0..1 and reading a field back
@@ -57,35 +62,27 @@ pub mod bits {
     /// the rule returns such a cell unchanged.
     pub const ICE: u8 = 1 << 1;
 
-    /// Byte 1, bits 4..7: **how old this cell is**, nought to seven.
+    /// Byte 1, bits 5..8: **how far through this cell is**, nought to seven.
     ///
     /// Not a count of generations — a step, and what a step means is the
-    /// kind's business. Nothing advances it yet; see [payloads], which is
-    /// what it is for.
+    /// kind's business: see [`super::Ages`], which is where each kind says
+    /// what its own counts.
     ///
-    /// **Here so the sheet reads as a grid.** The high nibble of the tile byte
-    /// is the row, so age in its low three bits puts a kind's eight ages in
-    /// eight rows down, under the four states that are its four columns.
-    ///
-    /// [payloads]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#payloads
-    pub const AGE_SHIFT: u8 = 4;
+    /// At the top of the byte, so it extracts with a shift alone. It used to
+    /// sit in the middle, splitting the kind in two, because that made the
+    /// byte its own sheet index — see [`super::Cell::sprite`], which is what
+    /// pays for this instead.
+    pub const AGE_SHIFT: u8 = 5;
     pub const AGE_WIDTH: u8 = 3;
     pub const AGE_MASK: u8 = (1 << AGE_WIDTH) - 1;
     pub const MAX_AGE: u8 = AGE_MASK;
 
-    /// Byte 1, bits 2..4 and bit 7: what kind of cell this is.
+    /// Byte 1, bits 2..5: what kind of cell this is. Eight of them.
     ///
-    /// **Split, because age took the middle of the nibble.** Three bits, and
-    /// the two the sheet wants adjacent to the state bits are 2 and 3 — so the
-    /// third goes above the age, where it becomes the top half of the sheet.
-    /// Kinds 0-3 are the first eight rows and 4-7 the last eight.
-    ///
-    /// Six bits once, of which three were used. Sixty-one spare kinds is not
-    /// worth a nibble that does not line up.
+    /// **In one piece**, which it was not: the sheet wanted the two low bits
+    /// beside the state bits and the third above the age, so a kind was
+    /// assembled from bits 2, 3 and 7 every time it was read or written.
     pub const KIND_SHIFT: u8 = 2;
-    pub const KIND_LOW_WIDTH: u8 = 2;
-    pub const KIND_LOW_MASK: u8 = (1 << KIND_LOW_WIDTH) - 1;
-    pub const KIND_HIGH_SHIFT: u8 = 7;
     pub const KIND_WIDTH: u8 = 3;
     pub const KIND_MASK: u8 = (1 << KIND_WIDTH) - 1;
 
@@ -148,11 +145,9 @@ const _: () = {
     assert!(bits::ALIVE == 1);
     assert!(bits::ICE == 2);
     assert!(bits::KIND_SHIFT == 2);
-    // Kind low, age, kind high: bits 2..8 with no overlap and no gap.
-    assert!(bits::KIND_SHIFT + bits::KIND_LOW_WIDTH == bits::AGE_SHIFT);
-    assert!(bits::AGE_SHIFT + bits::AGE_WIDTH == bits::KIND_HIGH_SHIFT);
-    assert!(bits::KIND_HIGH_SHIFT == 7);
-    assert!(bits::KIND_LOW_WIDTH + 1 == bits::KIND_WIDTH);
+    // Alive, ice, kind, age: bits 0..8 with no overlap and no gap.
+    assert!(bits::KIND_SHIFT + bits::KIND_WIDTH == bits::AGE_SHIFT);
+    assert!(bits::AGE_SHIFT + bits::AGE_WIDTH == 8);
     // A kind must fit the field it is stored in, or `with_kind` truncates it
     // into a different kind that has art of its own.
     assert!(Kind::COUNT <= 1 << bits::KIND_WIDTH);
@@ -218,20 +213,36 @@ impl Cell {
         PlayerId(self.owner_byte() >> bits::PLAYER_SHIFT)
     }
 
-    /// What kind of cell this is. Not the tile on its own: the tile carries
-    /// the state as well, which is what makes a kind's four pictures four
-    /// consecutive entries in the sheet.
+    /// What kind of cell this is. One shift and one mask, which it was not:
+    /// the kind used to be assembled from bits 2, 3 and 7.
     #[inline]
     pub const fn kind(self) -> Kind {
-        let tile = self.tile();
-        Kind(
-            ((tile >> bits::KIND_SHIFT) & bits::KIND_LOW_MASK)
-                | ((tile >> bits::KIND_HIGH_SHIFT) << bits::KIND_LOW_WIDTH),
-        )
+        Kind((self.tile() >> bits::KIND_SHIFT) & bits::KIND_MASK)
     }
 
-    /// How old this cell is, nought to [`bits::MAX_AGE`]. Nothing advances it
-    /// yet — see [`bits::AGE_SHIFT`].
+    /// **Where this cell's picture is on the sheet**, as a tile index.
+    ///
+    /// Four operations, and it used to be none: the byte was arranged to *be*
+    /// this number, which is why the kind was split around the age. The sheet
+    /// is unchanged by moving them — a kind's four states are still four
+    /// columns and its eight ages still eight rows — so what this computes is
+    /// exactly the byte that used to be stored.
+    ///
+    /// The column is the kind's low two bits and the two state bits, so four
+    /// states sit side by side; the row is the age, with the kind's third bit
+    /// choosing which half of the sheet, so kinds 0-3 are the top eight rows
+    /// and 4-7 the bottom eight. `render/shaders/grid.wgsl` does the same
+    /// arithmetic and is the one thing kept in step by hand.
+    #[inline]
+    pub const fn sprite(self) -> u8 {
+        let kind = self.kind().0;
+        let column = ((kind & 3) << 2) | (self.tile() & (bits::ALIVE | bits::ICE));
+        let row = self.age() | ((kind >> 2) << 3);
+        (row << 4) | column
+    }
+
+    /// How far through this cell is, nought to [`bits::MAX_AGE`]. What it
+    /// counts is the kind's business — see [`Ages`].
     pub const fn age(self) -> u8 {
         (self.tile() >> bits::AGE_SHIFT) & bits::AGE_MASK
     }
@@ -301,13 +312,8 @@ impl Cell {
 
     #[inline]
     pub const fn with_kind(self, kind: Kind) -> Self {
-        let kind = kind.0 & bits::KIND_MASK;
-        let kept = self.tile()
-            & !((bits::KIND_LOW_MASK << bits::KIND_SHIFT) | (1 << bits::KIND_HIGH_SHIFT));
-        self.with_tile(
-            kept | ((kind & bits::KIND_LOW_MASK) << bits::KIND_SHIFT)
-                | ((kind >> bits::KIND_LOW_WIDTH) << bits::KIND_HIGH_SHIFT),
-        )
+        let kept = self.tile() & !(bits::KIND_MASK << bits::KIND_SHIFT);
+        self.with_tile(kept | ((kind.0 & bits::KIND_MASK) << bits::KIND_SHIFT))
     }
 
     /// Granted ground: this square is somebody's home patch and its owner does
@@ -363,7 +369,11 @@ pub struct Kind(pub u8);
 /// [`Kind::inherits`] cannot drift from each other, and adding a kind is a
 /// row rather than four edits in three places.
 macro_rules! kinds {
-    ($( $(#[$doc:meta])* $name:ident = $n:literal, inherited: $inherited:literal ),* $(,)?) => {
+    ($(
+        $(#[$doc:meta])* $name:ident = $n:literal,
+        inherited: $inherited:literal,
+        ages: $ages:expr
+    ),* $(,)?) => {
         impl Kind {
             $( $(#[$doc])* pub const $name: Self = Self($n); )*
 
@@ -401,13 +411,57 @@ macro_rules! kinds {
                     _ => false,
                 }
             }
+
+            /// **What this kind's age field counts.** See [`Ages`].
+            pub const fn ages(self) -> Ages {
+                match self.0 {
+                    $( $n => $ages, )*
+                    _ => Ages::Never,
+                }
+            }
         }
     };
 }
 
+/// **What a kind's age field counts**, which is the whole reason the field is
+/// where it is: eight ages are eight rows of the sheet, so whatever a kind
+/// counts is on screen without an interface to read it off.
+///
+/// One thing or nothing, never two. There is one age field, so a kind that
+/// wanted a fuse *and* a rot would need somewhere to put the second — and the
+/// two are anyway on opposite sides of the same event, since one counts while
+/// the cell lives and the other only once it is dead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ages {
+    /// Nothing. The field stays at nought and the kind is one row of the
+    /// sheet.
+    Never,
+    /// **A fuse, while it lives**, advancing on this chance a generation —
+    /// and certainly from [`super::rule::PAYLOAD_WARN`], so the last sprite is
+    /// on screen for exactly one generation.
+    ///
+    /// The rate is on the row rather than in a constant somewhere else,
+    /// because "what it counts" and "how fast" are one fact about a kind and
+    /// splitting them is how the two come to disagree.
+    ///
+    /// A chance and not a count, because it **scatters**: four payloads laid
+    /// in one gesture do not go off in lockstep. What happens when it runs out
+    /// is not a rule at all; see [`super::World::detonate`].
+    Fuse(super::rule::Chance),
+    /// **A corpse rotting**, one step a generation with no roll, until at
+    /// [`bits::MAX_AGE`] it becomes ordinary ground.
+    ///
+    /// Certain, where a fuse is a chance, because there is nothing to scatter:
+    /// a corpse does nothing while it lies there, so how long it lies there is
+    /// bookkeeping and is worth being able to read off the sheet. A dead
+    /// turret is the other way about — it fires backwards for as long as it
+    /// lasts, so its lifetime is a balance number and stays a roll.
+    Rot,
+}
+
 kinds! {
     /// An ordinary living cell.
-    NORMAL = 0, inherited: true,
+    NORMAL = 0, inherited: true, ages: Ages::Never,
     /// A cell that pays its owner when it is **born**.
     ///
     /// Not a marker on the ground and not a rule about death: income is a
@@ -421,7 +475,7 @@ kinds! {
     /// mines is a still life and never gives birth, so it earns nothing. An
     /// oscillator earns every period, and a gun earns forever — which is the
     /// right shape for a game about patterns that work.
-    MINE = 1, inherited: true,
+    MINE = 1, inherited: true, ages: Ages::Rot,
     /// A cell that claims ground at range: every generation it takes the
     /// nearest square that is not its owner's and makes it theirs.
     ///
@@ -436,7 +490,24 @@ kinds! {
     /// cheapest thing in Conway that never dies and never gives birth, which
     /// is why a turret is placed in fours. It does not inherit, so a turret
     /// is always exactly the cells somebody paid for.
-    TURRET = 2, inherited: false,
+    TURRET = 2, inherited: false, ages: Ages::Never,
+    /// A cell that counts down and then scrambles the ground around it.
+    ///
+    /// The **age** field is the fuse — see [`bits::AGE_SHIFT`], which is where
+    /// it sits precisely so that eight ages are eight rows of the sheet and a
+    /// payload visibly counts down with no interface at all. It advances on a
+    /// chance while the cell is alive and not under ice, and at
+    /// [`super::rule::PAYLOAD_WARN`] it always advances, so the last sprite is
+    /// on screen for exactly one generation. A weapon with a random warning is
+    /// a weapon with no warning.
+    ///
+    /// What it does is not a rule: "every square within reach" is not a
+    /// question eight neighbours can answer, so detonation is a pass — see
+    /// [`super::World::detonate`].
+    ///
+    /// It does not inherit, for the turret's reason exactly: a payload whose
+    /// children were payloads would make any gun a bomb factory.
+    PAYLOAD = 3, inherited: false, ages: Ages::Fuse(super::rule::PAYLOAD_FUSE),
 }
 
 /// What each player's mines did in one generation, indexed by the number the
@@ -446,10 +517,9 @@ kinds! {
 /// economy's business and the economy lives in `net`. The rule counts.
 ///
 /// `born` is a count of births. `upkeep` is a count of **charges falling due**
-/// on dead mines — not of deaths. A mine's corpse costs its owner for as long
-/// as it lies there, one generation in [`super::rule::MINE_UPKEEP`], so a
-/// square can be counted many times and a square that dies and is never
-/// counted is possible too.
+/// on dead mines — one per corpse, at the end of the [`Ages::Rot`] it spends
+/// lying there. Not of deaths: a corpse that is painted over, iced or brought
+/// back before it has finished rotting is never charged.
 ///
 /// Two counts rather than one net figure, so the two can be priced apart —
 /// which is what lets the rule decide *how often* a corpse is charged and
@@ -611,13 +681,16 @@ impl Halo {
                         if !before.is_alive() {
                             mined.born[after.player().0 as usize] += 1;
                         }
-                    } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, MINE_UPKEEP) {
-                        // A corpse costs once and is then ordinary ground.
-                        // Charging it for as long as it lay there made a mine
-                        // field a debt you could not pay off; this way what a
-                        // mine costs in the end is bounded by how many died.
+                    } else if after.age() == MINE_DUE {
+                        // **Charged once, when it has lain there long enough**
+                        // — see [`MINE_DUE`], where the delay is the mechanic.
+                        // Exactly on that age and not at or above it, so a
+                        // corpse pays once however long it goes on rotting.
                         mined.upkeep[after.player().0 as usize] += 1;
-                        after = after.with_kind(Kind::NORMAL);
+                    } else if after.age() >= bits::MAX_AGE {
+                        // Rotted through: ordinary ground, and already paid
+                        // for.
+                        after = after.with_kind(Kind::NORMAL).with_age(0);
                     }
                 }
                 // A dead turret fires backwards over the ground behind it for
@@ -630,6 +703,18 @@ impl Halo {
                     && Roll::new(cell_seed).chance(TURRET_ROT_STREAM, TURRET_DECAY)
                 {
                     after = after.with_kind(Kind::NORMAL);
+                }
+                // **A payload that dies never goes off**, and does not lie
+                // there being a bomb either: it rots on the same terms a dead
+                // turret does. Keeping a corpse armed would mean a payload
+                // could be killed and still detonate, which takes away the one
+                // answer that does not need ice — a payload is a live cell, so
+                // it has to be kept alive to be worth anything.
+                if after.kind() == Kind::PAYLOAD
+                    && !after.is_alive()
+                    && Roll::new(cell_seed).chance(TURRET_ROT_STREAM, TURRET_DECAY)
+                {
+                    after = after.with_kind(Kind::NORMAL).with_age(0);
                 }
                 next[(row, col)] = after;
             }
@@ -794,19 +879,55 @@ mod tests {
         }
     }
 
-    /// **Ages are rows.** The high nibble of the tile byte is the row, and age
-    /// sits in its low three bits, so a kind's eight ages are the eight rows
-    /// under its four states. That is the whole reason age is where it is.
+    /// **Ages are rows**, which is now a property of [`Cell::sprite`] rather
+    /// than of where the bits sit.
+    ///
+    /// It used to fall out of the layout: the age was the low three bits of
+    /// the tile byte's high nibble, so the byte *was* the sheet index. Moving
+    /// the age to the top of the byte to put the kind back in one piece is
+    /// what makes this a test of the arithmetic instead — the sheet did not
+    /// change, only what computes a position on it.
     #[test]
     fn a_kinds_ages_are_eight_rows_down_the_sheet() {
         for kind in 0..=bits::KIND_MASK {
             let base = Cell::DEAD.with_kind(Kind(kind)).with_alive(true);
-            let rows: Vec<u8> = (0..=bits::MAX_AGE).map(|a| base.with_age(a).tile() >> 4).collect();
+            let rows: Vec<u8> =
+                (0..=bits::MAX_AGE).map(|a| base.with_age(a).sprite() >> 4).collect();
             let top = rows[0];
             assert_eq!(rows, (top..top + 8).collect::<Vec<_>>(), "kind {kind}");
             // And the column never moves as a cell ages.
-            let cols: Vec<u8> = (0..=bits::MAX_AGE).map(|a| base.with_age(a).tile() & 15).collect();
+            let cols: Vec<u8> =
+                (0..=bits::MAX_AGE).map(|a| base.with_age(a).sprite() & 15).collect();
             assert!(cols.iter().all(|&c| c == cols[0]), "kind {kind} changed column with age");
+        }
+    }
+
+    /// **The byte and the sheet position are two different numbers now**, and
+    /// the position is the one the old byte used to be.
+    ///
+    /// Worth pinning, because the whole justification for splitting the kind
+    /// around the age was that the byte fell out as an index — so the thing to
+    /// check when putting it back together is that nothing on the sheet moved.
+    #[test]
+    fn the_sprite_index_is_the_byte_the_old_layout_stored() {
+        for kind in 0..=bits::KIND_MASK {
+            for age in 0..=bits::MAX_AGE {
+                for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let cell = Cell::DEAD
+                        .with_kind(Kind(kind))
+                        .with_age(age)
+                        .with_alive(alive)
+                        .with_ice(ice);
+                    // What the old packing produced: alive, ice, the kind's
+                    // low two bits, the age, then the kind's third bit.
+                    let was = (alive as u8)
+                        | ((ice as u8) << 1)
+                        | ((kind & 3) << 2)
+                        | (age << 4)
+                        | ((kind >> 2) << 7);
+                    assert_eq!(cell.sprite(), was, "kind {kind} age {age} moved on the sheet");
+                }
+            }
         }
     }
 

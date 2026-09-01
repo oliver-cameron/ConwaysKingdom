@@ -358,7 +358,7 @@ fn cell(
         // this placement's kind. The sheet is already in the player's colour
         // and the tile byte carries the state, so there is nothing to look up.
         Some(sheet) => {
-            let tile = what.apply_to(Cell::DEAD, player).tile();
+            let tile = what.apply_to(Cell::DEAD, player).sprite();
             painter.image(sheet, rect, Icons::uv(tile), egui::Color32::WHITE);
         }
         None => {

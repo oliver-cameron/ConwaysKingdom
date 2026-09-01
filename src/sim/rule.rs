@@ -20,7 +20,7 @@
 //! [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md
 //! [docs/game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 
-use super::cell::{bits, Cell};
+use super::cell::{bits, Ages, Cell};
 use super::player::PlayerId;
 use super::seed::Roll;
 
@@ -59,8 +59,17 @@ pub const LEVEL_ADJUST: Chance = 16;
 
 // --- mines -------------------------------------------------------------------
 
-/// A dead mine costs its owner [`MINE_DRAIN`] and becomes ordinary ground.
-pub const MINE_UPKEEP: Chance = 16;
+/// How long a mine's corpse has to lie there before it costs its owner
+/// [`MINE_DRAIN`].
+///
+/// **The delay is the mechanic.** A corpse reborn before this is never
+/// charged, which is what makes a mine pay on *turnover* rather than on
+/// holdings: a blinker's squares die and come back every generation and escape
+/// every time, and a sprawl leaves corpses lying about and bleeds. It was a
+/// roll of sixteen in sixty-four, which is the same four generations on
+/// average — this is that number said once, deterministically, and visible on
+/// the sheet as [`Ages::Rot`] counts it off.
+pub const MINE_DUE: u8 = 3;
 
 // --- turrets -----------------------------------------------------------------
 
@@ -72,6 +81,42 @@ pub const TURRET_POWER: usize = 1;
 pub const TURRET_PUSH: u8 = bits::MAX_LEVEL;
 /// A dead turret becomes ordinary ground.
 pub const TURRET_DECAY: Chance = 4;
+
+// --- payloads ----------------------------------------------------------------
+
+/// How often a payload's fuse advances, while it is alive and not under ice.
+///
+/// A chance rather than a count, and the second reason is what earns it. A
+/// chance **scatters** payloads laid in one gesture, so four do not go off in
+/// lockstep. And [`PAYLOAD_WARN`] makes the last step certain, so the warning
+/// is reliable — a weapon with a random warning is a weapon with no warning.
+pub const PAYLOAD_FUSE: Chance = 16;
+/// The age at and above which the fuse always advances.
+///
+/// One below [`bits::MAX_AGE`], so the last sprite is on screen for exactly
+/// one generation, always.
+pub const PAYLOAD_WARN: u8 = bits::MAX_AGE - 1;
+/// How far a detonation reaches from its centre, in cells.
+pub const PAYLOAD_REACH: i32 = 8;
+/// How many squares in sixty-four a detonation brings to life.
+///
+/// Conway's classic soup is a half, which mostly burns down; a third is where
+/// a random field goes on happening longest. This wants playing with rather
+/// than deriving — see `examples/balance.rs`.
+pub const PAYLOAD_DENSITY: u64 = 24;
+/// The furthest a blast's centre may be thrown from the payload, in cells.
+///
+/// **Bounded, or it is a homing weapon with a range of the whole world.** A
+/// payload deep inside a large country lobs itself at the nearest frontier;
+/// past this it goes off where it stands.
+pub const PAYLOAD_THROW: i32 = 12;
+/// How much of a blast's disc has to be somebody else's for it to be worth
+/// setting off there, in squares out of sixty-four.
+///
+/// A blast on your own ground turns your own patterns into your own noise, so
+/// a payload walks outward until it finds a disc at least this much not-yours.
+/// Half: the point at which it is doing more to somebody else than to you.
+pub const PAYLOAD_FOREIGN: u64 = 32;
 
 // --- what a new world defaults to ---------------------------------------------
 
@@ -100,6 +145,9 @@ pub const LIFE_COST: i32 = 1;
 pub const MINE_COST: i32 = 10;
 /// One turret. Read per emplacement: the smallest that works is four.
 pub const TURRET_COST: i32 = 15;
+/// What a payload costs. Dearer than a turret: a turret takes one square a
+/// generation and this rearranges a disc.
+pub const PAYLOAD_COST: i32 = 40;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
@@ -127,6 +175,7 @@ pub enum Then {
 rules! {
     "ice freezes what it covers" => ice,
     "territory is won and lost"  => territory,
+    "whatever a kind counts"     => fuse,
     "life and death"             => conway,
 }
 
@@ -143,6 +192,46 @@ fn ice(cell: Cell, _: &Neighbours, _: Roll) -> Then {
         Then::Stop(cell)
     } else {
         Then::Next(cell)
+    }
+}
+
+/// **Whatever this kind counts, counts** — see [`Ages`], which is the one
+/// place a kind's rules live.
+///
+/// A payload's fuse burns while it lives; a mine's corpse rots once it is
+/// dead. Both are the same field and the same step, because eight ages are
+/// eight rows of the sheet and the whole point of the field is that what a
+/// cell is counting is on screen.
+///
+/// After `ice`, so a frozen fuse does not burn and a frozen corpse does not
+/// rot: a pane stops time over what it covers and that is every rule. Before
+/// `conway`, so this reads the cell as it is now — a payload that dies this
+/// generation stops at the age it had reached rather than gaining one on the
+/// way out, and a corpse starts rotting the generation after it died rather
+/// than the one it died in.
+fn fuse(cell: Cell, _: &Neighbours, roll: Roll) -> Then {
+    if cell.age() >= bits::MAX_AGE {
+        return Then::Next(cell);
+    }
+    match cell.kind().ages() {
+        Ages::Never => Then::Next(cell),
+        // **While it lives.** Certain at the last step and a chance before it:
+        // the chance scatters payloads laid in one gesture, and the certainty
+        // is what makes the warning a tell somebody can act on.
+        Ages::Fuse(rate) if cell.is_alive() => {
+            if cell.age() >= PAYLOAD_WARN || roll.chance(stream::FUSE, rate) {
+                Then::Next(cell.with_age(cell.age() + 1))
+            } else {
+                Then::Next(cell)
+            }
+        }
+        // **Only once it is dead**, which is the whole of what the field is
+        // for on a mine: a live one never moves, so what the sheet shows is
+        // how far through rotting a corpse is and nothing else. What happens
+        // at the end is in `Halo::step_into`, which is the one place that
+        // holds a cell before and after and so can charge the upkeep.
+        Ages::Rot if !cell.is_alive() => Then::Next(cell.with_age(cell.age() + 1)),
+        _ => Then::Next(cell),
     }
 }
 
@@ -251,14 +340,19 @@ mod stream {
     /// Whether a square works out what reaches it this generation.
     pub const LEVEL: u64 = 1;
     pub const PARENT: u64 = 3;
-    pub const UPKEEP: u64 = 4;
     /// Which of the squares that tie for nearest a turret acts on.
     pub const TURRET: u64 = 6;
     /// Whether a dead turret has become ordinary ground.
     pub const TURRET_ROT: u64 = 7;
+    /// Whether a payload's fuse advanced this generation.
+    pub const FUSE: u64 = 8;
+    /// Whether a square inside a blast comes up alive.
+    pub const BLAST: u64 = 9;
+    /// Which of the centres that tie for nearest a blast is thrown to.
+    pub const THROW: u64 = 10;
 }
 
-pub use stream::UPKEEP as UPKEEP_STREAM;
+pub use stream::{BLAST as BLAST_STREAM, THROW as THROW_STREAM};
 pub use stream::{TURRET as TURRET_STREAM, TURRET_ROT as TURRET_ROT_STREAM};
 
 /// Which parent a birth copies, and whether its kind travels.

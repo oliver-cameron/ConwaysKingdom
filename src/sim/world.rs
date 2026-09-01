@@ -441,6 +441,12 @@ impl World {
         // its first step in the same breath as being uncovered rather than
         // starting from exactly what was drawn.
         let seeds = self.ice_seeds();
+        // **Before the rule, where the other two passes are after it.** A fuse
+        // that reached full during the rule and went off in the same breath
+        // would never be drawn full — and the whole of what makes a payload
+        // answerable is that its last sprite is on screen for exactly one
+        // generation, always. See [`Self::detonate`].
+        self.detonate();
         self.compute_active();
         let active = std::mem::take(&mut self.active);
 
@@ -542,6 +548,113 @@ impl World {
                 })
             })
             .collect()
+    }
+
+    /// Set off every payload whose fuse has run out, and scramble the ground
+    /// around each one.
+    ///
+    /// **A pass and not a rule**, because "every square within reach" is not a
+    /// question a halo of eight neighbours can answer — the same reason
+    /// [`Self::fire_turrets`] and [`Self::break_ice_from`] are passes. What
+    /// makes this one cheap enough to be one is that it is **one roll per
+    /// square**: `sim::seed` is already a stream per cell per generation that
+    /// two peers agree on without exchanging anything, so a probability does
+    /// directly what a scoring function would have manufactured.
+    ///
+    /// It runs at the **top** of the generation, which the other two do not.
+    /// That is the warning: a fuse reaches full during one generation's rule,
+    /// is drawn full for that whole generation, and goes off at the start of
+    /// the next.
+    fn detonate(&mut self) {
+        let ready = self.payloads_ready();
+        if ready.is_empty() {
+            return;
+        }
+        let generation = super::seed::generation_seed(self.seed, self.generation);
+
+        // Gathered before anything is written, so a blast does not scramble
+        // the ground the next one is deciding where to land on. Two peers
+        // stepping the same generation must make the same choices, and a
+        // choice that depended on which payload was handled first would
+        // depend on the iteration order of a map.
+        let mut blasts = Vec::new();
+        for (at, owner) in &ready {
+            let seed = super::seed::cell_seed(generation, at.0, at.1);
+            blasts.push((self.blast_centre(*at, *owner, seed), *owner, seed));
+        }
+
+        for (((row, col), _), (_, _, seed)) in ready.iter().zip(&blasts) {
+            // **Consumed, and it takes the same roll as the ground it threw.**
+            // Left alive it is a cell standing in the middle of noise that
+            // nothing else in the blast could have produced, which reads as a
+            // survivor rather than as a crater; left dead it is a hole in the
+            // same way. So it comes up alive or dead on its own square's own
+            // roll, exactly like everything else the blast touched.
+            let cell = self.cell_at(*row, *col).unwrap_or(Cell::DEAD);
+            let square = super::seed::cell_seed(*seed, *row, *col);
+            let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
+            self.set_cell_at(
+                *row,
+                *col,
+                cell.with_kind(Kind::NORMAL).with_age(0).with_alive(alive),
+            );
+        }
+
+        for (centre, _, seed) in blasts {
+            self.scramble(centre, seed);
+        }
+    }
+
+    /// Turn a disc of ground into noise, and light every payload it reaches.
+    ///
+    /// **The ground decides whose noise it is.** A square brought to life
+    /// takes the owner already on it, and a square nobody holds cannot come
+    /// alive at all — `Cell::alive` asserts a live cell has an owner. That one
+    /// rule does the whole balance job: into somebody's country it turns their
+    /// ordered pattern into *their* noise, over no-man's-land it does nothing,
+    /// and it can never give you a square, so it stays a weapon and does not
+    /// compete with a turret.
+    ///
+    /// Ice is untouched, because a pane stops time over whatever it covers and
+    /// that is every rule.
+    fn scramble(&mut self, centre: (i32, i32), seed: u64) {
+        let reach = rule::PAYLOAD_REACH;
+        let mut chained = Vec::new();
+        for dr in -reach..=reach {
+            for dc in -reach..=reach {
+                if dr * dr + dc * dc > reach * reach {
+                    continue;
+                }
+                let (row, col) = (centre.0 + dr, centre.1 + dc);
+                let Some(cell) = self.cell_at(row, col) else { continue };
+                if cell.is_ice() {
+                    continue;
+                }
+                // **The chain, and it cannot recurse.** A payload in the blast
+                // has its fuse set to full, so it goes off at the top of the
+                // *next* generation — a line of them is a fuse and a cluster
+                // is one ring a generation, rather than one pass re-entering
+                // itself.
+                if cell.kind() == Kind::PAYLOAD && cell.is_alive() {
+                    chained.push(((row, col), cell.with_age(super::cell::bits::MAX_AGE)));
+                    continue;
+                }
+                // Nobody holds it, so nothing can live on it.
+                if !cell.player().is_owned() {
+                    continue;
+                }
+                // Its own square's own roll, on the blast's own stream, so two
+                // overlapping blasts do not decide the same square twice the
+                // same way — and so a peer that never saw the payload placed
+                // still lands on the same board.
+                let square = super::seed::cell_seed(seed, row, col);
+                let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
+                self.set_cell_at(row, col, cell.with_alive(alive).with_kind(Kind::NORMAL));
+            }
+        }
+        for ((row, col), cell) in chained {
+            self.set_cell_at(row, col, cell);
+        }
     }
 
     /// Break every pane reached from these cells, and everything each pane is
@@ -801,6 +914,132 @@ impl World {
     /// A scan rather than an index, the way `ice_cells` is. The world has no
     /// list of anything, and a turret is found by looking, which costs one
     /// pass over what is held per generation.
+    /// **Where a blast is worth setting off**, walking outward from the
+    /// payload until it finds somewhere.
+    ///
+    /// A blast wasted on its owner's own ground is a blast wasted: a
+    /// detonation inside your own country turns your own patterns into your
+    /// own noise. So this searches rings at increasing distance for a centre
+    /// whose disc is at least [`rule::PAYLOAD_FOREIGN`] not its owner's, takes
+    /// the nearest, and breaks a tie with a seeded roll — which is
+    /// [`Self::turret_target`] again, in shape: the nearest square answering a
+    /// question, with the tie broken so a volley does not always favour one
+    /// direction.
+    ///
+    /// What that buys is that **a payload does not have to be placed
+    /// exactly.** Placing is confined to your own influence, so without it the
+    /// only useful payload is one laid on the exact square of your border
+    /// nearest something worth hitting — a precision the interface does not
+    /// support, against a frontier that moves every generation.
+    ///
+    /// Bounded by [`rule::PAYLOAD_THROW`], and it goes off where it stands if
+    /// nothing within that is better. Unbounded it would be a homing weapon
+    /// with a range of the whole world.
+    fn blast_centre(&self, at: (i32, i32), owner: PlayerId, seed: u64) -> (i32, i32) {
+        let throw = rule::PAYLOAD_THROW;
+        // Ring by ring, so the first distance that has any answer is the one
+        // taken and a payload on its own frontier stops at once. The worst
+        // case — one in the middle of a large country — is what the bound is
+        // for.
+        for ring in 0..=throw {
+            let mut ties = 0usize;
+            let walk = |count: &mut usize, want: usize| -> Option<(i32, i32)> {
+                for dr in -ring..=ring {
+                    for dc in -ring..=ring {
+                        // The ring and not the disc: the box's inside was
+                        // covered by an earlier, nearer ring.
+                        if dr.abs().max(dc.abs()) != ring {
+                            continue;
+                        }
+                        let centre = (at.0 + dr, at.1 + dc);
+                        if !self.worth_hitting(centre, owner) {
+                            continue;
+                        }
+                        if *count == want {
+                            return Some(centre);
+                        }
+                        *count += 1;
+                    }
+                }
+                None
+            };
+            walk(&mut ties, usize::MAX);
+            if ties == 0 {
+                continue;
+            }
+            let pick = Roll::new(seed).pick(rule::THROW_STREAM, ties);
+            let mut n = 0;
+            if let Some(found) = walk(&mut n, pick) {
+                return found;
+            }
+        }
+        at
+    }
+
+    /// Whether a blast centred here would do more to somebody else than to its
+    /// owner.
+    ///
+    /// A count and not a cost: how many squares of the disc are already this
+    /// player's, which is the same question `net::crowding` asks when it seats
+    /// a latecomer. Short-circuits the moment enough of it is not theirs, so
+    /// a payload standing on a frontier answers in a handful of reads.
+    fn worth_hitting(&self, centre: (i32, i32), owner: PlayerId) -> bool {
+        let reach = rule::PAYLOAD_REACH;
+        let mut foreign = 0u64;
+        // How many squares of a disc this radius holds, so the threshold is a
+        // fraction of the disc rather than of the box around it.
+        let total: u64 = (-reach..=reach)
+            .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+            .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+            .count() as u64;
+        for dr in -reach..=reach {
+            for dc in -reach..=reach {
+                if dr * dr + dc * dc > reach * reach {
+                    continue;
+                }
+                let mine =
+                    self.cell_at(centre.0 + dr, centre.1 + dc).is_some_and(|c| c.player() == owner);
+                if !mine {
+                    foreign += 1;
+                    if foreign * 64 >= total * rule::PAYLOAD_FOREIGN {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Every payload whose fuse has run out, sorted, so two peers set them off
+    /// in the same order.
+    fn payloads_ready(&self) -> Vec<((i32, i32), PlayerId)> {
+        let mut out = Vec::new();
+        for ((crow, ccol), chunk) in self.stored() {
+            for row in 0..CHUNK_N {
+                for col in 0..CHUNK_N {
+                    let cell = chunk[(row, col)];
+                    // A frozen payload does not go off: a pane stops time over
+                    // whatever it covers, and that is every rule.
+                    if cell.kind() != Kind::PAYLOAD || cell.is_ice() {
+                        continue;
+                    }
+                    if !cell.is_alive() || cell.age() < super::cell::bits::MAX_AGE {
+                        continue;
+                    }
+                    if !cell.player().is_owned() {
+                        continue;
+                    }
+                    out.push((
+                        (crow * CHUNK_N as i32 + row as i32, ccol * CHUNK_N as i32 + col as i32),
+                        cell.player(),
+                    ));
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
     fn turrets(&self) -> Vec<((i32, i32), PlayerId, bool)> {
         let mut out = Vec::new();
         for ((crow, ccol), chunk) in self.stored() {

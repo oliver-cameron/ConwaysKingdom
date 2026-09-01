@@ -24,13 +24,22 @@
 // different kind of cell, and a strength nobody can act on separately is one
 // the map does not need to spell out.
 //
-// Alive, ice, kind and age are read as **one number** -- byte 1 is the tile
-// index into the sheet, so this shader never takes them apart, and that is the
-// point of the layout. Age is placed so the sheet reads as a grid: four states
-// across a row, eight ages down. See `sim::cell::bits`.
+// Byte 1 is what a cell **is**: alive, iced, its kind, and how far through
+// whatever that kind counts. Every field is contiguous -- see
+// `sim::cell::bits`, and the block below, which is the one thing kept in step
+// with it by hand.
+//
+// It used to be the sheet index outright, which is why the kind sat in two
+// pieces around the age. `sprite_index` is what pays for putting it back
+// together, and it is four operations.
 const PLAYER_SHIFT: u32 = 4u;   // top of its byte, so no mask is needed
+const ALIVE: u32 = 1u;          // byte 1, bit 0
+const ICE: u32 = 2u;            // byte 1, bit 1
+const KIND_SHIFT: u32 = 2u;     // byte 1, bits 2..5
+const KIND_MASK: u32 = 7u;
+const AGE_SHIFT: u32 = 5u;      // byte 1, bits 5..8
 
-// See render::atlas. One sheet; a cell's tile byte is the index into it.
+// See render::atlas. One sheet, sixteen tiles each way.
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
@@ -274,12 +283,14 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
         texel = textureLoad(coarse, vec2<i32>(floor(rel)), 0).rg;
     }
 
+    // The two state bits, which are where they always were and are the only
+    // part of the byte a cell without its art needs.
     let tile = texel.g;
     var light = COARSE_DEAD;
-    if (tile & 1u) != 0u {
+    if (tile & ALIVE) != 0u {
         light = COARSE_ALIVE;
     }
-    if (tile & 2u) != 0u {
+    if (tile & ICE) != 0u {
         light = light + COARSE_ICE;
     }
     let player = texel.r >> PLAYER_SHIFT;
@@ -323,17 +334,30 @@ fn aa_side() -> i32 {
 /// sheet coordinates instead would blend a cell's art into its neighbour's,
 /// because the sheet is an atlas and adjacent tiles are unrelated pictures.
 /// It is also why the sheet cannot simply be given mipmaps.
+/// Where a cell's picture is on the sheet, as a tile index.
+///
+/// The same four operations as `sim::cell::Cell::sprite`, and the two are kept
+/// in step by hand because a shader cannot read Rust constants. The sheet's
+/// own layout is what it always was: a kind's four states are four columns,
+/// its eight ages are eight rows, and the kind's third bit picks which half of
+/// the sheet -- kinds 0-3 in the top eight rows, 4-7 in the bottom eight.
+fn sprite_index(tile: u32) -> f32 {
+    let kind = (tile >> KIND_SHIFT) & KIND_MASK;
+    let column = ((kind & 3u) << 2u) | (tile & (ALIVE | ICE));
+    let row = ((tile >> AGE_SHIFT) & 7u) | ((kind >> 2u) << 3u);
+    return f32((row << 4u) | column);
+}
+
 fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     // local is in texels across the chunk; the cell is that divided by a
     // tile's width, and where we are inside the cell is the remainder.
     let cell_coord = vec2<i32>(floor(local / f32(TILE_N)));
     let within = local % f32(TILE_N);
 
-    // r is the owner byte, g the tile byte -- and the tile byte *is* the index
-    // into the sheet, kind and alive and ice already folded into it. Nothing
-    // to look up and nothing to branch on.
+    // r is the owner byte, g is what the cell is. Nothing to look up and
+    // nothing to branch on: the sheet position is arithmetic on the fields.
     let texel = textureLoad(chunks, cell_coord, i32(layer), 0);
-    let tile = f32(texel.g);
+    let tile = sprite_index(texel.g);
 
     // Low nibble across the sheet, high nibble down it.
     let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));

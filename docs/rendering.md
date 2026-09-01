@@ -55,7 +55,11 @@ It used to be a quad per chunk, and the visible chunk count grows as the square 
 
 The monospace is doing work rather than decoration. A number that changes every generation in a proportional face is a number whose width changes with it, so the label under it slides about and the eye re-finds it every time; in a monospaced one the digits sit in columns and only the digits move.
 
-**One sheet**, `assets/sprites/sheet.png`: 256×256, a 16×16 grid of 16×16 tiles. A cell's tile byte is the index into it — low nibble across, high nibble down — and that byte already carries alive, ice, kind and age, so there is nothing to look up.
+**One sheet**, `assets/sprites/sheet.png`: 256×256, a 16×16 grid of 16×16 tiles. `Cell::sprite` is the index into it — low nibble across, high nibble down — computed from the cell's alive, ice, kind and age in four operations, and `sprite_index` in `grid.wgsl` does the same arithmetic.
+
+The byte used to *be* that index, which is why the kind sat in two pieces around the age. It is one field now, at bits 2..5, with the age above it at 5..8 — every field contiguous and every one a shift and a mask. Nothing on the sheet moved: a kind's four states are still four columns, its eight ages are still eight rows, and the kind's third bit still picks which half. `the_sprite_index_is_the_byte_the_old_layout_stored` is that, as a test.
+
+**Drawing it.** `cnvt --back` gives a normal PNG to look at, and `cnvt --back --hsl` gives one to *draw in*: the sheet's three bytes mapped straight onto an sRGB-HSL colour, so a colour wheel drives them directly and one hue stays one hue at every lightness. OKLab is still the space the sheet is in — that view is a way to reach the numbers, not a change to them, which is why it does not look like the art. Convert back with `cnvt --hsl`. Lightness survives exactly, saturation to within a step or two at the extremes, and hue is not kept because nothing reads it.
 
 The fields are placed so the sheet reads as a grid rather than as a list. Alive and ice are the bottom two bits, so a kind's **four states are four columns**; age is the low three bits of the high nibble, so its **eight ages are eight rows** under them. The kind's third bit is the top bit of the byte, which splits the sheet in half: kinds 0–3 above, 4–7 below.
 
@@ -70,7 +74,7 @@ Nothing advances age yet — see [payloads](planned.md#payloads), which is what 
 
 A tile per state rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One tile, one unconditional sample, and now not even a layer index to compute.
 
-The sheet in the repo is **provisional**: four flat tiles so the states are told apart, all in the first row. Redraw it and drop it in; no code changes, because the mapping is the tile byte and nothing else.
+The sheet in the repo is **provisional**: flat tiles so the states are told apart. Kinds 0–2 are in the first row; the payload's four states and its eight fuse rows, and the mine's seven rot rows, are generated placeholders — a casing that fills, and a mark that fades. Redraw any of it and drop it in; no code changes, because the mapping is `Cell::sprite` and nothing else.
 
 The PNGs are the source, and `cnvt` converts between what you draw and what the shader reads, in both directions:
 

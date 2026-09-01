@@ -21,7 +21,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
-| [Payloads](#payloads) | Designed | a cell that counts down and scrambles the ground around it |
+| [Payloads](#payloads) | Built | the art is a placeholder; the numbers want arguing out |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
@@ -55,7 +55,15 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 ## Payloads
 
-**Designed.** A cell that counts down and then scrambles the ground around it. The age field exists for this and nothing uses it.
+**Built**, and the age field it was designed around finally does something. `Kind::PAYLOAD` counts down while it lives, `World::detonate` runs at the top of the generation, and the blast walks outward to somewhere worth hitting. What is left is the **art** — the sprites in the sheet are a generated placeholder, a casing that fills as the fuse burns — and the numbers, which want `examples/balance.rs` pointed at them.
+
+Three things came out of building it that the design did not say.
+
+**A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A payload's fuse and a mine's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
+
+**A mine's corpse rots in view.** It used to clear on a roll of sixteen in sixty-four a generation, which is four generations on average and none you could see coming — the field this was written for went unused while the timing lived in a dice stream. It is `MINE_DUE` now: a corpse charges its owner once when it has lain there that long, and the delay is the mechanic rather than bookkeeping, because a corpse reborn before it escapes. That is what makes a mine pay on turnover rather than on holdings, and it is what the roll was buying all along.
+
+**The detonating payload takes its own blast's roll.** Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
 
 ### The fuse
 

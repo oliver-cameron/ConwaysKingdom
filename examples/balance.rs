@@ -71,11 +71,11 @@ fn run(name: &str, seed: &[(i32, i32)], generations: u32) {
 
 fn main() {
     println!(
-        "  cost {}  yield {}  drain {}  upkeep {} in 64",
+        "  cost {}  yield {}  drain {} once, after {} generations rotting",
         net::MINE_COST,
         net::MINE_YIELD,
         net::MINE_DRAIN,
-        conwayskingdom::sim::MINE_UPKEEP,
+        conwayskingdom::sim::bits::MAX_AGE,
     );
     run("block        still life, never dies", &[(0, 0), (0, 1), (1, 0), (1, 1)], 300);
     run("blinker      compact, pure churn", &[(0, 0), (0, 1), (0, 2)], 300);

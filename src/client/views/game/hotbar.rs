@@ -608,7 +608,7 @@ fn square(
     match face {
         Face::Sprite(cell) => match look.sheet {
             Some(sheet) => {
-                painter.image(sheet, inner, Icons::uv(cell.tile()), egui::Color32::WHITE);
+                painter.image(sheet, inner, Icons::uv(cell.sprite()), egui::Color32::WHITE);
             }
             None => draw_text(painter, inner, name, ink),
         },

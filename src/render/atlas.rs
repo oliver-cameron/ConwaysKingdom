@@ -185,7 +185,7 @@ mod tests {
                     .with_alive(alive)
                     .with_ice(ice)
                     .with_player(PlayerId(1));
-                let tile = cell.tile();
+                let tile = cell.sprite();
                 let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
 
                 let covered = (0..TILE_N)
@@ -214,7 +214,7 @@ mod tests {
             let base = Cell::DEAD.with_kind(kind);
             let tiles: Vec<u8> = [(false, false), (true, false), (false, true), (true, true)]
                 .iter()
-                .map(|&(a, i)| base.with_alive(a).with_ice(i).tile())
+                .map(|&(a, i)| base.with_alive(a).with_ice(i).sprite())
                 .collect();
             let first = tiles[0];
             assert_eq!(tiles, vec![first, first + 1, first + 2, first + 3]);

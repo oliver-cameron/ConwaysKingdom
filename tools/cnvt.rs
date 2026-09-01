@@ -212,6 +212,7 @@ fn reverse(pixels: &[u8], player: Option<u8>) -> Vec<u8> {
 
 fn main() {
     let mut back_wards = false;
+    let mut hsl = false;
     let mut player: Option<u8> = None;
     let mut paths: Vec<String> = Vec::new();
 
@@ -219,6 +220,7 @@ fn main() {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--back" => back_wards = true,
+            "--hsl" => hsl = true,
             "--player" => match args.next().and_then(|v| v.parse::<u8>().ok()) {
                 Some(p) if p <= 31 => player = Some(p),
                 _ => {
@@ -231,16 +233,23 @@ fn main() {
     }
 
     let [input, output] = paths.as_slice() else {
-        eprintln!("usage: cnvt [--back [--player N]] <in.png> <out.png>");
+        eprintln!("usage: cnvt [--back [--player N]] [--hsl] <in.png> <out.png>");
         eprintln!("  Forward: an RGBA sheet into the atlas format -- R saturation,");
         eprintln!("  G lightness, B hue, A coverage.");
         eprintln!("  --back:  the atlas format into something you can look at.");
         eprintln!("  --player N: draw it the way the game will, in player N's");
         eprintln!("  colour. 0 is unowned, which is grey.");
+        eprintln!("  --hsl:   the sheet's three bytes AS an HSL colour, so a");
+        eprintln!("  colour wheel drives them directly. Not a preview -- it is");
+        eprintln!("  what to draw in. Use it both ways round.");
         std::process::exit(2);
     };
     if player.is_some() && !back_wards {
         eprintln!("cnvt: --player only means anything with --back");
+        std::process::exit(2);
+    }
+    if hsl && player.is_some() {
+        eprintln!("cnvt: --hsl and --player are two different views; pick one");
         std::process::exit(2);
     }
 
@@ -252,14 +261,28 @@ fn main() {
         }
     };
 
-    let (out, report) = if back_wards {
-        let what = match player {
-            Some(p) => format!("as player {p} sees it"),
-            None => "in the sheet's own hue".to_string(),
-        };
-        (reverse(&pixels, player), format!("reversed {what}"))
-    } else {
-        forward(&pixels, width)
+    let (out, report) = match (back_wards, hsl) {
+        // **Straight onto the bytes, both ways.** No colour model, so nothing
+        // can be lost to one: what an HSL wheel picks is what the sheet holds.
+        (true, true) => (
+            pixels.chunks_exact(4).flat_map(|p| to_hsl_view([p[0], p[1], p[2], p[3]])).collect(),
+            format!(
+                "the sheet's own numbers, as an HSL colour to draw in\n{}",
+                hsl_round_trip(&pixels)
+            ),
+        ),
+        (false, true) => (
+            pixels.chunks_exact(4).flat_map(|p| from_hsl_view([p[0], p[1], p[2], p[3]])).collect(),
+            "read back as HSL".to_string(),
+        ),
+        (true, false) => {
+            let what = match player {
+                Some(p) => format!("as player {p} sees it"),
+                None => "in the sheet's own hue".to_string(),
+            };
+            (reverse(&pixels, player), format!("reversed {what}"))
+        }
+        (false, false) => forward(&pixels, width),
     };
 
     if let Err(e) = write_rgba(Path::new(output), width, height, &out) {
@@ -269,6 +292,120 @@ fn main() {
 
     println!("{input} -> {output}  {width}x{height}");
     println!("{report}");
+}
+
+// --- a way in, for drawing ---------------------------------------------------
+//
+// **OKLab is the right space and this does not change it.** The sheet holds
+// what it always held and the shader reads it the same way; what follows is a
+// way to *reach* those numbers with a colour picker, and nothing else.
+//
+// **The problem it solves.** The atlas holds three numbers per texel and the
+// first two are the only ones the shader reads: saturation and lightness, in
+// OKLab. Drawing them by drawing a *picture* and letting `convert` decompose it
+// works only if the picture's hue is irrelevant, and it is not quite: OKLab hue
+// and sRGB-HSL hue are different functions, so one HSL hue held constant across
+// a range of lightnesses is a *moving* OKLab hue — and the chroma available at
+// each of them differs, so the saturation that comes out varies for strokes the
+// artist made with one colour. Which reads as the tool losing your colour.
+//
+// So `--hsl` takes the decomposition out. In that mode an ordinary
+// sRGB-HSL colour maps **straight onto the three bytes**: H is the hue byte, S
+// the saturation byte, L the lightness byte, with no colour model in between.
+// An HSL wheel then drives exactly the numbers the sheet stores, and one hue is
+// one hue at every lightness.
+//
+// Two things it costs, and neither is silent — [`hsl_round_trip`] measures both
+// and the run prints them.
+//
+// The file **no longer looks like the art**, and cannot: the L you pick on the
+// wheel becomes the sheet's OKLab lightness, which is a perceptual number and
+// not sRGB's. So the two views are for two jobs — `--back` to see what the game
+// will draw, `--back --hsl` to set the numbers it draws from.
+//
+// And HSL is not a bijection on the byte cube, so a round trip is not quite the
+// identity. Lightness is exact, which is what carries every shape. Saturation
+// moves by a step or two where the lightness is near black or near white,
+// because HSL has almost no chroma to spend there. Hue collapses entirely where
+// the saturation is nought — grey has no hue to remember — and that one costs
+// nothing at all, because the shader ignores the hue byte and takes the colour
+// from the player.
+
+/// An sRGB pixel as hue, saturation and lightness, each 0..1.
+fn rgb_to_hsl([r, g, b]: [f32; 3]) -> [f32; 3] {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let lightness = (max + min) / 2.0;
+    let span = max - min;
+    if span <= f32::EPSILON {
+        return [0.0, 0.0, lightness];
+    }
+    let saturation = span / (1.0 - (2.0 * lightness - 1.0).abs());
+    let hue = if max == r {
+        ((g - b) / span).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / span + 2.0
+    } else {
+        (r - g) / span + 4.0
+    } / 6.0;
+    [hue, saturation, lightness]
+}
+
+/// The inverse, so the round trip is the identity up to a byte.
+fn hsl_to_rgb([h, s, l]: [f32; 3]) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h.rem_euclid(1.0) * 6.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let [r, g, b] = match hp as u32 {
+        0 => [c, x, 0.0],
+        1 => [x, c, 0.0],
+        2 => [0.0, c, x],
+        3 => [0.0, x, c],
+        4 => [x, 0.0, c],
+        _ => [c, 0.0, x],
+    };
+    let m = l - c / 2.0;
+    [r + m, g + m, b + m]
+}
+
+/// The sheet's three bytes as an sRGB-HSL colour, so a colour wheel drives
+/// them directly. The alpha is coverage either way and is untouched.
+fn to_hsl_view(sheet: [u8; 4]) -> [u8; 4] {
+    let rgb = hsl_to_rgb([
+        sheet[2] as f32 / 255.0, // hue
+        sheet[0] as f32 / 255.0, // saturation
+        sheet[1] as f32 / 255.0, // lightness
+    ]);
+    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    [r, g, b, sheet[3]]
+}
+
+/// And back. The exact inverse of [`to_hsl_view`], which is what makes drawing
+/// in it safe: nothing is decomposed, so nothing can be lost to a colour model.
+fn from_hsl_view(px: [u8; 4]) -> [u8; 4] {
+    let [h, s, l] = rgb_to_hsl([px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0]);
+    [(s * 255.0).round() as u8, (l * 255.0).round() as u8, (h * 255.0).round() as u8, px[3]]
+}
+
+/// How much the HSL view loses, per channel, so it is a measured claim rather
+/// than an assurance. See the note above for why each is what it is.
+fn hsl_round_trip(pixels: &[u8]) -> String {
+    // **The two the shader reads, and only those.** Hue does not survive and
+    // does not need to: HSL has almost no hue resolution at low saturation and
+    // none at all on grey, and the shader takes the colour from the player's
+    // number rather than from the sheet. Reporting a hue error would be
+    // reporting a channel nobody is keeping.
+    let (mut saturation, mut lightness) = (0i32, 0i32);
+    for px in pixels.chunks_exact(4) {
+        let sheet = [px[0], px[1], px[2], px[3]];
+        let back = from_hsl_view(to_hsl_view(sheet));
+        saturation = saturation.max((sheet[0] as i32 - back[0] as i32).abs());
+        lightness = lightness.max((sheet[1] as i32 - back[1] as i32).abs());
+    }
+    format!(
+        "round trip: lightness off by at most {lightness}, saturation {saturation}; \
+         hue is not kept and nothing reads it"
+    )
 }
 
 /// The forward pass, and how faithful it was.
