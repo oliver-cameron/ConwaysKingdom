@@ -108,16 +108,10 @@ const PAN_FAST: f32 = 3.0;
 /// two-pixel cell claims a precision the pointer does not have.
 const HOVER_MIN_ZOOM: f32 = 4.0;
 
-/// The most cells one drag may lay.
-///
-/// A rectangle at one pixel per cell can cover millions, and every one of them
-/// would be listed, priced, applied and put on the wire. A stroke stops
-/// growing when it reaches this and says so, rather than being trimmed at the
-/// end where nobody would see what was lost.
-///
-/// [`crate::net::MOST_CELLS_AT_ONCE`] rather than a number of its own, because
-/// the server refuses anything longer: a client that stopped somewhere else
-/// would either draw shapes the server drops or refuse ones it would take.
+/// The most cells one drag may lay. A rectangle at one pixel per cell covers
+/// millions, and every one would be listed, priced, applied and put on the
+/// wire; a stroke stops growing here and says so. The server's cap, so a
+/// client cannot draw a shape the server drops.
 const MAX_DRAG_CELLS: i64 = crate::net::MOST_CELLS_AT_ONCE as i64;
 
 /// Cells of slack around the viewport when subscribing, so life entering from
@@ -424,18 +418,10 @@ pub struct GameApp {
     /// cleared on a `Welcome`, which is a different match or none.
     forfeited: bool,
     /// **The number this client's cells carry**, which in a team match is the
-    /// team's and not this seat's.
-    ///
-    /// A team is a player and several clients are connected to it, so this is
-    /// the whole of what a client has to know about teams: who it is playing
-    /// as. Everything downstream — what it may place, what that costs, which
-    /// of the actions coming back are its own — asks this and never asks who
-    /// is allied with whom, because there is nobody to be allied with.
-    ///
-    /// Equal to [`Self::me`] offline, in a free-for-all, and in a match nobody
-    /// has picked teams in. What used to be here was the whole roster's
-    /// allegiances, copied off the wire so the client could price a placement
-    /// beside a teammate the way the server would.
+    /// team's and not this seat's — and the whole of what a client knows about
+    /// teams. Everything downstream asks this and never asks who is allied with
+    /// whom, because there is nobody to be allied with. Equal to [`Self::me`]
+    /// offline and in a free-for-all.
     plays_as: Option<PlayerId>,
     /// The game being played, if there is one, waiting to be filed.
     ///
@@ -450,19 +436,12 @@ pub struct GameApp {
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate rather than a log line — see [`crate::client::desync`].
     geiger: crate::client::desync::Geiger,
-    /// **A laboratory's two rules**, and they are two.
+    /// **A laboratory's two rules**, and they are two: `net::may_place` is about
+    /// where your influence reaches and `net::price` is about what you can
+    /// afford, so an experiment may want the map open and the economy on.
     ///
-    /// `net::may_place` is about where your influence reaches and `net::price`
-    /// is about what you can afford — separate rules with separate reasons, so
-    /// an experiment may reasonably want the map open and the economy on, or
-    /// the reverse. They were one flag until there was a panel to put them on.
-    ///
-    /// The only two an experiment has to take off, because [liveness is
-    /// exactly B3/S23] whatever else is true. Offline only, and cleared on a
-    /// `Welcome`: a client predicting placements a server would refuse resyncs
-    /// every time it draws.
-    ///
-    /// [liveness is exactly B3/S23]: crate::sim::World::step
+    /// Offline only, and cleared on a `Welcome` — a client predicting placements
+    /// a server would refuse resyncs every time it draws.
     place_anywhere: bool,
     place_free: bool,
     /// **The world is stopped**, which only means anything offline.
@@ -685,25 +664,15 @@ impl GameApp {
         }
         // **Anything else means messages were lost, so nothing is stepped.**
         //
-        // Catching up is what this used to do, and it is the bug rather than
-        // the recovery. A `Step` carries the actions applied at its tick, so a
-        // gap is not "we are behind by n generations", it is "n generations
-        // happened here that we were not told the contents of" — and stepping
-        // to close it runs those generations *empty*. The world that comes out
-        // is one nobody else has, and Life makes a handful of missing cells a
-        // different pattern within a minute. Which is exactly what a branched
-        // world looks like from the inside.
+        // Catching up is the bug rather than the recovery: a `Step` carries the
+        // actions applied at its tick, so a gap is not "we are behind" but "n
+        // generations happened whose contents we were not told" — and stepping to
+        // close it runs those generations *empty*, which is a world nobody else
+        // has within a minute.
         //
-        // A websocket does not lose or reorder, which is what made this look
-        // safe. The broadcast channel in front of it does: `server::ws` logs
-        // `connection lagged n messages` and carries on, and a client whose
-        // socket is slow to drain — a backgrounded tab throttles exactly that
-        // — is the ordinary case rather than an exotic one.
-        //
-        // So: take the server's number, throw away the world built on the
-        // missing steps, and ask for it again. It self-limits, because the
-        // generation is the server's afterwards and the next `Step` is one
-        // past it.
+        // A websocket does not lose or reorder; the broadcast channel in front of
+        // it does, and a backgrounded tab is the ordinary case rather than an
+        // exotic one.
         log::warn!(
             "out of step: the server is at {tick} and this client at {here}; \
              discarding {} generation(s) and asking again",
@@ -714,17 +683,11 @@ impl GameApp {
 
     /// Throw away what this client holds and fetch it from the server.
     ///
-    /// **The whole world, not the chunks that look wrong.** Every chunk here
-    /// was stepped alongside every other, so one that missed an action has
-    /// been feeding wrong cells across its edges into its neighbours ever
-    /// since; and a chunk outside the viewport is never checkpointed at all,
-    /// so "the ones we know are wrong" is a set this client cannot compute.
-    /// Rebuilding to the world's own shape and re-asking is the only answer
-    /// that does not leave some of the divergence in place.
-    ///
-    /// It looks like a join, because it is one: `Welcome` does this same thing
-    /// for the same reason, and the blank moment before the chunks land is the
-    /// one that path already has.
+    /// **The whole world, not the chunks that look wrong.** Every chunk was
+    /// stepped alongside every other, so one that missed an action has been
+    /// feeding wrong cells across its edges ever since — and a chunk outside the
+    /// viewport is never checkpointed, so "the ones we know are wrong" is a set
+    /// this client cannot compute.
     fn resync_everything(&mut self, tick: crate::net::Tick) {
         // **Keeping the seed**, which the shape does not carry: `build` makes a
         // world that has not been told which game it is, and a client rolling
@@ -750,14 +713,10 @@ impl GameApp {
 
     /// Settle a solitary match, if there is one and it is done.
     ///
-    /// **The same two conditions the server settles**, read off the same
-    /// `net::standings` this client already counts each generation — offline
-    /// it holds the whole world, so its count is the server's count rather
-    /// than a guess about a viewport.
-    ///
-    /// Only offline. Connected, a phase arrives in `ServerMessage::Match` and
-    /// this must never invent one: two authorities deciding one match is the
-    /// bug the whole design is arranged to avoid.
+    /// The same two conditions the server settles, read off the same
+    /// `net::standings` — offline this client holds the whole world, so its
+    /// count *is* the server's. Guarded on there being no link: two authorities
+    /// deciding one match is the bug the whole design avoids.
     fn decide_alone(&mut self) {
         if self.link.is_some() {
             return;
@@ -1145,49 +1104,23 @@ impl GameApp {
                     // and tick, so doing this a generation early or late is
                     // the same as doing something else.
                     //
-                    // **Except our own, which were applied when they were
-                    // made.** A `Paint` is idempotent on the generation it was
-                    // meant for and not one generation later: by then the cells
-                    // it named have moved, and laying them again stamps the
-                    // original pattern back on top of where it went. Draw a
-                    // glider, watch it thicken into a blob and settle into a
-                    // honey farm, and watch it snap back to a glider when the
-                    // resync lands a few seconds later.
+                    // **Except our own, which were applied when they were made.** A `Paint` is
+                    // idempotent on the generation it was meant for and not one later, so
+                    // laying it twice stamps the original pattern back over where it has got
+                    // to — draw a glider, watch it thicken into a blob, watch it snap back when
+                    // the resync lands.
                     //
-                    // Skipping them leaves the phase error prediction has
-                    // always had -- the same cells, a generation out, which the
-                    // checkpoint puts right -- instead of a different pattern
-                    // that the rules then build on.
-                    //
-                    // **By seat, not by player.** Those are the same question
-                    // until a team is a player and several clients are at its
-                    // controls; then a teammate's action carries the team's
-                    // number, this skipped it as something already predicted,
-                    // and never applied it at all. Two people building on one
-                    // team saw different worlds until a checkpoint dragged the
-                    // chunks across -- which it did, every few seconds, for as
-                    // long as they both kept playing.
-                    // **And not one this client already applied early**, or a
-                    // `Paint` lands twice: idempotent on the generation it was
-                    // meant for, and not on the one after. `Acted` is a
-                    // shortcut that can be dropped, so the `Step` still
-                    // carries everything and this is where the two meet.
+                    // **By seat, not by player**: a teammate's action carries the team's number,
+                    // so skipping by player never applied it at all. And not one already
+                    // applied from an `Acted`, which is a shortcut that can be dropped, so the
+                    // `Step` carries everything and this is where the two meet.
                     let early = std::mem::take(&mut self.applied_early);
                     for stamped in
                         actions.iter().filter(|s| Some(s.seat) != self.me && !early.contains(s))
                     {
-                        // **And a teammate's comes out of the purse we share.**
-                        // One team is one purse, so an ally spending is this
-                        // client's balance moving with no action of its own
-                        // behind it. Predicted for the same reason our own
-                        // spending is: the alternative is a figure that stays
-                        // wrong until the next checkpoint, which is seconds of
-                        // offering to spend money somebody else has spent.
-                        //
-                        // **Priced before it is applied**, which is the whole
-                        // contract of `value_delta` -- it reads what is there
-                        // now, and what is there now is what the server priced
-                        // it against.
+                        // **A teammate's comes out of the purse we share**, so it is predicted for
+                        // the same reason our own spending is. Priced before it is applied, which
+                        // is the contract of `value_delta`.
                         if Some(stamped.player) == self.plays_as {
                             let delta = crate::net::value_delta(&self.world, stamped);
                             self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
@@ -1203,23 +1136,13 @@ impl GameApp {
                         self.send_checkpoint();
                     }
                 }
-                // **An action, the moment the server took it.** Applied here
-                // rather than waited for, so a cell somebody else placed
-                // appears in a round trip instead of at the next generation —
-                // which at four a second was 125 ms of doing nothing on a link
-                // that costs four.
+                // **An action, the moment the server took it**, rather than at the next
+                // generation — 125 ms of doing nothing on a link that costs four.
                 //
-                // **Not on the tick it names**, which was the wrong test and
-                // cost a whole generation whenever an action was made near a
-                // boundary. `stamped.tick` is the *actor's* guess; the server
-                // applies whatever is pending on the step it happens to be on
-                // when it steps, which is the generation this client is on too
-                // — `advance_to` puts it there and nothing else moves it. So
-                // being caught up is the condition, and this is what being
-                // caught up looks like.
-                //
-                // Our own is already down: this client predicted it when it
-                // was made, which is the same thing a round trip earlier.
+                // Not on the tick it names, which was the wrong test and cost a whole
+                // generation near a boundary: `stamped.tick` is the actor's guess, and the
+                // server applies what is pending on the step it happens to be on, which is
+                // the generation this client is on too.
                 ServerMessage::Acted(stamped) => {
                     if Some(stamped.seat) != self.me {
                         // **Priced before it is applied**, as in the `Step`
@@ -1949,22 +1872,12 @@ impl GameApp {
 
     /// Leave whatever server this client is on, and start a game of one.
     ///
-    /// **Playing alone has to mean alone**, and it meant "the same screen with
-    /// the menu gone". The reasoning was that `init` builds and grants a local
-    /// world whether or not anyone connects, so there was nothing left to do —
-    /// true on the first press and false on every press after a room, because
-    /// a `Welcome` replaces that world with the server's.
-    ///
-    /// So a client that had been anywhere got the room's world back, at the
-    /// server's tick, with the player number and the value the server issued,
-    /// a HUD that said connected, and — worst of it — a board that did not
-    /// move. `update` steps the local world only when there is no link, since
-    /// a connected client takes its generations from the server and must never
-    /// invent its own; the link was still open, so nothing stepped. A frozen
-    /// board in a world you cannot build in is not a game.
-    ///
-    /// The seat itself was already given up on the way here: `back_to_menu`
-    /// sends `Leave`. This is the connection going, and the world with it.
+    /// **Playing alone has to mean alone.** It meant the same screen with the
+    /// socket still open: `back_to_menu` gave up the seat but kept the link, so
+    /// a `Welcome` replaced the world with the server's, the HUD said connected,
+    /// and the board did not move — `update` steps the local world only when
+    /// there is no link. A frozen board in a world you cannot build in is not a
+    /// game.
     fn play_alone(&mut self) {
         self.play_alone_on(start::chosen_world(), None)
     }
@@ -2072,15 +1985,10 @@ impl GameApp {
 
     /// Follow the back or forward button, if it has just been pressed.
     ///
-    /// **The other half of pushing an address.** The browser moves the address
-    /// and expects the page to follow; a client that only *writes* addresses
-    /// shows the old screen under the new one, which is worse than having no
-    /// addresses because now they lie.
-    ///
+    /// The other half of pushing an address: a client that only *writes* them
+    /// shows the old screen under the new one, which is worse than having none.
     /// A room is joined the way a link into one is, because it is the same
-    /// request. Everything else is a screen to be on, and going back to a
-    /// screen means leaving whatever world you were in — which `back_to_menu`
-    /// already does properly, giving up the seat rather than abandoning it.
+    /// request.
     fn follow_history(&mut self) {
         use crate::client::route::Route;
         let Some(route) = crate::client::route::went_back() else { return };
@@ -2339,17 +2247,7 @@ impl GameApp {
     }
 
     /// Ask for the room list again, so it does not go stale under the pointer.
-    ///
-    /// A list is a photograph of the moment it was asked for, and rooms come
-    /// and go — somebody makes a match while you are reading, or the one you
-    /// are about to click empties out. Re-asked rather than left with a button
-    /// to press, because a list that is only right when you remember to
-    /// refresh it is a list you cannot trust, and asking costs one small
-    /// message every few seconds to a server that is already sending you a
-    /// generation four times a second.
-    ///
-    /// Only while the list is what is on screen. Asking from inside a world
-    /// would be answering a question nobody has open.
+    /// Only while the list is on screen.
     fn refresh_room_list(&mut self) {
         if !matches!(
             self.ui.screen,
