@@ -436,10 +436,11 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // below it appear or do not according to this.
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::KIND).size(m.text_small));
-            // **A laboratory is a room**, so it is offered where rooms are
-            // made and not on the solitary form — where picking it would have
-            // opened a world with the rules quietly still on. A match is the
-            // same: it gathers, and there is nobody to gather.
+            // **A match is the one that needs other people.** It gathers,
+            // and there is nobody to gather with — where a laboratory alone is
+            // the oldest thing this page did, and being a room as well is a
+            // reason for it to work on a server rather than a reason for it
+            // not to work without one.
             let kinds: &[(Kind, &str)] = if reached {
                 &[
                     (Kind::World, words::make::WORLD),
@@ -447,9 +448,9 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                     (Kind::Experiment, words::make::EXPERIMENT),
                 ]
             } else {
-                &[(Kind::World, words::make::WORLD), (Kind::Match, words::make::MATCH)]
+                &[(Kind::World, words::make::WORLD), (Kind::Experiment, words::make::EXPERIMENT)]
             };
-            if !reached && draft.kind == Kind::Experiment {
+            if !reached && draft.kind == Kind::Match {
                 draft.kind = Kind::World;
             }
             toggles(ui, theme, &mut draft.kind, kinds);
@@ -635,7 +636,11 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                     match draft.world() {
                         Ok((shape, victory)) => {
                             draft.note = None;
-                            chose = Some(Chose::Alone { shape, victory });
+                            chose = Some(Chose::Alone {
+                                shape,
+                                victory,
+                                laboratory: draft.kind == Kind::Experiment,
+                            });
                         }
                         Err(why) => draft.note = Some(why),
                     }
@@ -666,21 +671,26 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
     let p = theme.palette;
     let m = theme.metrics;
     let wrapping = draft.shape == Shape::Wrapping;
-    // Tall enough for the fields when they are there, and the same height
-    // either way so that choosing does not move the row's own bottom edge.
-    let tall = m.button_height * 2.0 + m.item_spacing * 2.0 + m.text_small;
+    // **As tall as its taller option and no taller.** This reserved two rows
+    // of button and a line of text, from when the size sat under the label
+    // instead of beside it — so the row kept the height of a layout that is
+    // not there any more and left a band of nothing under both halves. What
+    // sets it now is the framed option: one row of fields inside a padded
+    // frame.
+    let tall = m.button_height + m.panel_padding;
 
     ui.horizontal_top(|ui| {
-        ui.set_min_height(tall);
         let each = (ui.available_width() - m.item_spacing) / 2.0;
 
+        // **Both halves the same block.** The plain button was drawn at one
+        // button's height at the top of a row sized for the framed one beside
+        // it, so it sat high against its neighbour and read as misaligned.
+        // Sized to the row, it is a block of the same shape and its label
+        // centres itself.
         ui.vertical(|ui| {
             ui.set_width(each);
             if ui
-                .add_sized(
-                    [each, m.button_height],
-                    toggle(theme, words::make::BOUNDLESS, !wrapping),
-                )
+                .add_sized([each, tall], toggle(theme, words::make::BOUNDLESS, !wrapping))
                 .clicked()
             {
                 draft.shape = Shape::Boundless;
@@ -705,6 +715,7 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
                 .inner_margin(m.panel_padding * 0.5)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    ui.set_min_height(tall - m.panel_padding);
                     // **On the label's own line**, so choosing does not make
                     // the button taller and shove everything under it down.
                     // The size is what this option *is*, so it reads as part

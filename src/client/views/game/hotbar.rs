@@ -366,14 +366,18 @@ fn face_of<'a>(
     match key {
         Key::Kind(i) => (Face::Sprite(KINDS[i].shows), KINDS[i].name, held.kind == i),
         // One square, not two: draw and pane are one choice with two answers,
-        // so it shows which is current rather than offering both. It shows a
-        // held stamp too, and clicking it is the way back to drawing.
+        // so it shows which is current rather than offering both. Clicking it
+        // is also the way back to drawing from a stamp.
+        //
+        // **Lit only when it is what is held**, which it was not: it read as
+        // pressed unconditionally, so with a stamp in hand the bar showed a
+        // highlighted pencil beside a highlighted stamp and claimed you were
+        // holding both. What the square shows follows the same rule — the
+        // shape you are actually in, not the one this kind is usually wanted
+        // in, so a pane held as a pencil says pencil.
         Key::Flip => {
-            let icon = match KINDS[held.kind].usually {
-                Shape::Rect => glyph::RECT,
-                _ => glyph::PENCIL,
-            };
-            (Face::Icon(icon), held.shape.name(), true)
+            let (icon, lit) = flip_face(held);
+            (Face::Icon(icon), held.shape.name(), lit)
         }
         Key::Shape(Shape::Capture) => (Face::Camera, words::CAPTURE, held.shape == Shape::Capture),
         Key::Shape(Shape::Stamp(i)) => {
@@ -388,16 +392,46 @@ fn face_of<'a>(
             (Face::Pattern(shown), &shown.name, held.shape == Shape::Stamp(i))
         }
         Key::Shape(_) => (Face::Text(""), "", false),
+        // **The library's own icon, not an ellipsis.** Every other square on
+        // the bar shows the thing it does; three dots said "there is more"
+        // without saying more of what, in a row where everything else is a
+        // picture of itself. How many did not fit goes in the hover, which is
+        // where a number nobody has to act on belongs.
         Key::More => {
             let over = library.len() - library.on_the_bar();
-            *label = if over > 0 { format!("+{over}") } else { "…".into() };
-            (Face::Text(label), words::LIBRARY, false)
+            *label = if over > 0 {
+                format!("{} (+{over})", words::LIBRARY)
+            } else {
+                words::LIBRARY.to_string()
+            };
+            (Face::Icon(glyph::LIBRARY), label, false)
         }
         Key::Run if look.paused => (Face::Icon(glyph::PLAY), words::RUN_HINT, true),
         Key::Run => (Face::Icon(glyph::PAUSE), words::STOP_HINT, false),
         Key::Step => (Face::Icon(glyph::STEP), words::STEP_HINT, false),
         Key::Rules => (Face::Icon(glyph::GEAR), words::RULES_HINT, look.showing_rules),
         Key::Help => (Face::Icon(glyph::HELP), words::HELP_HINT, false),
+    }
+}
+
+/// What the shape square shows, and whether it is lit.
+///
+/// A free function because it is the whole of the decision and needs none of
+/// the frame around it — which is what lets a test say that holding a stamp
+/// does not also light the pencil.
+fn flip_face(held: Held) -> (&'static str, bool) {
+    match held.shape {
+        Shape::Draw => (glyph::PENCIL, true),
+        Shape::Rect => (glyph::RECT, true),
+        // Neither, so the square is the way *out* rather than a claim to be
+        // what is in your hand. It shows where flipping would put you.
+        Shape::Capture | Shape::Stamp(_) => (
+            match KINDS[held.kind].usually {
+                Shape::Rect => glyph::RECT,
+                _ => glyph::PENCIL,
+            },
+            false,
+        ),
     }
 }
 
@@ -702,6 +736,61 @@ fn shadowed_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Every kind gets a square.** The payload existed, burned its fuse and
+    /// detonated for a whole commit with no way to put one down, because
+    /// `KINDS` is the bar and it was not in it. A kind that cannot be placed
+    /// is a kind that is not in the game.
+    #[test]
+    fn every_kind_has_a_square_and_a_key() {
+        let bar = slots(&Library::default(), true);
+        for (i, tool) in KINDS.iter().enumerate() {
+            let slot = bar
+                .iter()
+                .find(|s| s.key == Key::Kind(i))
+                .unwrap_or_else(|| panic!("{} has no square on the bar", tool.name));
+            assert!(
+                matches!(slot.press, Press::Shift(_)),
+                "{} has a square and no key to reach it",
+                tool.name
+            );
+        }
+        assert!(
+            KINDS.iter().any(|t| t.placement == crate::net::Placement::Payload),
+            "the payload is not among the kinds the bar offers"
+        );
+    }
+
+    /// **The clock is there when it is yours**, and gone when it is not. A
+    /// stopped board in a world the server is stepping would be a lie.
+    #[test]
+    fn the_clock_squares_are_there_when_the_clock_is_ours() {
+        let mine = slots(&Library::default(), true);
+        for key in [Key::Run, Key::Step, Key::Rules] {
+            assert!(mine.iter().any(|s| s.key == key), "{key:?} is missing when time is ours");
+        }
+        let theirs = slots(&Library::default(), false);
+        for key in [Key::Run, Key::Step, Key::Rules] {
+            assert!(!theirs.iter().any(|s| s.key == key), "{key:?} is offered on a server's clock");
+        }
+    }
+
+    /// **One square is lit at a time on each axis.** The shape square read as
+    /// pressed unconditionally, so holding a stamp lit both it and the pencil
+    /// and the bar claimed you were holding two things.
+    #[test]
+    fn holding_a_stamp_does_not_also_light_the_pencil() {
+        let lit = |held: Held| flip_face(held).1;
+        assert!(lit(Held::default()), "a pencil in hand should light the shape square");
+        assert!(
+            !lit(Held { shape: Shape::Stamp(0), ..Default::default() }),
+            "a stamp in hand lit the pencil as well"
+        );
+        assert!(
+            !lit(Held { shape: Shape::Capture, ..Default::default() }),
+            "a capture in hand lit the pencil as well"
+        );
+    }
 
     /// **One list, so the keyboard and the layout cannot go out by one.**
     /// They were two, and this is what replaced them: every square the bar

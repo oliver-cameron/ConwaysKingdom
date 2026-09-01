@@ -980,7 +980,7 @@ impl GameApp {
     /// there is no link. A frozen board in a world you cannot build in is not a
     /// game.
     fn play_alone(&mut self) {
-        self.play_alone_on(start::chosen_world(), None)
+        self.play_alone_on(start::chosen_world(), None, false)
     }
 
     /// Playing alone on a described world, with a way to win it if one was
@@ -996,9 +996,24 @@ impl GameApp {
         &mut self,
         shape: crate::sim::WorldKind,
         victory: Option<crate::net::Victory>,
+        laboratory: bool,
     ) {
-        log::info!("playing alone on {shape:?} ({victory:?})");
+        log::info!("playing alone on {shape:?} ({victory:?}, laboratory: {laboratory})");
         self.session.play_alone(&self.world, victory);
+        // **A laboratory opens stopped**, which is Golly's habit and the right
+        // one: the first thing anybody does here is draw, and a world running
+        // while you draw into it is a world eating what you drew. The two
+        // placing rules come off with it, and the panel on the bar is where
+        // they go back on.
+        if laboratory {
+            self.session.set_rules(crate::net::Rules {
+                laboratory: true,
+                paused: true,
+                place_anywhere: true,
+                place_free: true,
+            });
+            self.last_action = Some(words::help::PAUSED.into());
+        }
         let (world, home) = start::solo_world_of(shape);
         self.world = world;
         // **A name it is not asked for.** A world nobody else can reach needs
@@ -1247,7 +1262,9 @@ impl GameApp {
         match chose {
             menu::Chose::Nothing => {}
             menu::Chose::Offline => self.play_alone(),
-            menu::Chose::Alone { shape, victory } => self.play_alone_on(shape, victory),
+            menu::Chose::Alone { shape, victory, laboratory } => {
+                self.play_alone_on(shape, victory, laboratory)
+            }
             // The list refreshes itself; this is for somebody who has just
             // made a room elsewhere and does not want to wait out the
             // interval. Asking again is one small message.

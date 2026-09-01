@@ -198,6 +198,12 @@ pub enum Chose {
     Offline,
     /// Play alone, on a world described here.
     ///
+    /// **A laboratory can be one**, which it briefly could not: an experiment
+    /// is a room so that several people can share one, and that is a reason
+    /// for it to work on a server rather than a reason for it not to work
+    /// without one. A world of one with the clock in your hand is the oldest
+    /// thing this page did.
+    ///
     /// **The make-a-world form, pointed somewhere else.** Its questions —
     /// how big, does it end, how — are the same questions whether or not a
     /// server is going to hold the answer, and asking them twice in two forms
@@ -208,6 +214,8 @@ pub enum Chose {
         shape: WorldKind,
         /// `None` is a sandbox, which is what playing alone has always been.
         victory: Option<Victory>,
+        /// Open it as a laboratory: stopped, with the placing rules off.
+        laboratory: bool,
     },
     /// Reach this server and ask what rooms it has.
     Connect(String),
