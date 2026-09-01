@@ -573,6 +573,77 @@ impl<T> Shown<T> {
     }
 }
 
+/// **A panel over the world**: a titled frame, anchored, with a way out.
+///
+/// Four views drew this by hand — the key list, the stamp library, the rules
+/// switches and a profile — and by the fourth they had come to differ in their
+/// padding, their width and whether the title had a close button beside it,
+/// none of which anybody decided. A panel is a panel; what belongs to a view
+/// is what goes *in* one.
+///
+/// A struct because the argument list was heading for seven, which is the
+/// point at which their order is the thing most likely to be got wrong — the
+/// same reason [`super::game::lobby::Look`] is one.
+pub struct Panel<'a> {
+    /// egui's id for the area. Distinct per panel, or two of them share a
+    /// position and fight over it.
+    pub id: &'static str,
+    pub title: &'a str,
+    /// Where it sits. Centred for anything you open and read; a corner for
+    /// anything that hangs off the control that opened it.
+    pub at: egui::Align2,
+    pub offset: [f32; 2],
+}
+
+impl Panel<'_> {
+    /// Centred, which is what a panel you open and read wants.
+    pub fn middle<'a>(id: &'static str, title: &'a str) -> Panel<'a> {
+        Panel { id, title, at: egui::Align2::CENTER_CENTER, offset: [0.0, 0.0] }
+    }
+}
+
+/// Draw one, and say what its body was told.
+///
+/// **It owns being closed.** `open` goes false when the button is pressed, so
+/// a view whose only answer was "I was shut" needs no answer type at all —
+/// which is what `help::Did` and `profile::Did` each were, and a third of what
+/// the rules panel returned.
+pub fn panel<T>(
+    ctx: &egui::Context,
+    theme: &theme::Theme,
+    what: Panel<'_>,
+    open: &mut bool,
+    body: impl FnOnce(&mut egui::Ui) -> T,
+) -> Shown<T> {
+    let (p, m) = (theme.palette, theme.metrics);
+    let mut told = None;
+    let area = egui::Area::new(what.id.into()).anchor(what.at, what.offset).show(ctx, |ui| {
+        egui::Frame::new()
+            .fill(p.surface)
+            .stroke(egui::Stroke::new(1.0, p.line))
+            .corner_radius(m.rounding)
+            .inner_margin(m.panel_padding * 1.4)
+            .show(ui, |ui| {
+                // One width for every panel, from the theme, which is where a
+                // measurement belongs. Two of these carried a hard-coded 280
+                // and two asked the theme, so a phone got a panel sized for a
+                // desktop half the time.
+                ui.set_width(theme.panel_width(ctx.content_rect().width()));
+                ui.horizontal(|ui| {
+                    ui.heading(what.title);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(words::CLOSE).clicked() {
+                            *open = false;
+                        }
+                    });
+                });
+                ui.add_space(m.item_spacing);
+                told = Some(body(ui));
+            });
+    });
+    Shown::new(area.response.rect, told.expect("the body runs inside the frame"))
+}
+
 /// The shapes a frame of interface produced.
 ///
 /// Deliberately holds no `TexturesDelta`. egui panics if one is dropped with

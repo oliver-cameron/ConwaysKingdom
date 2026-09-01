@@ -4,7 +4,7 @@
 //! and share almost nothing: this one is about a machine somewhere and the
 //! worlds on it, and home is about the person in front of the screen.
 
-use super::draft::{Draft, Ends, Kind, Shape, Together};
+use super::draft::{Draft, Ends, Kind, Shape};
 use super::{describe, players, words, Chose, Menu, Page, Stage, Where, RETRY_EVERY, SETTLE};
 use crate::client::views::theme::Theme;
 use crate::net::{RoomId, RoomInfo};
@@ -486,15 +486,13 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             if reached && draft.kind != Kind::Experiment {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
-                let mut together = draft.together;
                 toggles(
                     ui,
                     theme,
-                    &mut together,
-                    &[(Together::Solo, words::make::SOLO), (Together::Teams, words::make::TEAMS)],
+                    &mut draft.teams,
+                    &[(false, words::make::SOLO), (true, words::make::TEAMS)],
                 );
-                draft.together = together;
-                if draft.together == Together::Teams {
+                if draft.teams {
                     ui.add_space(m.item_spacing);
                     ui.horizontal_top(|ui| {
                         ui.set_min_height(m.button_height);
@@ -609,17 +607,10 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 // are the same kind of answer to the player.
                 if reached {
                     match draft.parse() {
-                        Ok(described) => {
+                        Ok(made) => {
                             draft.note = None;
                             draft.asking = true;
-                            chose = Some(Chose::Create {
-                                name: described.name,
-                                shape: described.shape,
-                                victory: described.victory,
-                                teams: described.teams,
-                                private: draft.private,
-                                laboratory: described.laboratory,
-                            });
+                            chose = Some(made);
                         }
                         Err(why) => draft.note = Some(why),
                     }

@@ -807,7 +807,10 @@ pub fn show(
                     ui.separator();
                     ui.small(words::HOW);
                     if ui
-                        .add_sized([ui.available_width(), 26.0], egui::Button::new(words::CLOSE))
+                        .add_sized(
+                            [ui.available_width(), 26.0],
+                            egui::Button::new(crate::client::views::words::CLOSE),
+                        )
                         .clicked()
                     {
                         picked = Picked::Close;

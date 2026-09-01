@@ -10,7 +10,7 @@
 //! `Victory` and never sees a string somebody typed.
 
 use super::words;
-use crate::net::{RoomName, Victory};
+use crate::net::Victory;
 use crate::sim::WorldKind;
 
 /// **What kind of room this describes**, which is the first question because
@@ -40,39 +40,12 @@ pub enum Ends {
     Territory,
 }
 
-/// Whether it is played in teams. A world may be as much as a match: a team is
-/// people playing as one player, which is worth having without a result to
-/// win. What a match adds is that the teams have to be even at the whistle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Together {
-    Solo,
-    Teams,
-}
-
 /// Whether the ground stops. Two answers, so a row of buttons rather than a
 /// list to open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
     Boundless,
     Wrapping,
-}
-
-/// A room as it was described, once what was typed has been checked.
-///
-/// Named fields rather than the tuple of five this used to be: four of those
-/// are the same two shapes in a row, and two that differ only in order are the
-/// ones that get swapped without anything noticing — the same argument as
-/// [`super::super::Shown`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Described {
-    pub name: RoomName,
-    pub shape: WorldKind,
-    pub victory: Option<Victory>,
-    /// `None` is a free-for-all; `Some(n)` is n sides.
-    pub teams: Option<u8>,
-    /// Make it a laboratory. Never true beside a `victory`: a match with the
-    /// rules off is not a match.
-    pub laboratory: bool,
 }
 
 /// A world being described, before it exists.
@@ -105,9 +78,14 @@ pub struct Draft {
     /// Sent, and waiting for an answer. The form stays on screen while it is
     /// true, because a refusal has to arrive back into something.
     pub asking: bool,
-    /// Free-for-all, or sides. Read only when the match ends somehow, because
-    /// a world has no result for a side to win.
-    pub together: Together,
+    /// Whether it is played in sides. A world may have them as much as a
+    /// match: a team is people playing as one player, which is worth having
+    /// without a result to win. What a match adds is that the sides have to be
+    /// even at the whistle.
+    ///
+    /// A `bool` and not an enum of two, because it is a yes and a no — and the
+    /// two labels it shows live in `words`, where every other one does.
+    pub teams: bool,
     /// How many sides, as typed. Read only in a team match.
     pub team_count: String,
     /// Kept out of the listing and reached by a code the server generates.
@@ -129,7 +107,7 @@ impl Default for Draft {
             cols: cols.to_string(),
             ends: Ends::Timer,
             target: crate::net::DEFAULT_TIMER.to_string(),
-            together: Together::Solo,
+            teams: false,
             team_count: crate::net::MIN_TEAMS.to_string(),
             note: None,
             asking: false,
@@ -151,17 +129,25 @@ impl Draft {
     /// is selected, or a target typed and then switched to "never", is
     /// somebody changing their mind — refusing on it would be refusing a
     /// number nobody is asking to use.
-    pub fn parse(&self) -> Result<Described, String> {
+    pub fn parse(&self) -> Result<super::Chose, String> {
         // A private room's name is the code the server generates, so there is
         // nothing here to check and nothing to refuse.
         let name = if self.private { String::new() } else { crate::net::room_name(&self.name)? };
         let (shape, victory) = self.world()?;
         // Only when asked for; a world may have them as much as a match can.
-        let teams = match self.together {
-            Together::Teams => Some(self.sides()?),
-            Together::Solo => None,
-        };
-        Ok(Described { name, shape, victory, teams, laboratory: self.kind == Kind::Experiment })
+        let teams = if self.teams { Some(self.sides()?) } else { None };
+        // **The choice itself, not a description of one.** This handed back a
+        // struct of five whose only caller copied all five into a
+        // `Chose::Create` — one shape for one fact, which is the convention
+        // every view here already answers a frame with.
+        Ok(super::Chose::Create {
+            name,
+            shape,
+            victory,
+            teams,
+            private: self.private,
+            laboratory: self.kind == Kind::Experiment,
+        })
     }
 
     /// The **world** this describes, without the room around it.
@@ -236,6 +222,25 @@ impl Draft {
 mod tests {
     use super::*;
 
+    use super::super::Chose;
+
+    /// `parse` answers with the choice itself, so the tests take one apart
+    /// here rather than at every assertion.
+    fn made(draft: &Draft) -> Chose {
+        draft.parse().expect("the form was refused")
+    }
+
+    /// What a described room came out as, by name, so an assertion says which
+    /// answer it is checking.
+    macro_rules! room {
+        ($draft:expr, $field:ident) => {
+            match made(&$draft) {
+                Chose::Create { $field, .. } => $field,
+                _ => panic!("a form describes a room"),
+            }
+        };
+    }
+
     /// **A world with nobody in it is not asked for a room's name.**
     ///
     /// The form hides the field when there is no server, and for a while the
@@ -268,10 +273,9 @@ mod tests {
         draft.retarget(Ends::Territory);
 
         let (shape, victory) = draft.world().unwrap();
-        let described = draft.parse().unwrap();
-        assert_eq!(described.name, "arena");
+        assert_eq!(room!(draft, name), "arena");
         assert_eq!(shape, WorldKind::Toroidal { rows: 8, cols: 6 });
-        assert_eq!((shape, victory), (described.shape, described.victory));
+        assert_eq!((shape, victory), (room!(draft, shape), room!(draft, victory)));
     }
 
     /// **The three kinds, and what each one takes off the form.**
@@ -287,19 +291,17 @@ mod tests {
         draft.retarget(Ends::Timer);
         draft.shape = Shape::Wrapping;
 
-        assert_eq!(draft.parse().unwrap().victory, None, "a world has no way to win");
-        assert!(!draft.parse().unwrap().laboratory);
+        assert_eq!(room!(draft, victory), None, "a world has no way to win");
+        assert!(!room!(draft, laboratory));
 
         draft.kind = Kind::Match;
-        let described = draft.parse().unwrap();
-        assert_eq!(described.victory, Some(Victory::Timer { generations: 2000 }));
-        assert!(!described.laboratory, "a match is a game, so its rules are not yours");
+        assert_eq!(room!(draft, victory), Some(Victory::Timer { generations: 2000 }));
+        assert!(!room!(draft, laboratory), "a match is a game, so its rules are not yours");
 
         draft.kind = Kind::Experiment;
-        let described = draft.parse().unwrap();
-        assert!(described.laboratory);
-        assert_eq!(described.victory, None, "and no way to win, whatever was typed");
-        assert_eq!(described.shape, WorldKind::Infinite, "boundless, whatever was typed");
+        assert!(room!(draft, laboratory));
+        assert_eq!(room!(draft, victory), None, "and no way to win, whatever was typed");
+        assert_eq!(room!(draft, shape), WorldKind::Infinite, "boundless, whatever was typed");
     }
 
     /// A private room is named by the server, so it is the other case where a
@@ -308,8 +310,7 @@ mod tests {
     fn a_private_room_is_named_by_the_server() {
         let mut draft = Draft::default();
         draft.private = true;
-        let described = draft.parse().expect("a private room was refused for its name");
-        assert_eq!(described.name, "", "the code the server generates becomes the name");
+        assert_eq!(room!(draft, name), "", "the code the server generates becomes the name");
     }
 }
 

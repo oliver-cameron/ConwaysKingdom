@@ -361,7 +361,6 @@ pub mod hotbar {
     /// The panel's own heading. The square that opens it is an icon.
     pub const RULES: &str = "Rules";
     pub const RULES_HINT: &str = "What the game's rules are doing here";
-    pub const CLOSE: &str = "Close";
     pub const ANYWHERE: &str = "Place outside your territory";
     pub const ANYWHERE_NOTE: &str =
         "Off, you may only build where your own influence reaches, as in a game.";
@@ -388,7 +387,6 @@ pub mod stamps {
     /// changes nothing on the screen — which looks like a key that does not
     /// work rather than one that had nothing to act on.
     pub const NOTHING_TO_TURN: &str = "Hold a stamp to turn one";
-    pub const CLOSE: &str = "Close";
     pub const FORGET: &str = "forget";
     pub const NONE_YET: &str = "Nothing kept yet.";
     pub const HOW: &str = "Grab and drag a box round your own life to take one, or draw one below.";
@@ -446,6 +444,13 @@ pub mod clock {
     }
 }
 
+/// **The way out of a panel**, and there is one of them.
+///
+/// Three modules each declared this, which is three places for one control to
+/// come to be called three things. Every panel is drawn by
+/// [`super::panel`] now, so there is one button as well as one word.
+pub const CLOSE: &str = "Close";
+
 /// A rating, said as a rating rather than as a bare number: five figures on a
 /// screen of other figures is one nobody can place.
 ///
@@ -472,7 +477,6 @@ pub fn provisional(games: u32) -> String {
 /// What a server says about somebody.
 pub mod profile {
     pub const TITLE: &str = "Player";
-    pub const CLOSE: &str = "Close";
     /// Asked for, and not answered yet. Its own line rather than an empty
     /// panel, because a wait and a blank look the same and only one of them is
     /// worth waiting through.

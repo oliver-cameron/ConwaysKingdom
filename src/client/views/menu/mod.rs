@@ -24,7 +24,7 @@ mod home;
 mod play;
 mod settings;
 
-pub use draft::{Draft, Ends, Kind, Shape, Together};
+pub use draft::{Draft, Ends, Kind, Shape};
 
 use home::home;
 use play::play;
@@ -525,6 +525,17 @@ mod tests {
     use super::*;
     use crate::client::views::theme::Theme;
 
+    /// One field of a described room, by name, so an assertion says which
+    /// answer it is checking. `parse` answers with the choice itself now.
+    macro_rules! room {
+        ($draft:expr, $field:ident) => {
+            match $draft.parse().expect("the form was refused") {
+                Chose::Create { $field, .. } => $field,
+                _ => panic!("a form describes a room"),
+            }
+        };
+    }
+
     #[test]
     fn a_room_reads_as_something_to_choose_between() {
         assert_eq!(players(0), "empty");
@@ -553,9 +564,15 @@ mod tests {
     #[test]
     fn a_draft_becomes_a_room_or_says_what_is_wrong() {
         let world = Draft { name: "  Arena ".into(), ..Draft::default() };
-        let made = world.parse().unwrap();
-        assert_eq!(made.name, "arena", "trimmed and lowercased, the way the server will name it");
-        assert_eq!((made.shape, made.victory, made.teams), (WorldKind::Infinite, None, None));
+        assert_eq!(
+            room!(world, name),
+            "arena",
+            "trimmed and lowercased, the way the server will name it"
+        );
+        assert_eq!(
+            (room!(world, shape), room!(world, victory), room!(world, teams)),
+            (WorldKind::Infinite, None, None)
+        );
 
         let torus = Draft {
             name: "ring".into(),
@@ -564,7 +581,7 @@ mod tests {
             cols: "8".into(),
             ..Draft::default()
         };
-        assert_eq!(torus.parse().unwrap().shape, WorldKind::Toroidal { rows: 6, cols: 8 });
+        assert_eq!(room!(torus, shape), WorldKind::Toroidal { rows: 6, cols: 8 });
 
         let cup = Draft {
             name: "cup".into(),
@@ -576,8 +593,8 @@ mod tests {
             rows: "nonsense".into(),
             ..Draft::default()
         };
-        assert_eq!(cup.parse().unwrap().victory, Some(Victory::Territory { squares: 500 }));
-        assert_eq!(cup.parse().unwrap().teams, None, "a match is solo unless asked otherwise");
+        assert_eq!(room!(cup, victory), Some(Victory::Territory { squares: 500 }));
+        assert_eq!(room!(cup, teams), None, "a match is solo unless asked otherwise");
 
         // Teams on a match, and on a world too: a team is people playing as
         // one player, which is worth having without a result to win.
@@ -585,25 +602,20 @@ mod tests {
             name: "cup".into(),
             kind: Kind::Match,
             ends: Ends::Timer,
-            together: Together::Teams,
+            teams: true,
             team_count: "3".into(),
             ..Draft::default()
         };
-        assert_eq!(sided.parse().unwrap().teams, Some(3));
-        let world_with_teams = Draft {
-            name: "hall".into(),
-            together: Together::Teams,
-            team_count: "2".into(),
-            ..Draft::default()
-        };
-        let made = world_with_teams.parse().unwrap();
-        assert_eq!(made.victory, None, "a world still never ends");
-        assert_eq!(made.teams, Some(2), "and may still be played in teams");
+        assert_eq!(room!(sided, teams), Some(3));
+        let world_with_teams =
+            Draft { name: "hall".into(), teams: true, team_count: "2".into(), ..Draft::default() };
+        assert_eq!(room!(world_with_teams, victory), None, "a world still never ends");
+        assert_eq!(room!(world_with_teams, teams), Some(2), "and may still be played in teams");
         let too_many = Draft {
             name: "cup".into(),
             kind: Kind::Match,
             ends: Ends::Timer,
-            together: Together::Teams,
+            teams: true,
             team_count: "99".into(),
             ..Draft::default()
         };
@@ -619,7 +631,7 @@ mod tests {
             rows: "big".into(),
             ..Draft::default()
         };
-        let why = sizeless.parse().unwrap_err();
+        let Err(why) = sizeless.parse() else { panic!("a size that will not parse was taken") };
         assert!(why.contains(words::make::ROWS), "the error says which field: {why}");
         assert!(!why.contains(words::make::COLS), "and not the one that is fine: {why}");
 

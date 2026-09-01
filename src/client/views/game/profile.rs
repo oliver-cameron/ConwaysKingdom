@@ -21,12 +21,6 @@ use crate::client::views::theme::Theme;
 use crate::client::views::words::profile as words;
 use crate::client::views::Shown;
 
-/// What the panel was told.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Did {
-    pub close: bool,
-}
-
 /// What to draw, which is either an answer or the wait for one.
 ///
 /// **Three states, not two.** A profile that has not arrived and one the
@@ -50,40 +44,23 @@ pub enum Look<'a> {
     },
 }
 
-pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look) -> Shown<Did> {
-    let (p, m) = (theme.palette, theme.metrics);
-    let mut did = Did::default();
-
-    let area = egui::Area::new("profile".into())
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(p.surface)
-                .stroke(egui::Stroke::new(1.0, p.line))
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding * 1.6)
-                .show(ui, |ui| {
-                    ui.set_width(theme.panel_width(ctx.content_rect().width()));
-                    ui.horizontal(|ui| {
-                        ui.heading(words::TITLE);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(words::CLOSE).clicked() {
-                                did.close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(m.item_spacing);
-                    match look {
-                        Look::Asking => ui.colored_label(p.text_dim, words::ASKING),
-                        Look::Unknown => ui.colored_label(p.text_dim, words::UNKNOWN),
-                        Look::Found { it, hue, mine } => {
-                            body(ui, theme, it, *hue, *mine);
-                            ui.label("")
-                        }
-                    };
-                });
-        });
-    Shown::new(area.response.rect, did)
+pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) -> Shown<()> {
+    let p = theme.palette;
+    crate::client::views::panel(
+        ctx,
+        theme,
+        crate::client::views::Panel::middle("profile", words::TITLE),
+        open,
+        |ui| match look {
+            Look::Asking => {
+                ui.colored_label(p.text_dim, words::ASKING);
+            }
+            Look::Unknown => {
+                ui.colored_label(p.text_dim, words::UNKNOWN);
+            }
+            Look::Found { it, hue, mine } => body(ui, theme, it, *hue, *mine),
+        },
+    )
 }
 
 fn body(

@@ -115,20 +115,16 @@ fn groups(keys: &Keys) -> Vec<Group> {
     ]
 }
 
-/// Draw it. Returns the rectangle covered, so a click on it does not also
-/// reach the world, and whether it was dismissed.
-/// What a press on the key list meant.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum Did {
-    #[default]
-    Nothing,
-    Close,
-}
-
-pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> crate::client::views::Shown<Did> {
+/// Draw it. The panel owns being closed, so this has nothing of its own to
+/// say and answers with the rectangle it covered and nothing else.
+pub fn show(
+    ctx: &egui::Context,
+    theme: &Theme,
+    keys: &Keys,
+    open: &mut bool,
+) -> crate::client::views::Shown<()> {
     let p = theme.palette;
     let m = theme.metrics;
-    let mut did = Did::Nothing;
 
     // The widest keycap across every group, so the two columns line up down
     // the whole panel rather than per group — measured rather than guessed,
@@ -142,57 +138,32 @@ pub fn show(ctx: &egui::Context, theme: &Theme, keys: &Keys) -> crate::client::v
         .max()
         .unwrap_or(0);
 
-    let area = egui::Area::new("help".into()).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
+    crate::client::views::panel(
         ctx,
+        theme,
+        crate::client::views::Panel::middle("help", words::TITLE),
+        open,
         |ui| {
-            egui::Frame::new()
-                .fill(p.surface)
-                .stroke(egui::Stroke::new(1.0, p.line))
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding * 1.6)
-                .show(ui, |ui| {
-                    ui.set_width(theme.panel_width(ctx.content_rect().width()));
+            for group in &groups {
+                ui.add_space(m.item_spacing * 1.5);
+                ui.colored_label(p.text_dim, egui::RichText::new(group.heading).size(m.text_small));
+                for (key, what) in &group.keys {
                     ui.horizontal(|ui| {
-                        ui.heading(words::TITLE);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(words::CLOSE).clicked() {
-                                did = Did::Close;
-                            }
-                        });
-                    });
-
-                    for group in &groups {
-                        ui.add_space(m.item_spacing * 1.5);
-                        ui.colored_label(
-                            p.text_dim,
-                            egui::RichText::new(group.heading).size(m.text_small),
+                        ui.label(
+                            egui::RichText::new(format!("{key:widest$}"))
+                                .monospace()
+                                .size(m.text_small)
+                                .color(p.accent),
                         );
-                        for (key, what) in &group.keys {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new(format!("{key:widest$}"))
-                                        .monospace()
-                                        .size(m.text_small)
-                                        .color(p.accent),
-                                );
-                                ui.colored_label(
-                                    p.text,
-                                    egui::RichText::new(*what).size(m.text_small),
-                                );
-                            });
-                        }
-                    }
+                        ui.colored_label(p.text, egui::RichText::new(*what).size(m.text_small));
+                    });
+                }
+            }
 
-                    ui.add_space(m.item_spacing * 1.5);
-                    ui.colored_label(
-                        p.text_dim,
-                        egui::RichText::new(words::DISMISS).size(m.text_small),
-                    );
-                });
+            ui.add_space(m.item_spacing * 1.5);
+            ui.colored_label(p.text_dim, egui::RichText::new(words::DISMISS).size(m.text_small));
         },
-    );
-
-    crate::client::views::Shown::new(area.response.rect, did)
+    )
 }
 
 #[cfg(test)]

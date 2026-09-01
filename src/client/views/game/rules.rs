@@ -18,59 +18,51 @@ use crate::client::views::theme::Theme;
 use crate::client::views::words::hotbar as words;
 use crate::client::views::Shown;
 
-/// What the panel was told.
+/// Which switch was thrown, if either was.
+///
+/// **An enum, because one press is one press.** It was a struct of two
+/// `Option<bool>`s and a close flag, which says a frame can throw both at once
+/// — it cannot — and made the caller write `told.anywhere.unwrap_or(current)`
+/// to put back what nobody touched. The close flag went to
+/// [`crate::client::views::panel`], which owns it for every panel.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Did {
-    pub anywhere: Option<bool>,
-    pub free: Option<bool>,
-    pub close: bool,
+pub enum Did {
+    #[default]
+    Nothing,
+    Anywhere(bool),
+    Free(bool),
 }
 
-pub fn show(ctx: &egui::Context, theme: &Theme, anywhere: bool, free: bool) -> Shown<Did> {
+pub fn show(
+    ctx: &egui::Context,
+    theme: &Theme,
+    rules: crate::net::Rules,
+    open: &mut bool,
+) -> Shown<Did> {
     let (p, m) = (theme.palette, theme.metrics);
-    let mut did = Did::default();
-    let (mut anywhere, mut free) = (anywhere, free);
+    let (mut anywhere, mut free) = (rules.place_anywhere, rules.place_free);
 
     // Above the bar and to its right, which is where the square that opens it
     // is: a panel that appeared somewhere else would be a panel you have to
     // look for after pressing something.
-    let area = egui::Area::new("rules".into())
-        .anchor(egui::Align2::RIGHT_BOTTOM, [-m.margin, -(m.slot + m.margin * 4.0)])
-        .show(ctx, |ui| {
-            egui::Frame::new()
-                .fill(p.surface)
-                .stroke(egui::Stroke::new(1.0, p.line))
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding)
-                .show(ui, |ui| {
-                    ui.set_max_width(280.0);
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(words::RULES).size(m.text_body));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(words::CLOSE).clicked() {
-                                did.close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(m.item_spacing);
+    let where_ = crate::client::views::Panel {
+        id: "rules",
+        title: words::RULES,
+        at: egui::Align2::RIGHT_BOTTOM,
+        offset: [-m.margin, -(m.slot + m.margin * 4.0)],
+    };
+    crate::client::views::panel(ctx, theme, where_, open, |ui| {
+        let mut did = Did::Nothing;
+        if ui.checkbox(&mut anywhere, words::ANYWHERE).changed() {
+            did = Did::Anywhere(anywhere);
+        }
+        ui.colored_label(p.text_dim, egui::RichText::new(words::ANYWHERE_NOTE).size(m.text_small));
 
-                    if ui.checkbox(&mut anywhere, words::ANYWHERE).changed() {
-                        did.anywhere = Some(anywhere);
-                    }
-                    ui.colored_label(
-                        p.text_dim,
-                        egui::RichText::new(words::ANYWHERE_NOTE).size(m.text_small),
-                    );
-
-                    ui.add_space(m.item_spacing);
-                    if ui.checkbox(&mut free, words::FREE).changed() {
-                        did.free = Some(free);
-                    }
-                    ui.colored_label(
-                        p.text_dim,
-                        egui::RichText::new(words::FREE_NOTE).size(m.text_small),
-                    );
-                });
-        });
-    Shown::new(area.response.rect, did)
+        ui.add_space(m.item_spacing);
+        if ui.checkbox(&mut free, words::FREE).changed() {
+            did = Did::Free(free);
+        }
+        ui.colored_label(p.text_dim, egui::RichText::new(words::FREE_NOTE).size(m.text_small));
+        did
+    })
 }

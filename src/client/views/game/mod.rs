@@ -1780,9 +1780,12 @@ impl App for GameApp {
                 },
             }
         });
-        let mut profile_closed = false;
-        let helping = self.ui.helping;
-        let mut help_closed = false;
+        // **The panel owns being closed**, so these go in and come back false
+        // rather than each view answering with a flag of its own — see
+        // [`crate::client::views::panel`].
+        let mut profile_open = profile_look.is_some();
+        let mut help_open = self.ui.helping;
+        let mut rules_open = true;
         // **One borrow, not five takes.** The closure needs `&mut` on the
         // interface's own state while `views` is borrowed, and because `ui`
         // and `views` are different fields, borrowing one says nothing about
@@ -1869,8 +1872,7 @@ impl App for GameApp {
                         // Over the bar rather than instead of it: the square
                         // that opens it has to stay pressable.
                         let rules_rect = if showing_rules && rules.laboratory {
-                            let shown =
-                                rules::show(ctx, &theme, rules.place_anywhere, rules.place_free);
+                            let shown = rules::show(ctx, &theme, rules, &mut rules_open);
                             told_rules = shown.did;
                             shown.rect
                         } else {
@@ -1931,19 +1933,14 @@ impl App for GameApp {
             // Over everything, and drawn last so it sits on top of whatever
             // screen asked for it. Its rectangle joins the list the client
             // uses to keep a press off the world behind.
-            if helping {
-                let shown = help::show(ctx, &theme, &help_keys);
-                let (rect, closed) = (shown.rect, shown.did == help::Did::Close);
-                help_closed = closed;
-                rects.extend(rect);
+            if help_open {
+                rects.extend(help::show(ctx, &theme, &help_keys, &mut help_open).rect);
             }
             // Over everything, and over the lobby it is usually opened from: a
             // profile answers a question about the screen underneath it, so it
             // sits on that screen rather than replacing it.
             if let Some(look) = &profile_look {
-                let shown = profile::show(ctx, &theme, look);
-                profile_closed = shown.did.close;
-                rects.extend(shown.rect);
+                rects.extend(profile::show(ctx, &theme, look, &mut profile_open).rect);
             }
             rects
         });
@@ -1955,14 +1952,17 @@ impl App for GameApp {
         // The two rules, and the press that shuts the panel. Sent as well as
         // applied, because the room holds them and everybody in it shares
         // them — see `set_rules`.
-        if told_rules.anywhere.is_some() || told_rules.free.is_some() {
-            self.session.set_rules(crate::net::Rules {
-                place_anywhere: told_rules.anywhere.unwrap_or(self.session.rules.place_anywhere),
-                place_free: told_rules.free.unwrap_or(self.session.rules.place_free),
-                ..self.session.rules
-            });
+        let now = self.session.rules;
+        match told_rules {
+            rules::Did::Nothing => {}
+            rules::Did::Anywhere(on) => {
+                self.session.set_rules(crate::net::Rules { place_anywhere: on, ..now })
+            }
+            rules::Did::Free(on) => {
+                self.session.set_rules(crate::net::Rules { place_free: on, ..now })
+            }
         }
-        if told_rules.close {
+        if !rules_open {
             self.ui.showing_rules = false;
         }
         match from_library {
@@ -2074,10 +2074,8 @@ impl App for GameApp {
                 self.session.look_up(who);
             }
         }
-        if help_closed {
-            self.ui.helping = false;
-        }
-        if profile_closed {
+        self.ui.helping = help_open;
+        if !profile_open {
             self.ui.showing_profile = None;
         }
         if leaving {
