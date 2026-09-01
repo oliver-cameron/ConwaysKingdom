@@ -98,7 +98,7 @@ pub const PAYLOAD_FUSE: Chance = 16;
 /// one generation, always.
 pub const PAYLOAD_WARN: u8 = bits::MAX_AGE - 1;
 /// How far a detonation reaches from its centre, in cells.
-pub const PAYLOAD_REACH: i32 = 8;
+pub const PAYLOAD_REACH: i32 = 10;
 /// How many squares in sixty-four a detonation brings to life.
 ///
 /// Conway's classic soup is a half, which mostly burns down; a third is where
@@ -111,13 +111,18 @@ pub const PAYLOAD_DENSITY: u64 = 24;
 /// payload deep inside a large country lobs itself at the nearest frontier;
 /// past this it goes off where it stands.
 pub const PAYLOAD_THROW: i32 = 12;
-/// How much of a blast's disc has to be somebody else's for it to be worth
-/// setting off there, in squares out of sixty-four.
+/// How much of a blast's disc has to be **held by somebody else** for it to be
+/// worth setting off there, in squares out of sixty-four.
 ///
-/// A blast on your own ground turns your own patterns into your own noise, so
-/// a payload walks outward until it finds a disc at least this much not-yours.
-/// Half: the point at which it is doing more to somebody else than to you.
-pub const PAYLOAD_FOREIGN: u64 = 32;
+/// Somebody else's, not merely not-yours: unowned ground passes "not mine"
+/// trivially, so that test sent payloads out of their own country to go off
+/// over the nearest empty stretch — and over the debris of earlier blasts,
+/// which is mostly unowned, so they detonated in each other's craters.
+///
+/// A quarter, which is lower than it reads: a disc centred on a frontier is
+/// half somebody's country at best, and anything further in has to be reached
+/// by walking past ground that qualifies less.
+pub const PAYLOAD_FOREIGN: u64 = 16;
 
 // --- what a new world defaults to ---------------------------------------------
 

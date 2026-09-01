@@ -862,6 +862,18 @@ impl GameApp {
             Key::Run => self.toggle_running(),
             Key::Step => self.step_one(),
             Key::Rules => self.ui.showing_rules = !self.ui.showing_rules,
+            // **Asked for rather than done**, like the step: several people
+            // share a laboratory, so the world they are all looking at is the
+            // room's to empty and the answer comes back as the `Resync`
+            // everybody gets. Offline the same message reaches the same code
+            // by the shortest possible wire.
+            Key::Wipe => {
+                if self.session.own_clock() {
+                    self.session.wipe(&mut self.world);
+                    self.notice = None;
+                    self.last_action = Some(words::help::WIPED.into());
+                }
+            }
             // The one place flipping happens, so the key and the square
             // cannot drift apart -- which they did, the key putting the shape
             // back to the kind's usual while a click toggled. The turn goes

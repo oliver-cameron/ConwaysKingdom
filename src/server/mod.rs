@@ -1193,6 +1193,16 @@ impl Server {
                 self.announce.extend(stepped);
                 Vec::new()
             }
+            ClientMessage::Wipe => match self.wipe() {
+                Ok(chunks) if chunks.is_empty() => Vec::new(),
+                Ok(chunks) => {
+                    // To everybody in the room: several people share a
+                    // laboratory, and one of them emptying it is news.
+                    self.announce.push(ServerMessage::Resync { tick: self.tick(), chunks });
+                    Vec::new()
+                }
+                Err(reason) => vec![ServerMessage::NotStarted { reason }],
+            },
             ClientMessage::Checkpoint { tick, chunks } => {
                 // Only meaningful for the tick the server is on; an older one
                 // would need a history of past states to compare against.
@@ -1238,6 +1248,32 @@ impl Server {
             chunk,
             cells: c.as_bytes().to_vec(),
         })
+    }
+
+    /// **Empty a laboratory**, keeping its clock.
+    ///
+    /// Answers with the chunks that had something in them, because a client
+    /// cannot be told "it is all gone" — what it can be told is which chunks
+    /// to ask for again, which is `Resync` and is machinery that already
+    /// exists for a world this one disagrees with.
+    ///
+    /// The seed and the tick both stay: a generation is a number two peers
+    /// agree on, and this clears the ground rather than starting the room
+    /// over.
+    pub fn wipe(&mut self) -> Result<Vec<ChunkId>, String> {
+        if !self.rules.laboratory {
+            return Err("this room is a game, so its world is not yours to empty".into());
+        }
+        let had: Vec<ChunkId> = self.world.stored().iter().map(|&(coord, _)| coord).collect();
+        let (seed, tick) = (self.world.seed(), self.tick());
+        self.world = self.world.kind().build();
+        self.world.set_seed(seed);
+        self.world.set_generation(tick);
+        // Nothing is pending against a world that no longer has the cells
+        // those actions were priced and aimed against.
+        self.pending.clear();
+        log::info!("\"{}\" was emptied at tick {tick}", self.room);
+        Ok(had)
     }
 
     /// One generation in a stopped room, and stay stopped.

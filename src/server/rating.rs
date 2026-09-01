@@ -55,6 +55,18 @@ pub const SPREAD: f64 = 400.0;
 /// be right about a newcomer, and there is nothing to be steady about yet.
 pub const K: f64 = 32.0;
 
+/// How many past ratings a profile keeps, so a number can be drawn as a line
+/// rather than read as a figure.
+///
+/// **A rating is only meaningful as a comparison, and the most useful one is
+/// with yourself.** "1340" says nothing; "1340, up from 1180 over your last
+/// twenty" says what kind of run you are on.
+///
+/// Bounded because it is one line of a text file per person, and because a
+/// sparkline in a panel has a few hundred pixels: past this the points are
+/// narrower than the ink.
+pub const HISTORY: usize = 32;
+
 /// How many settled matches it takes for a rating to stop being provisional.
 ///
 /// Ten is the usual figure and the argument for it is the one [`START`] makes:

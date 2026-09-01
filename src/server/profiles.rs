@@ -32,11 +32,11 @@ use std::path::Path;
 use crate::net::PersonId;
 use crate::server::rating::{self, Entrant};
 
-/// Bumped to 2 when a row stopped being a rating and became a profile: a
-/// version 1 line is a person and a number, and is read forward with the
-/// counts starting at nought, which is the honest answer — the server was not
-/// counting them.
-const VERSION: u8 = 2;
+/// Bumped to 2 when a row stopped being a rating and became a profile, and to
+/// 3 when it gained the ratings behind the current one. Both read forward:
+/// what an older line does not say is what the server was not keeping, so the
+/// counts start at nought and the line is empty, which is the honest answer.
+const VERSION: u8 = 3;
 
 /// **What one person has done here.**
 ///
@@ -57,6 +57,13 @@ pub struct Record {
     /// would start, and showing it as though it had been earned is the thing
     /// the provisional mark exists to stop.
     rating: Option<i32>,
+    /// **Where that number has been**, oldest first, at most
+    /// [`rating::HISTORY`] of them.
+    ///
+    /// One entry per settled match including the ones that moved nothing, so
+    /// the line's length is the number of matches and a flat stretch reads as
+    /// a run of draws rather than as missing data.
+    pub history: Vec<i32>,
 }
 
 impl Record {
@@ -144,11 +151,20 @@ impl Profiles {
             // between equals says nothing about who is better and everything
             // about how much this table knows, so it is one of the results a
             // rating stops being provisional after.
+            let rating = (delta != 0).then(|| (was.rating() + delta).max(0)).or(was.rating);
+            // Every settled match, whether or not it moved the number: a flat
+            // stretch is a run of draws and is worth being able to see as one.
+            let mut history = was.history.clone();
+            history.push(rating.unwrap_or(rating::START));
+            if history.len() > rating::HISTORY {
+                history.drain(..history.len() - rating::HISTORY);
+            }
             let now = Record {
                 name: finisher.name.clone(),
                 games: was.games + 1,
                 best: was.best.max(finisher.score),
-                rating: (delta != 0).then(|| (was.rating() + delta).max(0)).or(was.rating),
+                rating,
+                history,
             };
             self.known.insert(finisher.who.clone(), now);
             if delta != 0 {
@@ -182,7 +198,16 @@ impl Profiles {
                 // rather than as the starting number, so reading the table
                 // back cannot invent a result.
                 let rating = r.rating.map(|n| n.to_string()).unwrap_or_default();
-                format!("{VERSION}\t{who}\t{rating}\t{}\t{}\t{}\n", r.games, r.best, r.name)
+                // Commas inside a tab-separated field, so the shape of a line
+                // does not depend on how long somebody has played.
+                let history: Vec<String> = r.history.iter().map(|n| n.to_string()).collect();
+                format!(
+                    "{VERSION}\t{who}\t{rating}\t{}\t{}\t{}\t{}\n",
+                    r.games,
+                    r.best,
+                    history.join(","),
+                    r.name
+                )
             })
             .collect()
     }
@@ -249,10 +274,24 @@ fn read_row(fields: &[&str]) -> Option<(PersonId, Record)> {
         // What this replaced: a person and a number, and no counts because
         // nothing was counting.
         (1, [_, _, _]) => Record { rating, ..Default::default() },
-        (VERSION, [_, _, _, games, best, name]) => Record {
+        // And the one before the history, whose line is the same minus that
+        // field. A rating with nowhere it has been is a point, which is what
+        // it always was.
+        (2, [_, _, _, games, best, name]) => Record {
             rating,
             games: games.parse().ok()?,
             best: best.parse().ok()?,
+            history: Vec::new(),
+            name: name.to_string(),
+        },
+        (VERSION, [_, _, _, games, best, history, name]) => Record {
+            rating,
+            games: games.parse().ok()?,
+            best: best.parse().ok()?,
+            // A point this build cannot read is dropped rather than taking the
+            // person with it: a gap in a line is a worse thing to lose a
+            // rating over.
+            history: history.split(',').filter_map(|n| n.parse().ok()).collect(),
             name: name.to_string(),
         },
         _ => return None,
@@ -395,17 +434,42 @@ mod tests {
         }
     }
 
-    /// **The table this replaced reads forward.** A version 1 line is a person
-    /// and a rating, and the counts start at nought because the server was not
-    /// counting them — which is the honest answer, and better than skipping
-    /// the line and throwing away every rating anybody has earned.
+    /// **Every table this replaced reads forward.** What an older line does
+    /// not say is what the server was not keeping, so those fields come back
+    /// empty — which is the honest answer, and better than skipping the line
+    /// and throwing away every rating anybody has earned.
     #[test]
-    fn a_rating_from_the_old_table_survives_the_new_one() {
-        let table = Profiles::from_lines("1\tabc\t1300\n");
-        let row = table.of(&PersonId("abc".into()));
-        assert_eq!(row.rating(), 1300, "a rating was lost in the migration");
-        assert_eq!((row.games, row.best), (0, 0), "and nothing was invented");
-        assert!(row.provisional(), "with no games behind it, it is unearned");
+    fn a_rating_from_an_old_table_survives_the_new_one() {
+        let table = Profiles::from_lines("1\tabc\t1300\n2\tdef\t1400\t7\t90\tdee\n");
+        let one = table.of(&PersonId("abc".into()));
+        assert_eq!(one.rating(), 1300, "a rating was lost in the migration");
+        assert_eq!((one.games, one.best), (0, 0), "and nothing was invented");
+        assert!(one.provisional(), "with no games behind it, it is unearned");
+
+        let two = table.of(&PersonId("def".into()));
+        assert_eq!((two.rating(), two.games, two.best, two.name.as_str()), (1400, 7, 90, "dee"));
+        assert!(two.history.is_empty(), "a line from before the history has none");
+    }
+
+    /// **A point per settled match**, including the ones that moved nothing:
+    /// a flat stretch is a run of draws and is worth being able to see as one.
+    #[test]
+    fn a_rating_remembers_where_it_has_been() {
+        let mut table = Profiles::new();
+        for _ in 0..3 {
+            table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        }
+        table.settle(&[solo("a", 1, 5), solo("b", 2, 5)]);
+        let row = table.of(&who("a"));
+        assert_eq!(row.history.len(), 4, "a drawn match is still a match");
+        assert_eq!(row.history.last().copied(), Some(row.rating()), "the last point is now");
+        assert!(row.history[0] < row.history[2], "three wins should climb: {:?}", row.history);
+
+        // Bounded, or one line of a text file grows without end.
+        for _ in 0..rating::HISTORY * 2 {
+            table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        }
+        assert_eq!(table.of(&who("a")).history.len(), rating::HISTORY);
     }
 
     /// A line this build cannot read is skipped rather than fatal. Losing one
@@ -413,9 +477,9 @@ mod tests {
     #[test]
     fn a_line_this_build_cannot_read_is_skipped() {
         let table = Profiles::from_lines(&format!(
-            "{VERSION}\tabc\t1300\t4\t80\tabby\n\
+            "{VERSION}\tabc\t1300\t4\t80\t1200,1250,1300\tabby\n\
              9\tfrom\tthe\tfuture\n\n\
-             {VERSION}\tdef\tnot-a-number\t0\t0\t\n\
+             {VERSION}\tdef\tnot-a-number\t0\t0\t\t\n\
              rubbish\n"
         ));
         assert_eq!(table.len(), 1, "a bad line took a good one with it");

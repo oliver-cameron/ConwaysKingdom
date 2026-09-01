@@ -121,6 +121,7 @@ mod tests {
                 laboratory: true,
             }),
             ClientMessage::StepOnce,
+            ClientMessage::Wipe,
             ClientMessage::Profile { who: crate::net::PersonId("3f2a91c4".into()) },
         ];
         for msg in cases {
@@ -180,6 +181,7 @@ mod tests {
                     rating: 1200,
                     provisional: true,
                     games: 3,
+                    history: vec![1200, 1188, 1200],
                     best: 80,
                 }),
                 you: PlayerId(2),
@@ -251,6 +253,7 @@ mod tests {
                 rating: 1417,
                 provisional: false,
                 games: 22,
+                history: vec![1200, 1216, 1204, 1240, 1417],
                 best: 1204,
             })),
             // Somebody this server has never met, which is a real answer.

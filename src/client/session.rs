@@ -467,6 +467,23 @@ impl Session {
         }
     }
 
+    /// **Empty this laboratory.**
+    ///
+    /// Asked for in a room, because several people share one and the world
+    /// they are all looking at is the room's — the answer comes back as the
+    /// `Resync` everybody gets. Offline there is nobody to ask and this client
+    /// is the authority, so it is the same clearing `resync_everything` does
+    /// when a world has to be thrown away.
+    pub fn wipe(&mut self, world: &mut World) {
+        match self.link.as_ref() {
+            Some(link) => link.send(ClientMessage::Wipe),
+            None => {
+                let tick = world.generation;
+                self.resync_everything(world, tick);
+            }
+        }
+    }
+
     /// Step a world nobody else is keeping time in, and bank what it mined.
     ///
     /// Offline only, and guarded on it: connected, the world advances when the

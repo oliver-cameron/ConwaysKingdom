@@ -120,6 +120,7 @@ fn body(
                 .size(m.text_small),
         );
     }
+    curve(ui, theme, &it.history);
     ui.add_space(m.item_spacing);
 
     ui.label(words::matches(it.games));
@@ -140,4 +141,56 @@ fn body(
     } else {
         ui.colored_label(p.text_dim, crate::client::views::words::record::NOTHING_YET);
     }
+}
+
+/// **Where the rating has been**, as a line rather than a figure.
+///
+/// A rating means nothing on its own — only differences do — so the most
+/// useful thing beside the number is the number twenty matches ago. One point
+/// per settled match, oldest at the left.
+///
+/// Drawn rather than charted: there are no axes and no grid, because the shape
+/// is the whole message and a scale would be four more numbers to read on a
+/// panel that already has five. The two ends are labelled instead, which is
+/// the one comparison anybody actually makes.
+fn curve(ui: &mut egui::Ui, theme: &Theme, history: &[i32]) {
+    let (p, m) = (theme.palette, theme.metrics);
+    // Two points is the fewest that can be a line. One match is a dot, and a
+    // dot says less than the figure above it already does.
+    if history.len() < 2 {
+        return;
+    }
+    ui.add_space(m.item_spacing);
+    let width = ui.available_width();
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(width, m.button_height), egui::Sense::hover());
+
+    let (lo, hi) = history.iter().fold((i32::MAX, i32::MIN), |(a, b), &n| (a.min(n), b.max(n)));
+    // A flat run is a real thing to have had, and scaling by its range would
+    // be dividing by nought — so it draws down the middle rather than not at
+    // all.
+    let span = (hi - lo).max(1) as f32;
+    let step = rect.width() / (history.len() - 1) as f32;
+    let at = |i: usize, n: i32| {
+        let t = if hi == lo { 0.5 } else { (n - lo) as f32 / span };
+        egui::pos2(rect.left() + i as f32 * step, rect.bottom() - t * rect.height())
+    };
+    let points: Vec<egui::Pos2> = history.iter().enumerate().map(|(i, &n)| at(i, n)).collect();
+
+    // The ground it sits on, so a line low in the box reads as low rather than
+    // as floating.
+    ui.painter().rect_filled(rect, m.rounding * 0.5, p.surface_lift);
+    ui.painter().add(egui::Shape::line(points.clone(), egui::Stroke::new(1.5, p.accent)));
+    // And where it ended, because that is the number above it and this is what
+    // joins the two.
+    if let Some(&last) = points.last() {
+        ui.painter().circle_filled(last, 2.5, p.accent);
+    }
+
+    ui.horizontal(|ui| {
+        ui.colored_label(p.text_dim, egui::RichText::new(lo.to_string()).size(m.text_small));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.colored_label(p.text_dim, egui::RichText::new(hi.to_string()).size(m.text_small));
+        });
+    });
 }

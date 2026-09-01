@@ -784,6 +784,7 @@ impl Rooms {
             rating: row.rating(),
             provisional: row.provisional(),
             games: row.games,
+            history: row.history.clone(),
             best: row.best,
         })
     }

@@ -689,6 +689,10 @@ pub struct Profile {
     pub provisional: bool,
     /// Matches this server has settled for them.
     pub games: u32,
+    /// **Where that rating has been**, oldest first, one point per settled
+    /// match. A number on its own says nothing — only differences do — and the
+    /// most useful comparison is with yourself a month ago.
+    pub history: Vec<i32>,
     /// The most ground they have held at once, in squares.
     pub best: usize,
 }
@@ -901,6 +905,16 @@ pub enum ClientMessage {
     /// Its own message rather than an unpause and a pause, which would be two
     /// round trips and a world that ran for however long they took.
     StepOnce,
+    /// **Empty this laboratory.** Refused anywhere else, for the reason
+    /// [`Self::SetRules`] is: everywhere but a laboratory these are the rules
+    /// of the game, and a world somebody can wipe is not one anybody would
+    /// build in.
+    ///
+    /// The tick is kept. A generation is a number two peers agree on, and
+    /// starting it over would be a world at tick nought that half the room is
+    /// still at tick nine hundred in — the ground is what is being cleared,
+    /// not the clock.
+    Wipe,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

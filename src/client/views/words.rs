@@ -360,6 +360,9 @@ pub mod hotbar {
     pub const STEP_HINT: &str = "One generation, and stay stopped";
     /// The panel's own heading. The square that opens it is an icon.
     pub const RULES: &str = "Rules";
+    /// Said as what it does to the world rather than as "reset", which reads
+    /// like putting something back the way it was.
+    pub const WIPE_HINT: &str = "empty this laboratory";
     pub const RULES_HINT: &str = "What the game's rules are doing here";
     pub const ANYWHERE: &str = "Place outside your territory";
     pub const ANYWHERE_NOTE: &str =
@@ -717,6 +720,7 @@ pub mod help {
     pub const SERVER_KEEPS_TIME: &str = "the server keeps time in a game; a laboratory's is yours";
     pub const GO_BACK: &str = "back a screen";
     pub const PAUSED: &str = "paused";
+    pub const WIPED: &str = "emptied";
     pub const RUNNING: &str = "running";
     pub fn stepped_to(generation: u64) -> String {
         format!("stepped to generation {generation}")

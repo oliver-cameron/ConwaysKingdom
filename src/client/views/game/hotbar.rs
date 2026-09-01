@@ -224,6 +224,9 @@ pub enum Key {
     Step,
     /// Open the laboratory's settings: what the game's rules are doing.
     Rules,
+    /// Empty this laboratory. Only offered where the clock is, because both
+    /// are things only a laboratory lets anybody do.
+    Wipe,
     /// The shape square: pencil and pane are one choice with two answers, so
     /// this is the other one. A `Key` rather than a `Shape` because which one
     /// it means depends on what is held, and [`slots`] is a fixed list.
@@ -296,12 +299,16 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
     tool(&mut out, Key::More, Group::Shapes, true);
 
     if clock {
-        for (key, press) in [
-            (Key::Run, Press::Named(words::RUN_KEY)),
-            (Key::Step, Press::Named(words::STEP_KEY)),
-            (Key::Rules, Press::None),
+        for (key, press, rule) in [
+            (Key::Run, Press::Named(words::RUN_KEY), false),
+            (Key::Step, Press::Named(words::STEP_KEY), false),
+            (Key::Rules, Press::None, false),
+            // Behind a rule, because it is the one square here that cannot be
+            // undone: the other three change what the world is doing and this
+            // one throws it away.
+            (Key::Wipe, Press::None, true),
         ] {
-            out.push(Slot { key, group: Group::Clock, press, rule: false });
+            out.push(Slot { key, group: Group::Clock, press, rule });
         }
     }
     out.push(Slot {
@@ -437,6 +444,7 @@ fn face_of<'a>(
         Key::Run => (Face::Icon(glyph::PAUSE), words::STOP_HINT, false),
         Key::Step => (Face::Icon(glyph::STEP), words::STEP_HINT, false),
         Key::Rules => (Face::Icon(glyph::GEAR), words::RULES_HINT, look.showing_rules),
+        Key::Wipe => (Face::Icon(glyph::TRASH), words::WIPE_HINT, false),
         Key::Help => (Face::Icon(glyph::HELP), words::HELP_HINT, false),
     }
 }
@@ -842,15 +850,19 @@ mod tests {
         assert_eq!(pressed.len(), before, "two squares share a key");
     }
 
-    /// The clock is offline only, and its squares are the difference.
+    /// **The clock is a laboratory's**, and its squares are the difference —
+    /// running, stepping, the rules, and emptying it, which are the four
+    /// things only a laboratory lets anybody do.
     #[test]
-    fn a_connected_bar_has_no_clock() {
+    fn a_bar_without_the_clock_has_none_of_it() {
         let lib = library(0);
-        let alone = slots(&lib, true);
-        let joined = slots(&lib, false);
-        assert_eq!(alone.len(), joined.len() + 3);
-        assert!(joined.iter().all(|s| s.group != Group::Clock));
-        assert!(alone.iter().any(|s| s.key == Key::Run));
+        let ours = slots(&lib, true);
+        let theirs = slots(&lib, false);
+        assert_eq!(ours.len(), theirs.len() + 4);
+        assert!(theirs.iter().all(|s| s.group != Group::Clock));
+        for key in [Key::Run, Key::Step, Key::Rules, Key::Wipe] {
+            assert!(ours.iter().any(|s| s.key == key), "{key:?} is missing");
+        }
     }
 
     /// **The bar fits the screen it is on.** One row at full size where there

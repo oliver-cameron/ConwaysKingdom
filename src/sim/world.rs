@@ -976,16 +976,25 @@ impl World {
         at
     }
 
-    /// Whether a blast centred here would do more to somebody else than to its
-    /// owner.
+    /// Whether a blast centred here would be worth setting off.
     ///
-    /// A count and not a cost: how many squares of the disc are already this
-    /// player's, which is the same question `net::crowding` asks when it seats
-    /// a latecomer. Short-circuits the moment enough of it is not theirs, so
-    /// a payload standing on a frontier answers in a handful of reads.
+    /// **Somebody else's ground, not merely "not mine".** This asked whether
+    /// enough of the disc was *not* the owner's, and unowned ground passes
+    /// that trivially — so a payload walked out of its own country to go off
+    /// over the nearest empty stretch, which does nothing to anybody. Worse,
+    /// the debris of an earlier blast is mostly unowned, so payloads queued up
+    /// to detonate in each other's craters.
+    ///
+    /// What makes a blast worth anything is turning **somebody's** ordered
+    /// pattern into **their** noise, so that is what is counted. Over
+    /// no-man's-land it does nothing, which the design said all along and this
+    /// test did not.
+    ///
+    /// A count and not a cost, and it stops the moment it has seen enough — so
+    /// a payload on a frontier answers in a handful of reads.
     fn worth_hitting(&self, centre: (i32, i32), owner: PlayerId) -> bool {
         let reach = rule::PAYLOAD_REACH;
-        let mut foreign = 0u64;
+        let mut theirs = 0u64;
         // How many squares of a disc this radius holds, so the threshold is a
         // fraction of the disc rather than of the box around it.
         let total: u64 = (-reach..=reach)
@@ -997,11 +1006,12 @@ impl World {
                 if dr * dr + dc * dc > reach * reach {
                     continue;
                 }
-                let mine =
-                    self.cell_at(centre.0 + dr, centre.1 + dc).is_some_and(|c| c.player() == owner);
-                if !mine {
-                    foreign += 1;
-                    if foreign * 64 >= total * rule::PAYLOAD_FOREIGN {
+                let held_by_another = self
+                    .cell_at(centre.0 + dr, centre.1 + dc)
+                    .is_some_and(|c| c.player().is_owned() && c.player() != owner);
+                if held_by_another {
+                    theirs += 1;
+                    if theirs * 64 >= total * rule::PAYLOAD_FOREIGN {
                         return true;
                     }
                 }
