@@ -36,9 +36,9 @@ pub const FAMILY: &str = "phosphor";
 /// Run the world.
 pub const PLAY: &str = "\u{e3d0}";
 /// Stop it.
-pub const PAUSE: &str = "\u{e01a}";
+pub const PAUSE: &str = "\u{e39e}";
 /// One generation, and stay stopped.
-pub const STEP: &str = "\u{e01a}";
+pub const STEP: &str = "\u{e5a6}";
 /// The rules panel: what the game is doing here.
 pub const GEAR: &str = "\u{e270}";
 /// Out of this screen. The one control whose job is to be recognised at a
@@ -59,11 +59,14 @@ pub const GROUND: &str = "\u{e244}";
 /// Rating.
 pub const RATING: &str = "\u{e67e}";
 
+/// Drawing a cell at a time.
 pub const PENCIL: &str = "\u{e3b4}";
 
+/// Filling a rectangle.
 pub const RECT: &str = "\u{e3f2}";
 
-pub const TRASH: &str = "\u{e5a6}";
+/// Throw a stamp away.
+pub const TRASH: &str = "\u{e4a6}";
 
 /// Every one of them, for the test and for the subsetter.
 pub const ALL: &[(&str, &str)] = &[

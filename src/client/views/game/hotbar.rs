@@ -1,25 +1,15 @@
 //! What a click puts down.
 //!
-//! Two segments along the bottom, one thing selected across both:
-//!
 //! ```text
-//!     [ Life  Mine │ Ice ]   [ Grab  stamps … ⋯ ]
+//!   [ figures ] [ Life Mine Turret Ice ] [ shape │ grab │ stamps │ ⋯ ] [ ▶ +1 ⚙ ] [ ? ]
 //! ```
 //!
-//! Segmented because the halves are not alike. The tools are the game's own
-//! vocabulary and never change; the stamps are whatever you happened to
-//! capture, and there may be none or thirty. Run together, the Ice key would
-//! move every time you saved a pattern.
+//! [`slots`] is that line as a list, and the keyboard, the key list and the
+//! layout all read it.
 //!
-//! Ice sits with the other tools but behind a rule, because it is the one that
-//! walls people off and should not be a neighbour of the one you draw with.
-//!
-//! **Keys: the digits are the stamps, shift and a digit is a tool.** The
-//! stamps get the bare digits because they are what you hold ten of and swap
-//! between without looking. Binding is by *physical* key so it is the same key
-//! on any layout; the label is learned from what that key actually types,
-//! because shift and `1` is `!` on one keyboard and something else on
-//! Programmer Dvorak, and nothing but the keyboard can say which.
+//! Digits are the stamps, shift-and-a-digit is everything else. Bound by
+//! position so it is the same key on every layout, labelled with whatever that
+//! key types — see [`hint`].
 
 use crate::client::views::game::stamp::{Library, Stamp};
 use crate::client::views::glyph;
@@ -53,19 +43,9 @@ pub struct Tool {
     /// What the server is asked for. A name rather than cell bits, so the
     /// server can judge the request.
     pub placement: Placement,
-    /// The shape this kind is usually wanted in — **a default and not a
-    /// constraint**, which is the difference between this and the tool it grew
-    /// out of.
-    ///
-    /// A mine is placed a few at a time and into a pattern, because what it is
-    /// worth depends on what it is next to; a turret goes down in fours,
-    /// because one live cell on its own dies of loneliness and a 2x2 block is
-    /// the cheapest thing that does not. Both are gestures, which is what a
-    /// pencil is for. Ice is a wall, and a wall is a thing you say the size of
-    /// before it exists.
-    ///
-    /// The shape axis can still be set to anything; this is only where the one
-    /// key that resets it goes.
+    /// The shape this kind is usually wanted in: a pencil for life, a
+    /// rectangle for ice, which is a wall and so a thing you say the size of.
+    /// A default, not a constraint — the shape axis still sets to anything.
     pub usually: Shape,
 }
 
@@ -136,17 +116,10 @@ impl Shape {
     }
 }
 
-/// **Two axes: a shape and what it is made of.**
-///
-/// It was one — a list of tools and stamps where picking any of them replaced
-/// everything about the last. So a mine was always a pencil, ice was always a
-/// pane, and a stamp was always whatever it had been captured as; there was no
-/// way to draw a line of ice, sweep a pane of mines, or lay a glider in
-/// anything but the material it was built from.
-///
-/// Separating them makes each choice mean one thing. The shape says how the
-/// cells are chosen and the kind says what goes in them, and every combination
-/// is reachable rather than the dozen somebody happened to list.
+/// **Two axes: a shape and what it is made of.** The shape says how cells are
+/// chosen, the kind says what goes in them, and every combination is reachable
+/// — a line of ice and a pane of mines were both unsayable when it was one
+/// list of tools.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Held {
     pub shape: Shape,
@@ -174,11 +147,8 @@ impl Held {
         self.tool().map(|t| t.placement)
     }
 
-    /// What a drag with this held draws.
-    ///
-    /// A stamp is placed by a click, so a drag with one held sweeps out the
-    /// rectangle that **captures** another — holding a stamp already means you
-    /// are thinking about stamps, which is why that needs no bar of its own.
+    /// What a drag draws. A stamp is placed by a click, so dragging with one
+    /// held sweeps the rectangle that captures another.
     pub fn stroke(self) -> Stroke {
         match self.shape {
             Shape::Draw => Stroke::Pencil,
@@ -186,17 +156,8 @@ impl Held {
         }
     }
 
-    /// Back to the shape this kind is usually wanted in.
-    ///
-    /// **One key, and it goes somewhere rather than somewhere else.** A toggle
-    /// between draw and pane is a key whose meaning depends on what you last
-    /// pressed, so using it means remembering where you are; this always lands
-    /// in the same place for a given material — a pencil for life, mines and
-    /// turrets, a pane for ice — and is therefore also the way out of a stamp
-    /// or a capture without looking at the bar to see what it will do.
-    ///
-    /// The other shape is a click away on the bar, which is the right home for
-    /// the choice you make occasionally.
+    /// Back to the shape this kind is usually wanted in — which is also the
+    /// way out of a stamp or a capture without looking at the bar.
     pub fn defaulted(self) -> Self {
         let shape = self.tool().map(|k| k.usually).unwrap_or_default();
         // The turn goes too. "Put me back to normal" that left a pattern
@@ -208,18 +169,13 @@ impl Held {
 /// Something on the bar that a key can pick.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Key {
-    /// Open the list of every key.
-    ///
-    /// **A square, because a key nobody knows about is not a key.** `?` was
-    /// discoverable only by pressing `?`, and the one place a player already
-    /// looks to find out what something does is the bar — every other square
-    /// on it teaches its own keystroke in the corner, and this one teaches the
-    /// square that teaches the rest.
+    /// Open the list of every key. A square as well as a key, because `?` was
+    /// discoverable only by pressing `?`.
     Help,
     /// Pick a shape, leaving what it is made of alone.
     Shape(Shape),
-    /// Pick a kind, leaving the shape alone. **That is the whole point of two
-    /// axes**: choosing a material does not put your pencil down.
+    /// Pick a kind, leaving the shape alone: choosing a material does not put
+    /// your pencil down.
     Kind(usize),
     /// The stamps that did not fit.
     More,
@@ -230,31 +186,95 @@ pub enum Key {
     /// Open the laboratory's settings: what the game's rules are doing.
     Rules,
     /// The shape square: pencil and pane are one choice with two answers, so
-    /// this is the other one.
-    ///
-    /// **On the shifted row rather than on a key of its own.** It was the
-    /// backtick — which is a dead key on the Spanish, Portuguese and Nordic
-    /// layouts, so the least reachable key in the game was on one of its most
-    /// ordinary actions — and the key and the square disagreed besides: the
-    /// key put the shape back to the kind's usual and a click on the square
-    /// toggled. One action now, and it is the square's, because the square is
-    /// the thing that shows which answer is current.
-    ///
-    /// A `Key` rather than a `Shape`, because which shape it means depends on
-    /// which is held, and `shifted` is a fixed list.
+    /// this is the other one. A `Key` rather than a `Shape` because which one
+    /// it means depends on what is held, and [`slots`] is a fixed list.
     Flip,
 }
 
-/// **The digits are the stamps.** `1` to `9` then `0`, which is ten and is why
-/// [`ON_THE_BAR`](crate::client::views::game::stamp::ON_THE_BAR) is ten.
-///
-/// The answer is a **slot on the bar**, not an index into the library — see
-/// `Library::bar`, which is the mapping between them and is the same one the
-/// squares are drawn from, so the keys and the bar cannot disagree.
-///
-/// The stamps get them because they are the keys you reach for without
-/// looking, and stamps are the thing you hold ten of and swap between. The
-/// three tools never change and never grow, so they can afford a modifier.
+/// Which key picks a square.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Press {
+    /// Shift and a digit: the tools.
+    Shift(u32),
+    /// A bare digit: the stamps. `1` to `9` then `0`, which is ten and is why
+    /// [`ON_THE_BAR`](crate::client::views::game::stamp::ON_THE_BAR) is ten.
+    Digit(u32),
+    /// A key of its own.
+    Named(&'static str),
+    None,
+}
+
+/// Which boxed group a square sits in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Group {
+    /// What a cell is made of.
+    Kinds,
+    /// What shape it is drawn in, and the patterns.
+    Shapes,
+    /// The world's clock. Offline only: connected, the server keeps time.
+    Clock,
+    Help,
+}
+
+/// One square on the bar.
+pub struct Slot {
+    pub key: Key,
+    pub group: Group,
+    pub press: Press,
+    /// A hairline before it: same group, different job.
+    pub rule: bool,
+}
+
+/// The whole bar, in the order it sits. The keyboard, the key list and the
+/// layout all read this, so they cannot go out by one. No egui, so it tests
+/// without a window.
+pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
+    let mut out = Vec::new();
+    let mut shift = 0;
+    let mut tool = |out: &mut Vec<Slot>, key, group, rule| {
+        shift += 1;
+        out.push(Slot { key, group, press: Press::Shift(shift), rule });
+    };
+
+    for i in 0..KINDS.len() {
+        tool(&mut out, Key::Kind(i), Group::Kinds, false);
+    }
+    tool(&mut out, Key::Flip, Group::Shapes, false);
+    tool(&mut out, Key::Shape(Shape::Capture), Group::Shapes, true);
+
+    // A slot on the bar is a place; the stamp standing in it is looked up.
+    // They were one number while the bar was the first ten of the library and
+    // are not once a stamp can be pinned — and what is *held* stays a library
+    // index, so re-pinning does not change what is in your hand.
+    for (slot, i) in library.bar().into_iter().enumerate() {
+        out.push(Slot {
+            key: Key::Shape(Shape::Stamp(i)),
+            group: Group::Shapes,
+            press: Press::Digit(if slot == 9 { 0 } else { slot as u32 + 1 }),
+            rule: slot == 0,
+        });
+    }
+    tool(&mut out, Key::More, Group::Shapes, true);
+
+    if clock {
+        for (key, press) in [
+            (Key::Run, Press::Named(words::RUN_KEY)),
+            (Key::Step, Press::Named(words::STEP_KEY)),
+            (Key::Rules, Press::None),
+        ] {
+            out.push(Slot { key, group: Group::Clock, press, rule: false });
+        }
+    }
+    out.push(Slot {
+        key: Key::Help,
+        group: Group::Help,
+        press: Press::Named(words::HELP),
+        rule: false,
+    });
+    out
+}
+
+/// Which stamp slot a bare digit picks.
 pub fn stamp_for_digit(digit: u32) -> Option<usize> {
     match digit {
         0 => Some(9),
@@ -263,59 +283,34 @@ pub fn stamp_for_digit(digit: u32) -> Option<usize> {
     }
 }
 
-/// The keys that are not stamps, in the order they sit on the bar. Shift and a
-/// digit picks one of these.
-pub fn shifted(_library: &Library) -> Vec<Key> {
-    // **Derived from [`KINDS`], not listed beside it.** It was a hand-written
-    // list once and went out by one the moment a tool was added, so the bar
-    // labelled its squares from its own layout and the keyboard disagreed.
-    // **In the order the squares sit on the bar**, which is now the whole
-    // row: the shape square used to be the one control with a key outside this
-    // list, so the bar read left to right and the keyboard skipped a square in
-    // the middle of it. `Flip` goes where it is drawn, and capture and more
-    // shuffle along.
-    (0..KINDS.len())
-        .map(Key::Kind)
-        .chain([Key::Flip, Key::Shape(Shape::Capture), Key::More])
+/// What shift and a digit picks, read off [`slots`] so it cannot disagree
+/// with what is drawn.
+pub fn shifted_for_digit(digit: u32, library: &Library) -> Option<Key> {
+    slots(library, true).into_iter().find(|s| s.press == Press::Shift(digit)).map(|s| s.key)
+}
+
+/// The squares shift and a digit reaches, which is what the key list counts.
+pub fn shifted(library: &Library) -> Vec<Key> {
+    slots(library, true)
+        .into_iter()
+        .filter(|s| matches!(s.press, Press::Shift(_)))
+        .map(|s| s.key)
         .collect()
 }
 
-/// Which of those shift and this digit picks.
-pub fn shifted_for_digit(digit: u32, library: &Library) -> Option<Key> {
-    let index = (digit as usize).checked_sub(1)?;
-    shifted(library).get(index).copied()
-}
-
-/// What a stamp's square shows in its corner.
+/// What a square's corner says, on *this* keyboard.
 ///
-/// **Asked of the keyboard, like the row above it.** This hard-coded `1`-`9`
-/// and `0` while `tool_hint` beside it asked — so on AZERTY, whose unshifted
-/// digit row prints ``&é"'(-è_çà``, ten squares were labelled with ten keys
-/// that layout does not have, and the help screen was right about it while the
-/// bar was not. Which is worse than both being wrong.
-fn stamp_hint(index: usize, plain: &Typed) -> Option<String> {
-    let digit = match index {
-        0..=8 => index as u32 + 1,
-        9 => 0,
-        _ => return None,
-    };
-    // The US guess is seeded, so this only falls through on a keyboard nothing
-    // has been able to name — and a digit is a better guess than nothing.
-    Some(plain(digit).unwrap_or_else(|| digit.to_string()))
-}
-
-/// What a tool's square shows: whatever shift and that digit types on the
-/// keyboard in front of the player, once they have pressed it, and a plain
-/// `S`-and-digit until then.
-fn tool_hint(index: usize, typed: &Typed) -> Option<String> {
-    let digit = u32::try_from(index).ok()? + 1;
-    if digit > 9 {
-        return None;
+/// Asked rather than assumed: the digit row prints `&é"'(-è_çà` on AZERTY, and
+/// a bar labelled `1`-`0` there names ten keys the keyboard does not have. The
+/// US guess is seeded, so the fallbacks only fire on a key nothing has been
+/// able to name.
+fn hint(press: Press, look: &Look<'_>) -> Option<String> {
+    match press {
+        Press::Shift(d) => Some((look.typed)(d).unwrap_or_else(|| format!("S{d}"))),
+        Press::Digit(d) => Some((look.plain)(d).unwrap_or_else(|| d.to_string())),
+        Press::Named(key) => Some(key.to_string()),
+        Press::None => None,
     }
-    Some(match typed(digit) {
-        Some(what) => what,
-        None => format!("S{digit}"),
-    })
 }
 
 /// What shift and a digit types here. Asked of the keyboard rather than
@@ -347,6 +342,71 @@ pub struct Look<'a> {
     pub showing_rules: bool,
 }
 
+/// What a square shows, what it is called, and whether it is the current one.
+fn face_of<'a>(
+    key: Key,
+    held: Held,
+    library: &'a Library,
+    look: &Look<'_>,
+    turned: &'a mut Option<Stamp>,
+    label: &'a mut String,
+) -> (Face<'a>, &'a str, bool) {
+    match key {
+        Key::Kind(i) => (Face::Sprite(KINDS[i].shows), KINDS[i].name, held.kind == i),
+        // One square, not two: draw and pane are one choice with two answers,
+        // so it shows which is current rather than offering both. It shows a
+        // held stamp too, and clicking it is the way back to drawing.
+        Key::Flip => {
+            let icon = match KINDS[held.kind].usually {
+                Shape::Rect => glyph::RECT,
+                _ => glyph::PENCIL,
+            };
+            (Face::Icon(icon), held.shape.name(), true)
+        }
+        Key::Shape(Shape::Capture) => (Face::Camera, words::CAPTURE, held.shape == Shape::Capture),
+        Key::Shape(Shape::Stamp(i)) => {
+            let stamp = library.get(i).expect("a slot names a stamp the library holds");
+            // Shown as it would be laid, turn and all: a thumbnail that stayed
+            // upright while the preview rotated would be two answers to what
+            // is about to happen.
+            if held.shape == Shape::Stamp(i) && !held.turn.is_default() {
+                *turned = Some(stamp.turned(held.turn));
+            }
+            let shown = turned.as_ref().unwrap_or(stamp);
+            (Face::Pattern(shown), &shown.name, held.shape == Shape::Stamp(i))
+        }
+        Key::Shape(_) => (Face::Text(""), "", false),
+        Key::More => {
+            let over = library.len() - library.on_the_bar();
+            *label = if over > 0 { format!("+{over}") } else { "…".into() };
+            (Face::Text(label), words::LIBRARY, false)
+        }
+        Key::Run if look.paused => (Face::Icon(glyph::PLAY), words::RUN_HINT, true),
+        Key::Run => (Face::Icon(glyph::PAUSE), words::STOP_HINT, false),
+        Key::Step => (Face::Icon(glyph::STEP), words::STEP_HINT, false),
+        Key::Rules => (Face::Icon(glyph::GEAR), words::RULES_HINT, look.showing_rules),
+        Key::Help => (Face::Icon(glyph::HELP), words::HELP_HINT, false),
+    }
+}
+
+/// How big a square can be, and how many rows the bar needs.
+///
+/// Shrinks before it wraps: a shorter row of smaller squares reads better than
+/// two rows of large ones, and a row costs height, which is scarcer on a phone
+/// held sideways.
+fn fit(squares: usize, available: f32, theme: &Theme) -> (f32, usize) {
+    /// Below this a sprite is not a picture of anything.
+    const SMALLEST: f32 = 22.0;
+    let m = theme.metrics;
+    let step = |size: f32| size + m.item_spacing * 1.5;
+    if squares as f32 * step(m.slot) <= available {
+        return (m.slot, 1);
+    }
+    let size = (available / squares as f32 - m.item_spacing * 1.5).clamp(SMALLEST, m.slot);
+    let across = (available / step(size)).floor().max(1.0);
+    (size, (squares as f32 / across).ceil() as usize)
+}
+
 pub fn show(
     ctx: &egui::Context,
     look: &Look<'_>,
@@ -355,246 +415,80 @@ pub fn show(
     status: &crate::client::views::game::hud::Status,
 ) -> crate::client::views::Shown<Option<Key>> {
     let theme = look.theme;
-    let typed = look.typed;
     let m = theme.metrics;
     let mut picked = None;
-    // Shift keys run over the bar's non-stamp squares in the order they sit.
-    let mut shift = 0usize;
 
-    let response = egui::Area::new("hotbar".into())
+    let slots = slots(library, look.own_clock);
+    // The figures at the left are the widest thing on the bar and the least
+    // urgent — they are also what the HUD used to carry — so on a narrow
+    // screen they go before anything you press does.
+    let screen = ctx.content_rect().width();
+    let figures = screen > 640.0;
+    let room = screen - m.margin * 2.0 - if figures { 280.0 } else { 0.0 };
+    let (size, rows) = fit(slots.len(), room, theme);
+    let per_row = slots.len().div_ceil(rows.max(1));
+
+    let area = egui::Area::new("hotbar".into())
         .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -m.margin])
         .show(ctx, |ui| {
-            // Top-aligned, and with the row's height stated up front.
-            //
-            // `ui.horizontal` centres each item against the row, and the row's
-            // height is whatever the tallest item turns out to be — which is
-            // not known when the first one is placed. The segments came out the
-            // same height and thirteen pixels apart.
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
-                ui.set_min_height(m.slot + m.panel_padding * 1.2 + 2.0);
-
-                standing(ui, theme, status);
-
-                // **What it is made of.** One segment, four kinds, and ice
-                // among them: it used to sit behind a rule because it came
-                // with a different stroke, and the stroke is the other axis
-                // now.
-                // Life, mine, turret and ice
-                segment(ui, theme, |ui| {
-                    for (i, tool) in KINDS.iter().enumerate() {
-                        if square(
-                            ui,
-                            look,
-                            Face::Sprite(tool.shows),
-                            tool.name,
-                            tool_hint(shift, typed),
-                            held.kind == i,
-                        ) {
-                            picked = Some(Key::Kind(i));
+            ui.spacing_mut().item_spacing.y = m.item_spacing * 0.5;
+            ui.vertical_centered(|ui| {
+                for (row, line) in slots.chunks(per_row).enumerate() {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;
+                        if row == 0 && figures {
+                            standing(ui, theme, status);
                         }
-                        shift += 1;
-                    }
-                });
-
-                // The stamps segment stands even when it is empty, so the bar
-                // does not change shape the first time anything is captured.
-                segment(ui, theme, |ui| {
-                    // **One square, not two.** Draw and pane are one choice
-                    // with two answers, so they are one control that says
-                    // which answer is current — two squares spent twice the
-                    // room saying the same thing, and left the unselected one
-                    // looking like a third thing you could be doing rather
-                    // than the other half of what you are.
-                    //
-                    // It shows what is held, which includes a stamp: the shape
-                    // axis is where a pattern lives too, so the square says so
-                    // rather than going blank, and a click on it is the way
-                    // back to drawing.
-                    let shown = held.shape;
-                    // rect if ice, pencil otherwise
-                    // let held_tool = held.tool().unwrap_or(&KINDS[0]);
-                    // let held_tool = KINDS[held.kind].usually.name();
-                    let held_tool = match held.kind{
-                        3 => glyph::RECT,
-                        _ => glyph::PENCIL
-                    };
-                    if square(
-                        ui,
-                        look,
-                        Face::Icon(held_tool),
-                        shown.name(),
-                        tool_hint(shift, typed),
-                        true,
-                    ) {
-                        picked = Some(Key::Flip);
-                    }
-                    shift += 1;
-                    rule(ui, theme);
-                    // The capture square: it is where a library comes from, so
-                    // it cannot be behind having one.
-                    if square(
-                        ui,
-                        look,
-                        Face::Camera,
-                        words::CAPTURE,
-                        tool_hint(shift, typed),
-                        held.shape == Shape::Capture,
-                    ) {
-                        picked = Some(Key::Shape(Shape::Capture));
-                    }
-                    shift += 1;
-                    // **A slot on the bar is a place, and the stamp standing
-                    // in it is looked up.** They were the same number while
-                    // the bar was always the first ten of the library; they
-                    // are not once a stamp can be pinned to a square. What is
-                    // *held* stays a library index, so re-pinning does not
-                    // change what is in your hand.
-                    for (slot, i) in library.bar().into_iter().enumerate() {
-                        let Some(stamp) = library.get(i) else { continue };
-                        // The held square shows the pattern **as it would be
-                        // laid**, turn and all. A thumbnail that stayed upright
-                        // while the preview under the pointer rotated would be
-                        // two answers to what is about to happen.
-                        let turned;
-                        let stamp = if held.shape == Shape::Stamp(i) && !held.turn.is_default() {
-                            turned = stamp.turned(held.turn);
-                            &turned
-                        } else {
-                            stamp
-                        };
-                        if square(
-                            ui,
-                            look,
-                            Face::Pattern(stamp),
-                            &stamp.name,
-                            stamp_hint(slot, look.plain),
-                            held.shape == Shape::Stamp(i),
-                        ) {
-                            picked = Some(Key::Shape(Shape::Stamp(i)));
+                        // One boxed segment per group, and a group never
+                        // straddles two rows because the chunking is by group
+                        // within a row.
+                        for group in line.chunk_by(|a, b| a.group == b.group) {
+                            segment(ui, theme, size, |ui| {
+                                for slot in group {
+                                    if slot.rule {
+                                        rule(ui, theme, size);
+                                    }
+                                    let (mut turned, mut label) = (None, String::new());
+                                    let (face, name, on) = face_of(
+                                        slot.key,
+                                        held,
+                                        library,
+                                        look,
+                                        &mut turned,
+                                        &mut label,
+                                    );
+                                    let key = hint(slot.press, look);
+                                    if square(ui, look, size, face, name, key, on) {
+                                        picked = Some(slot.key);
+                                    }
+                                }
+                            });
                         }
-                    }
-                    // The library is always one key away, whether or not
-                    // anything overflowed: it is where a stamp is named, looked
-                    // at, and thrown away.
-                    rule(ui, theme);
-                    let overflow = library.len() - library.on_the_bar();
-                    let label =
-                        if overflow > 0 { format!("+{overflow}") } else { "…".to_string() };
-                    if square(
-                        ui,
-                        look,
-                        Face::Text(&label),
-                        words::LIBRARY,
-                        tool_hint(shift, typed),
-                        false,
-                    ) {
-                        picked = Some(Key::More);
-                    }
-                    shift += 1;
-
-                    // **The clock, in a section of its own.** It is not about
-                    // what you are holding or what you are drawing with — it
-                    // is about the world, which is a third thing — and it is
-                    // on the bar rather than only on a key because a control
-                    // nobody can see is a control nobody finds. Offline only:
-                    // connected, the server keeps time and there is nothing
-                    // here to press.
-                    if look.own_clock {
-                        rule(ui, theme);
-                        // Icons rather than words, which is what the icon font
-                        // is for: these three are the most universally drawn
-                        // symbols there are, and a square wide enough for
-                        // "Stop" is a square that shoves the bar along.
-                        if square(
-                            ui,
-                            look,
-                            Face::Icon(if look.paused { glyph::PLAY } else { glyph::PAUSE }),
-                            if look.paused { words::RUN_HINT } else { words::STOP_HINT },
-                            Some(words::RUN_KEY.to_string()),
-                            look.paused,
-                        ) {
-                            picked = Some(Key::Run);
-                        }
-                        if square(
-                            ui,
-                            look,
-                            Face::Icon(glyph::STEP),
-                            words::STEP_HINT,
-                            Some(words::STEP_KEY.to_string()),
-                            false,
-                        ) {
-                            picked = Some(Key::Step);
-                        }
-                        if square(
-                            ui,
-                            look,
-                            Face::Icon(glyph::GEAR),
-                            words::RULES_HINT,
-                            None,
-                            look.showing_rules,
-                        ) {
-                            picked = Some(Key::Rules);
-                        }
-                    }
-
-                    // Last, and outside the rule with the library: it is not
-                    // about stamps, it is about the bar.
-                    rule(ui, theme);
-                    if square(
-                        ui,
-                        look,
-                        Face::Icon(glyph::HELP),
-                        words::HELP_HINT,
-                        Some(words::HELP.to_string()),
-                        false,
-                    ) {
-                        picked = Some(Key::Help);
-                    }
-                });
+                    });
+                }
             });
         });
 
-    crate::client::views::Shown::new(response.response.rect, picked)
+    crate::client::views::Shown::new(area.response.rect, picked)
 }
 
 /// A hairline between two squares in one segment: same group, different job.
-fn rule(ui: &mut egui::Ui, theme: &Theme) {
-    let m = theme.metrics;
-    // Allocated a full square tall so it takes part in the row like everything
-    // else, and painted short so it reads as a divider.
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, m.slot), egui::Sense::hover());
-    let short = rect.shrink2(egui::vec2(0.0, m.slot * 0.15));
+fn rule(ui: &mut egui::Ui, theme: &Theme, size: f32) {
+    // A full square tall so it takes part in the row like everything else, and
+    // painted short so it reads as a divider.
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, size), egui::Sense::hover());
+    let short = rect.shrink2(egui::vec2(0.0, size * 0.15));
     ui.painter().rect_filled(short, 0.0, theme.palette.line);
 }
 
-/// One boxed group of squares.
-/// Who you are and how you are doing, at the left end of the bar.
-///
-/// **Where you are looking already.** These were in the HUD, in the opposite
-/// corner from the squares and the pointer — so the three numbers that change
-/// while you play were the three furthest from where you play. The HUD keeps
-/// what is about the *connection*: whether it is up, which room, and the
-/// rating, none of which you watch.
-///
-/// Two rows of two rather than a list, because these pair: what you hold and
-/// what you can spend are the state of your kingdom, and the tick and your
-/// rating are the state of the match. The swatch is the colour the shader
-/// gives your cells, so the bar and the board cannot disagree about who you
-/// are.
+/// Who you are and how you are doing, at the left end of the bar — where you
+/// are looking already. Dropped on a narrow screen: widest and least urgent.
 fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::game::hud::Status) {
     let p = theme.palette;
     let m = theme.metrics;
-    // A number and what it is, the number first and bigger: at a glance the
-    // figure is what is being read and the word is what makes it mean
-    // something, so the word is the quiet half.
-    //
-    // **Monospaced and padded to its width.** These change every generation,
-    // and a proportional digit is a different width from its neighbour — so
-    // the figure grew and shrank, the label under it slid about, and the eye
-    // re-found both every time. Padded with leading zeroes rather than spaces
-    // because the column has to be the same width whatever is in it and a
-    // leading space reads as the number having moved.
+    // Monospaced and zero-padded: these change every generation, and a
+    // proportional digit is a different width from its neighbour, so the
+    // figure grew and shrank and the label under it slid about.
     let stat = |ui: &mut egui::Ui, what: &str, value: u64, digits: usize, ink: egui::Color32| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -603,7 +497,7 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
             ui.colored_label(p.text_dim, egui::RichText::new(what).monospace().size(m.text_small));
         });
     };
-    segment(ui, theme, |ui| {
+    segment(ui, theme, m.slot, |ui| {
         let (r, g, b) = crate::client::views::hue::player_colour(status.player);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(4.0, m.slot), egui::Sense::hover());
         ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(r, g, b));
@@ -634,7 +528,7 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
     });
 }
 
-fn segment(ui: &mut egui::Ui, theme: &Theme, contents: impl FnOnce(&mut egui::Ui)) {
+fn segment(ui: &mut egui::Ui, theme: &Theme, size: f32, contents: impl FnOnce(&mut egui::Ui)) {
     let p = theme.palette;
     let m = theme.metrics;
     egui::Frame::new()
@@ -644,11 +538,11 @@ fn segment(ui: &mut egui::Ui, theme: &Theme, contents: impl FnOnce(&mut egui::Ui
         .inner_margin(m.panel_padding * 0.6)
         .show(ui, |ui| {
             // Every segment is one square tall, whatever is in it, so two of
-            // them side by side line up without either having to know what the
-            // other holds.
-            ui.set_min_height(m.slot);
+            // them side by side line up without either knowing what the other
+            // holds.
+            ui.set_min_height(size);
             ui.horizontal_top(|ui| {
-                ui.set_min_height(m.slot);
+                ui.set_min_height(size);
                 contents(ui);
             });
         });
@@ -671,14 +565,12 @@ enum Face<'a> {
 }
 
 /// One square: a picture of what it does, the key that picks it, and its name
-/// on hover.
-///
-/// A picture rather than the word, because what you are choosing is what will
-/// be on the board and the board is where you are looking. The word is still
-/// there, as a tooltip, for the first time somebody wonders.
+/// on hover. A picture rather than a word, because what you are choosing is
+/// what will be on the board.
 fn square(
     ui: &mut egui::Ui,
     look: &Look<'_>,
+    size: f32,
     face: Face<'_>,
     name: &str,
     key: Option<String>,
@@ -686,7 +578,7 @@ fn square(
 ) -> bool {
     let p = look.theme.palette;
     let m = look.theme.metrics;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(m.slot, m.slot), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
 
     let fill = if selected {
         p.accent.gamma_multiply(0.22)
@@ -706,7 +598,7 @@ fn square(
     );
 
     // The picture sits inside the key's corner, so the two never overlap.
-    let inner = rect.shrink(m.slot * 0.18);
+    let inner = rect.shrink(size * 0.18);
     let ink = if selected { p.text } else { p.text_dim };
     match face {
         Face::Sprite(cell) => match look.sheet {
@@ -752,17 +644,9 @@ fn draw_text(painter: &egui::Painter, rect: egui::Rect, text: &str, colour: egui
     shadowed(painter, rect.center(), egui::Align2::CENTER_CENTER, text, 14.0, colour);
 }
 
-/// Text with something dark under it, so it reads whatever it is over.
-///
-/// **Every square on this bar has a picture behind its writing** — a sprite,
-/// a pattern, the world showing through a gap — and thin light glyphs on top
-/// of a busy one are a smear rather than a word. A shadow is the cheap answer
-/// and the right one here: no panel behind the text, which would cover the
-/// picture the square exists to show, and no outline, which at this size turns
-/// a glyph into a blob.
-///
-/// Offset by one point rather than blurred, because a blur is several draws
-/// and this is drawn per square per frame.
+/// Text with something dark under it, so it reads over a sprite. A shadow
+/// rather than a panel, which would cover the picture the square exists to
+/// show, and offset rather than blurred, which is several draws.
 fn shadowed(
     painter: &egui::Painter,
     at: egui::Pos2,
@@ -801,6 +685,61 @@ fn shadowed_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **One list, so the keyboard and the layout cannot go out by one.**
+    /// They were two, and this is what replaced them: every square the bar
+    /// draws is a slot, and every key the bar answers is a slot's `press`.
+    #[test]
+    fn the_keyboard_reads_the_squares_that_are_drawn() {
+        let lib = library(3);
+        let bar = slots(&lib, true);
+
+        for slot in &bar {
+            if let Press::Shift(d) = slot.press {
+                assert_eq!(shifted_for_digit(d, &lib), Some(slot.key), "shift and {d}");
+            }
+        }
+        // Every digit is spoken for once: two squares on one key is a square
+        // that cannot be reached.
+        let mut pressed: Vec<Press> =
+            bar.iter().map(|s| s.press).filter(|p| *p != Press::None).collect();
+        let before = pressed.len();
+        pressed.sort_by_key(|p| format!("{p:?}"));
+        pressed.dedup();
+        assert_eq!(pressed.len(), before, "two squares share a key");
+    }
+
+    /// The clock is offline only, and its squares are the difference.
+    #[test]
+    fn a_connected_bar_has_no_clock() {
+        let lib = library(0);
+        let alone = slots(&lib, true);
+        let joined = slots(&lib, false);
+        assert_eq!(alone.len(), joined.len() + 3);
+        assert!(joined.iter().all(|s| s.group != Group::Clock));
+        assert!(alone.iter().any(|s| s.key == Key::Run));
+    }
+
+    /// **The bar fits the screen it is on.** One row at full size where there
+    /// is room; smaller squares before a second row, because a row costs
+    /// height and height is what a phone held sideways has least of.
+    #[test]
+    fn the_bar_fits_the_screen() {
+        let theme = Theme::default();
+        let squares = 20;
+
+        let (size, rows) = fit(squares, 1600.0, &theme);
+        assert_eq!((size, rows), (theme.metrics.slot, 1), "a wide screen changes nothing");
+
+        let (size, rows) = fit(squares, 700.0, &theme);
+        assert!(size < theme.metrics.slot, "a narrow screen should shrink the squares");
+        assert_eq!(rows, 1, "and shrink before it wraps");
+
+        let (small, rows) = fit(squares, 320.0, &theme);
+        assert!(rows > 1, "a phone held upright needs more than one row");
+        assert!(small >= 22.0, "and never smaller than a sprite can be seen at");
+    }
+
     use crate::client::views::game::stamp::{Stamp, ON_THE_BAR};
 
     fn library(n: usize) -> Library {
