@@ -577,13 +577,29 @@ impl World {
         // stepping the same generation must make the same choices, and a
         // choice that depended on which payload was handled first would
         // depend on the iteration order of a map.
+        // **A blob of them is one bomb, not many.** Payloads whose blasts
+        // would overlap go off as a single, larger one — see
+        // [`rule::blast_reach`], where each is worth a constant area — so a
+        // hundred of them reach ten times as far as one rather than a hundred
+        // small craters in the same place.
         let mut blasts = Vec::new();
-        for (at, owner) in &ready {
+        for group in clusters(&ready, rule::PAYLOAD_REACH) {
+            let reach = rule::blast_reach(group.len());
+            let owner = ready[group[0]].1;
+            // The middle of the blob, which is where a bomb made of all of
+            // them is. Integer division, so it lands on a square.
+            let (rows, cols): (i32, i32) =
+                group.iter().fold((0, 0), |(r, c), &i| (r + ready[i].0 .0, c + ready[i].0 .1));
+            let at = (rows / group.len() as i32, cols / group.len() as i32);
             let seed = super::seed::cell_seed(generation, at.0, at.1);
-            blasts.push((self.blast_centre(*at, *owner, seed), *owner, seed));
+            blasts.push((self.blast_centre(at, owner, seed, reach), seed, reach));
         }
 
-        for (((row, col), _), (_, _, seed)) in ready.iter().zip(&blasts) {
+        // Every payload that went off is consumed, whichever blast it was
+        // part of — the first blast's seed decides them all, which is one roll
+        // per square either way.
+        let seed_for = blasts.first().map(|&(_, seed, _)| seed).unwrap_or(generation);
+        for ((row, col), _) in &ready {
             // **Consumed, and it takes the same roll as the ground it threw.**
             // Left alive it is a cell standing in the middle of noise that
             // nothing else in the blast could have produced, which reads as a
@@ -591,7 +607,7 @@ impl World {
             // same way. So it comes up alive or dead on its own square's own
             // roll, exactly like everything else the blast touched.
             let cell = self.cell_at(*row, *col).unwrap_or(Cell::DEAD);
-            let square = super::seed::cell_seed(*seed, *row, *col);
+            let square = super::seed::cell_seed(seed_for, *row, *col);
             let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
             self.set_cell_at(
                 *row,
@@ -600,8 +616,8 @@ impl World {
             );
         }
 
-        for (centre, _, seed) in blasts {
-            self.scramble(centre, seed);
+        for (centre, seed, reach) in blasts {
+            self.scramble(centre, seed, reach);
         }
     }
 
@@ -617,8 +633,7 @@ impl World {
     ///
     /// Ice is untouched, because a pane stops time over whatever it covers and
     /// that is every rule.
-    fn scramble(&mut self, centre: (i32, i32), seed: u64) {
-        let reach = rule::PAYLOAD_REACH;
+    fn scramble(&mut self, centre: (i32, i32), seed: u64, reach: i32) {
         let mut chained = Vec::new();
         for dr in -reach..=reach {
             for dc in -reach..=reach {
@@ -935,7 +950,7 @@ impl World {
     /// Bounded by [`rule::PAYLOAD_THROW`], and it goes off where it stands if
     /// nothing within that is better. Unbounded it would be a homing weapon
     /// with a range of the whole world.
-    fn blast_centre(&self, at: (i32, i32), owner: PlayerId, seed: u64) -> (i32, i32) {
+    fn blast_centre(&self, at: (i32, i32), owner: PlayerId, seed: u64, reach: i32) -> (i32, i32) {
         let throw = rule::PAYLOAD_THROW;
         // Ring by ring, so the first distance that has any answer is the one
         // taken and a payload on its own frontier stops at once. The worst
@@ -952,7 +967,7 @@ impl World {
                             continue;
                         }
                         let centre = (at.0 + dr, at.1 + dc);
-                        if !self.worth_hitting(centre, owner) {
+                        if !self.worth_hitting(centre, owner, reach) {
                             continue;
                         }
                         if *count == want {
@@ -992,8 +1007,7 @@ impl World {
     ///
     /// A count and not a cost, and it stops the moment it has seen enough — so
     /// a payload on a frontier answers in a handful of reads.
-    fn worth_hitting(&self, centre: (i32, i32), owner: PlayerId) -> bool {
-        let reach = rule::PAYLOAD_REACH;
+    fn worth_hitting(&self, centre: (i32, i32), owner: PlayerId, reach: i32) -> bool {
         let mut theirs = 0u64;
         // How many squares of a disc this radius holds, so the threshold is a
         // fraction of the disc rather than of the box around it.
@@ -1268,8 +1282,89 @@ fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: PlayerId) {
     }
 }
 
+/// Which payloads go off together: the groups whose blasts would overlap.
+///
+/// **Two whose discs touch are one bomb.** Otherwise a blob of them is a
+/// hundred craters in the same place, each doing again what the last already
+/// did — where what a player built is one charge made of a hundred, and
+/// [`rule::blast_reach`] is what that is worth.
+///
+/// Connected by distance and transitively, so a line of payloads is one long
+/// bomb rather than a chain of pairs. `O(n²)` over the ones that are *ready*,
+/// which is a handful in the generations it is not nought.
+///
+/// The order is the order they came in, which is sorted — so two peers group
+/// them identically without exchanging anything.
+fn clusters(ready: &[((i32, i32), PlayerId)], reach: i32) -> Vec<Vec<usize>> {
+    let mut group: Vec<Option<usize>> = vec![None; ready.len()];
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for i in 0..ready.len() {
+        if group[i].is_some() {
+            continue;
+        }
+        let g = out.len();
+        out.push(vec![i]);
+        group[i] = Some(g);
+        // Grown rather than scanned once: reaching a payload can bring in
+        // others only that one is near, which is what makes a line one bomb.
+        let mut k = 0;
+        while k < out[g].len() {
+            let (at, _) = ready[out[g][k]];
+            for j in 0..ready.len() {
+                if group[j].is_some() {
+                    continue;
+                }
+                let (dr, dc) = (ready[j].0 .0 - at.0, ready[j].0 .1 - at.1);
+                if dr * dr + dc * dc <= reach * reach {
+                    group[j] = Some(g);
+                    out[g].push(j);
+                }
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// **A blob of payloads is one bomb, and each is worth an area.** A
+    /// hundred of them reach ten times as far as one, not a hundred times —
+    /// anything else and clustering is either pointless or the only thing in
+    /// the game.
+    #[test]
+    fn a_cluster_reaches_by_the_root_of_its_size() {
+        assert_eq!(rule::blast_reach(1), rule::PAYLOAD_REACH);
+        assert_eq!(rule::blast_reach(4), rule::PAYLOAD_REACH * 2);
+        assert_eq!(rule::blast_reach(100), rule::PAYLOAD_REACH * 10);
+        // Bounded, or a thousand of them rewrite a quarter of a large world in
+        // one generation.
+        assert_eq!(rule::blast_reach(100_000), rule::PAYLOAD_MOST_REACH);
+        // And nothing is worth less than one on its own.
+        assert_eq!(rule::blast_reach(0), rule::PAYLOAD_REACH);
+    }
+
+    /// **Whose blasts would overlap go off together**, transitively — so a
+    /// line of them is one long bomb rather than a chain of pairs.
+    #[test]
+    fn payloads_whose_blasts_overlap_are_one_bomb() {
+        let me = PlayerId(1);
+        let reach = rule::PAYLOAD_REACH;
+        let ready: Vec<((i32, i32), PlayerId)> =
+            [(0, 0), (0, reach - 1), (0, 2 * reach - 2), (0, 900)]
+                .into_iter()
+                .map(|at| (at, me))
+                .collect();
+        let groups = clusters(&ready, reach);
+        assert_eq!(groups.len(), 2, "a line should be one bomb and the far one another");
+        assert_eq!(groups[0].len(), 3, "the chain of three did not join up");
+        assert_eq!(groups[1], vec![3]);
+
+        // One on its own is one group, and nothing is dropped.
+        let alone = clusters(&ready[3..], reach);
+        assert_eq!(alone, vec![vec![0]]);
+    }
 
     /// **A payload placed on the bar reaches the ground**, which is the whole
     /// path: a `Placement` becomes a cell, the fuse burns while it lives, and

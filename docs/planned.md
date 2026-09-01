@@ -128,6 +128,23 @@ hitting — which is a precision the interface does not really support and a
 frontier that moves every generation anyway. Walking outward means "somewhere
 near my edge" is good enough, and the rule finds the rest.
 
+### A blob is one bomb, and each charge is worth an area
+
+**A hundred payloads reach ten times as far as one, not a hundred times.**
+`blast_reach` is `PAYLOAD_REACH * sqrt(n)`, so each one going off adds a
+constant *area* of blast — which is the only scaling that makes a cluster
+worth building without making it the only thing in the game. Below it, a blob
+does less than the same payloads laid apart and nobody clusters; above it,
+nothing else matters.
+
+It is also the honest reading of what a cluster is. Payloads whose discs would
+overlap are grouped, transitively, so a line of them is one long bomb rather
+than a chain of pairs — and the blast is centred on the middle of the blob,
+because that is where a bomb made of all of them is. `PAYLOAD_MOST_REACH`
+bounds it: the pass is one roll per square, which is nothing until somebody
+works out that a thousand of them would rewrite a quarter of a large world in
+one generation.
+
 ### The chain, which is the best idea in it
 
 The one part of the scoring design worth keeping outright, and it needs no score: **on detonation, every payload within reach has its fuse set to full**, so it goes off the next generation. A line of them is then a fuse, and a cluster is one blast a generation wide rather than one big one.

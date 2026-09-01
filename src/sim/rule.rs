@@ -97,8 +97,37 @@ pub const PAYLOAD_FUSE: Chance = 16;
 /// One below [`bits::MAX_AGE`], so the last sprite is on screen for exactly
 /// one generation, always.
 pub const PAYLOAD_WARN: u8 = bits::MAX_AGE - 1;
-/// How far a detonation reaches from its centre, in cells.
+/// How far **one** payload's detonation reaches from its centre, in cells.
+///
+/// Ten rather than eight: a payload has to be built around and kept alive to
+/// go off at all, and eight was a blast you had to look for.
+///
+/// A cluster that goes off together reaches further — see [`blast_reach`],
+/// where each payload is worth a constant *area* of blast.
 pub const PAYLOAD_REACH: i32 = 10;
+
+/// The furthest any blast may reach, however many payloads went into it.
+///
+/// Ten times one payload's, so a hundred of them is the biggest bomb there is.
+/// A bound rather than a balance figure: the pass is one roll per square,
+/// which is nothing until somebody works out that a thousand payloads would
+/// rewrite a quarter of a large world in one generation.
+pub const PAYLOAD_MOST_REACH: i32 = PAYLOAD_REACH * 10;
+
+/// How far a cluster of `n` payloads reaches when they go off together.
+///
+/// **Each payload is worth a constant area**, so the radius goes as the square
+/// root of how many there are: a hundred of them reach ten times as far as
+/// one, not a hundred times. Anything else and a blob is either worth less
+/// than laying the same payloads apart — which makes clustering pointless —
+/// or so much more that nothing else in the game matters.
+///
+/// It is also the honest reading of what a cluster *is*: one bomb made of n
+/// charges, rather than n bombs that happen to be adjacent.
+pub fn blast_reach(n: usize) -> i32 {
+    let reach = (PAYLOAD_REACH as f64 * (n as f64).sqrt()).round() as i32;
+    reach.clamp(PAYLOAD_REACH, PAYLOAD_MOST_REACH)
+}
 /// How many squares in sixty-four a detonation brings to life.
 ///
 /// Conway's classic soup is a half, which mostly burns down; a third is where
