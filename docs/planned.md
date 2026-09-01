@@ -38,6 +38,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Keys the player chooses](#keys-the-player-chooses) | Decided | defaults cannot be right; three faults have come out of that |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [How to play](#how-to-play) | Designed | the rules nobody can infer, the four tips that matter, and who wrote the rule underneath |
+| [A profile screen worth visiting](#a-profile-screen-worth-visiting) | Designed | stamps edited out of play, a face, and finding somebody |
+| [Antialias always](#antialias-always) | Designed | one rule at every zoom, a box filter one pixel wide |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
@@ -792,6 +794,89 @@ So the page should say what he would rather you looked up:
 - **The doomsday algorithm** for working out the day of the week in your head, which he delighted in and practised daily.
 
 He died in April 2020. The nod should be short, should link out rather than explain, and should not be sentimental — one paragraph and a list. The point is that somebody who enjoyed this enough to read to the bottom of the page is exactly the person who should be told there is far more, and where it is.
+
+## A profile screen worth visiting
+
+**Designed.** The panel exists — name and fingerprint, colour, rating with its
+provisional mark and the line it has traced, matches, most ground held, and
+your own diary under the server's count. What is designed and not built is
+everything that makes it a *place* rather than a readout.
+
+### Stamps are edited here, not in play
+
+**The library is a modal panel over a running world**, which is the wrong room
+for it. Renaming a pattern, pinning one to the bar, throwing one away and
+drawing a new one are all things you do *between* games, and doing them over a
+board that is still stepping means every one of them competes with the game for
+the screen and for your attention. Worse, the pad is where a pattern is drawn
+by hand, and drawing a shape carefully is the least interruptible thing in the
+client.
+
+So the library moves to the profile screen, beside the record — which is where
+it belongs by ownership as well as by timing: a stamp library is *yours*,
+filed against your key, and it is the one thing on a profile that nobody else
+is ever shown. What stays in play is holding one and putting it down, which is
+the hotbar and is already right.
+
+What that needs is the pad and the list working outside a `GameApp`: they take
+a `Library` and a theme today and nothing else, so this is mostly about where
+`show` is called from.
+
+### A face
+
+Not an upload. **An identicon from the key**, which costs no storage, no
+moderation and no upload path — and has an answer to hand that no other game
+has: a pattern. Take the fingerprint, seed a small soup, step it a few
+generations with the game's own rule, and draw what settles. Everybody's face
+is a still life or an oscillator that is theirs, derived rather than assigned,
+and it is the same arithmetic the rest of the game is made of.
+
+Uploads are the thing to *not* do, and the reason is not effort: a picture
+somebody chose is a picture somebody has to moderate, and this is a game with
+no accounts, no email and no way to contact anybody about anything.
+
+### Finding somebody
+
+Two messages, and the second is the first with an empty query. `ClientMessage::People { like: String }` answers with a `Vec<Profile>` — the names this server knows, filtered. Answerable **without a seat**, like `Rooms` and `Profile` and for the same reason: you look somebody up from a menu as often as from a lobby.
+
+The list is what "who else plays here" looks like, and it is also the way in to
+a leaderboard: [a leaderboard](#a-leaderboard) is this sorted by rating, and
+`server::profiles` is already keyed by person and already saved. Two things to
+be careful of. A name is **self-chosen**, so a search that matched only names
+would let anybody impersonate anybody in a list — the fingerprint has to be on
+every row, which it is in `net::Seat::label`. And it must not become a way to
+enumerate everybody a server has met: a bounded answer, and no empty-query
+listing on a public server unless somebody decides that is wanted.
+
+## Antialias always
+
+**Designed.** One rule at every zoom: a box filter over the pixel's own
+footprint, always, rather than a point sample above zoom sixteen and a `k×k`
+supersample below it.
+
+`aa_side` already computes the footprint in texels and clamps it to `1..4`,
+and the rule it implements is already a box filter — the `k == 1` branch is
+that same rule with one sample rather than a different one. What is wrong is
+the claim above it: *"at one pixel per texel a point sample is exact"* is only
+true when pixel centres land on texel centres, which they do not once the
+camera is anywhere but an integer offset. So a straddling pixel picks one of
+the two texels under it and flips between them as you pan.
+
+The fix is to floor `k` at two rather than one and drop the branch, so a pixel
+is always averaged over its own footprint. **The blur is exactly one screen
+pixel wide**, which is the whole point: at high zoom the footprint is a
+fraction of a texel, so the average is the texel it sits in except within one
+pixel of a boundary — crisp blocks with a single soft pixel at each edge, which
+is what pixel art wants and what `render/atlas.rs`'s "not a blurred blob" was
+guarding against being lost.
+
+What it costs is four texture reads a fragment where there was one, at the
+zooms people spend most of their time at. That is the thing to measure before
+it lands, and the cheaper alternative if it bites is the texel-snapped bilinear
+trick — one sample, edges softened over a pixel by `fwidth` — which needs
+derivatives and so needs the sampling out of non-uniform control flow, and
+needs care at tile boundaries because the sheet is an atlas and a bilinear tap
+across one would bleed a neighbouring picture in.
 
 ## Bots
 
