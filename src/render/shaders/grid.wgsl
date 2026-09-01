@@ -300,16 +300,30 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
 /// How many samples a side one pixel is worth, at this zoom.
 ///
 /// **A cell is sixteen texels of art**, so aliasing starts long before a pixel
-/// covers more than one cell: at one pixel per texel — zoom sixteen — a point
-/// sample is exact, and every step out from there is one pixel standing for
-/// four texels, then sixteen, then more. `textureLoad` and a `Nearest` sampler
-/// pick one of them, so a pattern shimmers as the camera moves and thin
-/// structures wink in and out at some zooms and not others.
+/// covers more than one cell: every step out from one pixel per texel is one
+/// pixel standing for four texels, then sixteen, then more. `textureLoad` and
+/// a `Nearest` sampler pick one of them, so a pattern shimmers as the camera
+/// moves and thin structures wink in and out at some zooms and not others.
 ///
 /// So the footprint is measured in **texels**, which makes one rule cover both
 /// halves of the problem: inside a tile it antialiases the art, and past one it
 /// averages over the cells a pixel covers. Nothing has to know which case it is
 /// in.
+///
+/// **Never one.** It used to floor here, on the reasoning that at one pixel per
+/// texel a point sample is exact — which is true only when pixel centres land
+/// on texel centres, and they stop doing that the moment the camera is off an
+/// integer offset. A pixel straddling two texels then picked one of them and
+/// flipped between them as you panned, which is the shimmer this exists to
+/// remove, at the zoom people play at.
+///
+/// Flooring at two makes it **one rule everywhere**: a box filter over the
+/// pixel's own footprint, always. Zoomed in that footprint is a fraction of a
+/// texel, so all four samples land in the same one and the picture is exactly
+/// as crisp as it was — except within one pixel of a texel boundary, where it
+/// is the average it should always have been. The blur is one screen pixel
+/// wide by construction, which is what keeps this pixel art rather than a
+/// blurred blob.
 ///
 /// Capped, because this is `k²` loads and samples a fragment. Four is exact
 /// down to zoom four and progressively under-sampled below it, which is where
@@ -317,13 +331,14 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
 /// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#zooming-out-without-lying).
 /// It is a dial: raise it for a better picture at low zoom, lower it if the
 /// fragment cost ever shows up.
+const MIN_AA: i32 = 2;
 const MAX_AA: i32 = 4;
 
 fn aa_side() -> i32 {
     // Texels one pixel covers on a side. `cam.zoom` is pixels per cell and a
     // cell is TILE_N texels.
     let texels_per_pixel = f32(TILE_N) / cam.zoom;
-    return clamp(i32(ceil(texels_per_pixel)), 1, MAX_AA);
+    return clamp(i32(ceil(texels_per_pixel)), MIN_AA, MAX_AA);
 }
 
 /// The colour of one point, in texels across a chunk.
@@ -471,29 +486,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = cam.chunk_n;
     let k = aa_side();
 
-    var colour: vec3<f32>;
-    if k == 1 {
-        // One pixel to a texel or better, where a point sample is exact and
-        // the loop below would take the same reading sixteen times.
-        colour = shaded(in, vec2<f32>(0.0), n);
-    } else {
-        // A `k` by `k` grid on the pixel's own footprint, averaged in shaded
-        // colour rather than in cell bytes. **Averaging the bytes would be
-        // meaningless**: they are bit fields, so half of one kind and half of
-        // another is a third kind with its own art, and a player number
-        // between two players is a third player.
-        let cells_per_pixel = 1.0 / cam.zoom;
-        var acc = vec3<f32>(0.0);
-        for (var i = 0; i < k; i = i + 1) {
-            for (var j = 0; j < k; j = j + 1) {
-                // Centres of an even grid over the footprint, so the samples
-                // are symmetric about the pixel and none sits on its edge.
-                let at = (vec2<f32>(f32(j), f32(i)) + 0.5) / f32(k) - 0.5;
-                acc = acc + shaded(in, at * cells_per_pixel, n);
-            }
+    // **One rule at every zoom**: a `k` by `k` box filter over the pixel's own
+    // footprint, and nothing else. There was a point-sampled arm for `k == 1`
+    // and it is gone — see `aa_side` for why it was never the exactness it
+    // claimed to be, and why the footprint being a fraction of a texel when
+    // zoomed in is what keeps this crisp without a second path.
+    //
+    // Averaged in shaded **colour** rather than in cell bytes. Averaging the
+    // bytes would be meaningless: they are bit fields, so half of one kind and
+    // half of another is a third kind with its own art, and a player number
+    // between two players is a third player.
+    let cells_per_pixel = 1.0 / cam.zoom;
+    var acc = vec3<f32>(0.0);
+    for (var i = 0; i < k; i = i + 1) {
+        for (var j = 0; j < k; j = j + 1) {
+            // Centres of an even grid over the footprint, so the samples are
+            // symmetric about the pixel and none sits on its edge.
+            let at = (vec2<f32>(f32(j), f32(i)) + 0.5) / f32(k) - 0.5;
+            acc = acc + shaded(in, at * cells_per_pixel, n);
         }
-        colour = acc / f32(k * k);
     }
+    var colour = acc / f32(k * k);
 
     // Encoded here only when the surface will not do it. On an sRGB surface
     // this is skipped and the hardware converts; on a plain Unorm one the

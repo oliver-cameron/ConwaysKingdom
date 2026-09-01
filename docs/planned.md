@@ -39,7 +39,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [How to play](#how-to-play) | Designed | the rules nobody can infer, the four tips that matter, and who wrote the rule underneath |
 | [A profile screen worth visiting](#a-profile-screen-worth-visiting) | Designed | stamps edited out of play, a face, and finding somebody |
-| [Antialias always](#antialias-always) | Designed | one rule at every zoom, a box filter one pixel wide |
+| [Antialias always](#antialias-always) | Built | one rule at every zoom, a box filter one pixel wide |
+| [Something to see when it goes off](#something-to-see-when-it-goes-off) | Designed | a blast is a frame of noise and nothing else says it happened |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
@@ -867,7 +868,7 @@ listing on a public server unless somebody decides that is wanted.
 
 ## Antialias always
 
-**Designed.** One rule at every zoom: a box filter over the pixel's own
+**Built.** One rule at every zoom: a box filter over the pixel's own
 footprint, always, rather than a point sample above zoom sixteen and a `k×k`
 supersample below it.
 
@@ -894,6 +895,57 @@ trick — one sample, edges softened over a pixel by `fwidth` — which needs
 derivatives and so needs the sampling out of non-uniform control flow, and
 needs care at tile boundaries because the sheet is an atlas and a bilinear tap
 across one would bleed a neighbouring picture in.
+
+## Something to see when it goes off
+
+**Designed.** A detonation is currently a generation in which a disc of ground
+quietly becomes different. There is no bang: the cells before and the cells
+after are both just cells, so the largest thing a player can do reads as the
+board having glitched — and at four generations a second the whole event is
+over in a quarter of a second, which is under the threshold at which anybody
+notices *what* happened as against *that something did*.
+
+**It goes in the overlay, not in the world.** `views::game::overlay` already
+draws over the board every frame in egui, with the camera's own mapping from
+cells to screen — it is where the hover box and the drag preview live, and
+those are exactly this shape: a thing drawn about the world that is not in it.
+Doing it as cells instead would be wrong twice over. It would have to be part
+of the simulation, so every peer would have to agree on it and it would ride
+the wire and the save; and it would take the age field or a kind, which are the
+two scarcest things in the byte.
+
+So the shape is: the client keeps a short list of blasts it has been told
+about — centre, radius, the generation it happened at — and the overlay draws
+each one for a fixed number of *seconds* of wall clock, fading out. Seconds and
+not generations, because this is animation and the generation clock is four a
+second and stops in a laboratory.
+
+**Where the list comes from is the one real question**, and there are two
+answers. The client already knows: `net::apply` is deterministic and every peer
+steps the same world, so a client could notice a payload at `MAX_AGE` about to
+go and draw the ring itself, with no protocol change at all — and a client that
+is a generation behind draws it a generation late, which nobody can see. Or the
+server says so, which is a message and is exact. The first is free and is
+probably right; the second is what a spectator following somebody would want,
+since it is the only one that survives a client not holding those chunks.
+
+What to draw, in rough order of what it buys:
+
+- **A ring that expands**, from nothing to the blast's own radius, over about a
+  third of a second. It is the one thing that says how far it reached, which is
+  the number the player wants and now has to infer from the wreckage.
+- **A flash**, one frame, bright — because a quarter of a second of anything is
+  easy to miss entirely if it starts subtle.
+- **A shake**, small and brief, scaled by the blast's radius. `views::camera`
+  is pure arithmetic and this is an offset added at draw time, so nothing about
+  the camera's own state moves.
+- And the same machinery, later, for whatever else earns it: a turret firing
+  is the obvious second customer, and it is the same "a thing happened at a
+  square" shape.
+
+**What it must not become** is a second thing that decides what is on the
+board. It draws over what the rules did and never changes it, which is what
+keeps it out of the simulation, off the wire, and out of the save.
 
 ## Bots
 

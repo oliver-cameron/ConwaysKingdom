@@ -784,6 +784,34 @@ impl ChunkStore {
 
 #[cfg(test)]
 mod tests {
+
+    /// **The shader compiles**, which nothing else here checked.
+    ///
+    /// `cargo check` only ever sees a string: WGSL is parsed and validated
+    /// when the pipeline is built, so a typo or a type error in it is a panic
+    /// on the first frame behind a green test run — right up until somebody
+    /// opens the game. The tests that would have caught it need a browser and
+    /// a GPU.
+    ///
+    /// Validated and not merely parsed, because parsing catches a missing
+    /// bracket and validation catches the mistakes anybody actually makes:
+    /// assigning to a `let`, a `vec3` where a `vec4` goes, a function called
+    /// with the wrong arity.
+    #[test]
+    fn the_shader_compiles() {
+        let module = match wgpu::naga::front::wgsl::parse_str(SHADER_SOURCE) {
+            Ok(m) => m,
+            Err(e) => panic!("grid.wgsl does not parse: {}", e.emit_to_string(SHADER_SOURCE)),
+        };
+        let mut validator = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!("grid.wgsl does not validate: {}", e.emit_to_string(SHADER_SOURCE));
+        }
+    }
+
     use super::*;
     use crate::sim::PlayerId;
 
