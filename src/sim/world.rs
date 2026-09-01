@@ -1260,6 +1260,94 @@ fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: PlayerId) {
 
 #[cfg(test)]
 mod tests {
+
+    /// **A payload placed on the bar reaches the ground**, which is the whole
+    /// path: a `Placement` becomes a cell, the fuse burns while it lives, and
+    /// the pass turns a disc of ground into noise.
+    ///
+    /// End to end because each half of it worked on its own while the thing
+    /// did not exist for anybody playing — the kind had no square on the bar,
+    /// so nothing could put one down at all.
+    #[test]
+    fn a_payload_placed_burns_down_and_goes_off() {
+        let mut world = World::infinite();
+        let me = PlayerId(1);
+        crate::net::grant(&mut world, me);
+        let home = crate::net::spawn_for(me, &world);
+
+        // A block, so it survives long enough to burn: a payload on its own
+        // dies of loneliness in a generation, which is the real cost of one.
+        let block = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(r, c)| (home.0 + r, home.1 + c));
+        for (i, &(row, col)) in block.iter().enumerate() {
+            let what =
+                if i == 0 { crate::net::Placement::Payload } else { crate::net::Placement::Life };
+            let was = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+            world.set_cell_at(row, col, what.apply_to(was, me));
+        }
+        let at = block[0];
+        let is_payload = |w: &World| {
+            w.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::PAYLOAD && c.is_alive())
+        };
+        assert!(is_payload(&world), "the placement did not put a payload down");
+        assert_eq!(world.cell_at(at.0, at.1).unwrap().age(), 0, "a fresh fuse starts at nought");
+
+        // It burns on a chance, so this is bounded rather than exact — and it
+        // has to reach the end, which `PAYLOAD_WARN` makes certain.
+        let mut generations = 0;
+        while is_payload(&world) && generations < 500 {
+            world.step();
+            generations += 1;
+        }
+        assert!(generations < 500, "the fuse never ran out");
+        assert!(
+            world.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::NORMAL),
+            "a spent payload should be ordinary ground"
+        );
+    }
+
+    /// **The blast is what a payload is for**, and it is noise rather than a
+    /// hole: every square in the disc takes its own roll, so some come up
+    /// alive and some do not.
+    #[test]
+    fn a_blast_scrambles_the_ground_it_reaches() {
+        let mut world = World::infinite();
+        let me = PlayerId(1);
+        crate::net::grant(&mut world, me);
+        let (row, col) = crate::net::spawn_for(me, &world);
+
+        // Armed and about to go, which is the state the fuse takes a while to
+        // reach on its own.
+        let armed = crate::net::Placement::Payload
+            .apply_to(world.cell_at(row, col).unwrap_or(Cell::DEAD), me)
+            .with_age(super::super::cell::bits::MAX_AGE);
+        world.set_cell_at(row, col, armed);
+
+        let live_before = world.live_cells().len();
+        world.step();
+
+        assert!(
+            world.cell_at(row, col).is_some_and(|c| c.kind() == Kind::NORMAL),
+            "the payload was not consumed"
+        );
+        assert!(
+            world.live_cells().len() > live_before,
+            "a blast on granted ground should leave life behind: {live_before} before"
+        );
+        // Noise and not a slab: a disc brought wholly to life would be one
+        // shape rather than something to clean up.
+        let reach = rule::PAYLOAD_REACH;
+        let disc: Vec<(i32, i32)> = (-reach..=reach)
+            .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+            .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+            .map(|(dr, dc)| (row + dr, col + dc))
+            .collect();
+        let alive = disc
+            .iter()
+            .filter(|&&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_alive()))
+            .count();
+        assert!(alive > 0 && alive < disc.len(), "{alive} of {} is not noise", disc.len());
+    }
+
     use super::*;
 
     /// The glider is seeded at chunk-local (6, 6) and travels south-east one

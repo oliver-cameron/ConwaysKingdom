@@ -689,7 +689,7 @@ That also makes "the rules come off" much smaller than it sounded. There is no n
 
 **And it opens stopped**, which is Golly's habit and the right one: the first thing anybody does here is draw, and a world running while you draw into it is a world eating what you drew. `Server::step` returns nothing while `rules.paused`, the same whole stop `asleep` is, and `Server::step_once` lifts the pause for exactly one call — a client that unpaused, stepped and paused again would run the world for however long the two round trips took, which at four generations a second is not one step.
 
-A laboratory is still **boundless**, which is a game answer to a game question taken off: a torus is a shape a match wants so its ground is finite and contested, and that means nothing to somebody watching a pattern. Worth revisiting — a bounded universe is an ordinary thing to want in Golly — but it is a decision and not an oversight.
+A laboratory **picks its own shape, sides and everything else**, like any other room. It was briefly forced boundless and free-for-all on the reasoning that a torus and a team are answers to game questions — which was answering a question nobody asked: a bounded universe is what every Life program offers, and a team in a laboratory is who shares the bench.
 
 ### What to take from Golly, in order
 

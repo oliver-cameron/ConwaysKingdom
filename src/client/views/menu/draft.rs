@@ -160,13 +160,14 @@ impl Draft {
     /// screen: `room_name("")` says "a room needs a name", so pressing Play
     /// alone answered a question nobody had been asked.
     pub fn world(&self) -> Result<(WorldKind, Option<Victory>), String> {
-        // **A laboratory is boundless**, which is a game answer to a game
-        // question taken off: a torus is a shape a match wants so its ground
-        // is finite and contested, and that means nothing to somebody watching
-        // a pattern. See [planned.md](../../../../docs/planned.md#experiments).
-        let shape = match (self.kind, self.shape) {
-            (Kind::Experiment, _) | (_, Shape::Boundless) => WorldKind::Infinite,
-            (_, Shape::Wrapping) => WorldKind::Toroidal {
+        // **A laboratory picks its own shape**, which it briefly could not:
+        // this forced one boundless on the reasoning that a torus is a shape a
+        // match wants. A bounded universe is an ordinary thing to want to
+        // watch a pattern in — it is what every Life program offers — and
+        // taking the choice away was answering a question nobody asked.
+        let shape = match self.shape {
+            Shape::Boundless => WorldKind::Infinite,
+            Shape::Wrapping => WorldKind::Toroidal {
                 rows: chunks(&self.rows, words::make::ROWS)?,
                 cols: chunks(&self.cols, words::make::COLS)?,
             },
@@ -278,12 +279,13 @@ mod tests {
         assert_eq!((shape, victory), (room!(draft, shape), room!(draft, victory)));
     }
 
-    /// **The three kinds, and what each one takes off the form.**
+    /// **A way to win is the whole of what makes a room a match**, so a target
+    /// typed and then switched away from is somebody changing their mind
+    /// rather than a number to refuse.
     ///
-    /// A way to win is the whole of what makes a room a match, and a
-    /// laboratory is boundless — so a target typed under one kind and a size
-    /// typed under another are somebody changing their mind, not numbers to
-    /// refuse.
+    /// Everything else on the form belongs to every kind. A laboratory briefly
+    /// had its shape forced boundless, which was answering a question nobody
+    /// asked: a bounded universe is an ordinary thing to watch a pattern in.
     #[test]
     fn the_kind_decides_which_answers_are_read() {
         let mut draft = Draft::default();
@@ -301,7 +303,11 @@ mod tests {
         draft.kind = Kind::Experiment;
         assert!(room!(draft, laboratory));
         assert_eq!(room!(draft, victory), None, "and no way to win, whatever was typed");
-        assert_eq!(room!(draft, shape), WorldKind::Infinite, "boundless, whatever was typed");
+        assert_eq!(
+            room!(draft, shape),
+            WorldKind::Toroidal { rows: 12, cols: 12 },
+            "a laboratory picks its own shape like anything else"
+        );
     }
 
     /// A private room is named by the server, so it is the other case where a

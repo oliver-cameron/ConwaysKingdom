@@ -436,24 +436,21 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // below it appear or do not according to this.
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::KIND).size(m.text_small));
-            // **A match is the one that needs other people.** It gathers,
-            // and there is nobody to gather with — where a laboratory alone is
-            // the oldest thing this page did, and being a room as well is a
-            // reason for it to work on a server rather than a reason for it
-            // not to work without one.
-            let kinds: &[(Kind, &str)] = if reached {
+            // **All three, with or without a server.** A solitary match is a
+            // real thing and always was — the client is the authority offline,
+            // so there is one world, one clock and one player, and `Victory`
+            // is something it can settle for itself. Leaving it off this form
+            // hid a feature the client already had.
+            toggles(
+                ui,
+                theme,
+                &mut draft.kind,
                 &[
                     (Kind::World, words::make::WORLD),
                     (Kind::Match, words::make::MATCH),
                     (Kind::Experiment, words::make::EXPERIMENT),
-                ]
-            } else {
-                &[(Kind::World, words::make::WORLD), (Kind::Experiment, words::make::EXPERIMENT)]
-            };
-            if !reached && draft.kind == Kind::Match {
-                draft.kind = Kind::World;
-            }
-            toggles(ui, theme, &mut draft.kind, kinds);
+                ],
+            );
             ui.colored_label(
                 p.text_dim,
                 egui::RichText::new(match draft.kind {
@@ -464,10 +461,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 .size(m.text_small),
             );
 
-            // **A laboratory is boundless**, so it is not asked: a torus is a
-            // shape a match wants so its ground is finite and contested, which
-            // means nothing to somebody watching a pattern.
-            if draft.kind != Kind::Experiment {
+            {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::SHAPE).size(m.text_small));
                 // **The size lives inside the Wrapping button.** As its own row it
@@ -479,11 +473,11 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 shape_row(ui, theme, draft);
             }
 
-            // Teams, on a world as much as on a match: a team is people
-            // playing as one player, which is worth having without a result
-            // to win. Not in a laboratory, where nobody is playing as
-            // anything.
-            if reached && draft.kind != Kind::Experiment {
+            // Teams, on any of the three: a team is people playing as one
+            // player, which is worth having without a result to win and worth
+            // having in a laboratory, where it is who shares a bench. Needs a
+            // server, because it needs somebody to share with.
+            if reached {
                 ui.add_space(m.item_spacing);
                 ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
                 toggles(
@@ -654,106 +648,85 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
 
 /// Shape, with the size inside the option it belongs to.
 ///
-/// Two cells side by side. Boundless is a plain toggle; Wrapping is a toggle
-/// with two number fields under it, which appear only when it is the one
-/// chosen — so the **row** grows and the form does not, and nothing below
-/// moves when the shape changes.
+/// **Two of the same block, side by side.** They were a bare button and a
+/// framed panel, matched by computing a height for the row and forcing both to
+/// it — which is a way of saying they are the same shape without making them
+/// one, and it went wrong twice: the plain half sat at the top of a row sized
+/// for its neighbour and read as misaligned, and the forced height was left
+/// over from a layout where the size sat *under* the label rather than beside
+/// it, so the row carried a band of nothing.
+///
+/// So both are the frame now, with the same padding and the same label row.
+/// The wrapping one has two fields in that row and the boundless one does not,
+/// which is the only difference there should ever have been — and the heights
+/// match because they are built the same way rather than because two numbers
+/// were made to agree.
 fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
     let p = theme.palette;
     let m = theme.metrics;
     let wrapping = draft.shape == Shape::Wrapping;
-    // **As tall as its taller option and no taller.** This reserved two rows
-    // of button and a line of text, from when the size sat under the label
-    // instead of beside it — so the row kept the height of a layout that is
-    // not there any more and left a band of nothing under both halves. What
-    // sets it now is the framed option: one row of fields inside a padded
-    // frame.
-    let tall = m.button_height + m.panel_padding;
 
     ui.horizontal_top(|ui| {
         let each = (ui.available_width() - m.item_spacing) / 2.0;
 
-        // **Both halves the same block.** The plain button was drawn at one
-        // button's height at the top of a row sized for the framed one beside
-        // it, so it sat high against its neighbour and read as misaligned.
-        // Sized to the row, it is a block of the same shape and its label
-        // centres itself.
-        ui.vertical(|ui| {
-            ui.set_width(each);
-            if ui
-                .add_sized([each, tall], toggle(theme, words::make::BOUNDLESS, !wrapping))
-                .clicked()
-            {
-                draft.shape = Shape::Boundless;
-            }
-        });
-
-        // **The size lives inside the button, not under it.** A world that
-        // wraps has a shape and a world that does not has none, so the two
-        // fields belong to the *option* rather than to the row — under it they
-        // read as another question, and which of the two buttons they belonged
-        // to was a matter of guessing from how far left they started.
-        //
-        // So the chosen option is a panel in the accent and the fields sit on
-        // it. Pressing anywhere on the panel that is not a field chooses it,
-        // which is what makes it still a button.
-        ui.vertical(|ui| {
-            ui.set_width(each);
-            let chosen = egui::Frame::new()
-                .fill(if wrapping { p.accent } else { p.surface })
-                .stroke(egui::Stroke::new(1.0, p.line))
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding * 0.5)
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.set_min_height(tall - m.panel_padding);
-                    // **On the label's own line**, so choosing does not make
-                    // the button taller and shove everything under it down.
-                    // The size is what this option *is*, so it reads as part
-                    // of the word rather than as a question under it.
-                    ui.horizontal(|ui| {
-                        ui.colored_label(
-                            if wrapping { p.ground } else { p.text },
-                            egui::RichText::new(words::make::WRAPPING).size(m.text_small),
-                        );
-                        // **Shown either way**, greyed when the world does not
-                        // wrap. Appearing and disappearing made the button
-                        // change width as you chose, so the two options moved
-                        // under the pointer and the row jumped — and a control
-                        // that is not there cannot be read before it matters.
-                        //
-                        // `12x12`, which is how a size is written and how
-                        // `--torus` takes one. Labelled fields said "rows" and
-                        // "cols" over two boxes that could only be a size, in
-                        // a row whose whole subject is the shape of a world.
-                        // The unit is on hover rather than on a line of its
-                        // own: it is worth knowing once and worth no space
-                        // after that.
-                        let ink = if wrapping { p.ground } else { p.text_dim };
-                        ui.add_enabled_ui(wrapping, |ui| {
-                            let box_ = |ui: &mut egui::Ui, field: &mut String| {
-                                ui.add(
-                                    egui::TextEdit::singleline(field)
-                                        .desired_width(m.button_height * 1.4)
-                                        .horizontal_align(egui::Align::Center),
-                                )
-                                .on_hover_text(words::make::SIZE_NOTE);
-                            };
-                            box_(ui, &mut draft.rows);
+        // One option: a framed, centred label, and whatever else belongs to it
+        // on the same line. Pressing anywhere on it that is not a field
+        // chooses it, which is what keeps it a button.
+        let mut option =
+            |ui: &mut egui::Ui, chosen: bool, label: &str, extra: &mut dyn FnMut(&mut egui::Ui)| {
+                let frame = egui::Frame::new()
+                    .fill(if chosen { p.accent } else { p.surface })
+                    .stroke(egui::Stroke::new(1.0, p.line))
+                    .corner_radius(m.rounding)
+                    .inner_margin(m.panel_padding * 0.5)
+                    .show(ui, |ui| {
+                        ui.set_width(each - m.panel_padding);
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(m.button_height);
                             ui.colored_label(
-                                ink,
-                                egui::RichText::new(words::make::BY).size(m.text_small),
+                                if chosen { p.ground } else { p.text },
+                                egui::RichText::new(label).size(m.text_small),
                             );
-                            box_(ui, &mut draft.cols);
+                            extra(ui);
                         });
                     });
-                });
-            // The panel itself, minus whatever a field claimed: clicking a
-            // number must edit it rather than re-choose the option it is on.
-            if chosen.response.interact(egui::Sense::click()).clicked() {
-                draft.shape = Shape::Wrapping;
-            }
-        });
+                frame.response.interact(egui::Sense::click()).clicked()
+            };
+
+        if option(ui, !wrapping, words::make::BOUNDLESS, &mut |_| {}) {
+            draft.shape = Shape::Boundless;
+        }
+
+        // **Shown either way**, greyed when the world does not wrap. Appearing
+        // and disappearing made the button change width as you chose, so the
+        // two options moved under the pointer and the row jumped — and a
+        // control that is not there cannot be read before it matters.
+        //
+        // `12x12`, which is how a size is written and how `--torus` takes one.
+        // Labelled fields said "rows" and "cols" over two boxes that could
+        // only be a size, in a row whose whole subject is the shape of a
+        // world. The unit is on hover: worth knowing once and worth no space
+        // after that.
+        let (rows, cols) = (&mut draft.rows, &mut draft.cols);
+        let mut size = |ui: &mut egui::Ui| {
+            let ink = if wrapping { p.ground } else { p.text_dim };
+            ui.add_enabled_ui(wrapping, |ui| {
+                let box_ = |ui: &mut egui::Ui, field: &mut String| {
+                    ui.add(
+                        egui::TextEdit::singleline(field)
+                            .desired_width(m.button_height * 1.4)
+                            .horizontal_align(egui::Align::Center),
+                    )
+                    .on_hover_text(words::make::SIZE_NOTE);
+                };
+                box_(ui, rows);
+                ui.colored_label(ink, egui::RichText::new(words::make::BY).size(m.text_small));
+                box_(ui, cols);
+            });
+        };
+        if option(ui, wrapping, words::make::WRAPPING, &mut size) {
+            draft.shape = Shape::Wrapping;
+        }
     });
 }
 
