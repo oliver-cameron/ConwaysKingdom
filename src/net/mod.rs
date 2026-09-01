@@ -42,22 +42,13 @@ pub type ChunkId = Coord;
 /// so both sides apply it at the same point in the sequence.
 pub type Tick = u64;
 
-/// **What a room is**, for as long as its save file exists.
+/// **What a room is**, for as long as its save file exists — as against what
+/// it is *called*, which is typed, read aloud and may change.
 ///
-/// Distinct from the name, and that separation is the point. A name is typed,
-/// read aloud, and may be changed; an id is generated once and never changes.
-/// Everything that has to still mean the same room tomorrow keys off this: the
-/// save file, the seat a player holds, and the rejoin token filed against it.
-/// Rename a room and every one of those survives, because none of them ever
-/// knew the name.
-///
-/// A newtype rather than another `String`. Ids, names and codes are three
-/// strings about one room, and the whole failure this prevents is passing one
-/// where another was meant — which no amount of care catches and the compiler
-/// catches for free.
-///
-/// The spelling is [`crate::server::rooms`]'s business; `net` only carries it.
-/// It is always a legal [`room_name`], because it is also a filename.
+/// A newtype because ids, names and codes are three strings about one room,
+/// and passing one where another was meant is the failure the compiler can
+/// catch for free. Always a legal [`room_name`], because it is also a
+/// filename; the spelling is [`crate::server::rooms`]'s business.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RoomId(pub String);
 
@@ -93,19 +84,13 @@ impl std::borrow::Borrow<str> for RoomId {
 
 /// This room's number, for the dice its world rolls.
 ///
-/// **Derived, so it needs no field on the wire and no version in the save.**
-/// Both peers already know which room they are in — `Welcome` names it, and it
-/// is the save file's own name — so a number computed from the id is a number
-/// both sides have without anybody sending it. A field would be a third thing
-/// about a room that could be wrong, and this cannot be.
+/// Derived rather than sent: both peers know the room already, so a field
+/// would be a third thing about it that could be wrong. From the id and not
+/// the name, because renaming a room must not re-roll its dice.
 ///
-/// From the [`RoomId`] rather than the name, because the id never changes and
-/// a name can: renaming a room must not re-roll its dice, which would be a
-/// world quietly becoming a different world.
-///
-/// FNV-1a, for the reason [`crate::sim::World::digest`] gives — `DefaultHasher`
-/// is explicitly not stable across Rust versions, and a client and server built
-/// at different times would disagree about every contested birth.
+/// FNV-1a for the reason [`crate::sim::World::digest`] gives: `DefaultHasher`
+/// is not stable across Rust versions, so two builds would disagree about
+/// every contested birth.
 pub fn world_seed(room: &RoomId) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -125,20 +110,10 @@ pub type RoomName = String;
 /// The room a client that names none is put in.
 pub const DEFAULT_ROOM: &str = "main";
 
-/// What a solitary world is called.
-///
-/// **Not asked for.** A world nobody else can reach needs none of a room's
-/// things — a name to be found by, a place in a listing, sides — so the form
-/// that describes one hides all three, and refusing it for having no name was
-/// answering a question nobody had been asked.
-///
-/// It has a name anyway, because one costs nothing and buys three: the HUD has
-/// something to read, [`world_seed`] has something to turn into this world's
-/// own dice rather than rolling from nought like every other solitary world,
-/// and a saved world has something to be filed under when there is saving.
-///
-/// One name for now, so there is one slot. Several would want the field back,
-/// which is the change to make when loading exists rather than before.
+/// What a solitary world is called. Not asked for — a world nobody else can
+/// reach needs none of a room's things — but it has one anyway, so the HUD has
+/// something to read, [`world_seed`] has something to make dice from, and a
+/// saved world has something to be filed under. One name, so one slot.
 pub const SOLO_ROOM: &str = "solo";
 
 /// The longest a room name may be. Short enough to read in a log line and in
@@ -147,15 +122,11 @@ pub const ROOM_NAME_MAX: usize = 24;
 
 /// Normalise a room name, or say why it is not one.
 ///
-/// Lowercased, because the name is also the save file's name and a
-/// case-insensitive filesystem would make `Lobby` and `lobby` two rooms on one
-/// machine and one room on another — which is a world that appears and
-/// disappears depending on where the server is running.
-///
-/// The charset is narrow for the same reason: a room name reaches the
-/// filesystem, and `../` or a path separator in it would be a name that
-/// escapes the directory rooms live in. Validated here rather than at the file
-/// layer so a client can refuse the same name locally and for the same reason.
+/// Lowercased and narrow because **the name is also the save file's name**:
+/// a case-insensitive filesystem would make `Lobby` and `lobby` two rooms on
+/// one machine and one on another, and `../` in a name escapes the rooms
+/// directory. Checked here as well as on the server so a client can refuse
+/// the same name for the same reason.
 pub fn room_name(raw: &str) -> Result<RoomName, String> {
     let name = raw.trim().to_ascii_lowercase();
     if name.is_empty() {
@@ -175,17 +146,9 @@ pub fn room_name(raw: &str) -> Result<RoomName, String> {
 
 /// The most sides a match may have.
 ///
-/// **A side is a player, so it costs a number**, and there are fifteen of them
-/// — see [`PlayerId::MAX`]. Every side needs at least one seat to sit on it,
-/// so the most sides a match can actually fill is half the numbers, and that
-/// is the cap: seven sides of one, which is a free-for-all with extra words,
-/// and anything more useful leaves room to spare.
-///
-/// It used to be eight, and the reason given was **colour** — allies having to
-/// read as allies meant a family of hue per side, and eight families crowd a
-/// wheel that holds sixteen hues with difficulty. That argument is gone with
-/// the families: a side is one number and therefore one hue, exactly as a
-/// player always was.
+/// **A side is a player, so it costs a number** — see [`PlayerId::MAX`] — and
+/// every side needs a seat to sit on it, so half the numbers is the ceiling.
+/// Seven sides of one is a free-for-all with extra words.
 pub const MAX_TEAMS: u8 = PlayerId::MAX / 2;
 
 /// The fewest. One side is a solo match with extra words.
@@ -217,16 +180,9 @@ pub fn team_name(raw: &str) -> Result<String, String> {
 
 /// A side, as a lobby needs to show it.
 ///
-/// **The id is a [`PlayerId`] because a side is one.** Everybody on a side
-/// places cells carrying that number, spends that number's purse and stands on
-/// that number's ground, so "who is allied with whom" is not a question the
-/// rules ever have to ask: two allies *are* the same player, and `==` answers
-/// it the way it did before there were sides at all.
-///
-/// What used to be here was a `Sides` array mapping every player to a team
-/// number, copied onto the wire, and an `allied()` call threaded through
-/// placement, pricing, spawning, scoring and colour. Every one of those is a
-/// plain comparison again.
+/// **The id is a [`PlayerId`] because a side is one.** Everybody on it
+/// places cells carrying that number, so "who is allied with whom" is never
+/// a question the rules ask: two allies *are* the same player.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Team {
     pub id: PlayerId,
@@ -242,18 +198,9 @@ pub struct Team {
 
 /// How much ground each player holds, by their number.
 ///
-/// **Here rather than on the server**, because an offline client is its own
-/// server and needs the same answer: it owns the whole world, so counting it
-/// is exact rather than a guess about a viewport. A *connected* client still
-/// takes the server's figure — there it holds its screen and a margin, and
-/// counting that would score the view.
-///
-/// `granted` says whether the patch everybody is handed on joining counts. It
-/// does not for a **score** — a grant is not an achievement, and everybody has
-/// one — and it does for **ground**, which is what a player is shown. A figure
-/// reading nought beside a screen of squares plainly yours is wrong however
-/// defensible the scoring rule is, and it read nought for as long as somebody
-/// built only inside their own patch, which a block does for ever.
+/// Here rather than on the server because an offline client is its own server
+/// and owns the whole world; a connected one holds a viewport and takes the
+/// server's figure instead. `granted` is [`Granted`].
 pub fn holdings(world: &World, granted: Granted) -> [usize; PlayerId::COUNT] {
     let mut held = [0usize; PlayerId::COUNT];
     for (_, chunk) in world.stored() {
@@ -344,15 +291,10 @@ pub enum Placement {
     /// handed down whole. What you are paying for is a **lineage**, not a
     /// cell — which is why it costs what ten cells of life cost.
     Mine,
-    /// A living cell that claims ground at range: every generation it takes
-    /// the nearest square that is not its owner's and makes it theirs, and a
-    /// dead one runs that backwards over the ground behind it.
-    ///
-    /// The opposite of a mine, and priced by the **emplacement** rather than
-    /// by the cell. A mine is bought once per lineage, because a birth copies
-    /// it; a turret is not inherited, so it is bought once per cell forever —
-    /// and one turret is one live cell and dies of loneliness in a generation,
-    /// so the smallest turret that works is four of them in a block.
+    /// A living cell that claims ground at range, and a dead one running that
+    /// backwards. Priced by the **emplacement**: a turret is not inherited, so
+    /// it is bought once per cell, and one dies of loneliness in a generation —
+    /// the smallest that works is four in a block.
     Turret,
 }
 
@@ -395,27 +337,11 @@ impl Placement {
     /// Whether this is what the square already holds — the question a click
     /// asks to decide whether it places or takes back.
     ///
-    /// Not "would taking it away change anything", which is what this used to
-    /// be. Life and a mine are both taken away by clearing the same bit, so a
-    /// mine held over ordinary life read as already there and the click killed
-    /// the cell rather than converting it. What a player holding Mine over
-    /// their own life means is *make this a mine*, and the only click that
-    /// should take a mine back is one holding a mine.
-    ///
-    /// So life and a mine are **different things to hold**, where life and ice
-    /// are independent things to hold: clicking one over the other replaces
-    /// the kind, and clicking Life on a living cell under a pane still kills
-    /// the life and leaves the pane standing.
-    ///
-    /// The owner is no part of it. Somebody else's life is still life, so a
-    /// click holding Life takes it — which is what lets you clear a glider
-    /// that has flown onto your ground, priced at [`RECLAIM`] because taking
-    /// another player's should not be free.
-    ///
-    /// A corpse is not what it was. A mine's kind outlives the life that
-    /// carried it, so a dead mine holds no life for either placement to take
-    /// and a click over it places, which is what stops drawing over a corpse
-    /// handing out a free mine.
+    /// **Held, not present.** Life and a mine are taken away by clearing the
+    /// same bit, so "would removing it change anything" made a mine held over
+    /// your own life read as already there and the click killed the cell
+    /// instead of converting it. The owner is no part of it: somebody else's
+    /// life is still life, priced at [`RECLAIM`].
     pub fn is_on(self, existing: Cell) -> bool {
         match self {
             Self::Life => existing.is_alive() && existing.kind() == Kind::NORMAL,
@@ -425,18 +351,12 @@ impl Placement {
         }
     }
 
-    /// What one of these costs to put down.
-    ///
-    /// Life is cheap because it is drawn by the stroke rather than placed cell
-    /// by cell: a pencil lays tens of cells in a gesture, and at five a cell
-    /// that is a gesture nobody can afford. Ice stays dear because a pane is a
-    /// wall, and a wall that costs what a cell costs is not a decision.
-    ///
-    /// Life at one against reclaiming at one means putting a cell down and
-    /// taking it back is free, which is deliberate: you may rearrange your own
-    /// board as much as you like. What drains value is the rule — a cell that
-    /// dies of its neighbours cannot be reclaimed, so the sink is mortality
-    /// rather than the act of placing.
+    /// What one of these costs to put down. Life is cheap because a pencil
+    /// lays tens of cells in a gesture; ice is dear because a wall that costs
+    /// what a cell costs is not a decision. Placing and reclaiming life are
+    /// both one, so rearranging your own board is free — the sink is
+    /// mortality, since a cell that dies cannot be reclaimed. See
+    /// [docs/game.md].
     pub const fn cost(self) -> i32 {
         match self {
             Self::Life => LIFE_COST,
@@ -469,17 +389,10 @@ impl Placement {
         }
     }
 
-    /// Take this away, and leave everything else alone.
-    ///
-    /// The inverse of [`Self::apply_to`], and the reason clicking a living
-    /// cell under ice kills the life without taking the pane with it. Life and
-    /// ice are independent flags, so removing one must not touch the other —
-    /// clearing the cell outright would destroy a pane the player did not aim
-    /// at, and at five a cell that is an expensive misunderstanding.
-    ///
-    /// The owner stays. A cell keeps its owner when it dies of the rule, and
-    /// `Chunk::is_empty` asks about life and ice rather than about ownership,
-    /// so a cleared cell still lets its chunk be dropped.
+    /// Take this away and leave everything else alone — the inverse of
+    /// [`Self::apply_to`]. Life and ice are independent, so clearing the cell
+    /// outright would destroy a pane the player did not aim at. The owner
+    /// stays, as it does when a cell dies of the rule.
     pub fn remove_from(self, existing: Cell) -> Cell {
         match self {
             // The kind stays on the corpse, as it does when a cell dies of the
@@ -506,16 +419,11 @@ pub enum Action {
 
 /// The most cells one action may name.
 ///
-/// **Because the work is unbounded and the message is not.** A coordinate pair
-/// is two bytes on the wire, so a frame the transport happily accepts holds
-/// tens of millions of them — and every one is priced, applied, cloned into an
-/// `Acted`, broadcast, and applied again by every client in the room, on the
-/// one task that owns every world. `Erase` over ground nobody holds prices at
-/// nothing, so affordability is no bound at all.
-///
-/// A rectangle at one pixel per cell already covers millions, which is why the
-/// client stops a stroke here; this is the same number enforced where it has
-/// to be. Far above any gesture and far below anything that hurts.
+/// **Because the work is unbounded and the message is not.** A coordinate
+/// pair is two bytes, so a frame the transport accepts holds tens of
+/// millions — and an `Erase` over ground nobody holds prices at nothing, so
+/// affordability is no bound. Every one is priced, applied, cloned into an
+/// `Acted` and applied again by every client in the room.
 pub const MOST_CELLS_AT_ONCE: usize = 4096;
 
 impl Action {
@@ -535,23 +443,10 @@ pub struct Stamped {
     /// **The number the cells will carry**, which in a team match is the
     /// team's and not the sender's own.
     pub player: PlayerId,
-    /// **Who sent it**, which is a different question and has to be asked
-    /// separately as soon as two clients can be one player.
-    ///
-    /// A client applies its own actions the moment it makes them and must not
-    /// apply them again when they come back — a `Paint` is idempotent on the
-    /// generation it was meant for and not one generation later, so laying it
-    /// twice stamps the original pattern back on top of where it has got to.
-    /// "Its own" used to be `player`, which was the same question until a team
-    /// became a player: a teammate's action carries the team's number, so a
-    /// client skipped it as something it had already predicted and **never
-    /// applied it at all** — the two copies of the world then differed by
-    /// everything the rest of the team did, until a checkpoint dragged the
-    /// chunks back.
-    ///
-    /// The seat, then, because that is what a client is one of. Equal to
-    /// `player` outside a match, and offline, where a client is the only thing
-    /// at its own controls.
+    /// **Who sent it**, which is a different question once two clients can be
+    /// one player: a client skips its own actions coming back, and skipping by
+    /// `player` meant skipping a teammate's and never applying it. Equal to
+    /// `player` outside a match.
     pub seat: PlayerId,
     pub action: Action,
 }
@@ -592,16 +487,9 @@ impl MatchPhase {
     /// Whether a player may change the world.
     ///
     /// **Nothing happens before the whistle.** The same set as
-    /// [`Self::stepping`] today, and a different question: a match that let
-    /// people place while gathering would be fair in *generations* and unfair
-    /// in **time**, since somebody who joined ten minutes early has had ten
-    /// minutes to think and draw and the last to arrive has had none. Holding
-    /// the tick still does not hold a clock still.
-    ///
-    /// So a match opens with everybody looking at the same thing, and the
-    /// first thing anybody does is done against a running clock — which is a
-    /// better opening than a leisurely draw, since hesitating costs
-    /// generations rather than nothing.
+    /// [`Self::stepping`] today and a different question: placing while
+    /// gathering would be fair in generations and unfair in *time*, since
+    /// holding the tick still does not hold a clock still.
     pub fn accepts_actions(&self) -> bool {
         matches!(self, Self::Open | Self::Running { .. })
     }
@@ -690,46 +578,28 @@ pub struct RoomInfo {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
-    /// Asking to play. `token` is the secret a previous `Welcome` handed out,
-    /// if this client has one — presenting it asks for that player back rather
-    /// than a new one.
+    /// Asking to play. See [docs/networking.md].
     Join {
         name: String,
-        /// Which world to join. `None` takes the server's default room, so a
-        /// client with nothing to say about rooms still lands somewhere.
-        ///
-        /// A room is a separate world, not a channel inside a shared one, so
-        /// this decides which cells the player will ever see — and player
-        /// numbers, value, territory and the rejoin token are all per room. A
+        /// Which world. `None` takes the server's default. A room is a separate
+        /// world, so player numbers, value and territory are all per room — a
         /// player in two rooms is two players.
         room: Option<RoomId>,
-        /// Who is asking, as against which seat they want back.
+        /// Who is asking, as against which seat they want back. The client's
+        /// [`Secret`], which the server exchanges for a [`PersonId`]. `None` from a
+        /// client that could not make one, which the server will not remember.
         ///
-        /// The client's [`Secret`], which the server exchanges for a
-        /// [`PersonId`] — issuing one if it has not seen this secret before.
-        /// `None` from a client that could not make one, which plays as
-        /// somebody the server will not remember.
-        ///
-        /// It used to be a signature over a nonce the server had just sent, so
-        /// that the secret never crossed the wire at all. That is the right
-        /// answer for more than one server and an expensive one for a single
-        /// server, where it is the same bargain the rejoin token already makes
-        /// — see [`crate::net::auth`].
+        /// It crosses the wire, which is a single-server bargain and has to change
+        /// before there are two — see [`crate::net::auth::person`].
         person: Option<Secret>,
     },
     /// What this player did, and when they believe it happened.
     Act(Stamped),
     /// The chunks the client now needs, because its viewport moved.
     ///
-    /// **A fetch, and named for something it never quite was.** Nothing is
-    /// kept: the server answers with the chunks it holds and forgets the
-    /// request, because chunk *changes* reach a client as the `Step` for the
-    /// generation they happened in, broadcast to the whole room. There is no
+    /// **A fetch, whatever it is called.** Nothing is kept: a change reaches a
+    /// client as the `Step` for the generation it happened in, so there is no
     /// push for a subscription to select from.
-    ///
-    /// There was an `Unsubscribe` beside this for a while, and a list on the
-    /// server for it to remove from. Nothing ever read the list and no client
-    /// ever sent the message.
     Subscribe { chunks: Vec<ChunkId> },
     /// Per-chunk digests of what the client holds, so the server can spot a
     /// desync. Per chunk rather than whole-world: a client holds only what its
@@ -745,44 +615,20 @@ pub enum ClientMessage {
     Rooms,
     /// Watch a room without taking a seat in it.
     ///
-    /// A spectator is **not a player with the actions taken away**, it is a
-    /// connection with a room and no `PlayerId`. That distinction is the whole
-    /// design, and it is forced by two facts rather than chosen. A seat is one
-    /// of fifteen — `PlayerId::MAX`, four bits in the cell — so spending one
-    /// on somebody who is only watching costs a real player their place. And
-    /// **no late joining is a rule about players**: somebody arriving at
-    /// generation four hundred is exactly what watching is for, so the refusal
-    /// has to be able to tell the two apart.
-    ///
-    /// Answerable without a seat, like `Join`, and it names its own room for
-    /// the same reason.
+    /// A spectator is a connection with a room and no `PlayerId`, not a player
+    /// with the actions taken away: a seat is one of fifteen, and **no late
+    /// joining is a rule about players**, so the refusal has to tell the two
+    /// apart. See [server.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md).
     Watch { room: RoomId },
     /// Give up this seat, without closing the connection.
     ///
-    /// **Leaving a world used to have no signal at all.** A client that went
-    /// back to the menu kept its seat, on the reasoning that the seat is held
-    /// until another `Join` takes its place — which is true of a client that
-    /// then rejoins the *same* room, and false of everything else. The player
-    /// stayed marked online, so the room went on counting them; and the
-    /// rejoin token, which only brings you back to a player who is *not*
-    /// online, found them online and issued a new player instead. Leave and
-    /// come back three times and a room with one person in it says three.
-    ///
-    /// Not the same as the socket closing, which already frees a seat. This is
-    /// for a client that is still connected and no longer playing: it wants to
-    /// keep listing rooms.
+    /// Not the same as the socket closing, which already frees one. Without it a
+    /// client that went back to the menu stayed online, so the room went on
+    /// counting them and their token found them online and issued a new player.
     Leave,
-    /// Take a side, or leave the one you are on.
-    ///
-    /// Only while a match is **gathering**. Changing sides mid-match would
-    /// hand your ground to the people you were fighting, which is not a
-    /// decision a lobby should let somebody make by accident and not one the
-    /// scoring could sensibly explain.
-    ///
-    /// Anybody may take any side, and there is no balance check on the way in
-    /// — see `Start`, which is where a lopsided match is refused. A lobby that
-    /// stops you joining your friend because the sides would be uneven is a
-    /// lobby that makes you argue about the order you clicked in.
+    /// Take a side, or leave the one you are on. Only while **gathering**:
+    /// changing sides mid-match would hand your ground to the people you were
+    /// fighting. Any side, with no balance check — that is at `Start`.
     JoinTeam { team: PlayerId },
     /// Call a side something.
     ///
@@ -806,38 +652,21 @@ pub enum ClientMessage {
     Forfeit,
     /// Blow the whistle on a match this connection made.
     ///
-    /// Sent with no room, because it names one: the match you are **in**. A
-    /// player starting a match they are not in would be starting somebody
-    /// else's, and the seat is already the thing that says which room a
-    /// message belongs to.
-    ///
-    /// Refused unless this connection is the one that made the room, which is
-    /// the first thing the owner record is used for. Anybody may join a
-    /// gathering match; if anybody could also start it, the person who set it
-    /// up could not wait for their friends.
+    /// Sent with no room, because the seat already says which. Refused unless
+    /// this connection made it: anybody may join a gathering match, and if
+    /// anybody could start it the person who set it up could not wait.
     Start,
-    /// Make a room that is not here yet.
+    /// Make a room that is not here yet, answerable without a seat.
     ///
-    /// Answerable without a seat, like `Rooms` and `Join` and for a sharper
-    /// version of the same reason: it names a room that does not exist, so
-    /// there is nowhere to be standing when it is sent.
-    ///
-    /// The fields are what `world new` and `match new` take at the console,
-    /// and `victory` is the whole of the difference between them. One message
-    /// rather than two, because a world and a match differ by whether there is
-    /// a way to win and by nothing else, and two messages would be two
-    /// vocabularies for one act.
-    ///
-    /// **Making a room does not put you in it.** The answer is a name; the
-    /// client sends `Join` with it, which is the same `Join` the room list
-    /// sends. That keeps one path into a world rather than two.
+    /// One message rather than two, because a world and a match differ by
+    /// whether there is a way to win and by nothing else. **Making a room does
+    /// not put you in it**: the answer is a name, and the client sends `Join`,
+    /// which is the same `Join` the room list sends.
     Create {
-        /// What to call it. Validated by [`room_name`] on both sides — here
-        /// so the menu can refuse a name without a round trip, and again on
-        /// the server because nothing a client says about a filename is
-        /// trusted. The **id** is the server's to choose and is never sent
-        /// here: a client naming its own identifiers is a client that can
-        /// collide with one.
+        /// What to call it. Validated by [`room_name`] on both sides — here so the
+        /// menu can refuse without a round trip, and again on the server because
+        /// nothing a client says about a filename is trusted. The **id** is the
+        /// server's to choose and is never sent.
         name: RoomName,
         shape: WorldKind,
         /// How it is won. `None` makes a world, which is a match with no way
@@ -869,13 +698,8 @@ pub enum ServerMessage {
         tick: Tick,
         spawn: (i32, i32),
         /// **What this server calls you**, issued the first time it saw this
-        /// client's secret and the same on every visit after.
-        ///
-        /// The client cannot work it out for itself — that is what the server
-        /// issuing it means — so it is told, and remembers it so the settings
-        /// screen has something to show before the next join. `None` for a
-        /// client that offered no secret, which plays as somebody this server
-        /// will not remember.
+        /// client's secret. The client cannot work it out, so it is told and
+        /// remembers it. `None` for a client that offered no secret.
         person: Option<PersonId>,
         /// What this client is rated on this server.
         ///
@@ -883,32 +707,21 @@ pub enum ServerMessage {
         /// than an option: a client that has never been rated here is not a
         /// special case, it is somebody at the start.
         rating: i32,
-        /// What this player has to spend.
-        ///
-        /// Sent, because a returning player has a value already and the client
-        /// has no way to know it. Assuming the starting figure left the two
-        /// disagreeing from the first frame: the client would offer to spend
-        /// money the server knows is gone, and the server would refuse the
-        /// difference without the client having anything to show for it.
+        /// What this player has to spend. Sent because a returning player has a
+        /// value already and the client cannot know it — assuming the starting
+        /// figure left the two disagreeing from the first frame.
         value: i32,
-        /// Which room this is. Named back rather than assumed, because the
-        /// client may have asked for none and because the token it is about to
-        /// keep is filed under this name — a token stored against the wrong
-        /// room returns you to the wrong world, which is worse than having no
-        /// token at all.
+        /// Which room this is. Named back rather than assumed, because the client
+        /// may have asked for none.
         room: RoomId,
         /// What that room is called, for the HUD. Sent beside the id rather
         /// than looked up, because a client that has joined by code has never
         /// seen the listing and so has no name for where it is.
         name: RoomName,
-        /// The shape of the world, so the client builds the same one.
-        ///
-        /// Without it a client joining a toroidal server built an infinite
-        /// world locally: coordinates never folded, so the far side of the
-        /// world was somewhere else entirely, chunk digests were taken against
-        /// coordinates the server had never heard of, and the seam showed as
-        /// soon as anything crossed it. The shape is not something a client can
-        /// derive — nothing it can see says whether the ground ends.
+        /// The shape of the world, so the client builds the same one. Not something
+        /// it can derive: nothing it can see says whether the ground ends, and a
+        /// client that guessed infinite against a toroidal server folded no
+        /// coordinates and disagreed the moment anything crossed the seam.
         world: WorldKind,
     },
     Rejected {
@@ -922,75 +735,42 @@ pub enum ServerMessage {
     NotStarted {
         reason: String,
     },
-    /// Watching, and here is the world to build in order to watch it.
-    ///
-    /// A `Welcome` without a player: no number, no token, no value and no
-    /// spawn, because a spectator has none of those and sending zeroes would
-    /// have the client draw a purse and a home patch belonging to nobody.
-    /// What is left is what watching actually needs — which world, and where
-    /// it has got to.
+    /// Watching: a `Welcome` with no player, because a spectator has no number,
+    /// no purse and no spawn, and sending zeroes would draw all three.
     Watching {
         room: RoomId,
         name: RoomName,
         tick: Tick,
         world: WorldKind,
     },
-    /// The answer to [`ClientMessage::Create`]: what the room ended up being
-    /// called, or why there is not one.
-    ///
-    /// A `Result` rather than two variants, because it is one question with
-    /// two answers and because `Rooms::create` and `Rooms::new_match` already
-    /// return exactly this — the wire carries what the server already says,
-    /// refusal wording included.
-    ///
-    /// The name is sent back rather than assumed for the reason `Welcome`
-    /// sends one: [`room_name`] lowercases and trims, so what was typed and
-    /// what the room is called are not always the same string, and joining the
-    /// second is the only thing that works.
+    /// The answer to [`ClientMessage::Create`]: what the room is called, or why
+    /// there is not one. The name is sent back because [`room_name`] lowercases
+    /// and trims, so what was typed and what the room is called differ.
     Made(Result<Made, String>),
     /// One generation happened. `tick` is the generation the world is on
-    /// **after** it, and `actions` is what was applied on the way there.
+    /// **after** it, and `actions` is what was applied on the way.
     ///
-    /// The unit of lockstep, and the reason it carries the tick rather than
-    /// just the actions: a step is a pure function of state and tick, so two
-    /// peers only stay identical while they step at the same ticks. A client
-    /// that kept its own clock drifted from the server within seconds — same
-    /// nominal rate, different phase, nothing correcting it — and every seed
-    /// is derived from the generation, so births chose different owners and
-    /// territory spread differently on each side. Late joining still looked
-    /// right, because that is a snapshot; everything after it was one world
-    /// each.
-    ///
-    /// So the server is the clock. A connected client advances when told and
-    /// never on its own.
+    /// **The server is the clock.** A step is a pure function of state and
+    /// tick, so two peers stay identical only while they step at the same
+    /// ticks; a client keeping its own drifted within seconds. See
+    /// [networking.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/networking.md).
     Step {
         tick: Tick,
         actions: Vec<Stamped>,
     },
     /// Where a player's opening ground was laid, and whose it is.
     ///
-    /// **Because a grant is a change to the world that nobody was told about.**
-    /// `Welcome` carries a spawn, which is right for somebody arriving — and a
-    /// match grants everybody at the whistle instead, long after every client
-    /// has joined and subscribed. Their chunks do not change hands, so nothing
-    /// re-fetches them, and the ground appeared for the server and for nobody
-    /// else. A reload fixed it, which is what made it look like a client bug.
-    ///
-    /// To the whole room rather than to its subject, because knowing where
-    /// everybody started is worth having and because a per-player message
-    /// would need routing this does not have. A `Resync` naming the same
-    /// chunks goes out beside it: this says where, and that says fetch it.
+    /// **A grant is a change to the world nobody was told about.** A match
+    /// grants everybody at the whistle, long after every client has subscribed,
+    /// so their chunks do not change hands and nothing re-fetches them. A
+    /// `Resync` naming the same chunks goes out beside it.
     Spawned {
         player: PlayerId,
         at: (i32, i32),
     },
     /// Somebody's rating here, and what the match just finished moved it by.
-    ///
-    /// Broadcast to the room rather than sent to its owner alone, because a
-    /// result is a comparison and the interesting half of it is what happened
-    /// to everybody else. Sent at the moment the match ends rather than left
-    /// to be found on the next join: the screen somebody is looking at when it
-    /// ends is the one this belongs on.
+    /// Broadcast, because a result is a comparison and the interesting half is
+    /// what happened to everybody else.
     Rated {
         who: PersonId,
         rating: i32,
@@ -1008,64 +788,34 @@ pub enum ServerMessage {
         tick: Tick,
         chunks: Vec<ChunkId>,
     },
-    /// One action, the moment the server took it, rather than at the end of
-    /// the generation it belongs to.
+    /// One action, the moment the server took it, rather than in the `Step` for
+    /// the generation it belongs to — which was a wait of half a generation, or
+    /// 125 ms at four a second, on a link that costs four.
     ///
-    /// **This is what makes a cell appear on somebody else's screen in a round
-    /// trip instead of at the next tick.** An action is applied by the server
-    /// during the step it names, and used to reach other clients only in the
-    /// `Step` that announces that step is done — so a click was worth a wait
-    /// of half a generation on average, which at four generations a second is
-    /// 125 ms of doing nothing on a link that costs four. The client that
-    /// *made* the action never waited: it predicts. This lets everybody else
-    /// predict the same thing at the same tick.
-    ///
-    /// The `Step` still carries it. A broadcast can be dropped — `server::ws`
-    /// logs `connection lagged` and carries on — so this is a shortcut and not
-    /// a replacement, and a client applies whichever reaches it first and
-    /// ignores the other; see `Stamped` and the skip in the client's `Step`
-    /// handling.
+    /// The `Step` still carries it, because a broadcast can be dropped. A client
+    /// applies whichever reaches it first and ignores the other.
     Acted(Stamped),
-    /// What the match in this room is doing, and who is in it.
-    ///
-    /// Sent on joining and again whenever it changes, because a lobby is a
-    /// screen that has to be right rather than eventually right: somebody
-    /// looking at "waiting to start" after it has started is looking at a lie.
-    ///
-    /// Names as well as numbers. A lobby is the one screen where players are
-    /// people rather than colours, since the whole of it is finding out who
-    /// else turned up.
+    /// What the match in this room is doing, and who is in it. Sent on joining
+    /// and whenever it changes: a lobby has to be right rather than eventually
+    /// right. Names as well as numbers, since a lobby is the one screen where
+    /// players are people rather than colours.
     Match {
         /// Who blew the whistle, once somebody has. `None` before the start,
         /// and for a match the console started — which is the operator rather
         /// than anybody in the room.
         started_by: Option<PlayerId>,
-        /// The sides this match has, what they are called, and who sits on
-        /// them. Empty in a free-for-all.
-        ///
-        /// This is also how a client learns **which number its own cells
-        /// carry**: it finds its seat in a side's `seats` and plays as that
-        /// side's id. A separate map of who is allied with whom used to ride
-        /// here so the client could price a placement beside a teammate the
-        /// way the server would; there is nothing to price differently now,
-        /// because a teammate's cells are the client's own.
+        /// The sides this match has and who sits on them. Empty in a free-for-all.
+        /// Also how a client learns **which number its own cells carry**: it finds
+        /// its seat in a side and plays as that side's id.
         teams: Vec<Team>,
-        /// Whose match this is: the player who may start it.
-        ///
-        /// A `PlayerId` rather than a "may you start it" flag, because this
-        /// message is **broadcast to the whole room** and a flag would have to
-        /// be true for one recipient and false for the rest. Every client
-        /// compares it with its own number and gets the right answer.
-        ///
-        /// `None` for a match the console made, which is the operator's and
-        /// starts at the console.
+        /// Whose match this is: the player who may start it. A `PlayerId` rather
+        /// than a flag, because this is broadcast and a flag would have to be true
+        /// for one recipient and false for the rest. `None` for one the console
+        /// made.
         owner: Option<PlayerId>,
-        /// The code that reaches this room, if it is private.
-        ///
-        /// Here rather than only in the `Made` reply, because the reply is
-        /// seen once by the person who made it and the code is the thing they
-        /// have to hand to somebody — which they do from the lobby, while
-        /// waiting, which is the moment they need to be able to read it.
+        /// The code that reaches this room, if it is private. Here as well as in
+        /// the `Made` reply, because the reply is seen once and the code is what
+        /// somebody reads out from the lobby while waiting.
         code: Option<String>,
         phase: MatchPhase,
         victory: Option<Victory>,
@@ -1073,38 +823,23 @@ pub enum ServerMessage {
     },
     /// Who holds how much ground, most first.
     ///
-    /// **From the server because a client cannot work it out.** A client holds
-    /// the chunks it subscribed to, which is its own screen, so counting
-    /// locally would score the view rather than the world — and on a match
-    /// that is the difference between a scoreboard and a rumour.
-    ///
-    /// Granted ground is not counted: `HOME` never decays, so a player wiped
-    /// out in the first minute would otherwise still be holding their patch at
-    /// the whistle, and that is points for having turned up.
-    ///
-    /// Broadcast on a cadence rather than every generation. It is one pass
-    /// over the world to work out, and a bar that moved four times a second
-    /// would be harder to read than one that moved every couple of seconds.
+    /// From the server because a client holds the chunks it subscribed to, so
+    /// counting locally would score its own screen. Granted ground is left out:
+    /// `HOME` never decays, so it would be points for having turned up.
+    /// Broadcast on a cadence, being a pass over the world.
     Standing {
         tick: Tick,
         held: Vec<Holding>,
     },
-    /// What this player actually has to spend.
-    ///
-    /// Sent in reply to a `Checkpoint`, which is the only regular thing a
-    /// client says. Value used to be predictable from a client's own actions
-    /// alone; mining made it depend on births anywhere in the world, and a
-    /// client holds a viewport — so its number drifts below the server's for
-    /// as long as it plays, and nothing else would ever correct it.
+    /// What this player actually has to spend, in reply to a `Checkpoint`.
+    /// Mining made value depend on births anywhere in the world, and a client
+    /// holds a viewport — so its figure drifts down for as long as it plays and
+    /// nothing else would correct it.
     Purse {
         value: i32,
     },
-    /// The rooms this server has, in the order it lists them.
-    ///
-    /// Ordered by the server rather than sorted by the client, so two players
-    /// looking at the same menu see the same list in the same order — and so
-    /// the order is one thing a server can decide rather than a thing that
-    /// happens.
+    /// The rooms this server has, in the order **it** lists them, so two players
+    /// looking at one menu see one list.
     Rooms {
         rooms: Vec<RoomInfo>,
     },
@@ -1121,35 +856,22 @@ pub const SPAWN_N: i32 = 12;
 /// How much of `player`'s influence reaches this square, nought to
 /// [`crate::sim::bits::MAX_LEVEL`].
 ///
-/// A lookup rather than a sum: a square carries one owner, so the contest was
-/// settled by the rule the last time that square worked itself out. Nought
-/// where it is somebody else's, nobody's, or in a chunk this peer does not
-/// hold — the honest answer, since guessing would let a client predict a
-/// cheaper price than the server charges.
-///
-/// There was an `influence` beside this that forwarded to it unchanged, from
-/// when the two were "mine" and "my side's". A side is a player now, so they
-/// were one question with two names.
+/// A lookup rather than a sum: a square carries one owner, so the contest
+/// was settled when it last worked itself out. Nought for a chunk this peer
+/// does not hold, which is the honest answer — guessing would let a client
+/// predict a cheaper price than the server charges.
 pub fn reach(world: &World, player: PlayerId, row: i32, col: i32) -> u8 {
     world.cell_at(row, col).filter(|c| c.player() == player).map(|c| c.influence()).unwrap_or(0)
 }
 
-/// Whether `player` may put something down here.
+/// Whether `player` may put something down here: **only where their own
+/// influence reaches.**
 ///
-/// **Only where their own influence reaches.** Placing anywhere for a multiple
-/// of the price was tried and is out: it made the map somewhere you bought
-/// your way into rather than somewhere you grew into, and ten times a cell is
-/// no obstacle at all to anybody with a mine running. See
-/// [docs/game.md#where-you-may-build].
-///
-/// Safe in a way the same wall was not before levels: granted ground is a
-/// **source**, so a player whose life has gone out still has a patch with a
-/// live gradient around it and can always build somewhere.
-///
-/// Territory is the owner field on dead cells, which the rule spreads outward
-/// from living ones, so a player's ground grows where their life goes.
-///
-/// [docs/game.md#where-you-may-build]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
+/// Placing anywhere for a multiple of the price was tried and is out — it
+/// made the map somewhere you bought your way into rather than grew into.
+/// Safe in a way it was not before levels, because granted ground is a
+/// *source*: a player whose life has gone out still has a live gradient
+/// around their patch. See [docs/game.md#where-you-may-build].
 pub fn may_place(world: &World, player: PlayerId, row: i32, col: i32) -> bool {
     reach(world, player, row, col) > 0
 }
@@ -1165,15 +887,9 @@ const SPAWN_ACROSS: i32 = 6;
 
 /// How much of somebody else's ground in a seat makes it not worth taking.
 ///
-/// A bar rather than "any at all", because a seat with a few stray cells in it
-/// is still a seat: `grant` claims dead ground whoever held it and steps the
-/// block around anything alive, so a couple of a neighbour's squares cost
-/// nothing. What this is looking for is a **country** — a seat inside
-/// somebody's territory, where a new player would be unable to build without
-/// paying the outside rate for every cell.
-///
-/// A quarter of the patch's own area, against a box that is four times that,
-/// so it takes a real border to trip it.
+/// A bar rather than "any at all": a few stray cells cost nothing, and what
+/// this looks for is a *country* — a seat inside somebody's territory, where
+/// a new player could not build.
 const SPAWN_CROWDED: usize = (SPAWN_N * SPAWN_N / 4) as usize;
 
 /// How many seats out from their own a player will look for somewhere emptier.
@@ -1184,21 +900,12 @@ const SPAWN_CROWDED: usize = (SPAWN_N * SPAWN_N / 4) as usize;
 /// everybody on any world that has been running a while.
 const SPAWN_SEARCH: i32 = 64;
 
-/// Which seat in the grid a player takes, as a square **spiral** out from the
-/// origin.
+/// Which seat a player takes, as a square **spiral** out from the origin.
 ///
-/// The grid grows with the roster, which is the point. A fixed six-across grid
-/// filled in reading order puts the first six players in a **line**, and a
-/// line is the arrangement the layout exists to avoid: your only neighbours
-/// are the two beside you, the ends can never reach each other, and the map is
-/// a corridor. A spiral fills a square at every size — four players make a
-/// 2x2, nine make a 3x3, sixteen a 4x4 — so however many turn up, everybody
-/// has neighbours on more than one side.
-///
-/// A spiral rather than "lay out a grid for the players present", because a
-/// seat must never move. Positions are a function of the player's number
-/// alone, so a player's ground stays where it was put when the next person
-/// joins, and the shape of the occupied region grows around them.
+/// A spiral fills a square at every size, so however many turn up everybody
+/// has neighbours on more than one side — a fixed grid filled in reading
+/// order puts the first six players in a line, and a line is a corridor.
+/// A function of the player's number alone, so a seat never moves.
 fn seat(n: i32) -> (i32, i32) {
     let (mut row, mut col) = (0, 0);
     let (mut dr, mut dc) = (0, 1);
@@ -1268,17 +975,10 @@ fn crowding(world: &World, (row, col): (i32, i32), player: PlayerId) -> usize {
 
 /// No-man's-land between one grant's edge and the next, in cells.
 ///
-/// Measured in **chunks** because that is the unit the world is built and
-/// drawn in, and because "how far away is my neighbour" is a question about
-/// the map rather than about the size of a patch. Three of them is far enough
-/// that neither player can see the other's opening at a comfortable zoom, and
-/// near enough that a glider crosses it in a hundred generations.
-///
-/// It was three patches' worth, thirty-six cells, and that read as close: two
-/// grants nearly touching at chunk scale, with the halo each block holds
-/// already a third of the way across. What the gap is really buying is the
-/// time before anyone's territory meets, and it wants to be enough to build a
-/// machine in.
+/// In **chunks**, because that is the unit the world is drawn in and "how
+/// far away is my neighbour" is a question about the map. Three is far
+/// enough that neither can see the other's opening, and near enough that a
+/// glider crosses in a hundred generations.
 const SPAWN_GAP: i32 = 3 * CHUNK_N as i32;
 
 /// Centre to centre between neighbouring grants, in cells: a patch, plus the
@@ -1288,30 +988,16 @@ const SPAWN_PITCH: i32 = SPAWN_N + SPAWN_GAP;
 /// The ground a player is granted on joining: a square of claimed but empty
 /// cells, far enough from everyone else's to be their own.
 ///
-/// **One seat per number, and a side is a number**, so this takes a
-/// [`PlayerId`] and nothing else. It used to take the whole roster's
-/// allegiances as well, and map a player to their side's seat through
-/// `seat_number` — which drew team ids and player numbers out of one 1..15
-/// space and so seated an unaligned player 3 on top of team 3. There is no
-/// mapping left to get wrong: everybody on a side already *is* that number.
+/// One seat per number, and a side is a number, so this takes a [`PlayerId`]
+/// and nothing else. Laid out in a square rather than a line, so territory
+/// meeting territory is something that happens.
 ///
-/// Laid out in a **square** rather than a line. A line puts the last player
-/// thirty patches from the first, so the two could never reach each other and
-/// the map is a corridor; a square keeps every player within a few patches of
-/// several others, which is the only arrangement in which territory meeting
-/// territory is something that happens.
-///
-/// The world decides the spacing. An infinite one has room, so the grid sits
-/// at a fixed pitch centred on the origin, and the world then grows in every
-/// direction rather than off into one quadrant. A torus does not: its ground
-/// is finite and has to be shared out, so the grid is spread over whatever
-/// there is and **every number still gets its own square**, on a small world
-/// as much as a large one.
-///
-/// Computed rather than searched for, so the answer never depends on what a
-/// peer happens to hold. It does depend on the world's shape, which a client
-/// cannot know until it is told — and that is why `Welcome` carries the spawn
-/// rather than leaving the client to work it out and be wrong.
+/// The world decides the spacing: an infinite one has room and uses a fixed
+/// pitch centred on the origin; a torus is finite and is shared out, and
+/// **every number still gets its own square**. Computed rather than
+/// searched for, so the answer never depends on what a peer happens to hold
+/// — but it depends on the world's shape, which is why `Welcome` carries
+/// the spawn rather than leaving a client to work it out and be wrong.
 pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
     let n = player.0 as i32;
 
@@ -1357,21 +1043,14 @@ pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
 
 /// How many seats across and down a torus is divided into.
 ///
-/// **Sized by the roster first and the world second**, which is the fix for a
-/// bug rather than a preference. It used to be sized by how many comfortable
-/// pitches fit, and then the seat index was folded into that with `%` — so a
-/// 128x128 world had four seats for fifteen numbers, players 1, 5, 9 and 13
-/// all stood on one patch, and each new arrival claimed the last one's ground
-/// out from under them. (`grant` claims dead ground whoever held it, and for
-/// a good reason; see there. The two together meant a player could be left
-/// holding the four squares under their own block.)
+/// **Sized by the roster first and the world second**, which is a fix rather
+/// than a preference: sized by comfortable pitches and folded with `%`, a
+/// 128x128 world had four seats for fifteen numbers and players 1, 5, 9 and
+/// 13 stood on one patch, each claiming the last one's ground.
 ///
-/// So this is the smallest grid that holds every number, never finer than the
-/// world has whole patches for. Where there is room it is exactly what it
-/// always was, because [`SPAWN_ACROSS`] still caps it; where there is not,
-/// players are seated closer together rather than on top of each other. A
-/// world with fewer patches than numbers cannot do even that, and
-/// [`too_cramped_for_grants`] is what says so on the way in.
+/// So: the smallest grid that holds every number, never finer than the world
+/// has whole patches for. [`too_cramped_for_grants`] is what says a world
+/// cannot do even that.
 fn torus_grid(height: i32, width: i32) -> (i32, i32) {
     // How many whole patches fit at all: the hard limit, since two patches
     // that overlap are not two patches.
@@ -1410,13 +1089,10 @@ pub fn too_cramped_for_grants(world: &World) -> bool {
 
 /// The world a server just said this client is in, or a boundless one.
 ///
-/// **A client trusts its server about the shape of the world and should not
-/// trust it about the size.** `Welcome` and `Resync` carry a `WorldKind`
-/// straight off a socket, and a torus is allocated whole — so a server that
-/// said `100000x100000`, by malice or by running an older build, took the
-/// client's browser tab with it. Falling back to a boundless world means the
-/// client goes on playing and disagrees with the server, which the checkpoint
-/// will say out loud; the alternative is a page that closes itself.
+/// **A client trusts its server about the shape and not about the size.** A
+/// torus is allocated whole, so a server saying `100000x100000` — by malice
+/// or an older build — took the browser tab with it. Falling back means the
+/// client plays on and disagrees, which the checkpoint says out loud.
 pub fn sane_world(kind: crate::sim::WorldKind, room: &RoomId) -> World {
     let mut world = match kind.checked() {
         Ok(kind) => kind.build(),
@@ -1452,56 +1128,33 @@ pub fn grant_chunks(world: &World, (row, col): (i32, i32)) -> Vec<ChunkId> {
 /// Claim a player's starting ground, with a block standing on it.
 ///
 /// Here rather than on the server because an offline client needs the same
-/// grant — placing is confined to territory, so a player who owns nothing can
-/// place nothing, and a game of one would have no opening move at all.
-///
-/// The block is a 2x2 still life: four cells that hold their shape forever
-/// under Conway's rules. Everyone starts with the same one, so nobody begins
-/// ahead, and because it never changes it costs nothing to leave alone while
-/// you decide what to build. It is also what keeps the ground: territory
-/// spreads from living cells, so a grant with nothing alive on it would never
-/// grow past the patch it was given.
+/// grant: placing is confined to territory, so a player who owns nothing has
+/// no opening move. The block is a 2x2 still life — the same one for
+/// everybody, and it holds its shape for ever, so it costs nothing to leave
+/// alone while you decide what to build.
 pub fn grant(world: &mut World, player: PlayerId) {
     let (row, col) = spawn_for(player, world);
 
-    // **Once each.** A player coming back with a token is granted again by
-    // `join_with`, and without this that hands them a fresh 12×12 patch and a
-    // brand-new 2×2 block on top of whatever they had built — so disconnecting
-    // and returning was a way to conjure a still life out of nothing, over and
-    // over, for free.
+    // **Once each.** A returning player is granted again by `join_with`, and
+    // without this that is a fresh patch and a fresh block on top of whatever
+    // they had built — a still life conjured out of nothing, over and over.
     //
-    // Asked of the world rather than remembered on the player, because the
-    // mark is already there and is already the durable answer: `HOME` sits on
-    // the **square**, survives the ground changing hands, and is written into
-    // the save. A flag on the player would be a second copy of the same fact,
-    // and one that a save from an older build would not have.
-    //
-    // **Which is also what makes a side share one platform**, and it costs
-    // nothing to say so: a side is one number, so the second ally to arrive
-    // asks about the ground the first was given and finds it already theirs.
+    // Asked of the world rather than remembered on the player: `HOME` sits on
+    // the *square*, survives the ground changing hands, and is in the save.
+    // It is also what makes a side share one platform, since the second ally
+    // to arrive finds the ground already theirs.
     if already_granted(world, (row, col), player) {
         log::debug!("{player:?} is already granted at ({row}, {col}); not granting again");
         return;
     }
 
-    // **Dead ground is claimed whoever it belonged to.** It used to be claimed
-    // only where nobody held it, on the principle that territory is taken by
-    // life reaching it rather than handed out over what is already held. That
-    // principle costs a player the game.
+    // **Dead ground is claimed whoever it belonged to.** Claiming only unheld
+    // ground costs a player the game: territory only ever spreads, so on a
+    // world with an edge it covers everything, and a player joining after that
+    // got a patch of nothing — no ground, so no block, so nothing they could
+    // ever place. On a torus that is the second player to arrive.
     //
-    // Territory only ever spreads -- there is no die-off -- so on a world with
-    // an edge it eventually covers everything. A player joining after that got
-    // a patch of nothing: no ground, and therefore no block, since the block
-    // is only placed on ground they own. Placing is confined to your own
-    // territory, so they could place nothing, could never come to own
-    // anything, and were locked out of a world they were looking at. On a
-    // torus that is not an edge case, it is what happens to the second player
-    // to arrive at a world that has been running.
-    //
-    // Living cells are still untouched. A grant takes ground, never anybody's
-    // life or their panes -- and dead ground is the thing the rule hands
-    // around freely anyway, since a corpse's owner flips to whoever grows over
-    // it.
+    // Living cells and panes are still untouched.
     for r in row..row + SPAWN_N {
         for c in col..col + SPAWN_N {
             let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
@@ -1583,14 +1236,10 @@ pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
 
 /// What an action is worth to the player who did it.
 ///
-/// Must be read **before** the action is applied, since it depends on what is
-/// there now. Shared by client and server for the same reason `apply` is: two
-/// implementations of what something costs are two ways to disagree about who
-/// can afford what.
-///
-/// Reclaiming your own living cell earns one. Placing costs one, and so does
-/// destroying someone else's cell — taking ground is not free. Erasing empty
-/// space is neither earned nor spent.
+/// Must be read **before** the action is applied, since it depends on what
+/// is there now. Shared by client and server, because two implementations
+/// of what something costs are two ways to disagree about who can afford
+/// what.
 pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
     match &stamped.action {
         // Only the cells a placement actually changes are charged for.
