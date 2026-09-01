@@ -61,7 +61,7 @@ Three things came out of building it that the design did not say.
 
 **A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A payload's fuse and a mine's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
 
-**A mine's corpse rots in view.** It used to clear on a roll of sixteen in sixty-four a generation, which is four generations on average and none you could see coming — the field this was written for went unused while the timing lived in a dice stream. It is `MINE_DUE` now: a corpse charges its owner once when it has lain there that long, and the delay is the mechanic rather than bookkeeping, because a corpse reborn before it escapes. That is what makes a mine pay on turnover rather than on holdings, and it is what the roll was buying all along.
+**A mine's age is not for this, and the table is where that is written down.** A dead mine still clears on `MINE_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spoken for by [depleted mines](#depleted-mines) below — a mine's age is a fade where a flag would be a cliff, so `Ages::Never` on that row is a reservation and not an absence.
 
 **The detonating payload takes its own blast's roll.** Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
 
@@ -367,9 +367,11 @@ A **depleted** mine is the push-back: past some point it stops paying and is an 
 
 Byte 1 is full — alive, ice, kind, age; see [simulation.md](simulation.md#the-cell). There is no spare bit, so this is a choice between three, and they are not equally good.
 
-**A kind.** `Kind::DEPLETED_MINE` beside `Kind::MINE`, costing one of eight kind indices and no bits at all. It gets art of its own for free, which a flag would not — a depleted mine has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted mine's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
+**A kind.** `Kind::DEPLETED_MINE` beside `Kind::MINE`, costing one of eight kind indices and no bits at all — four of the eight are spent now, on normal, mine, turret and payload. It gets art of its own for free, which a flag would not — a depleted mine has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted mine's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
 
 **The age field.** A mine's age *is* its depletion: `net::earnings` scales down with it and a mine at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that mines can no longer use age for anything else, and it collides with payloads if a payload is ever also a mine.
+
+**This is the one to do, and the field is now held for it.** `Kind::ages` says `Ages::Never` for a mine, which is a reservation: a dead mine's clearing was tried as an age count and put back to a roll precisely so nothing else spends the field. What is left is `net::earnings` reading the age, and something to advance it — a count of births is the honest one, since it is what a mine is paid for.
 
 **A bit off age.** Three bits become two, four ages instead of eight. Cheapest to write and the worst of the three: it takes resolution away from the one field that has a use lined up, to buy a flag that a kind gives away.
 

@@ -74,7 +74,7 @@ Nothing advances age yet — see [payloads](planned.md#payloads), which is what 
 
 A tile per state rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One tile, one unconditional sample, and now not even a layer index to compute.
 
-The sheet in the repo is **provisional**: flat tiles so the states are told apart. Kinds 0–2 are in the first row; the payload's four states and its eight fuse rows, and the mine's seven rot rows, are generated placeholders — a casing that fills, and a mark that fades. Redraw any of it and drop it in; no code changes, because the mapping is `Cell::sprite` and nothing else.
+The sheet in the repo is **provisional**: flat tiles so the states are told apart. Kinds 0–2 are in the first row; the payload's four states and its eight fuse rows are generated placeholders — a casing that fills. The mine's seven age rows are a placeholder too, a mark that fades, and nothing draws them yet: a mine's age is held for [depletion](planned.md#depleted-mines) and nothing advances it. Redraw any of it and drop it in; no code changes, because the mapping is `Cell::sprite` and nothing else.
 
 The PNGs are the source, and `cnvt` converts between what you draw and what the shader reads, in both directions:
 

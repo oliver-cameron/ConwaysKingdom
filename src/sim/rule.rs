@@ -59,17 +59,18 @@ pub const LEVEL_ADJUST: Chance = 16;
 
 // --- mines -------------------------------------------------------------------
 
-/// How long a mine's corpse has to lie there before it costs its owner
-/// [`MINE_DRAIN`].
+/// A dead mine costs its owner [`MINE_DRAIN`] and becomes ordinary ground.
 ///
-/// **The delay is the mechanic.** A corpse reborn before this is never
-/// charged, which is what makes a mine pay on *turnover* rather than on
-/// holdings: a blinker's squares die and come back every generation and escape
-/// every time, and a sprawl leaves corpses lying about and bleeds. It was a
-/// roll of sixteen in sixty-four, which is the same four generations on
-/// average — this is that number said once, deterministically, and visible on
-/// the sheet as [`Ages::Rot`] counts it off.
-pub const MINE_DUE: u8 = 3;
+/// **A roll and not a count**, which was tried the other way and is wrong for
+/// two reasons. The scatter is doing work: a corpse reborn before the charge
+/// falls due escapes it, and a chance means *some* of a pattern's corpses
+/// escape rather than all of them or none, which is what grades the cost by
+/// how much a pattern leaves lying about. And the age field is spoken for —
+/// [depleted mines] wants it, and a mine's age is a much better fade than a
+/// flag would be.
+///
+/// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
+pub const MINE_UPKEEP: Chance = 16;
 
 // --- turrets -----------------------------------------------------------------
 
@@ -198,17 +199,13 @@ fn ice(cell: Cell, _: &Neighbours, _: Roll) -> Then {
 /// **Whatever this kind counts, counts** — see [`Ages`], which is the one
 /// place a kind's rules live.
 ///
-/// A payload's fuse burns while it lives; a mine's corpse rots once it is
-/// dead. Both are the same field and the same step, because eight ages are
-/// eight rows of the sheet and the whole point of the field is that what a
-/// cell is counting is on screen.
+/// One kind counts today and its own row says so, which is the point of the
+/// table: adding the second is a row rather than a branch here.
 ///
-/// After `ice`, so a frozen fuse does not burn and a frozen corpse does not
-/// rot: a pane stops time over what it covers and that is every rule. Before
-/// `conway`, so this reads the cell as it is now — a payload that dies this
-/// generation stops at the age it had reached rather than gaining one on the
-/// way out, and a corpse starts rotting the generation after it died rather
-/// than the one it died in.
+/// After `ice`, so a frozen fuse does not burn: a pane stops time over what it
+/// covers and that is every rule. Before `conway`, so this reads the cell as
+/// it is now — a payload that dies this generation stops at the age it had
+/// reached rather than gaining one on the way out.
 fn fuse(cell: Cell, _: &Neighbours, roll: Roll) -> Then {
     if cell.age() >= bits::MAX_AGE {
         return Then::Next(cell);
@@ -225,12 +222,6 @@ fn fuse(cell: Cell, _: &Neighbours, roll: Roll) -> Then {
                 Then::Next(cell)
             }
         }
-        // **Only once it is dead**, which is the whole of what the field is
-        // for on a mine: a live one never moves, so what the sheet shows is
-        // how far through rotting a corpse is and nothing else. What happens
-        // at the end is in `Halo::step_into`, which is the one place that
-        // holds a cell before and after and so can charge the upkeep.
-        Ages::Rot if !cell.is_alive() => Then::Next(cell.with_age(cell.age() + 1)),
         _ => Then::Next(cell),
     }
 }
@@ -340,6 +331,8 @@ mod stream {
     /// Whether a square works out what reaches it this generation.
     pub const LEVEL: u64 = 1;
     pub const PARENT: u64 = 3;
+    /// Whether a dead mine's charge fell due this generation.
+    pub const UPKEEP: u64 = 4;
     /// Which of the squares that tie for nearest a turret acts on.
     pub const TURRET: u64 = 6;
     /// Whether a dead turret has become ordinary ground.
@@ -352,6 +345,7 @@ mod stream {
     pub const THROW: u64 = 10;
 }
 
+pub use stream::UPKEEP as UPKEEP_STREAM;
 pub use stream::{BLAST as BLAST_STREAM, THROW as THROW_STREAM};
 pub use stream::{TURRET as TURRET_STREAM, TURRET_ROT as TURRET_ROT_STREAM};
 

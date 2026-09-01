@@ -2,7 +2,9 @@ use bytemuck::{Pod, Zeroable};
 
 use super::dir::Dir;
 use super::player::PlayerId;
-use super::rule::{next_cell, Neighbours, MINE_DUE, TURRET_DECAY, TURRET_ROT_STREAM};
+use super::rule::{
+    next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM, UPKEEP_STREAM,
+};
 use super::seed::Roll;
 use std::ops::{Index, IndexMut};
 
@@ -427,10 +429,12 @@ macro_rules! kinds {
 /// where it is: eight ages are eight rows of the sheet, so whatever a kind
 /// counts is on screen without an interface to read it off.
 ///
-/// One thing or nothing, never two. There is one age field, so a kind that
-/// wanted a fuse *and* a rot would need somewhere to put the second — and the
-/// two are anyway on opposite sides of the same event, since one counts while
-/// the cell lives and the other only once it is dead.
+/// One thing or nothing, never two, because there is one field. Which is why
+/// what a kind spends it on is worth writing in the table rather than
+/// discovering: a mine's is **reserved** for [depleted mines], and a dead
+/// mine's clearing is a roll partly so that nothing else takes it.
+///
+/// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ages {
     /// Nothing. The field stays at nought and the kind is one row of the
@@ -448,15 +452,6 @@ pub enum Ages {
     /// in one gesture do not go off in lockstep. What happens when it runs out
     /// is not a rule at all; see [`super::World::detonate`].
     Fuse(super::rule::Chance),
-    /// **A corpse rotting**, one step a generation with no roll, until at
-    /// [`bits::MAX_AGE`] it becomes ordinary ground.
-    ///
-    /// Certain, where a fuse is a chance, because there is nothing to scatter:
-    /// a corpse does nothing while it lies there, so how long it lies there is
-    /// bookkeeping and is worth being able to read off the sheet. A dead
-    /// turret is the other way about — it fires backwards for as long as it
-    /// lasts, so its lifetime is a balance number and stays a roll.
-    Rot,
 }
 
 kinds! {
@@ -475,7 +470,14 @@ kinds! {
     /// mines is a still life and never gives birth, so it earns nothing. An
     /// oscillator earns every period, and a gun earns forever — which is the
     /// right shape for a game about patterns that work.
-    MINE = 1, inherited: true, ages: Ages::Rot,
+    ///
+    /// It counts nothing **yet**, and that is a reservation rather than an
+    /// absence: [depleted mines] is a mine that stops paying, and the age
+    /// field is a fade where a flag would be a cliff. Nothing else may spend
+    /// it.
+    ///
+    /// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
+    MINE = 1, inherited: true, ages: Ages::Never,
     /// A cell that claims ground at range: every generation it takes the
     /// nearest square that is not its owner's and makes it theirs.
     ///
@@ -517,9 +519,9 @@ kinds! {
 /// economy's business and the economy lives in `net`. The rule counts.
 ///
 /// `born` is a count of births. `upkeep` is a count of **charges falling due**
-/// on dead mines — one per corpse, at the end of the [`Ages::Rot`] it spends
-/// lying there. Not of deaths: a corpse that is painted over, iced or brought
-/// back before it has finished rotting is never charged.
+/// on dead mines — not of deaths. A dead mine is charged once, on the
+/// generation the roll in [`super::rule::MINE_UPKEEP`] comes up, so one that
+/// is painted over, iced or born again before then is never counted at all.
 ///
 /// Two counts rather than one net figure, so the two can be priced apart —
 /// which is what lets the rule decide *how often* a corpse is charged and
@@ -681,15 +683,17 @@ impl Halo {
                         if !before.is_alive() {
                             mined.born[after.player().0 as usize] += 1;
                         }
-                    } else if after.age() == MINE_DUE {
-                        // **Charged once, when it has lain there long enough**
-                        // — see [`MINE_DUE`], where the delay is the mechanic.
-                        // Exactly on that age and not at or above it, so a
-                        // corpse pays once however long it goes on rotting.
+                    } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, MINE_UPKEEP) {
+                        // A corpse costs once and is then ordinary ground.
+                        // Charging it for as long as it lay there made a mine
+                        // field a debt you could not pay off; this way what a
+                        // mine costs in the end is bounded by how many died.
+                        //
+                        // The age goes with the kind, which is the one moment
+                        // it resets: a mine's age is its depletion, so ground
+                        // that has stopped being a mine has nothing left to be
+                        // depleted.
                         mined.upkeep[after.player().0 as usize] += 1;
-                    } else if after.age() >= bits::MAX_AGE {
-                        // Rotted through: ordinary ground, and already paid
-                        // for.
                         after = after.with_kind(Kind::NORMAL).with_age(0);
                     }
                 }
