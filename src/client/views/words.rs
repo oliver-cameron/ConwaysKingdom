@@ -337,6 +337,7 @@ pub mod hotbar {
     pub const MINE: &str = "Mine";
     pub const TURRET: &str = "Turret";
     pub const ICE: &str = "Ice";
+    pub const PAYLOAD: &str = "Payload";
     /// The square that takes a stamp. Short, because it sits in a 44px box.
     /// The shape axis. Verbs, because they are how the cells get chosen
     /// rather than what ends up in them.

@@ -55,6 +55,9 @@ const LIVE: Cell = Cell::DEAD.with_alive(true);
 const MINED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::MINE);
 const TURRETED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::TURRET);
 const ICED: Cell = Cell::DEAD.with_ice(true);
+/// Age nought, which is a fuse that has not started. The bar shows what a
+/// square puts down, and what it puts down is unlit.
+const PAYLOADED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::PAYLOAD);
 
 /// The left segment: what you draw with.
 /// The four kinds, in the order they sit on the bar.
@@ -63,7 +66,7 @@ const ICED: Cell = Cell::DEAD.with_ice(true);
 /// tool that walls people off and because it came with a different stroke;
 /// with the stroke chosen separately there is nothing left to separate it by,
 /// and a fourth kind now appears here by existing.
-pub const KINDS: [Tool; 4] = [
+pub const KINDS: [Tool; 5] = [
     Tool { name: words::LIFE, shows: LIVE, placement: Placement::Life, usually: Shape::Draw },
     Tool { name: words::MINE, shows: MINED, placement: Placement::Mine, usually: Shape::Draw },
     Tool {
@@ -73,6 +76,15 @@ pub const KINDS: [Tool; 4] = [
         usually: Shape::Draw,
     },
     Tool { name: words::ICE, shows: ICED, placement: Placement::Ice, usually: Shape::Rect },
+    // A pencil, not a pane. A payload is placed one at a time and kept alive
+    // by what is built round it, so a drag that laid twenty is a gesture
+    // nobody wants and could afford even less.
+    Tool {
+        name: words::PAYLOAD,
+        shows: PAYLOADED,
+        placement: Placement::Payload,
+        usually: Shape::Draw,
+    },
 ];
 
 /// What a gesture makes: the shape axis.

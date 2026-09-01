@@ -436,16 +436,23 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // below it appear or do not according to this.
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(words::make::KIND).size(m.text_small));
-            toggles(
-                ui,
-                theme,
-                &mut draft.kind,
+            // **A laboratory is a room**, so it is offered where rooms are
+            // made and not on the solitary form — where picking it would have
+            // opened a world with the rules quietly still on. A match is the
+            // same: it gathers, and there is nobody to gather.
+            let kinds: &[(Kind, &str)] = if reached {
                 &[
                     (Kind::World, words::make::WORLD),
                     (Kind::Match, words::make::MATCH),
                     (Kind::Experiment, words::make::EXPERIMENT),
-                ],
-            );
+                ]
+            } else {
+                &[(Kind::World, words::make::WORLD), (Kind::Match, words::make::MATCH)]
+            };
+            if !reached && draft.kind == Kind::Experiment {
+                draft.kind = Kind::World;
+            }
+            toggles(ui, theme, &mut draft.kind, kinds);
             ui.colored_label(
                 p.text_dim,
                 egui::RichText::new(match draft.kind {
@@ -599,20 +606,39 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 // Refused here or refused there, into the same line under the
                 // same form: a name that is too long and a name already taken
                 // are the same kind of answer to the player.
-                match draft.parse() {
-                    Ok(described) => {
-                        draft.note = None;
-                        draft.asking = true;
-                        chose = Some(Chose::Create {
-                            name: described.name,
-                            shape: described.shape,
-                            victory: described.victory,
-                            teams: described.teams,
-                            private: draft.private,
-                            laboratory: described.laboratory,
-                        });
+                if reached {
+                    match draft.parse() {
+                        Ok(described) => {
+                            draft.note = None;
+                            draft.asking = true;
+                            chose = Some(Chose::Create {
+                                name: described.name,
+                                shape: described.shape,
+                                victory: described.victory,
+                                teams: described.teams,
+                                private: draft.private,
+                                laboratory: described.laboratory,
+                            });
+                        }
+                        Err(why) => draft.note = Some(why),
                     }
-                    Err(why) => draft.note = Some(why),
+                } else {
+                    // **With no server, the same form plays it here.** This
+                    // sent a `Create` whatever the button said, so pressing
+                    // "Play alone" asked a server that was not there and came
+                    // back "the connection went away" — `Chose::Alone` existed
+                    // the whole time and nothing produced it.
+                    //
+                    // `world` rather than `parse`: a name, a listing and sides
+                    // are what a *server* adds, and the form already hides all
+                    // three when there is nobody to ask.
+                    match draft.world() {
+                        Ok((shape, victory)) => {
+                            draft.note = None;
+                            chose = Some(Chose::Alone { shape, victory });
+                        }
+                        Err(why) => draft.note = Some(why),
+                    }
                 }
             }
             ui.add_space(m.item_spacing);

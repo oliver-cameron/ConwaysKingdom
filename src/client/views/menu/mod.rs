@@ -529,6 +529,19 @@ mod tests {
     /// What was typed becomes what was chosen, and a field that does not
     /// apply is not read — a size left over from a wrapping world does not
     /// refuse a boundless one.
+    /// **The offline form plays offline.** It produced a `Create` whatever the
+    /// button said, so pressing "Play alone" asked a server that was not there
+    /// — `Chose::Alone` existed and nothing in the tree ever built one.
+    #[test]
+    fn the_form_with_no_server_plays_the_world_here() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Alone;
+        assert!(
+            probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Alone { .. })),
+            "the solitary form asked a server instead of playing"
+        );
+    }
+
     #[test]
     fn a_draft_becomes_a_room_or_says_what_is_wrong() {
         let world = Draft { name: "  Arena ".into(), ..Draft::default() };
