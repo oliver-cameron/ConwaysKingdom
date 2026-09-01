@@ -450,7 +450,7 @@ impl Server {
         // By number, which is the order they arrived, so the list does not
         // reshuffle itself between two frames.
         players.sort_by_key(|&(id, _)| id);
-        ServerMessage::Match {
+        ServerMessage::Match(crate::net::Lobby {
             teams: self.teams(),
             started_by: self.started_by,
             // Both filled in by `Rooms` on the way out — see `rooms::stamp`.
@@ -461,7 +461,7 @@ impl Server {
             phase: self.phase.clone(),
             victory: self.victory,
             players,
-        }
+        })
     }
 
     /// Who holds how much, most first, as a client is told it.
@@ -1778,7 +1778,7 @@ mod tests {
 
         let lobby = |out: &[ServerMessage]| {
             out.iter().find_map(|m| match m {
-                ServerMessage::Match { players, phase, .. } => {
+                ServerMessage::Match(crate::net::Lobby { players, phase, .. }) => {
                     Some((players.clone(), phase.clone()))
                 }
                 _ => None,

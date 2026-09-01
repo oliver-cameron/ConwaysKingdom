@@ -1175,9 +1175,9 @@ impl Rooms {
 /// all. A `Server` is one room and knows neither who asked for it nor what
 /// code reaches it; those are facts about the map it sits in.
 fn stamp(msg: &mut ServerMessage, owner: Option<PlayerId>, code: Option<Code>) {
-    if let ServerMessage::Match { owner: whose, code: reachable, .. } = msg {
-        *whose = owner;
-        *reachable = code;
+    if let ServerMessage::Match(lobby) = msg {
+        lobby.owner = owner;
+        lobby.code = code;
     }
 }
 
@@ -1824,7 +1824,7 @@ mod tests {
         let owner = broadcast
             .iter()
             .find_map(|(_, m)| match m {
-                ServerMessage::Match { owner, .. } => Some(*owner),
+                ServerMessage::Match(lobby) => Some(lobby.owner),
                 _ => None,
             })
             .expect("a gathering match still broadcasts its lobby");

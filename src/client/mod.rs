@@ -7,6 +7,7 @@
 pub mod desync;
 pub mod record;
 pub mod route;
+pub mod session;
 pub mod views;
 
 pub use views::game::{GameApp, GENERATION_SPAN};

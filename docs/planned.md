@@ -40,7 +40,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
-| [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Designed | the one place the architecture does not hold |
+| [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Built | what is left is the gesture-to-cells half |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
 | [Auto-mining](#auto-mining) | Built | |
 | [Turrets](#turrets) | Built | |
@@ -169,7 +169,7 @@ A reading of the rest of this file, in the order the things depend on each other
 
 **3. `World: Clone`.** One derive, and it is what [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), a bot that chooses rather than follows a book, and an [experiment's](#experiments) pause-step-reset are all waiting on. The step is already a pure function of state and tick, so a copy diverges cleanly; there is simply no way to step a world that is not the world. Nothing else on this list has a ratio like it.
 
-**4. [The session comes out of the game view](#the-session-comes-out-of-the-game-view).** `client::views::game` is 3,400 lines, 51 fields and about 70 methods on one struct, and none of the part that talks to a server is testable because it shares that struct with the sprite atlas. `Ui` came out of it recently and that was the easy half. Everything else here that touches the client — [better interfaces](#better-interfaces), [mobile](#mobile), a minimap — is harder for as long as this is undone.
+**4. ~~The session comes out of the game view.~~** Done — `client::session` holds the link, the seat and the purse, and nothing in it needs a GPU. What is left of that entry is `lay`, `click` and `stamp_at`, which is smaller and is about wording rather than structure.
 
 **5. [Depleted mines](#depleted-mines).** The economy has no ceiling that is not the blunt one, `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. Small, needs nothing first, and `Kind::inherits` already makes it a row in a table rather than a rule.
 
@@ -825,17 +825,17 @@ What it runs into is that **a leaderboard is a reason to cheat**, and this game 
 
 ## The session comes out of the game view
 
-**Designed.** `client::views::game` is the one place the architecture in [architecture.md](architecture.md) does not hold, and the largest file in the crate by a factor of two.
+**Built.** `client::session` is the link, the seat, the purse, the subscription set, and the `pump` / `advance_to` / `send_checkpoint` / `subscribe` machinery. `views::game` is 2,600 lines from 3,700, and its struct is 31 fields from 55.
 
-It is a folder now — `start` is where the client is told where to go and what to look at until it gets there, and `input` is the gesture arithmetic, which was already tested without a window and now says so by living apart from everything that needs one. Neither of those is the thing below, and splitting them out has not made it smaller: `mod.rs` is still two and a half thousand lines and still holds the world, the link and the pipeline in one struct.
+What was wrong was not the size. It was a *view* by where it lived and was not one by what it did: it held the world, the link and the GPU pipeline together, and it executed logic — `pump_link` folded server messages into the world, `advance_to` stepped the simulation, `decide_alone` settled a match. Data, logic and interface on one struct, which is exactly the arrangement the [Data / Logic / Interface](inspiration.md#the-architecture) rule names and which every other view avoids through the `Shown`/`Chose` return-value convention.
 
-It is a *view* by where it lives, and it is not one by what it does. It holds the world, the link and the GPU pipeline, and it executes logic: `pump_link` folds server messages into the world, `lay` and `click` price and send actions, `advance_to` steps the simulation. Data, logic and interface in one struct with forty fields — which is exactly the arrangement the [Data / Logic / Interface](inspiration.md#the-architecture) rule names, and which every other view already avoids through the `Chose`/`Picked` return-value convention.
+The session uses that same convention. It takes messages in and hands back a `session::Effect` per thing only an interface can do — `Entered`, `LookAt`, `Rated`, `Refused`, `NotStarted`, `LobbyMoved`, `Made`, `NotMade`, `Rooms`, `Closed` — and `GameApp::act_on` is the other half. Everything else it does itself.
 
-The symptom is visible in the code rather than inferred: `update` takes its own fields out with `mem::replace` and `mem::take` and clones two more every frame, because `self.views.borrow_mut()` holds a borrow of `self` across the whole interface closure. Each of those has a comment explaining the borrow it is dodging, which is the tell — the code documents a design problem rather than fixing it.
+**The world is a parameter, not a field.** It belongs beside the chunk store that draws it, and passing it in is what makes a session testable against a world with no window near either — which is the point, and none of this was reachable by a test before. `advance_alone` is the offline clock, `may_act` and `may_place_at` and `price` are the three questions, and each now has one.
 
-What comes out is a **`client::session`**: the link, the subscription set, the room id and name, `me`, the purse, the lobby, the standing, and the `pump_link` / `advance_to` / `send_checkpoint` / `subscribe_to_view` machinery. It takes messages in and produces world mutations and outbound messages, and it needs no GPU and no egui — so it is testable, which none of it is today. `client::desync` and `client::record` are the first two pieces of that already living outside, and they are the shape the rest should take.
+What is left is the other half the notes named: **`lay`, `click` and `stamp_at`**. Those still turn a gesture into cells and an answer into words, which is view work, but the four steps between — may-act, quote, afford, commit — are the same four in three places with different sentences around them. The session has the pieces (`quote`, `spend`, `commit`); folding the sequence into it wants the words sorted out first, and the words are `views::words`' business.
 
-Two things it is not. It is not a rewrite of the gesture machine, which is already pure arithmetic tested without a window at the bottom of the same file. And it is not the camera, which came out for this exact reason and is the precedent.
+Two things it is not. It is not a rewrite of the gesture machine, which is already pure arithmetic tested without a window in `input`. And it is not the camera, which came out for this exact reason and was the precedent.
 
 ## Rooms per server
 

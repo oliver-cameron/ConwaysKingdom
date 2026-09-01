@@ -9,6 +9,7 @@
 //! the rest of the game has one.
 
 use super::*;
+use crate::net::link::Link;
 
 /// Set before the event loop starts, like the connection and for the same
 /// reason: `App::init` takes no arguments of its own.

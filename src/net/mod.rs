@@ -611,6 +611,37 @@ pub struct Made {
     pub code: Option<String>,
 }
 
+/// **What a room's match is doing, and who is in it.**
+///
+/// A struct rather than seven fields inline in [`ServerMessage::Match`],
+/// because the client held a copy with the same seven fields in the same
+/// meanings — one fact written down twice, and the two would have stopped
+/// agreeing the first time either gained a field. The client holds this now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lobby {
+    pub phase: MatchPhase,
+    pub victory: Option<Victory>,
+    /// Names as well as numbers: a lobby is the one screen where players are
+    /// people rather than colours.
+    pub players: Vec<(PlayerId, String)>,
+    /// The sides this match has and who sits on them. Empty in a free-for-all.
+    /// Also how a client learns **which number its own cells carry**: it finds
+    /// its seat in a side and plays as that side's id.
+    pub teams: Vec<Team>,
+    /// Whose match this is: the player who may start it. A `PlayerId` rather
+    /// than a flag, because this is broadcast and a flag would have to be true
+    /// for one recipient and false for the rest. `None` for one the console
+    /// made, which starts at the console.
+    pub owner: Option<PlayerId>,
+    /// Who blew the whistle, once somebody has. `None` before the start, and
+    /// for a match the console started.
+    pub started_by: Option<PlayerId>,
+    /// The code that reaches this room, if it is private. Here as well as in
+    /// the `Made` reply, because the reply is seen once and the code is what
+    /// somebody reads out from the lobby while waiting.
+    pub code: Option<String>,
+}
+
 /// One room, as a menu needs to show it.
 ///
 /// Enough to choose by and no more: which world, whether anybody is in it, and
@@ -889,28 +920,7 @@ pub enum ServerMessage {
     /// and whenever it changes: a lobby has to be right rather than eventually
     /// right. Names as well as numbers, since a lobby is the one screen where
     /// players are people rather than colours.
-    Match {
-        /// Who blew the whistle, once somebody has. `None` before the start,
-        /// and for a match the console started — which is the operator rather
-        /// than anybody in the room.
-        started_by: Option<PlayerId>,
-        /// The sides this match has and who sits on them. Empty in a free-for-all.
-        /// Also how a client learns **which number its own cells carry**: it finds
-        /// its seat in a side and plays as that side's id.
-        teams: Vec<Team>,
-        /// Whose match this is: the player who may start it. A `PlayerId` rather
-        /// than a flag, because this is broadcast and a flag would have to be true
-        /// for one recipient and false for the rest. `None` for one the console
-        /// made.
-        owner: Option<PlayerId>,
-        /// The code that reaches this room, if it is private. Here as well as in
-        /// the `Made` reply, because the reply is seen once and the code is what
-        /// somebody reads out from the lobby while waiting.
-        code: Option<String>,
-        phase: MatchPhase,
-        victory: Option<Victory>,
-        players: Vec<(PlayerId, String)>,
-    },
+    Match(Lobby),
     /// Who holds how much ground, most first.
     ///
     /// From the server because a client holds the chunks it subscribed to, so

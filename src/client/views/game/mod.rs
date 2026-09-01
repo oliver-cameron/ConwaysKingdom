@@ -2,6 +2,15 @@
 //!
 //! A view rather than the application, so a menu or a lobby can be another one
 //! beside it without this having to know they exist.
+//!
+//! **And a view by what it does now, not only by where it lives.** It used to
+//! hold the link, the seat, the purse and the subscription set beside the GPU
+//! pipeline, and fold server messages into the world from the middle of a
+//! frame — fifty-odd fields on one struct, none of the networked half of it
+//! reachable by a test. That is [`crate::client::session`], which takes
+//! messages in and hands back what an interface has to do about them; what is
+//! left here is what is drawn, what the pointer is doing, and the GPU it is
+//! drawn with.
 
 pub mod camera;
 pub mod clock;
@@ -38,49 +47,15 @@ use crate::sim::{World, WorldKind, CHUNK_N};
 use hotbar::{Held, Key};
 use lobby as lobby_view;
 
-use crate::net::link::Link;
-use crate::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
-use crate::sim::{Player, PlayerId};
+use crate::client::session::{Effect, Session};
+use crate::net::{ClientMessage, Placement, Stamped};
+use crate::sim::PlayerId;
 
 /// How large a purely vertical pixel scroll has to be, in a browser, to be a
 /// wheel notch rather than a trackpad swipe. Chrome sends 100 or 120 for a
 /// notch; a swipe is a stream of much smaller values, and a fast one only
 /// gets near this at its peak.
 const WHEEL_NOTCH: f64 = 60.0;
-
-/// How often a client asks the server whether they still agree, in
-/// generations. Four a second, so this is every few seconds.
-const CHECKPOINT_EVERY: u64 = 12;
-
-/// The most chunks one checkpoint carries. Sixteen bytes each, so even the
-/// cap is a small message; it exists so a client holding an enormous world
-/// cannot send an enormous one.
-const MAX_CHECKPOINT_CHUNKS: usize = 512;
-
-/// What a `Step` at this tick means for a client sitting at that generation.
-///
-/// Pure arithmetic, and a free function so it can be tested without a GPU —
-/// the same argument that took the camera out of this file. Everything
-/// interesting about recovering from a lost message is the decision, and the
-/// decision is one comparison.
-#[derive(Debug, PartialEq, Eq)]
-enum Advance {
-    /// The next generation, which is the only thing that ever ought to arrive.
-    Step,
-    /// Something was lost. Not "we are behind by n" — a `Step` carries the
-    /// actions applied at its tick, so a gap is n generations whose *contents*
-    /// this client was never told, and there is nothing it can compute that
-    /// would fill them in.
-    Lost,
-}
-
-fn advance(here: u64, tick: crate::net::Tick) -> Advance {
-    if tick == here + 1 {
-        Advance::Step
-    } else {
-        Advance::Lost
-    }
-}
 
 /// Seconds of wall clock per generation.
 pub const GENERATION_SPAN: f32 = 0.25;
@@ -117,15 +92,6 @@ const MAX_DRAG_CELLS: i64 = crate::net::MOST_CELLS_AT_ONCE as i64;
 /// Cells of slack around the viewport when subscribing, so life entering from
 /// off screen is already held rather than popping in a chunk late.
 const VIEW_MARGIN: i32 = CHUNK_N as i32;
-/// A join that has been decided on and not yet sent.
-///
-/// The room and the name; the token and the signature are looked up at the
-/// moment it goes, because both can change while it waits.
-struct Joining {
-    name: String,
-    room: Option<crate::net::RoomId>,
-}
-
 enum Screen {
     /// Choosing a server and a room, or choosing to play alone.
     Menu(menu::Menu),
@@ -133,64 +99,30 @@ enum Screen {
     Playing,
 }
 
-/// How often the room list is asked for again while it is on screen.
-const ROOM_LIST_REFRESH: f64 = 3.0;
-
-/// How long to wait for a server to say what rooms it has before giving up.
+/// How a lobby is drawn, from what the server said it is.
 ///
-/// Generous, because it covers a connection being made as well as answered,
-/// and short enough that a wrong address is a mistake you correct rather than
-/// a page you reload.
-const ROOM_LIST_TIMEOUT: f64 = 8.0;
-
-/// What the pointer is doing.
-///
-#[derive(Clone)]
-struct Lobby {
-    phase: crate::net::MatchPhase,
-    victory: Option<crate::net::Victory>,
-    players: Vec<(PlayerId, String)>,
-    /// The teams, their names and who is at each one's controls. Empty in a
-    /// free-for-all.
-    teams: Vec<crate::net::Team>,
-    /// Whose match it is: the player who may start it. `None` for one the
-    /// console made, which starts at the console.
-    owner: Option<PlayerId>,
-    /// Who blew the whistle, once somebody has.
-    started_by: Option<PlayerId>,
-    /// The code that reaches this room, if it is private. Shown in the lobby,
-    /// which is where somebody waiting for their friends actually needs to
-    /// read it off and send it.
-    code: Option<String>,
-}
-
-impl Lobby {
-    /// The hue table. A constant now — a team is a player and therefore one
-    /// colour, so nothing about it depends on who else is in the room. It used
-    /// to be a pass over the roster, because a member's place inside its
-    /// team's family of hue depended on how many members there were.
-    fn hues(&self) -> [f32; PlayerId::COUNT] {
-        crate::client::views::hue::table()
-    }
-
-    fn look<'a>(
-        &'a self,
-        me: PlayerId,
-        hues: &'a [f32; PlayerId::COUNT],
-        refused: Option<&'a str>,
-    ) -> lobby_view::Look<'a> {
-        lobby_view::Look {
-            me,
-            refused,
-            phase: &self.phase,
-            victory: self.victory,
-            players: &self.players,
-            owner: self.owner,
-            started_by: self.started_by,
-            teams: &self.teams,
-            code: self.code.as_deref(),
-            hues,
-        }
+/// A free function rather than a method, because the thing it reads is
+/// [`crate::net::Lobby`] — the client used to keep a struct of its own with
+/// the same seven fields in the same meanings, which is one fact written down
+/// twice. The hue table is a constant: a team is a player and therefore one
+/// colour, so nothing about it depends on who else is in the room.
+fn look_at<'a>(
+    lobby: &'a crate::net::Lobby,
+    me: PlayerId,
+    hues: &'a [f32; PlayerId::COUNT],
+    refused: Option<&'a str>,
+) -> lobby_view::Look<'a> {
+    lobby_view::Look {
+        me,
+        refused,
+        phase: &lobby.phase,
+        victory: lobby.victory,
+        players: &lobby.players,
+        owner: lobby.owner,
+        started_by: lobby.started_by,
+        teams: &lobby.teams,
+        code: lobby.code.as_deref(),
+        hues,
     }
 }
 
@@ -308,69 +240,6 @@ pub struct GameApp {
     hovering: bool,
     /// Last reported cursor position, in physical pixels.
     cursor: (f64, f64),
-    /// Our own player number, once the server has issued one.
-    ///
-    /// `None` offline before the first grant, and `None` for the whole of a
-    /// spectator's visit — see [`Self::watching`].
-    me: Option<crate::sim::PlayerId>,
-    /// Watching without a seat.
-    ///
-    /// Its own flag rather than `me.is_none()`, because those are two
-    /// different states that happen to share a field: a client between a
-    /// `Join` and its `Welcome` also has no number, and it is not a spectator.
-    /// Everything that acts asks this first.
-    watching: bool,
-    /// When the room list was asked for, so a server that never answers
-    /// becomes a message rather than a menu that says "asking" forever.
-    asked_at: Option<f64>,
-    /// When the room list last arrived, so it can be asked for again before it
-    /// goes stale.
-    listed_at: f64,
-    /// What the match in this room is doing, once the server has said. `None`
-    /// in an ordinary room, and in one that has not answered yet.
-    lobby: Option<Lobby>,
-    /// Which room the server put us in, once it has said.
-    ///
-    /// Taken from the `Welcome` rather than from what was asked for: a client
-    /// may have named no room at all, and the rejoin token is filed under this
-    /// name, so a guess here is a token that comes back to the wrong world.
-    /// `None` while offline, where there is no room to be in.
-    room: Option<crate::net::RoomId>,
-    /// What that room is **called**, for the HUD.
-    ///
-    /// Beside the id rather than looked up from the room list, because a
-    /// client that joined by code has never seen a listing and so has no other
-    /// way to know what it is in.
-    room_name: Option<String>,
-    /// Chunks already asked for, so a moving viewport only asks for what is new.
-    subscribed: std::collections::HashSet<crate::sim::Coord>,
-    /// **What this server calls this client**, from the `Welcome`.
-    ///
-    /// The client cannot derive it — the server issues it — so it is learnt
-    /// and remembered. `None` before a first join, or for a client with no
-    /// secret to offer.
-    person: Option<crate::net::PersonId>,
-    /// What this client is rated on the server it is talking to.
-    ///
-    /// `None` until a server has said, which is a different thing from the
-    /// starting number: a client that has reached nobody has no rating rather
-    /// than an average one, and a dashboard that showed 1200 to somebody who
-    /// has never connected would be inventing it.
-    rating: Option<i32>,
-    /// What the last result moved it by, so the dashboard can say so once.
-    rating_change: Option<i32>,
-    /// A join waiting for something to sign.
-    ///
-    /// **A join says who it is from**, and who it is from is a signature over
-    /// a challenge that arrives after the socket opens — so the intent is held
-    /// here and sent when the challenge lands. Held as what was wanted rather
-    /// than as a built message, so the signature is made against whatever
-    /// challenge is current rather than one that has since been replaced.
-    joining: Option<Joining>,
-    /// The server connection, if there is one. A client with no link still
-    /// simulates: the rules are deterministic, so offline is a game of one
-    /// rather than a broken game.
-    link: Option<Link>,
     /// Seconds since the client started. The interface animates against this,
     /// so it must be real time -- the generation counter only moves four times
     /// a second and would make every hover and fade crawl.
@@ -381,10 +250,6 @@ pub struct GameApp {
     /// this a click that lands on empty ground is indistinguishable from a
     /// click that never arrived.
     last_action: Option<String>,
-    /// What this player can spend. Predicted locally with the same arithmetic
-    /// the server charges by, so the number on screen is the number the server
-    /// will agree with.
-    value: i32,
     /// A finished gesture waiting to be resolved to cells.
     pending: Option<Pending>,
     /// What the hotbar is holding.
@@ -394,68 +259,16 @@ pub struct GameApp {
     /// The sprite sheet as egui can draw it, so the hotbar shows the cell each
     /// tool puts down rather than spelling its name.
     icons: icons::Icons,
-    /// Who holds how much ground, most first, as the server last said.
-    ///
-    /// From the server because a client holds only the chunks it subscribed
-    /// to: counting locally would score its own screen rather than the world.
-    standing: Vec<crate::net::Holding>,
-    /// The generation [`Self::standing`] was counted at, offline. A pass over
-    /// the world per generation and not per frame.
-    counted_at: crate::net::Tick,
     /// The address last written down, so it is written again only when it
     /// would say something different.
     said_where: Option<crate::client::route::Route>,
-    /// Actions taken from an [`Acted`] before the `Step` that carries them.
+    /// **What this client is to a server** — the link, the seat, the purse,
+    /// and the machinery that keeps this world in step with another.
     ///
-    /// Emptied every `Step`, because an action belongs to one generation and
-    /// the `Step` that names it is the last chance to hear about it.
-    ///
-    /// [`Acted`]: crate::net::ServerMessage::Acted
-    applied_early: Vec<Stamped>,
-    /// Whether this seat has given up, as the server last said.
-    ///
-    /// Held so the control can say so rather than offer to concede twice, and
-    /// cleared on a `Welcome`, which is a different match or none.
-    forfeited: bool,
-    /// **The number this client's cells carry**, which in a team match is the
-    /// team's and not this seat's — and the whole of what a client knows about
-    /// teams. Everything downstream asks this and never asks who is allied with
-    /// whom, because there is nobody to be allied with. Equal to [`Self::me`]
-    /// offline and in a free-for-all.
-    plays_as: Option<PlayerId>,
-    /// The game being played, if there is one, waiting to be filed.
-    ///
-    /// Committed when the room ends for this client — a different `Welcome`, a
-    /// link that closed, or the way back to the menu. A tab closed mid-game
-    /// loses its record, which is the honest cost of not writing on every
-    /// change: a browser gives no reliable moment to write at.
-    ///
-    /// A spectator never has one. Watching is not playing, and a record of
-    /// worlds you looked at is not a record.
-    in_play: Option<crate::client::record::InPlay>,
-    /// How badly this client and the server are disagreeing, as a decaying
-    /// rate rather than a log line — see [`crate::client::desync`].
-    geiger: crate::client::desync::Geiger,
-    /// **What the game is doing in this room** — see [`crate::net::Rules`].
-    ///
-    /// Taken from the server rather than decided here, which is the whole
-    /// reason a laboratory is a room: these used to be three client-held flags
-    /// that only meant anything offline, and a client that answers them for
-    /// itself predicts placements a server refuses. Offline this client is the
-    /// server, so it sets them itself and nothing downstream can tell.
-    ///
-    /// Not in `Ui`: a stopped clock is a fact about the world and not about
-    /// the interface, which is the same line `world`, `link` and `value` are
-    /// on the far side of.
-    rules: crate::net::Rules,
-    /// One generation asked for while stopped, taken on the next frame.
-    ///
-    /// A request rather than a step taken in the key handler, so that stepping
-    /// happens exactly where stepping happens — one place that banks what was
-    /// mined and recounts the standings, rather than two that have to agree.
-    /// Offline only; connected, [`crate::net::ClientMessage::StepOnce`] asks
-    /// the room instead and the generation comes back as a `Step`.
-    step_once: bool,
+    /// A field rather than forty of them. What is left on this struct is a
+    /// view: what is drawn, what the pointer is doing, and the GPU it is drawn
+    /// with. See [`Session`].
+    session: Session,
 }
 
 impl GameApp {
@@ -503,14 +316,6 @@ impl GameApp {
         self.camera.dirty = true;
         true
     }
-
-    /// Who we are. Before the server has said, we are player one — offline is
-    /// a game of one rather than a game of nobody.
-    /// The number this client places under: its team's in a match, its own
-    /// otherwise. Every rule takes this and knows nothing about teams.
-    fn player(&self) -> PlayerId {
-        self.plays_as.or(self.me).unwrap_or(PlayerId(1))
-    }
 }
 
 impl GameApp {
@@ -536,25 +341,6 @@ impl GameApp {
     fn begin_drawing(&mut self, at: (f64, f64)) {
         let stroke = self.held.stroke();
         self.gesture = Gesture::Drawing(Drag::begin(at, self.camera.cell_at(at), stroke));
-    }
-
-    /// Whether the world will take anything this player does right now.
-    ///
-    /// A match that has not started takes nothing, and neither does one that
-    /// is decided — the server drops those actions, and a client that went on
-    /// predicting them would draw cells that appear under the hand and vanish
-    /// a moment later when the next `Checkpoint` corrects the world. Which
-    /// looks like the game losing your work rather than like a rule.
-    ///
-    /// `None` for a room that is not a match, and for one that has not said
-    /// yet, both of which are ordinary rooms as far as this is concerned.
-    fn may_act(&self) -> bool {
-        // A spectator has no seat, so it has no player number to attribute an
-        // action to and no value to spend. Refused here as well as on the
-        // server, so that clicking the world says why rather than doing
-        // nothing -- the server drops what it cannot attribute and sends
-        // nothing back, which on its own looks exactly like a lost click.
-        !self.watching && self.lobby.as_ref().is_none_or(|l| l.phase.accepts_actions())
     }
 
     /// Whether what the hotbar holds is already on this cell.
@@ -646,582 +432,24 @@ impl GameApp {
         self.cursor = focus;
     }
 
-    /// Step the world up to the generation the server is on.
+    /// Price an action on these cells, with whatever the hotbar is holding.
     ///
-    /// Normally exactly one step: the server sends one of these per
-    /// generation. Anything else means this client and the server disagree
-    /// about where in the sequence they are, which is not something to paper
-    /// over quietly — the worlds have already diverged, and the honest thing
-    /// is to say so, take the server's number, and ask for the world again.
-    fn advance_to(&mut self, tick: crate::net::Tick) {
-        let here = self.world.generation;
-        if let Advance::Step = advance(here, tick) {
-            let mined = self.world.step();
-            self.bank(&mined);
-            return;
-        }
-        // **Anything else means messages were lost, so nothing is stepped.**
-        //
-        // Catching up is the bug rather than the recovery: a `Step` carries the
-        // actions applied at its tick, so a gap is not "we are behind" but "n
-        // generations happened whose contents we were not told" — and stepping to
-        // close it runs those generations *empty*, which is a world nobody else
-        // has within a minute.
-        //
-        // A websocket does not lose or reorder; the broadcast channel in front of
-        // it does, and a backgrounded tab is the ordinary case rather than an
-        // exotic one.
-        log::warn!(
-            "out of step: the server is at {tick} and this client at {here}; \
-             discarding {} generation(s) and asking again",
-            tick.saturating_sub(here)
-        );
-        self.resync_everything(tick);
+    /// Here rather than on the session because what is held is the hotbar's,
+    /// and a stamp lays a placement the bar is not holding — which is what the
+    /// second argument to [`Session::quote`] is for.
+    fn quote(&self, cells: Vec<(i32, i32)>, taking: bool) -> (Stamped, i32) {
+        self.quote_as(cells, taking, self.held.placement().unwrap_or(Placement::Life))
     }
 
-    /// Throw away what this client holds and fetch it from the server.
-    ///
-    /// **The whole world, not the chunks that look wrong.** Every chunk was
-    /// stepped alongside every other, so one that missed an action has been
-    /// feeding wrong cells across its edges ever since — and a chunk outside the
-    /// viewport is never checkpointed, so "the ones we know are wrong" is a set
-    /// this client cannot compute.
-    fn resync_everything(&mut self, tick: crate::net::Tick) {
-        // **Keeping the seed**, which the shape does not carry: `build` makes a
-        // world that has not been told which game it is, and a client rolling
-        // from nought against a server rolling from the room's number
-        // disagrees at the first contested birth. That reads as a desync, so
-        // it resyncs, so it rebuilds, so it disagrees again -- which is what
-        // `examples/two` caught the moment this was wired up.
-        let seed = self.world.seed();
-        self.world = self.world.kind().build();
-        self.world.set_seed(seed);
-        self.world.set_generation(tick);
-        self.world.dirty = true;
-        // Cleared, or `subscribe_to_view` would take this client's word for
-        // what it already holds and ask for none of it.
-        self.subscribed.clear();
-        // And this, which is a record of what was applied to the world that
-        // has just been thrown away. Kept, it would tell the next `Step` to
-        // skip an action that nothing in the new world has ever seen.
-        self.applied_early.clear();
-        self.geiger.reset();
-        self.subscribe_to_view();
+    fn quote_as(
+        &self,
+        cells: Vec<(i32, i32)>,
+        taking: bool,
+        placement: Placement,
+    ) -> (Stamped, i32) {
+        self.session.quote(&self.world, cells, taking, placement)
     }
 
-    /// Settle a solitary match, if there is one and it is done.
-    ///
-    /// The same two conditions the server settles, read off the same
-    /// `net::standings` — offline this client holds the whole world, so its
-    /// count *is* the server's. Guarded on there being no link: two authorities
-    /// deciding one match is the bug the whole design avoids.
-    fn decide_alone(&mut self) {
-        if self.link.is_some() {
-            return;
-        }
-        let Some(lobby) = &mut self.lobby else { return };
-        let (Some(victory), crate::net::MatchPhase::Running { from }) =
-            (lobby.victory, lobby.phase.clone())
-        else {
-            return;
-        };
-        let leader = self.standing.first();
-        let held = leader.map_or(0, |h| h.score as usize);
-        let done = match victory {
-            crate::net::Victory::Timer { generations } => {
-                self.world.generation.saturating_sub(from) >= generations
-            }
-            crate::net::Victory::Territory { squares } => held >= squares,
-        };
-        if !done {
-            return;
-        }
-        lobby.phase = crate::net::MatchPhase::Over {
-            winner: leader.map(|h| h.who),
-            held,
-            at: self.world.generation,
-        };
-        log::info!("a solitary match ended at generation {}", self.world.generation);
-    }
-
-    /// Fold a generation's mining into the predicted purse, floored at zero
-    /// the way the server floors the real one.
-    ///
-    /// A prediction, and a low one: only the mines in chunks this client holds
-    /// are counted. `Purse` is what makes it right again.
-    fn bank(&mut self, mined: &crate::sim::Mined) {
-        self.value =
-            (self.value + crate::net::earnings(mined, self.player())).clamp(0, Player::MAX_VALUE);
-    }
-
-    /// Drain the socket and fold what arrived into the local world.
-    fn pump_link(&mut self) {
-        let Some(link) = &mut self.link else { return };
-        let messages = link.drain();
-        let closed = link.is_closed();
-
-        for msg in messages {
-            match msg {
-                ServerMessage::Welcome {
-                    you,
-                    person,
-                    tick,
-                    spawn,
-                    rating,
-                    value,
-                    room,
-                    name,
-                    world,
-                    rules,
-                } => {
-                    self.rating = Some(rating);
-                    // Kept first, before anything else can go wrong: the whole
-                    // value of it is being able to come back, and a client that
-                    // crashes on its first frame is exactly the case that needs
-                    // to.
-                    //
-                    // Filed under the room the server says we are in, not the
-                    // one that was asked for: a client may have named none, and
-                    // a token stored against the wrong room brings you back to
-                    // the wrong world.
-                    // Filed against the **id**, not the name. That is the
-                    // whole point of there being an id: a room that is
-                    // renamed is the same room, and a token that keyed off
-                    // the name would come back to nothing.
-                    // The way back is the secret this client already has, so
-                    // there is nothing to file per room any more. What is kept
-                    // is who the server said we are, so the settings screen
-                    // can say it without waiting for the next join — the
-                    // server issues it, so this is the only way the client
-                    // ever has it. See `net::auth`.
-                    if let Some(id) = &person {
-                        crate::net::keep::remember_person(id);
-                    }
-                    self.person = person;
-                    // A different room is a different match, or none.
-                    self.lobby = None;
-                    log::info!(
-                        "joined \"{name}\" ({room}) as {you:?} at tick {tick}, in a {} world",
-                        match world {
-                            crate::sim::WorldKind::Infinite => "boundless".to_string(),
-                            crate::sim::WorldKind::Toroidal { rows, cols } =>
-                                format!("{rows}x{cols} wrapping"),
-                        }
-                    );
-                    // Taken from the server, not assumed: a player coming
-                    // back has a value already, and guessing the starting
-                    // figure would have this client offering to spend money
-                    // the server knows is gone.
-                    self.value = value;
-                    self.me = Some(you);
-                    self.plays_as = Some(you);
-                    self.watching = false;
-                    self.forfeited = false;
-                    self.room = Some(room);
-                    self.room_name = Some(name);
-                    // Into the game. Not before: until a Welcome arrives there
-                    // is no world to be in, and a menu that closed on the
-                    // click would leave the player staring at ground they
-                    // could not build on while the socket was still opening.
-                    self.ui.screen = Screen::Playing;
-                    self.asked_at = None;
-                    self.say_where();
-                    // Now, and only now, drop the local world. Until Welcome
-                    // arrives there is nothing authoritative to replace it
-                    // with, and an empty screen is worse than a local game.
-                    //
-                    // Built to the shape the server named. A client that
-                    // assumed an infinite plane against a wrapping server
-                    // folded no coordinates: chunks the server calls the same
-                    // one were several to the client, digests were taken
-                    // against coordinates it had never heard of, and the seam
-                    // showed the moment anything crossed it. Nothing a client
-                    // can see says whether the ground ends, so this is the only
-                    // way it can know.
-                    self.applied_early.clear();
-                    // **The room's, not this client's.** A pause and a free
-                    // hand are things a *world* does, so they arrive with it
-                    // rather than being carried over from the last one.
-                    self.rules = rules;
-                    self.world = crate::net::sane_world(
-                        world,
-                        self.room.as_ref().expect("the room was just set"),
-                    );
-                    // A birth's owner is seeded from the generation, so a
-                    // client simulating at a different tick would make
-                    // different choices from identical cells.
-                    self.world.set_generation(tick);
-                    self.subscribed.clear();
-                    // A different room is a different world and a different
-                    // argument about it, so the counter starts over rather
-                    // than showing the last room's trouble against this one.
-                    self.geiger.reset();
-                    self.file_game();
-                    self.in_play = Some(crate::client::record::InPlay::joined(
-                        self.room_name.clone().unwrap_or_default(),
-                        world,
-                        tick,
-                    ));
-                    // Look at our own ground, which is the only place we may
-                    // build. Derived rather than sent: `spawn_for` is the same
-                    // function on both sides, so the client can work out where
-                    // it was put without being told.
-                    self.camera.centre = middle_of(spawn);
-                    self.camera.dirty = true;
-                }
-                // Watching: the world and its clock, and no player at all.
-                ServerMessage::Watching { room, name, tick, world, rules } => {
-                    log::info!("watching \"{name}\" ({room}) from tick {tick}");
-                    self.lobby = None;
-                    self.me = None;
-                    self.watching = true;
-                    self.value = 0;
-                    // Watching is not playing, so whatever was being played
-                    // is filed and nothing new is started.
-                    self.file_game();
-                    self.room = Some(room);
-                    self.room_name = Some(name);
-                    self.ui.screen = Screen::Playing;
-                    self.asked_at = None;
-                    self.say_where();
-                    self.applied_early.clear();
-                    // **The room's, not this client's.** A pause and a free
-                    // hand are things a *world* does, so they arrive with it
-                    // rather than being carried over from the last one.
-                    self.rules = rules;
-                    self.world = crate::net::sane_world(
-                        world,
-                        self.room.as_ref().expect("the room was just set"),
-                    );
-                    self.world.set_generation(tick);
-                    self.subscribed.clear();
-                    self.geiger.reset();
-                    // No spawn to look at, because nothing here is ours. The
-                    // camera stays where it was, which for a fresh client is
-                    // the origin -- and the origin is where the first grant
-                    // goes, so it is where anything is likely to be.
-                    self.camera.dirty = true;
-                }
-                // A result, and what it did to somebody's number. Ours moves
-                // the dashboard; everybody else's is the half of a rating that
-                // makes it a comparison rather than a score, and is worth a
-                // line in the log until there is a screen for it.
-                ServerMessage::Rated { who, rating, change } => {
-                    let mine = self.person.clone();
-                    if mine.as_ref() == Some(&who) {
-                        log::info!("rated {rating} ({change:+})");
-                        self.rating = Some(rating);
-                        self.rating_change = Some(change);
-                        // The home screen reads this when it is built, and it
-                        // is already built if we are looking at it.
-                        if let Screen::Menu(m) = &mut self.ui.screen {
-                            m.rating = Some((rating, Some(change)));
-                        }
-                    } else {
-                        log::info!("{who} is now rated {rating} ({change:+})");
-                    }
-                }
-                // Somebody was given their opening ground. Ours moves the
-                // camera, because a match lays everybody out at the whistle
-                // and the spawn in our `Welcome` was worked out before any of
-                // it existed -- it is stale by the time it matters, which is
-                // why this used to need a reload.
-                ServerMessage::Spawned { player, at } => {
-                    if Some(player) == self.plays_as {
-                        log::info!("granted ground at {at:?}");
-                        self.camera.centre = middle_of(at);
-                        self.camera.dirty = true;
-                    }
-                }
-                ServerMessage::Rejected { reason } => {
-                    log::error!("server refused the connection: {reason}");
-                    // Shown rather than logged and dropped. The refusal names
-                    // the rooms that do exist, which with no other listing is
-                    // the most useful thing on the screen -- and the link is
-                    // kept, so the next choice is a click rather than a
-                    // reconnect.
-                    self.show_menu(menu::Stage::Failed(reason));
-                    self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
-                    self.asked_at = Some(self.elapsed);
-                    return;
-                }
-                // Who is winning. Kept whole rather than merged, because a
-                // player who has lost every square drops out of the list and a
-                // merge would leave their last bar standing forever.
-                ServerMessage::Match {
-                    teams,
-                    started_by,
-                    owner,
-                    code,
-                    phase,
-                    victory,
-                    players,
-                } => {
-                    // A decided match is a result, and the only moment this
-                    // client is told one. Recorded when it arrives rather than
-                    // when the room is left, because a player who watches the
-                    // final board and then closes the tab still played it.
-                    if let (crate::net::MatchPhase::Over { winner, .. }, Some(live)) =
-                        (&phase, self.in_play.as_mut())
-                    {
-                        live.decided(*winner == self.plays_as && self.plays_as.is_some());
-                    }
-                    // **Which player this client is now.** Joining a team is
-                    // taking the controls of the team's player, so from here
-                    // on this client's cells carry the team's number: what it
-                    // may place, what that costs and which of the actions
-                    // coming back are its own all follow from this one line.
-                    //
-                    // Read out of the roster rather than sent per connection,
-                    // because `Match` is broadcast to the whole room and a
-                    // field naming one recipient would be wrong for the rest.
-                    // A seat on no team plays as itself, which is what a
-                    // free-for-all is.
-                    self.plays_as = self
-                        .me
-                        .map(|me| {
-                            teams.iter().find(|t| t.players.contains(&me)).map_or(me, |t| t.id)
-                        })
-                        .or(self.plays_as);
-                    // The phase moved, or somebody picked a team: either way
-                    // whatever the last whistle was refused for has been
-                    // answered, and a stale reason under the button is worse
-                    // than none.
-                    self.ui.refused_start = None;
-                    self.lobby =
-                        Some(Lobby { teams, phase, victory, players, owner, started_by, code });
-                }
-                // The room's clock or its switches moved, for everybody in it
-                // at once. Taken rather than reconciled: this client may have
-                // predicted its own press, and anybody else's is news.
-                ServerMessage::Rules(rules) => {
-                    log::debug!("the room's rules are now {rules:?}");
-                    self.rules = rules;
-                }
-                ServerMessage::Standing { held, .. } => {
-                    if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.plays_as) {
-                        live.holding(
-                            held.iter().find(|h| h.who == me).map(|h| h.score).unwrap_or(0),
-                        );
-                    }
-                    self.standing = held;
-                }
-                ServerMessage::Purse { value } => {
-                    // Taken, not reconciled. A client only sees the mines in
-                    // its own viewport, so its guess is always low and always
-                    // getting lower; the server's number is the number. The
-                    // cost is that an action sent for this tick and not yet
-                    // applied shows for a moment as money still in hand, which
-                    // a checkpoint interval later is right again.
-                    if value != self.value {
-                        log::debug!("purse: {} -> {value}", self.value);
-                        self.value = value;
-                    }
-                }
-                // A whistle that was not blown, into the lobby it was pressed
-                // in. Its own message rather than `Rejected`, which closes a
-                // connection: this leaves you exactly where you were, with a
-                // reason to read.
-                ServerMessage::NotStarted { reason } => {
-                    log::info!("the match did not start: {reason}");
-                    self.notice = Some(reason.clone());
-                    self.ui.refused_start = Some(reason);
-                }
-                // The answer to `Create`, into the form it was sent from.
-                // A refusal has to land beside the fields that produced it:
-                // "there is already a room called that" is a thing to correct,
-                // not a thing to be told once and then hunt for.
-                ServerMessage::Made(made) => match made {
-                    Ok(crate::net::Made { id, name, code }) => {
-                        log::info!("made \"{name}\" ({id}); joining it");
-                        // A code is the thing you send somebody, so it goes
-                        // into the field it can be read off and copied from
-                        // rather than only into a log line nobody will see.
-                        if let Screen::Menu(m) = &mut self.ui.screen {
-                            if let Some(code) = code {
-                                m.code = code;
-                            }
-                            m.draft = None;
-                        }
-                        // Straight in. Making a world and then being handed
-                        // back to the list to find it is a step that exists
-                        // only because the messages are two.
-                        self.chose(menu::Chose::Join(id));
-                    }
-                    Err(why) => {
-                        log::info!("the server would not make that room: {why}");
-                        if let Screen::Menu(menu::Menu { draft: Some(draft), .. }) =
-                            &mut self.ui.screen
-                        {
-                            draft.asking = false;
-                            draft.note = Some(why);
-                        }
-                    }
-                },
-                ServerMessage::Rooms { rooms } => {
-                    log::debug!("the server has {} room(s)", rooms.len());
-                    self.asked_at = None;
-                    self.listed_at = self.elapsed;
-                    if let Screen::Menu(m) = &mut self.ui.screen {
-                        // A refusal already on screen is carried over rather
-                        // than replaced: the reason and the list of rooms that
-                        // do exist are two halves of one answer, and a list
-                        // arriving on its own reads as the click having done
-                        // nothing.
-                        let note = match std::mem::replace(&mut m.stage, menu::Stage::Idle) {
-                            menu::Stage::Failed(why) => Some(why),
-                            menu::Stage::Choosing { note, .. } => note,
-                            _ => None,
-                        };
-                        m.stage = menu::Stage::Choosing { rooms, note };
-                    }
-                }
-                ServerMessage::ChunkData { tick, chunk, cells } => {
-                    match bytemuck::try_from_bytes::<crate::sim::Chunk>(&cells) {
-                        Ok(c) => {
-                            // The generation is not taken from here. A chunk
-                            // reply and the step broadcast reach the socket by
-                            // different routes, so a chunk can arrive from a
-                            // tick either side of the one this client is on --
-                            // and setting the clock from it without stepping
-                            // would leave the world's state and its label
-                            // disagreeing, quietly, for good. The step stream
-                            // owns the clock; this only carries cells.
-                            if tick != self.world.generation {
-                                log::debug!(
-                                    "chunk {chunk:?} is from tick {tick}, and this client is \
-                                     on {}",
-                                    self.world.generation
-                                );
-                            }
-                            self.world.put_chunk(chunk, *c);
-                        }
-                        Err(e) => log::warn!("chunk {chunk:?} was the wrong size: {e}"),
-                    }
-                }
-                ServerMessage::Step { tick, actions } => {
-                    // Applied at the generation the server applied them at,
-                    // then stepped to the generation it stepped to. Order and
-                    // timing both matter: the step is a pure function of state
-                    // and tick, so doing this a generation early or late is
-                    // the same as doing something else.
-                    //
-                    // **Except our own, which were applied when they were made.** A `Paint` is
-                    // idempotent on the generation it was meant for and not one later, so
-                    // laying it twice stamps the original pattern back over where it has got
-                    // to — draw a glider, watch it thicken into a blob, watch it snap back when
-                    // the resync lands.
-                    //
-                    // **By seat, not by player**: a teammate's action carries the team's number,
-                    // so skipping by player never applied it at all. And not one already
-                    // applied from an `Acted`, which is a shortcut that can be dropped, so the
-                    // `Step` carries everything and this is where the two meet.
-                    let early = std::mem::take(&mut self.applied_early);
-                    for stamped in
-                        actions.iter().filter(|s| Some(s.seat) != self.me && !early.contains(s))
-                    {
-                        // **A teammate's comes out of the purse we share**, so it is predicted for
-                        // the same reason our own spending is. Priced before it is applied, which
-                        // is the contract of `value_delta`.
-                        if Some(stamped.player) == self.plays_as {
-                            let delta = crate::net::value_delta(&self.world, stamped);
-                            self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
-                        }
-                        crate::net::apply(&mut self.world, stamped);
-                    }
-                    self.advance_to(tick);
-
-                    // Every so often, ask whether we still agree. Cheap
-                    // enough to do often, and the sooner a divergence is found
-                    // the less of the world has been built on top of it.
-                    if self.world.generation % CHECKPOINT_EVERY == 0 {
-                        self.send_checkpoint();
-                    }
-                }
-                // **An action, the moment the server took it**, rather than at the next
-                // generation — 125 ms of doing nothing on a link that costs four.
-                //
-                // Not on the tick it names, which was the wrong test and cost a whole
-                // generation near a boundary: `stamped.tick` is the actor's guess, and the
-                // server applies what is pending on the step it happens to be on, which is
-                // the generation this client is on too.
-                ServerMessage::Acted(stamped) => {
-                    if Some(stamped.seat) != self.me {
-                        // **Priced before it is applied**, as in the `Step`
-                        // arm above and for the same reason: `value_delta`
-                        // reads what is on the square *now*, and the server
-                        // priced it against that. Applied first, every cell
-                        // compares equal to what the placement would put
-                        // there -- `apply_to` and `remove_from` are
-                        // idempotent -- so the delta was always exactly zero
-                        // and a teammate's spending never moved this client's
-                        // purse until the next `Purse` corrected it.
-                        if Some(stamped.player) == self.plays_as {
-                            let delta = self.price(&stamped);
-                            self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
-                        }
-                        crate::net::apply(&mut self.world, &stamped);
-                        self.applied_early.push(stamped);
-                    }
-                }
-                ServerMessage::Resync { tick, chunks } => {
-                    // One click per chunk, not per message: a resync naming
-                    // forty chunks is a world being rebuilt, and one naming a
-                    // single chunk is one prediction that missed. The log line
-                    // says it happened; the counter says how often.
-                    self.geiger.clicks(chunks.len(), self.elapsed);
-                    log::warn!(
-                        "desynced at tick {tick}; refetching {} chunks (rate {:.1})",
-                        chunks.len(),
-                        self.geiger.rate()
-                    );
-                    // Asked for again at once rather than left to the viewport
-                    // to notice: a wrong chunk off screen is still wrong, and
-                    // it will be back on screen eventually.
-                    for c in &chunks {
-                        self.subscribed.remove(c);
-                    }
-                    if let Some(link) = &self.link {
-                        link.send(ClientMessage::Subscribe { chunks });
-                    }
-                }
-            }
-        }
-
-        if closed {
-            self.file_game();
-            self.link = None;
-            self.asked_at = None;
-            match &self.ui.screen {
-                // Nothing was ever reached. The address is the likely reason
-                // and the only thing the player can act on, so it is what the
-                // message names.
-                Screen::Menu(m) => {
-                    let address = m.address.clone();
-                    self.show_menu(menu::Stage::Failed(words::menu::no_answer(&address)));
-                }
-                // Mid-game. The simulation is deterministic, so the world
-                // carries on locally rather than stopping -- offline is a
-                // solitary game, not a broken one. **Said on screen as well as
-                // in the log**, because a log line is not somewhere a player
-                // is looking and the difference between this game and the one
-                // they were in is every other player in it.
-                Screen::Playing => {
-                    log::warn!("link closed; continuing offline");
-                    self.notice = Some(words::menu::LOST_CONNECTION.into());
-                }
-            }
-            return;
-        }
-
-        if matches!(self.ui.screen, Screen::Playing) {
-            self.subscribe_to_view();
-        }
-    }
-
-    /// Ask for any visible chunk not already requested. The camera is fixed for
-    /// now, so this settles after the first frame; it is written against the
-    /// viewport so panning needs no new code.
     /// Lay what a drag drew, whatever shape it is.
     ///
     /// Always places, never takes: a drag across occupied ground is far more
@@ -1229,8 +457,8 @@ impl GameApp {
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
     fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
-        if !self.may_act() {
-            self.notice = Some(if self.watching {
+        if !self.session.may_act() {
+            self.notice = Some(if self.session.watching {
                 words::menu::watch::NO_SEAT.into()
             } else {
                 words::refused::not_started().to_string()
@@ -1243,13 +471,13 @@ impl GameApp {
         // All or nothing. A stroke laid as far as the value stretched would
         // stop somewhere the hand did not, and the player would be left
         // working out where it ran out and why.
-        if self.value + delta < 0 {
-            self.notice = Some(words::refused::cannot_afford(count, -delta, self.value));
+        if self.session.value + delta < 0 {
+            self.notice = Some(words::refused::cannot_afford(count, -delta, self.session.value));
             return;
         }
         self.notice = None;
-        self.value = (self.value + delta).clamp(0, Player::MAX_VALUE);
-        self.commit(&stamped);
+        self.session.spend(delta);
+        self.session.commit(&mut self.world, &stamped);
         self.last_action = Some(format!("{shape}, {delta:+}"));
     }
 
@@ -1261,8 +489,9 @@ impl GameApp {
         let name = self.holding().to_string();
         // A refusal again: a stroke is all or nothing, so one cell nothing of
         // yours reaches refuses the whole of it, before the button comes up.
-        let outside =
-            |cells: &[(i32, i32)]| cells.iter().filter(|&&(r, c)| !self.may_place_at(r, c)).count();
+        let outside = |cells: &[(i32, i32)]| {
+            cells.iter().filter(|&&(r, c)| !self.session.may_place_at(&self.world, r, c)).count()
+        };
         match drag.stroke {
             hotbar::Stroke::Pencil => {
                 let stray = outside(&drag.path);
@@ -1288,27 +517,6 @@ impl GameApp {
                 }
                 Ok((cells, format!("{name} {rows}x{cols}")))
             }
-        }
-    }
-
-    /// Apply an action here, and send it if there is anyone to send it to.
-    ///
-    /// Applied straight away, connected or not, so what you draw appears under
-    /// your hand rather than a quarter of a second later. The rules are
-    /// deterministic and the server runs the same `net::apply`, so acting
-    /// immediately shows the right answer a round trip early.
-    ///
-    /// Usually. The server applies it whenever the message lands, which is
-    /// this generation if it arrives before the next step and the one after if
-    /// it arrives later — so a click is a coin flip, and on the losing side
-    /// this world has evolved those cells a generation earlier than the
-    /// server's. That is what `Checkpoint` is for: the divergence is real,
-    /// rare, and found by comparing digests rather than prevented by waiting.
-    fn commit(&mut self, stamped: &Stamped) {
-        crate::net::apply(&mut self.world, stamped);
-        self.world.dirty = true;
-        if let Some(link) = &self.link {
-            link.send(ClientMessage::Act(stamped.clone()));
         }
     }
 
@@ -1344,84 +552,6 @@ impl GameApp {
                 drag.mark(cell);
             }
         }
-    }
-
-    /// Tell the server what this client thinks it holds, so the two can find
-    /// out cheaply whether they agree.
-    ///
-    /// A chunk is 512 bytes and its digest is eight, so a whole world's worth
-    /// of state fits in a message that costs nothing to send — which is the
-    /// point: agreement can be checked constantly, and only the chunks that
-    /// actually disagree are ever sent back.
-    ///
-    /// Stamped with the generation the digests were taken at, because a chunk
-    /// compared against the wrong tick disagrees for a reason that is not a
-    /// bug. The server ignores a checkpoint from any tick but its own, so one
-    /// that arrives late is skipped rather than answered wrongly, and the next
-    /// one is only seconds away.
-    fn send_checkpoint(&self) {
-        let Some(link) = &self.link else { return };
-        // Only the chunks this client has actually asked for.
-        //
-        // `stored()` is the wrong set on a wrapping world: a torus is
-        // allocated whole, so every chunk exists from the moment the world is
-        // built and the client would claim to hold hundreds it has never been
-        // sent. They read as empty, the server disagrees with every one of
-        // them, and it answers with a `Resync` naming the lot -- every
-        // checkpoint, until the whole world has been dragged across. An
-        // infinite world hid this, because there `stored()` is only what has
-        // been fetched or grown.
-        //
-        // Asked-for rather than received, because the two differ only where
-        // the server had nothing to send, and a chunk it says nothing about is
-        // one it agrees is empty.
-        let chunks: Vec<(crate::sim::Coord, u64)> = self
-            .world
-            .stored()
-            .iter()
-            .filter(|(coord, _)| self.subscribed.contains(coord))
-            .filter_map(|&(coord, _)| Some((coord, self.world.chunk_digest(coord)?)))
-            .take(MAX_CHECKPOINT_CHUNKS)
-            .collect();
-        if chunks.is_empty() {
-            return;
-        }
-        link.send(ClientMessage::Checkpoint { tick: self.world.generation, chunks });
-    }
-
-    /// Price an action on these cells    /// Price an action on these cells: what would be sent, and what it costs.
-    ///
-    /// Shared by the click, by a drag, and by the preview of a drag, so the
-    /// preview cannot promise something the release then refuses and a drag
-    /// cannot be priced differently from the click it is made of.
-    fn quote(&self, cells: Vec<(i32, i32)>, taking: bool) -> (Stamped, i32) {
-        self.quote_as(cells, taking, self.held.placement().unwrap_or(Placement::Life))
-    }
-
-    /// The same, for a placement the hotbar is not holding — a stamp lays
-    /// whatever it captured, which may be two kinds at once.
-    fn quote_as(
-        &self,
-        cells: Vec<(i32, i32)>,
-        taking: bool,
-        placement: Placement,
-    ) -> (Stamped, i32) {
-        let action = if taking {
-            Action::Erase { cells, placement }
-        } else {
-            Action::Paint { cells, placement }
-        };
-        let stamped = Stamped {
-            tick: self.world.generation,
-            player: self.player(),
-            // This client, as against the number it plays under. In a team
-            // match they differ, and telling them apart is what stops a
-            // teammate's action being mistaken for one this client predicted.
-            seat: self.me.unwrap_or_else(|| self.player()),
-            action,
-        };
-        let delta = self.price(&stamped);
-        (stamped, delta)
     }
 
     /// The box around the cell the pointer is on.
@@ -1464,8 +594,9 @@ impl GameApp {
             Err(why) => (Vec::new(), why, false),
             Ok((cells, shape)) => {
                 let (_, delta) = self.quote(cells.clone(), false);
-                if self.value + delta < 0 {
-                    let why = format!("{shape}   costs {}, you have {}", -delta, self.value);
+                if self.session.value + delta < 0 {
+                    let why =
+                        format!("{shape}   costs {}, you have {}", -delta, self.session.value);
                     (cells, why, false)
                 } else {
                     (cells, format!("{shape}   {delta:+}"), true)
@@ -1482,7 +613,7 @@ impl GameApp {
             hotbar::Stroke::Rectangle => vec![self.camera.cell_rect(drag.from, to)],
         };
 
-        let (r, g, b) = crate::client::views::hue::player_colour(self.player());
+        let (r, g, b) = crate::client::views::hue::player_colour(self.session.player());
         Some(overlay::Selection {
             bounds: self.camera.cell_rect(drag.from, to),
             cells: rects,
@@ -1519,18 +650,19 @@ impl GameApp {
         // preview says and what the click charges cannot drift apart.
         let what = self.held.placement()?;
         let delta = self.quote_as(laid.clone(), false, what).1;
-        let stray = laid.iter().filter(|&&(r, c)| !self.may_place_at(r, c)).count();
+        let stray =
+            laid.iter().filter(|&&(r, c)| !self.session.may_place_at(&self.world, r, c)).count();
 
-        let allowed = stray == 0 && self.value + delta >= 0;
+        let allowed = stray == 0 && self.session.value + delta >= 0;
         let label = if stray > 0 {
             words::refused::cells_not_yours(stray)
-        } else if self.value + delta < 0 {
-            format!("{}   costs {}, you have {}", stamp.name, -delta, self.value)
+        } else if self.session.value + delta < 0 {
+            format!("{}   costs {}, you have {}", stamp.name, -delta, self.session.value)
         } else {
             format!("{}   {}x{}   {delta:+}", stamp.name, stamp.size.0, stamp.size.1)
         };
 
-        let (r, g, b) = crate::client::views::hue::player_colour(self.player());
+        let (r, g, b) = crate::client::views::hue::player_colour(self.session.player());
         let far = (corner.0 + stamp.size.0 - 1, corner.1 + stamp.size.1 - 1);
         Some(overlay::Selection {
             bounds: self.camera.cell_rect(corner, far),
@@ -1573,11 +705,11 @@ impl GameApp {
             return;
         }
 
-        let player = self.player();
+        let player = self.session.player();
         let name = self.holding().to_string();
 
-        if !self.may_act() {
-            self.notice = Some(if self.watching {
+        if !self.session.may_act() {
+            self.notice = Some(if self.session.watching {
                 words::menu::watch::NO_SEAT.into()
             } else {
                 words::refused::not_started().to_string()
@@ -1592,7 +724,7 @@ impl GameApp {
         // the same terms the server refuses it, so the answer is instant
         // rather than a round trip away. Taking back what is already there is
         // not placing and is not confined.
-        if !already_there && !self.may_place_at(row, col) {
+        if !already_there && !self.session.may_place_at(&self.world, row, col) {
             self.notice = Some(words::refused::not_your_territory(row, col));
             self.last_action = Some(format!("({row}, {col}) is not yours to build on"));
             return;
@@ -1614,8 +746,8 @@ impl GameApp {
         // it locally means the refusal is instant rather than a round trip
         // away, and the two cannot disagree because it is the same function.
         let (stamped, delta) = self.quote(vec![(row, col)], already_there);
-        if self.value + delta < 0 {
-            self.notice = Some(format!("costs {}, you have {}", -delta, self.value));
+        if self.session.value + delta < 0 {
+            self.notice = Some(format!("costs {}, you have {}", -delta, self.session.value));
             return;
         }
         self.notice = None;
@@ -1628,46 +760,9 @@ impl GameApp {
                 format!("took player {}'s {name} at ({row}, {col}), {delta:+}", owner.0)
             }
         });
-        self.value += delta;
-        self.commit(&stamped);
-        log::debug!("clicked ({row}, {col}); value {}", self.value);
-    }
-
-    /// What the hotbar is holding, for the HUD and for a drag's label.
-    /// Whether this client may put something on that square.
-    ///
-    /// One question in one place, so a laboratory takes the rule off
-    /// everywhere it is asked rather than at three of the four call sites.
-    fn may_place_at(&self, row: i32, col: i32) -> bool {
-        crate::net::may_place_under(&self.world, self.player(), row, col, &self.rules)
-    }
-
-    /// **Whether the clock is this client's to press.**
-    ///
-    /// Offline it always is: there is nobody else keeping time. In a room it
-    /// is the laboratory's, and nowhere else — a game's clock belongs to the
-    /// server, which is the rule that makes prediction work at all.
-    fn own_clock(&self) -> bool {
-        self.link.is_none() || self.rules.laboratory
-    }
-
-    /// Change what the game is doing here.
-    ///
-    /// Applied at once **and** sent, the way an action is: the server answers
-    /// with a `Rules` broadcast that everybody in the room gets, and until it
-    /// lands this client's copy is right rather than a round trip behind its
-    /// own press. Offline there is nobody to send to, and this client is the
-    /// authority.
-    fn set_rules(&mut self, rules: crate::net::Rules) {
-        self.rules = rules;
-        if let Some(link) = &self.link {
-            link.send(ClientMessage::SetRules(rules));
-        }
-    }
-
-    /// What an action costs, which in a laboratory is nothing.
-    fn price(&self, stamped: &Stamped) -> i32 {
-        crate::net::price_under(&self.world, stamped, &self.rules)
+        self.session.spend(delta);
+        self.session.commit(&mut self.world, &stamped);
+        log::debug!("clicked ({row}, {col}); value {}", self.session.value);
     }
 
     /// Run, or stop running. Offline only.
@@ -1677,13 +772,16 @@ impl GameApp {
     /// time here" reads as the rule it is — and it is a rule worth learning,
     /// because it is the same one that makes prediction work.
     fn toggle_running(&mut self) {
-        if !self.own_clock() {
+        if !self.session.own_clock() {
             self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
             return;
         }
-        self.set_rules(crate::net::Rules { paused: !self.rules.paused, ..self.rules });
+        self.session.set_rules(crate::net::Rules {
+            paused: !self.session.rules.paused,
+            ..self.session.rules
+        });
         self.notice = None;
-        self.last_action = Some(if self.rules.paused {
+        self.last_action = Some(if self.session.rules.paused {
             words::help::PAUSED.into()
         } else {
             words::help::RUNNING.into()
@@ -1696,18 +794,11 @@ impl GameApp {
     /// means: a single step out of a moving world is a step you cannot look
     /// at.
     fn step_one(&mut self) {
-        if !self.own_clock() {
+        if !self.session.own_clock() {
             self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
             return;
         }
-        self.set_rules(crate::net::Rules { paused: true, ..self.rules });
-        // **Asked for rather than taken**, in a room as much as offline: the
-        // generation comes back as the `Step` everybody else in the laboratory
-        // gets, so one person stepping is not a world only they can see.
-        match self.link.as_ref() {
-            Some(link) => link.send(ClientMessage::StepOnce),
-            None => self.step_once = true,
-        }
+        self.session.ask_for_one_step();
         self.notice = None;
         // The generation it will be on once the step is taken, since that is
         // the number somebody stepping wants to read.
@@ -1762,8 +853,8 @@ impl GameApp {
     /// a stamp may have caught two. All or nothing across both: half a pattern
     /// is not the pattern, so it is priced whole before any of it is sent.
     fn stamp_at(&mut self, index: usize, at: (i32, i32)) {
-        if !self.may_act() {
-            self.notice = Some(if self.watching {
+        if !self.session.may_act() {
+            self.notice = Some(if self.session.watching {
                 words::menu::watch::NO_SEAT.into()
             } else {
                 words::refused::not_started().to_string()
@@ -1784,29 +875,30 @@ impl GameApp {
         let quotes = [self.quote_as(laid.clone(), false, what)];
 
         let cells: usize = stamp.cells.len();
-        let stray = laid.iter().filter(|&&(r, c)| !self.may_place_at(r, c)).count();
+        let stray =
+            laid.iter().filter(|&&(r, c)| !self.session.may_place_at(&self.world, r, c)).count();
         if stray > 0 {
             self.notice = Some(words::refused::cells_not_yours(stray));
             return;
         }
 
         let delta: i32 = quotes.iter().map(|(_, d)| d).sum();
-        if self.value + delta < 0 {
-            self.notice = Some(words::refused::cannot_afford(cells, -delta, self.value));
+        if self.session.value + delta < 0 {
+            self.notice = Some(words::refused::cannot_afford(cells, -delta, self.session.value));
             return;
         }
 
         self.notice = None;
-        self.value += delta;
+        self.session.spend(delta);
         for (stamped, _) in &quotes {
-            self.commit(stamped);
+            self.session.commit(&mut self.world, stamped);
         }
         self.last_action = Some(words::stamps::placed(&stamp.name, cells, delta));
     }
 
     /// Take the rectangle a drag swept into a new stamp.
     fn capture(&mut self, from: (i32, i32), to: (i32, i32)) {
-        match stamp::Stamp::capture(&self.world, self.player(), from, to) {
+        match stamp::Stamp::capture(&self.world, self.session.player(), from, to) {
             Some(taken) => {
                 let (name, cells) = (taken.name.clone(), taken.cells.len());
                 self.stamps.keep(taken);
@@ -1841,24 +933,10 @@ impl GameApp {
         if matches!(self.ui.screen, Screen::Menu(_)) {
             return false;
         }
-        !matches!(self.lobby.as_ref().map(|l| &l.phase), Some(crate::net::MatchPhase::Gathering))
-    }
-
-    /// File the game in play, if there is one, and forget it.
-    ///
-    /// Called wherever a room ends for this client. Idempotent, so the paths
-    /// that overlap — a link closing on the way back to the menu — file once.
-    fn file_game(&mut self) {
-        let Some(mut live) = self.in_play.take() else { return };
-        live.at(self.world.generation);
-        let game = live.finish();
-        log::info!(
-            "filing \"{}\": {} generations, {} squares at its largest",
-            game.room,
-            game.generations,
-            game.best
-        );
-        crate::client::record::remember(&game);
+        !matches!(
+            self.session.lobby.as_ref().map(|l| &l.phase),
+            Some(crate::net::MatchPhase::Gathering)
+        )
     }
 
     /// Back to the menu, from wherever.
@@ -1868,7 +946,7 @@ impl GameApp {
     /// `Join` takes its place, which is what the server treats a second join
     /// as anyway.
     fn back_to_menu(&mut self) {
-        self.file_game();
+        self.session.file_game(&self.world);
         // **Give the seat up.** Going back used to keep it, on the reasoning
         // that another `Join` would take its place — true of somebody who
         // rejoins the same room, and false of everything else. The player
@@ -1879,22 +957,9 @@ impl GameApp {
         //
         // The token is kept: this is the seat being vacated, not the player
         // being forgotten, and coming back should still be coming back.
-        if let (Some(link), true) = (&self.link, self.me.is_some() || self.watching) {
-            link.send(ClientMessage::Leave);
-        }
-        self.me = None;
-        self.room = None;
-        self.room_name = None;
-        self.lobby = None;
-        self.standing.clear();
-        self.subscribed.clear();
-        self.watching = false;
-        let asking = self.link.is_some();
+        self.session.leave(&self.world, self.elapsed);
+        let asking = self.session.connected();
         self.show_menu(if asking { menu::Stage::Asking } else { menu::Stage::Idle });
-        if let Some(link) = self.link.as_ref() {
-            link.send(ClientMessage::Rooms);
-            self.asked_at = Some(self.elapsed);
-        }
     }
 
     /// Leave whatever server this client is on, and start a game of one.
@@ -1924,25 +989,7 @@ impl GameApp {
         victory: Option<crate::net::Victory>,
     ) {
         log::info!("playing alone on {shape:?} ({victory:?})");
-        self.file_game();
-        // Dropping it closes it — see the `Drop` on the browser's `Link`, and
-        // the socket thread that ends with its channel on native.
-        self.link = None;
-        // Or the room list this client is no longer waiting for times out and
-        // drags it back to the menu, four seconds into a game of one, to say
-        // that a server it has stopped talking to did not answer.
-        self.asked_at = None;
-        self.me = None;
-        self.room = None;
-        self.room_name = None;
-        self.lobby = None;
-        self.standing.clear();
-        self.subscribed.clear();
-        self.watching = false;
-        // A different world is a different argument about it.
-        self.geiger.reset();
-        // What the server had issued belonged to the seat that was given up.
-        self.value = Player::STARTING_VALUE;
+        self.session.play_alone(&self.world, victory);
         let (world, home) = start::solo_world_of(shape);
         self.world = world;
         // **A name it is not asked for.** A world nobody else can reach needs
@@ -1955,37 +1002,11 @@ impl GameApp {
         // `room` stays empty beside it, and that is not an oversight: an id is
         // what a *server* is holding for this client, and there is no server.
         self.world.set_seed(crate::net::world_seed(&crate::net::SOLO_ROOM.into()));
-        self.room_name = Some(crate::net::SOLO_ROOM.to_string());
-        // A lobby of one, so the clock along the top has something to read.
-        // `None` for a sandbox, which is what playing alone has always been
-        // and what the form's "never" means.
-        self.lobby = victory.map(|victory| Lobby {
-            phase: crate::net::MatchPhase::Running { from: 0 },
-            victory: Some(victory),
-            players: vec![(PlayerId(1), String::new())],
-            teams: Vec::new(),
-            owner: None,
-            started_by: None,
-            code: None,
-        });
-        // A solitary world is a plain one. A laboratory is a room now, so
-        // there is nothing here to switch off and nothing for it to mean.
-        self.rules = crate::net::Rules::default();
         self.camera.centre = home;
         // The chunk store still holds the room's world, and a dirty camera is
         // what makes `update` sync it against this one.
         self.camera.dirty = true;
         self.ui.screen = Screen::Playing;
-    }
-
-    /// Say where the client is, in the address bar.
-    ///
-    /// Called wherever the screen or the room changes rather than every frame:
-    /// it is a browser API and a no-op on native, and neither wants doing
-    /// sixty times a second to say the same thing.
-    /// Whether this room is a match that has not started.
-    fn gathering(&self) -> bool {
-        matches!(self.lobby.as_ref().map(|l| &l.phase), Some(crate::net::MatchPhase::Gathering))
     }
 
     /// **Where the client is, as the address bar says it.**
@@ -1998,15 +1019,15 @@ impl GameApp {
     /// so it is the only thing.
     fn here(&self) -> crate::client::route::Route {
         use crate::client::route::Route;
-        match (&self.ui.screen, &self.room) {
+        match (&self.ui.screen, &self.session.room) {
             (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
             (Screen::Menu(m), _) if m.page == menu::Page::Alone => Route::Alone,
             (Screen::Menu(_), _) => Route::Home,
-            (Screen::Playing, Some(room)) if self.watching => Route::Watch(room.clone()),
+            (Screen::Playing, Some(room)) if self.session.watching => Route::Watch(room.clone()),
             // A lobby is a screen of its own, so it says so. Following either
             // does the same thing — join that room — and what you get is
             // whichever screen the phase calls for.
-            (Screen::Playing, Some(room)) if self.gathering() => Route::Lobby(room.clone()),
+            (Screen::Playing, Some(room)) if self.session.gathering() => Route::Lobby(room.clone()),
             (Screen::Playing, Some(room)) => Route::Room(room.clone()),
             // Offline. It has no room to name and is no link to hand anybody,
             // and it is still a screen you are on rather than the home screen
@@ -2037,13 +1058,15 @@ impl GameApp {
         match route {
             Route::Watch(room) => {
                 self.back_to_menu();
-                self.watching = true;
-                self.ask_to_join(Joining { name: self.my_name(), room: Some(room) });
+                self.session.watching = true;
+                let name = self.my_name();
+                self.session.join(name, Some(room));
             }
             Route::Room(room) | Route::Lobby(room) => {
                 self.back_to_menu();
-                self.watching = false;
-                self.ask_to_join(Joining { name: self.my_name(), room: Some(room) });
+                self.session.watching = false;
+                let name = self.my_name();
+                self.session.join(name, Some(room));
             }
             Route::Home => self.show_menu_page(menu::Page::Home),
             Route::Play => self.show_menu_page(menu::Page::Play),
@@ -2090,7 +1113,7 @@ impl GameApp {
                 // here and a home screen showing the count from before it
                 // would say the last game did not happen.
                 m.record = crate::client::record::Summary::of(&crate::client::record::games());
-                m.rating = self.rating.map(|r| (r, self.rating_change));
+                m.rating = self.session.rating.map(|r| (r, self.session.rating_change));
             }
             Screen::Playing => {
                 let address = self.address_hint();
@@ -2099,7 +1122,7 @@ impl GameApp {
                 // Carried over, because the menu is where a rating is read and
                 // the app is the only thing that has been told one. A match
                 // that has just ended is the commonest way to arrive here.
-                m.rating = self.rating.map(|r| (r, self.rating_change));
+                m.rating = self.session.rating.map(|r| (r, self.session.rating_change));
                 self.ui.screen = Screen::Menu(m);
             }
         }
@@ -2107,12 +1130,104 @@ impl GameApp {
 
     #[cfg(target_arch = "wasm32")]
     fn address_hint(&self) -> String {
-        Link::origin_url("/ws").unwrap_or_else(|| "ws://localhost:8080/ws".into())
+        crate::net::link::Link::origin_url("/ws").unwrap_or_else(|| "ws://localhost:8080/ws".into())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn address_hint(&self) -> String {
         crate::net::keep::server().unwrap_or_else(|| start::DEFAULT_ADDRESS.into())
+    }
+
+    /// **Act on what the session could not.**
+    ///
+    /// The other half of [`Effect`]: everything here needs a screen, a camera
+    /// or a menu, which is the line the session is on the other side of.
+    fn act_on(&mut self, effect: Effect) {
+        match effect {
+            // Into the game. Not before: until a `Welcome` arrives there is no
+            // world to be in, and a menu that closed on the click would leave
+            // the player staring at ground they could not build on while the
+            // socket was still opening.
+            Effect::Entered => {
+                self.ui.screen = Screen::Playing;
+                self.camera.dirty = true;
+                self.say_where();
+            }
+            Effect::LookAt(at) => {
+                self.camera.centre = middle_of(at);
+                self.camera.dirty = true;
+            }
+            // The home screen reads this when it is built, and it is already
+            // built if we are looking at it.
+            Effect::Rated => {
+                let now = self.session.rating.map(|r| (r, self.session.rating_change));
+                if let Screen::Menu(m) = &mut self.ui.screen {
+                    m.rating = now;
+                }
+            }
+            Effect::Refused(reason) => self.show_menu(menu::Stage::Failed(reason)),
+            Effect::NotStarted(reason) => {
+                self.notice = Some(reason.clone());
+                self.ui.refused_start = Some(reason);
+            }
+            // A stale reason under the button is worse than none: whatever the
+            // last whistle was refused for has been answered by this.
+            Effect::LobbyMoved => self.ui.refused_start = None,
+            Effect::Made { id, code } => {
+                // A code is the thing you send somebody, so it goes into the
+                // field it can be read off and copied from rather than only
+                // into a log line nobody will see.
+                if let Screen::Menu(m) = &mut self.ui.screen {
+                    if let Some(code) = code {
+                        m.code = code;
+                    }
+                    m.draft = None;
+                }
+                // Straight in. Making a world and then being handed back to
+                // the list to find it is a step that exists only because the
+                // messages are two.
+                self.chose(menu::Chose::Join(id));
+            }
+            Effect::NotMade(why) => {
+                if let Screen::Menu(menu::Menu { draft: Some(draft), .. }) = &mut self.ui.screen {
+                    draft.asking = false;
+                    draft.note = Some(why);
+                }
+            }
+            Effect::Rooms(rooms) => {
+                if let Screen::Menu(m) = &mut self.ui.screen {
+                    // A refusal already on screen is carried over rather than
+                    // replaced: the reason and the list of rooms that do exist
+                    // are two halves of one answer, and a list arriving on its
+                    // own reads as the click having done nothing.
+                    let note = match std::mem::replace(&mut m.stage, menu::Stage::Idle) {
+                        menu::Stage::Failed(why) => Some(why),
+                        menu::Stage::Choosing { note, .. } => note,
+                        _ => None,
+                    };
+                    m.stage = menu::Stage::Choosing { rooms, note };
+                }
+            }
+            Effect::Closed => match &self.ui.screen {
+                // Nothing was ever reached. The address is the likely reason
+                // and the only thing the player can act on, so it is what the
+                // message names.
+                Screen::Menu(m) => {
+                    let address = m.address.clone();
+                    self.show_menu(menu::Stage::Failed(words::menu::no_answer(&address)));
+                }
+                // Mid-game. The simulation is deterministic, so the world
+                // carries on locally rather than stopping -- offline is a
+                // solitary game, not a broken one. **Said on screen as well as
+                // in the log**, because a log line is not somewhere a player
+                // is looking and the difference between this game and the one
+                // they were in is every other player in it.
+                Screen::Playing => {
+                    log::warn!("link closed; continuing offline");
+                    self.notice = Some(words::menu::LOST_CONNECTION.into());
+                }
+            },
+        }
     }
 
     /// Act on what the menu was clicked for.
@@ -2124,29 +1239,17 @@ impl GameApp {
             // The list refreshes itself; this is for somebody who has just
             // made a room elsewhere and does not want to wait out the
             // interval. Asking again is one small message.
-            menu::Chose::Refresh => {
-                self.listed_at = self.elapsed;
-                self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
-            }
+            menu::Chose::Refresh => self.session.refresh_now(self.elapsed),
             menu::Chose::Connect(address) => {
                 if let Screen::Menu(m) = &mut self.ui.screen {
                     crate::net::keep::remember_name(&m.name);
                 }
                 crate::net::keep::remember_server(&address);
                 log::info!("asking {address} what rooms it has");
-                // Any previous socket goes first. Two links would both be
-                // draining into one client, and the second Welcome would
-                // arrive into a world built for the first.
-                self.link = dial(&address);
-                match &self.link {
-                    Some(link) => {
-                        link.send(ClientMessage::Rooms);
-                        self.asked_at = Some(self.elapsed);
-                        self.show_menu(menu::Stage::Asking);
-                    }
-                    None => {
-                        self.show_menu(menu::Stage::Failed(words::menu::not_an_address(&address)))
-                    }
+                if self.session.connect(dial(&address), self.elapsed) {
+                    self.show_menu(menu::Stage::Asking);
+                } else {
+                    self.show_menu(menu::Stage::Failed(words::menu::not_an_address(&address)));
                 }
             }
             // Back into the world already behind the menu. Nothing is joined
@@ -2183,13 +1286,7 @@ impl GameApp {
             // client that destroys something -- which is why the menu asks
             // twice before it gets here.
             menu::Chose::ResetEverything => {
-                log::warn!("forgetting this client's key, record and settings");
-                crate::net::keep::forget_everything();
-                self.link = None;
-                self.joining = None;
-                self.me = None;
-                self.room = None;
-                self.room_name = None;
+                self.session.forget_everything();
                 self.ui.screen = Screen::Menu(menu::Menu::new(
                     self.address_hint(),
                     cfg!(target_arch = "wasm32"),
@@ -2206,12 +1303,8 @@ impl GameApp {
             // room. Joining is the same message the room list sends, so there
             // is one way into a world rather than two.
             menu::Chose::Create { name, shape, victory, teams, private, laboratory } => {
-                let Some(link) = &self.link else {
-                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
-                    return;
-                };
                 log::info!("asking for a room called \"{name}\"");
-                link.send(ClientMessage::Create {
+                let asked = self.session.create(ClientMessage::Create {
                     name,
                     shape,
                     victory,
@@ -2219,120 +1312,27 @@ impl GameApp {
                     private,
                     laboratory,
                 });
+                if !asked {
+                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
+                }
             }
             // Watching takes no name and keeps no token: there is no player
             // to be remembered as.
             menu::Chose::Watch(room) => {
-                let Some(link) = &self.link else {
-                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
-                    return;
-                };
                 log::info!("watching room \"{room}\"");
-                link.send(ClientMessage::Watch { room });
+                if !self.session.watch(room) {
+                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
+                }
             }
             menu::Chose::Join(room) => {
-                let Some(link) = &self.link else {
+                if !self.session.connected() {
                     self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
                     return;
-                };
-                let _ = link;
-                let name = match &self.ui.screen {
-                    Screen::Menu(m) => m.name.clone(),
-                    Screen::Playing => "player".into(),
-                };
-                crate::net::keep::remember_name(&name);
+                }
+                let name = self.my_name();
                 log::info!("joining {room} as \"{name}\"");
-                self.ask_to_join(Joining { name, room: Some(room) });
+                self.session.join(name, Some(room));
             }
-        }
-    }
-
-    /// Join.
-    fn ask_to_join(&mut self, joining: Joining) {
-        self.joining = Some(joining);
-        self.send_pending_join();
-    }
-
-    /// Send the waiting join, if there is one and there is a link to send it
-    /// on.
-    ///
-    /// A client with no secret sends none, and plays as somebody this server
-    /// will not remember — the honest outcome for a browser that cannot keep
-    /// one, rather than a reason to refuse to let anybody play.
-    ///
-    /// **Nothing is waited for now.** A join used to be held until the server
-    /// sent a challenge to sign, which was a round trip before every join and
-    /// a state to get wrong; `Link` already holds messages until the socket is
-    /// open, so there is nothing left for this to be pending on.
-    fn send_pending_join(&mut self) {
-        let Some(link) = self.link.as_ref() else { return };
-        let Some(joining) = self.joining.take() else { return };
-        link.send(ClientMessage::Join {
-            person: crate::net::keep::secret_or_new(),
-            name: joining.name,
-            room: joining.room,
-        });
-    }
-
-    /// Ask for the room list again, so it does not go stale under the pointer.
-    /// Only while the list is on screen.
-    fn refresh_room_list(&mut self) {
-        if !matches!(
-            self.ui.screen,
-            Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { .. }, .. })
-        ) {
-            return;
-        }
-        if self.elapsed - self.listed_at < ROOM_LIST_REFRESH {
-            return;
-        }
-        self.listed_at = self.elapsed;
-        self.link.as_ref().inspect(|l| l.send(ClientMessage::Rooms));
-    }
-
-    /// Give up on a server that has not answered.
-    ///
-    /// A menu that says "asking" forever is indistinguishable from one that is
-    /// broken, and the two most likely causes -- a wrong address, and a server
-    /// that is not running -- both look exactly like this.
-    ///
-    /// **This runs for a client that was told where to go, too.** A link into
-    /// a room used to set no deadline at all, so a socket that never opened
-    /// left the client playing the world it starts every session with, on its
-    /// own, with nothing said and the HUD reading "connected" -- a browser's
-    /// socket object exists long before it connects, and may never connect.
-    fn time_out_first_word(&mut self) {
-        let Some(asked) = self.asked_at else { return };
-        if self.elapsed - asked < ROOM_LIST_TIMEOUT {
-            return;
-        }
-        self.asked_at = None;
-        self.link = None;
-        let address = self.address_hint();
-        self.show_menu(menu::Stage::Failed(words::menu::no_reply(&address)));
-    }
-
-    fn subscribe_to_view(&mut self) {
-        let (min, max) = self.camera.visible_cells(VIEW_MARGIN);
-        // Folded onto the chunks that actually exist before anything is asked
-        // for. On a wrapping world the viewport runs off the edge and comes
-        // back, so the same chunk is covered under several global coordinates
-        // -- and a `Resync` names the folded one. Asking under the unfolded
-        // name would subscribe several times to one chunk and then fail to
-        // match the name the server used when it said that chunk was wrong.
-        let mut wanted: Vec<_> = World::chunks_covering(min, max)
-            .into_iter()
-            .map(|c| self.world.canonical(c))
-            .filter(|c| !self.subscribed.contains(c))
-            .collect();
-        wanted.sort_unstable();
-        wanted.dedup();
-        if wanted.is_empty() {
-            return;
-        }
-        self.subscribed.extend(wanted.iter().copied());
-        if let Some(link) = &self.link {
-            link.send(ClientMessage::Subscribe { chunks: wanted });
         }
     }
 }
@@ -2356,59 +1356,30 @@ impl App for GameApp {
         // Where to go, or whether to ask. A destination stated on a command
         // line or in a link is a choice already made; anything else opens the
         // menu, which is the only way a room can be chosen without a terminal.
-        let mut pending: Option<Joining> = None;
-        // When the wait for a first word started, so it can run out. `None`
-        // once the server has answered, and for a client that is not waiting.
-        let mut asked_at: Option<f64> = None;
-        let (screen, link) = match startup() {
+        let mut session = Session::new();
+        let screen = match startup() {
             Start::Join { url, name, room, watch } => {
                 log::info!("connecting to {url}, asking for room {room:?}");
                 // `--room` and `?room=` are typed, so they are names rather
                 // than ids -- and the server resolves either, along with a
                 // code, which is what lets one flag carry all three.
                 let room = room.map(crate::net::RoomId);
-                // A link that says watch is answered by `Watch`, which takes
-                // no name and no token: there is no player to be remembered
-                // as, and nothing to sign for.
                 let watching = watch && room.is_some();
-                let link = dial(&url).inspect(|link| {
-                    if let (Some(room), true) = (&room, watching) {
-                        link.send(ClientMessage::Watch { room: room.clone() });
-                    }
-                });
-                // Held rather than sent: a join says who it is from, and who
-                // it is from is a signature over a challenge this connection
-                // has not been given yet. `pump_link` sends it when it is.
-                if link.is_some() && !watching {
-                    pending = Some(Joining { name, room: room.clone() });
-                }
-                match link {
-                    // **Timed like the menu's own ask, which it was not.** A
-                    // link into a room set no deadline, so a socket that never
-                    // opened produced no message, no retry and no way to tell:
-                    // the client sat in `Screen::Playing` on the world it
-                    // starts with, and a browser's socket object exists long
-                    // before it connects, so the HUD said "connected" for the
-                    // whole of it. A game that quietly turns out to be a
-                    // different game is worse than one that says it failed.
-                    Some(link) => {
-                        asked_at = Some(0.0);
-                        (Screen::Playing, Some(link))
-                    }
+                if session.go(dial(&url), name, room, watching) {
+                    Screen::Playing
+                } else {
                     // The address is unusable — a browser refusing to build a
                     // socket for it, which is the one way `dial` fails here.
                     // Said now rather than waited out.
-                    None => (
-                        Screen::Menu(menu::Menu::failed(
-                            url.clone(),
-                            cfg!(target_arch = "wasm32"),
-                            words::menu::not_an_address(&url),
-                        )),
-                        None,
-                    ),
+                    Screen::Menu(menu::Menu::failed(
+                        url.clone(),
+                        cfg!(target_arch = "wasm32"),
+                        words::menu::not_an_address(&url),
+                    ))
                 }
             }
             Start::Menu { address, page, describing } => {
+                #[allow(clippy::let_and_return)]
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
                 // **The page the address named, whichever it is.** This
                 // honoured `Play` alone, so `/alone` and `/experiments` were
@@ -2423,7 +1394,7 @@ impl App for GameApp {
                 if let Some(kind) = describing {
                     m.describe(kind);
                 }
-                (Screen::Menu(m), None)
+                Screen::Menu(m)
             }
         };
         // Always start with something on screen. Holding an empty world until
@@ -2527,35 +1498,13 @@ impl App for GameApp {
             elapsed: 0.0,
             notice: None,
             last_action: None,
-            value: Player::STARTING_VALUE,
-            asked_at,
-            listed_at: 0.0,
-            lobby: None,
-            me: None,
-            watching: false,
-            room: None,
-            room_name: None,
-            subscribed: std::collections::HashSet::new(),
-            person: crate::net::keep::person(),
-            rating: None,
-            rating_change: None,
-            joining: pending,
             cursor: (0.0, 0.0),
             pending: None,
             held: Held::default(),
             stamps: stamp::Library::remembered(),
             icons: icons::Icons::default(),
-            standing: Vec::new(),
-            counted_at: u64::MAX,
-            plays_as: None,
             said_where: None,
-            applied_early: Vec::new(),
-            rules: crate::net::Rules::default(),
-            step_once: false,
-            forfeited: false,
-            in_play: None,
-            geiger: Default::default(),
-            link,
+            session,
         };
         app.world.dirty = false;
         app.fit(gpu);
@@ -2566,7 +1515,7 @@ impl App for GameApp {
     fn resize(&mut self, gpu: &GpuState) {
         // `update` notices this too; this just avoids a frame of staleness.
         self.fit(gpu);
-        self.subscribed.clear();
+        self.session.forget_what_was_asked_for();
         self.write_camera(gpu);
     }
 
@@ -2583,22 +1532,34 @@ impl App for GameApp {
         //
         // Cheap to ask every frame: `send_pending_join` takes what it sends,
         // so this is one `Option` check once the join has gone.
-        if self.joining.is_some() {
-            self.send_pending_join();
+        if self.session.join_waiting() {
+            self.session.send_pending_join();
         }
         if self.fit(gpu) {
-            self.subscribed.clear(); // a different area is visible now
+            // A different area is visible now.
+            self.session.forget_what_was_asked_for();
         }
 
         if self.playing() {
             self.apply_pan(dt);
         }
 
-        if self.link.is_some() {
-            self.pump_link();
+        let effects = self.session.pump(&mut self.world, self.elapsed);
+        for effect in effects {
+            self.act_on(effect);
         }
-        self.time_out_first_word();
-        self.refresh_room_list();
+        // Only while the screen that shows them is up: a client sitting in a
+        // world has no list to keep fresh.
+        let listing = matches!(&self.ui.screen, Screen::Menu(m) if matches!(m.stage, menu::Stage::Choosing { .. }));
+        self.session.refresh_room_list(self.elapsed, listing);
+        if self.session.timed_out(self.elapsed) {
+            let address = self.address_hint();
+            self.show_menu(menu::Stage::Failed(words::menu::no_reply(&address)));
+        }
+        if self.playing() {
+            let (min, max) = self.camera.visible_cells(VIEW_MARGIN);
+            self.session.subscribe(&self.world, min, max);
+        }
 
         if let Some(Pending { drag, to_px }) = self.pending.take() {
             let to = self.cell_under_cursor(to_px);
@@ -2620,42 +1581,10 @@ impl App for GameApp {
             }
         }
 
-        // Only offline. Connected, the world advances when the server says a
-        // generation happened, and never on this client's own clock -- see
-        // `advance_to`.
-        if self.link.is_none() {
-            // **Stopped means stopped, and one means one.** `World::update`
-            // banks elapsed time against the span, so not calling it is the
-            // whole of pausing: no time accumulates, and letting go does not
-            // release a burst of generations that built up while stopped.
-            // A decided match stops, the way a room does. `stepping` is the
-            // same question the server asks, so a solitary match ends on the
-            // generation it was won rather than running on with the result
-            // already settled.
-            let stopped = self.lobby.as_ref().is_some_and(|l| !l.phase.stepping());
-            let mined = match (self.rules.paused || stopped, std::mem::take(&mut self.step_once)) {
-                (false, _) => self.world.update(dt, GENERATION_SPAN),
-                (true, true) => self.world.step(),
-                (true, false) => crate::sim::Mined::default(),
-            };
-            self.bank(&mined);
-            // **And its own standings**, which nothing else was producing:
-            // they arrive in a `ServerMessage::Standing` and offline there is
-            // no server, so every figure that reads them sat at nought for the
-            // whole of a solo game — the ground on the bar, and the bars in
-            // the HUD.
-            //
-            // Counted exactly rather than guessed. A *connected* client holds
-            // its screen and a margin, which is why it takes the server's
-            // figure; offline it owns the whole world, so the same count the
-            // server would do is the right one. `net::standings` is that
-            // count, shared so the two cannot disagree.
-            if self.world.generation != self.counted_at {
-                self.counted_at = self.world.generation;
-                self.standing = crate::net::standings(&self.world);
-                self.decide_alone();
-            }
-        }
+        // Only offline, and the session is what knows that. Connected, the
+        // world advances when the server says a generation happened and never
+        // on this client's own clock.
+        self.session.advance_alone(&mut self.world, dt, GENERATION_SPAN);
         if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);
             self.chunks.sync(&gpu.queue, &self.world, visible, self.camera.zoom);
@@ -2666,36 +1595,37 @@ impl App for GameApp {
         // Decayed every frame rather than only when something arrives: the
         // whole point of a rate is that it falls on its own, and one that only
         // moved on a resync would sit at its peak until the next one.
-        self.geiger.decay(self.elapsed);
+        self.session.geiger.decay(self.elapsed);
         let holding = self.holding().to_string();
         let status = hud::Status {
-            player: self.player(),
-            value: self.value,
+            player: self.session.player(),
+            value: self.session.value,
             generation: self.world.generation,
             // What this client has been sent, not what its world has room for.
             // A torus is allocated whole, so `stored_count` there is the size
             // of the world and says nothing about what has arrived.
-            chunks_held: self.subscribed.len(),
+            chunks_held: self.session.chunks_held(),
             chunks_drawn: self.chunks.instance_count(),
             zoom: self.camera.zoom,
-            connected: self.link.is_some(),
-            room: self.room_name.as_deref(),
+            connected: self.session.connected(),
+            room: self.session.room_name.as_deref(),
             world: self.world.kind(),
             notice: self.notice.as_deref(),
             pointer_on_ui: self.views.borrow().wants_pointer(),
             cursor_cell: self.cell_under_cursor(self.cursor),
             last_action: self.last_action.as_deref(),
             holding: &holding,
-            standing: &self.standing,
-            geiger: self.geiger,
-            watching: self.watching,
-            rating: self.rating.map(|r| (r, self.rating_change)),
+            standing: &self.session.standing,
+            geiger: self.session.geiger,
+            watching: self.session.watching,
+            rating: self.session.rating.map(|r| (r, self.session.rating_change)),
             in_a_match: matches!(
-                self.lobby.as_ref().map(|l| &l.phase),
+                self.session.lobby.as_ref().map(|l| &l.phase),
                 Some(crate::net::MatchPhase::Running { .. })
             ),
-            started_it: self.lobby.as_ref().and_then(|l| l.owner) == self.me && self.me.is_some(),
-            forfeited: self.forfeited,
+            started_it: self.session.lobby.as_ref().and_then(|l| l.owner) == self.session.me
+                && self.session.me.is_some(),
+            forfeited: self.session.forfeited,
         };
         // What the keys bound by *position* print here, read before the frame
         // because the closure below holds `views` for the whole of it. Three
@@ -2752,7 +1682,7 @@ impl App for GameApp {
         // needs the context, and the context is borrowed for the whole build.
         let sheet = {
             let ctx = self.views.borrow().ctx().clone();
-            self.icons.sheet(&ctx, self.player())
+            self.icons.sheet(&ctx, self.session.player())
         };
         // What shift and a digit types on this keyboard, as far as anyone has
         // found out by pressing it.
@@ -2760,7 +1690,7 @@ impl App for GameApp {
             move |digit: u32| shifted.get(digit.checked_sub(1)? as usize).cloned().flatten();
         // And what it types on its own, for the stamp squares.
         let plain = move |digit: u32| bare.get(digit as usize).cloned().flatten();
-        let (r, g, b) = crate::client::views::hue::player_colour(self.player());
+        let (r, g, b) = crate::client::views::hue::player_colour(self.session.player());
         let marks = overlay::Marks {
             tint: egui::Color32::from_rgb(r, g, b),
             hover: self.hover_mark(status.pointer_on_ui),
@@ -2778,27 +1708,27 @@ impl App for GameApp {
         // What a press in the lobby meant, acted on after the frame is built
         // because both answers change the screen the frame was drawn from.
         let mut in_lobby = lobby_view::Did::Nothing;
-        let lobby = self.lobby.clone();
-        let standing = self.standing.clone();
+        let lobby = self.session.lobby.clone();
+        let standing = self.session.standing.clone();
         let generation = self.world.generation;
-        let paused = self.rules.paused;
+        let paused = self.session.rules.paused;
         // Offline this client is the clock, and in a laboratory it is the
         // room's; in a game the server keeps time and there is nothing on the
         // bar to press.
-        let own_clock = self.own_clock();
+        let own_clock = self.session.own_clock();
         let showing_rules = self.ui.showing_rules;
-        let rules = self.rules;
+        let rules = self.session.rules;
         // What the client already is, which the menu cannot see for itself.
         let at = menu::Where {
             now: self.elapsed,
             on_web: cfg!(target_arch = "wasm32"),
-            waiting_in_a_match: self.link.is_some()
+            waiting_in_a_match: self.session.connected()
                 && matches!(
-                    self.lobby.as_ref().map(|l| &l.phase),
+                    self.session.lobby.as_ref().map(|l| &l.phase),
                     Some(crate::net::MatchPhase::Gathering)
                 ),
         };
-        let me = self.player();
+        let me = self.session.player();
         let helping = self.ui.helping;
         let mut help_closed = false;
         // **One borrow, not five takes.** The closure needs `&mut` on the
@@ -2844,7 +1774,12 @@ impl App for GameApp {
                                     lobby_view::show(
                                         ctx,
                                         &theme,
-                                        &l.look(me, &l.hues(), ui.refused_start.as_deref()),
+                                        &look_at(
+                                            l,
+                                            me,
+                                            &crate::client::views::hue::table(),
+                                            ui.refused_start.as_deref(),
+                                        ),
                                         &mut ui.naming_team,
                                     )
                                 },
@@ -2898,7 +1833,12 @@ impl App for GameApp {
                             let shown = lobby_view::show(
                                 ctx,
                                 &theme,
-                                &l.look(me, &l.hues(), ui.refused_start.as_deref()),
+                                &look_at(
+                                    l,
+                                    me,
+                                    &crate::client::views::hue::table(),
+                                    ui.refused_start.as_deref(),
+                                ),
                                 &mut ui.naming_team,
                             );
                             if !matches!(shown.did, lobby_view::Did::Nothing) {
@@ -2956,10 +1896,10 @@ impl App for GameApp {
         // applied, because the room holds them and everybody in it shares
         // them — see `set_rules`.
         if told_rules.anywhere.is_some() || told_rules.free.is_some() {
-            self.set_rules(crate::net::Rules {
-                place_anywhere: told_rules.anywhere.unwrap_or(self.rules.place_anywhere),
-                place_free: told_rules.free.unwrap_or(self.rules.place_free),
-                ..self.rules
+            self.session.set_rules(crate::net::Rules {
+                place_anywhere: told_rules.anywhere.unwrap_or(self.session.rules.place_anywhere),
+                place_free: told_rules.free.unwrap_or(self.session.rules.place_free),
+                ..self.session.rules
             });
         }
         if told_rules.close {
@@ -3030,22 +1970,17 @@ impl App for GameApp {
             hud::Did::Nothing => {}
             hud::Did::Back => leaving = true,
             hud::Did::Forfeit => {
-                if let Some(link) = &self.link {
-                    log::info!("giving up this match");
-                    link.send(ClientMessage::Forfeit);
-                    // Marked here rather than waiting for the server to say
-                    // so: there is no message that answers a forfeit, only a
-                    // lobby that changes, and a button that stays pressable
-                    // for a quarter of a second is a button people press
-                    // twice.
-                    self.forfeited = true;
-                }
+                log::info!("giving up this match");
+                self.session.tell(ClientMessage::Forfeit);
+                // Marked here rather than waiting for the server to say so:
+                // there is no message that answers a forfeit, only a lobby
+                // that changes, and a button that stays pressable for a
+                // quarter of a second is a button people press twice.
+                self.session.forfeited = true;
             }
             hud::Did::EndMatch => {
-                if let Some(link) = &self.link {
-                    log::info!("asking to end the match");
-                    link.send(ClientMessage::EndMatch);
-                }
+                log::info!("asking to end the match");
+                self.session.tell(ClientMessage::EndMatch);
             }
         }
         match in_lobby {
@@ -3055,23 +1990,17 @@ impl App for GameApp {
             // broadcast phase change, or as `NotStarted` with a reason, so
             // there is nothing to do here but ask.
             lobby_view::Did::Start => {
-                if let Some(link) = &self.link {
-                    log::info!("asking to start the match");
-                    link.send(ClientMessage::Start);
-                }
+                log::info!("asking to start the match");
+                self.session.tell(ClientMessage::Start);
             }
             // Both answer by broadcast: the server changes who is on what and
             // the next lobby message says so, to everybody at once, which is
             // what a lobby full of people all changing sides needs.
             lobby_view::Did::JoinTeam(team) => {
-                if let Some(link) = &self.link {
-                    link.send(ClientMessage::JoinTeam { team });
-                }
+                self.session.tell(ClientMessage::JoinTeam { team });
             }
             lobby_view::Did::NameTeam(team, name) => {
-                if let Some(link) = &self.link {
-                    link.send(ClientMessage::NameTeam { team, name });
-                }
+                self.session.tell(ClientMessage::NameTeam { team, name });
             }
         }
         if help_closed {
@@ -3534,33 +2463,6 @@ impl App for GameApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// **Only the next generation is a step; everything else is a loss.**
-    ///
-    /// This used to step forward to close a gap of up to thirty-two, which is
-    /// the branching bug rather than the recovery from it: those generations
-    /// carried actions, stepping runs them empty, and the world that comes out
-    /// is one nobody else has. There is no arithmetic that recovers a message
-    /// that never arrived, so the only honest answers are "step" and "ask
-    /// again".
-    #[test]
-    fn a_step_is_the_next_generation_and_nothing_else_is() {
-        assert_eq!(advance(0, 1), Advance::Step);
-        assert_eq!(advance(400, 401), Advance::Step);
-
-        // Behind, by one message and by many. Both used to be caught up
-        // locally and both are worlds this client would be inventing.
-        assert_eq!(advance(400, 402), Advance::Lost, "one dropped step is still a loss");
-        assert_eq!(advance(400, 432), Advance::Lost);
-        assert_eq!(advance(400, 100_000), Advance::Lost);
-
-        // Ahead, or the same tick twice: a websocket does not reorder, so
-        // either means something upstream is not what it is thought to be, and
-        // the answer is the same one.
-        assert_eq!(advance(400, 400), Advance::Lost);
-        assert_eq!(advance(400, 399), Advance::Lost);
-        assert_eq!(advance(400, 0), Advance::Lost);
-    }
 
     /// The HUD swatch and the cells on the board must agree about a player's
     /// colour, so this reproduces the shader's arithmetic and checks the result

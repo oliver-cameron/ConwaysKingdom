@@ -133,7 +133,7 @@ mod tests {
         let cases = vec![
             // Most first, and a player holding nothing is simply absent.
             // A decided match, which is the shape with the most in it.
-            ServerMessage::Match {
+            ServerMessage::Match(crate::net::Lobby {
                 teams: Vec::new(),
                 started_by: None,
                 owner: None,
@@ -145,8 +145,8 @@ mod tests {
                 },
                 victory: Some(crate::net::Victory::Timer { generations: 2000 }),
                 players: vec![(PlayerId(1), "alice".into()), (PlayerId(4), "bob".into())],
-            },
-            ServerMessage::Match {
+            }),
+            ServerMessage::Match(crate::net::Lobby {
                 teams: Vec::new(),
                 started_by: None,
                 owner: None,
@@ -154,7 +154,7 @@ mod tests {
                 phase: crate::net::MatchPhase::Gathering,
                 victory: Some(crate::net::Victory::Territory { squares: 500 }),
                 players: vec![],
-            },
+            }),
             ServerMessage::Standing {
                 tick: 40,
                 held: vec![
