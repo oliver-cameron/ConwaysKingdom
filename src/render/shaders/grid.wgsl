@@ -42,6 +42,7 @@ const AGE_SHIFT: u32 = 5u;      // byte 1, bits 5..8
 // See render::atlas. One sheet, sixteen tiles each way.
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
+const SHEET_N: f32 = 256.0;      // texels across the sheet, TILE_N * SHEET_TILES
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
 const KIND_COARSE: u32 = 2u;     // one quad standing in for the whole world
 
@@ -331,7 +332,24 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
 /// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#zooming-out-without-lying).
 /// It is a dial: raise it for a better picture at low zoom, lower it if the
 /// fragment cost ever shows up.
-const MIN_AA: i32 = 2;
+/// **Four, and cell boundaries are why.**
+///
+/// The coordinate is what antialiases *inside* a tile now — see
+/// `point_colour` — and that snap deliberately stops at the tile's edge,
+/// because the sheet is an atlas and a tap past the edge would blend an
+/// unrelated picture. So the one place it cannot help is exactly where it
+/// matters most: the boundary between two cells, which is two different
+/// sprites and the line the eye actually follows.
+///
+/// That is this loop's job, and the number of samples is the number of states
+/// an edge has as it crosses a pixel: `k + 1`. Two gave three — on, half, off
+/// — which still visibly steps. Four gives five, which does not.
+///
+/// It is the expensive way to buy them, and the cheap way is exact: a pixel
+/// straddling a cell boundary wants the two cells' colours mixed by how much
+/// of it each covers, which is two taps and a `lerp` rather than sixteen
+/// samples. That is the next thing to do here if the fragment cost shows up.
+const MIN_AA: i32 = 4;
 const MAX_AA: i32 = 4;
 
 fn aa_side() -> i32 {
@@ -376,12 +394,32 @@ fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
 
     // Low nibble across the sheet, high nibble down it.
     let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
-    let sheet_uv = (tile_xy + within / f32(TILE_N)) / SHEET_TILES;
+
+    // **A box filter one pixel wide, done in the coordinate rather than by
+    // sampling more.** Supersampling gives an edge `k+1` states as it crosses
+    // a pixel, and at four samples that is three — which still steps, and
+    // stepping is the thing being fixed.
+    //
+    // So the sheet coordinate is bent instead: it snaps to the middle of a
+    // texel everywhere except within one pixel of a boundary, where it ramps
+    // across. With a linear sampler that is exactly a one-pixel box filter,
+    // continuous, in a single tap — a texel is a flat block of colour and only
+    // its edge is soft, which is what pixel art wants.
+    //
+    // The footprint is known rather than measured: one pixel is
+    // `TILE_N / zoom` texels. `fwidth` would say the same thing and may not be
+    // taken in non-uniform control flow, which the loop above is.
+    let per_pixel = max(f32(TILE_N) / cam.zoom, 1e-4);
+    let ramp = clamp((fract(within) - 0.5) / per_pixel + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
+    // **Clamped inside the tile.** The sheet is an atlas, so a tap that
+    // wandered past a tile's edge would blend in an unrelated picture; the
+    // outer half-texel of every tile therefore stays flat.
+    let soft = clamp(floor(within) + ramp, vec2<f32>(0.5), vec2<f32>(f32(TILE_N) - 0.5));
+    let sheet_uv = (tile_xy * f32(TILE_N) + soft) / f32(SHEET_N);
     // **An explicit level, not an implicit one.** `textureSample` needs
     // derivatives, and derivatives may not be taken in non-uniform control
     // flow -- which a loop and a branch on the quad's kind both are. The sheet
-    // has one mip and a `Nearest` sampler, so level zero is exactly what the
-    // implicit path chose anyway and nothing about the picture changes.
+    // has one mip, so level zero is what the implicit path would have chosen.
     let sprite = textureSampleLevel(sprites, sprite_sampler, sheet_uv, 0.0);
 
     var colour = grid_tint(vec2<f32>(cell_coord), n);

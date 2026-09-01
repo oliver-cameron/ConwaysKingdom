@@ -65,7 +65,20 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     }
     // **Under the rating, which is the thing it explains.** A number with no
     // way to ask what is behind it is a number people stop reading.
-    if ui.small_button(words::home::PROFILE).clicked() {
+    //
+    // Full width like everything else on this screen and unaccented, because
+    // the one accent here is Play. A small button would be a word to aim at on
+    // a phone.
+    if ui
+        .add_sized(
+            [ui.available_width(), m.button_height],
+            egui::Button::new(
+                egui::RichText::new(words::home::PROFILE).size(m.text_small).color(p.text),
+            )
+            .fill(p.surface),
+        )
+        .clicked()
+    {
         chose = Chose::Profile;
     }
     ui.add_space(m.item_spacing);

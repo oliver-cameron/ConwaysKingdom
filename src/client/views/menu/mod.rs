@@ -558,6 +558,19 @@ mod tests {
     /// **The offline form plays offline.** It produced a `Create` whatever the
     /// button said, so pressing "Play alone" asked a server that was not there
     /// — `Chose::Alone` existed and nothing in the tree ever built one.
+    /// **A profile has to be reachable without other people.** It was
+    /// reachable from a lobby roster and a standings bar and from nowhere
+    /// else, so a player alone could not look at their own.
+    #[test]
+    fn the_home_screen_can_reach_your_own_profile() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        assert!(menu.page == Page::Home);
+        assert!(
+            probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Profile)),
+            "nothing on the home screen asks for your profile"
+        );
+    }
+
     #[test]
     fn the_form_with_no_server_plays_the_world_here() {
         let mut menu = Menu::new("ws://host:8080/ws".into(), false);

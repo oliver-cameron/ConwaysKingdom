@@ -2015,6 +2015,22 @@ impl App for GameApp {
             rects
         });
 
+        // **Shut before anything can open**, and only ever shut.
+        //
+        // These were `self.ui.helping = help_open` at the *end* of the frame,
+        // which is a write-back of a value read before it: a press that opened
+        // a panel — the help square, the profile button — was then overwritten
+        // by what the flag had been when the frame started, so both of them
+        // did nothing at all. Reading a flag, drawing from it and writing it
+        // back around everything that can change it is the shape of that
+        // mistake; asking only "was it closed" is not.
+        if !help_open {
+            self.ui.helping = false;
+        }
+        if !profile_open {
+            self.ui.showing_profile = None;
+        }
+
         self.chose(chose);
         if let Some(key) = picked {
             self.pick(key);
@@ -2143,10 +2159,6 @@ impl App for GameApp {
                 self.ui.showing_profile = Some(Whose::Somebody(who.clone()));
                 self.session.look_up(who);
             }
-        }
-        self.ui.helping = help_open;
-        if !profile_open {
-            self.ui.showing_profile = None;
         }
         if leaving {
             self.back_to_menu();

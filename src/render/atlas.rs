@@ -97,8 +97,16 @@ impl Atlas {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            // **Linear, and it is still pixel art.** The shader hands this a
+            // coordinate that has already been snapped to the middle of a
+            // texel except within one screen pixel of a boundary — see
+            // `point_colour` — so what linear filtering has to interpolate is
+            // that one pixel of ramp and nothing else. Nearest gave the same
+            // blocks with a hard edge that jumped a whole pixel at a time as
+            // the camera moved, which is the shimmer the whole arrangement is
+            // for.
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
