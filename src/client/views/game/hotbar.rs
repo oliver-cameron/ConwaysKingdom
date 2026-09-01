@@ -412,10 +412,17 @@ pub fn show(
                     // rather than going blank, and a click on it is the way
                     // back to drawing.
                     let shown = held.shape;
+                    // rect if ice, pencil otherwise
+                    // let held_tool = held.tool().unwrap_or(&KINDS[0]);
+                    // let held_tool = KINDS[held.kind].usually.name();
+                    let held_tool = match held.kind{
+                        3 => glyph::RECT,
+                        _ => glyph::PENCIL
+                    };
                     if square(
                         ui,
                         look,
-                        Face::Text(shown.name()),
+                        Face::Icon(held_tool),
                         shown.name(),
                         tool_hint(shift, typed),
                         true,
@@ -537,7 +544,7 @@ pub fn show(
                     if square(
                         ui,
                         look,
-                        Face::Text(words::HELP),
+                        Face::Icon(glyph::HELP),
                         words::HELP_HINT,
                         Some(words::HELP.to_string()),
                         false,

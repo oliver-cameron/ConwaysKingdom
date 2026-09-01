@@ -36,16 +36,16 @@ pub const FAMILY: &str = "phosphor";
 /// Run the world.
 pub const PLAY: &str = "\u{e3d0}";
 /// Stop it.
-pub const PAUSE: &str = "\u{e39e}";
+pub const PAUSE: &str = "\u{e01a}";
 /// One generation, and stay stopped.
-pub const STEP: &str = "\u{e5a6}";
+pub const STEP: &str = "\u{e01a}";
 /// The rules panel: what the game is doing here.
 pub const GEAR: &str = "\u{e270}";
 /// Out of this screen. The one control whose job is to be recognised at a
 /// glance, and which was a hand-painted arrow because there was no font.
 pub const BACK: &str = "\u{e058}";
 /// Every key, on one screen.
-pub const HELP: &str = "\u{e3e8}";
+pub const HELP: &str = "\u{e63c}";
 /// The stamp library.
 pub const LIBRARY: &str = "\u{e466}";
 /// Take a rectangle of the world as a stamp.
@@ -58,6 +58,12 @@ pub const CLOCK: &str = "\u{e19a}";
 pub const GROUND: &str = "\u{e244}";
 /// Rating.
 pub const RATING: &str = "\u{e67e}";
+
+pub const PENCIL: &str = "\u{e3b4}";
+
+pub const RECT: &str = "\u{e3f2}";
+
+pub const TRASH: &str = "\u{e5a6}";
 
 /// Every one of them, for the test and for the subsetter.
 pub const ALL: &[(&str, &str)] = &[
@@ -73,6 +79,9 @@ pub const ALL: &[(&str, &str)] = &[
     ("CLOCK", CLOCK),
     ("GROUND", GROUND),
     ("RATING", RATING),
+    ("PENCIL", PENCIL),
+    ("RECT", RECT),
+    ("TRASH", TRASH),
 ];
 
 /// An icon, sized like the text it sits with.
