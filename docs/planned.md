@@ -37,6 +37,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Experiments](#experiments) | Part built | a kind of **room**: the clock and the placing rules are the room's, and shared; RLE and reset are not |
 | [Keys the player chooses](#keys-the-player-chooses) | Decided | defaults cannot be right; three faults have come out of that |
 | [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
+| [How to play](#how-to-play) | Designed | the rules nobody can infer, the four tips that matter, and who wrote the rule underneath |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
 | [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
@@ -757,6 +758,38 @@ What is actually wrong, in the order it bites:
 **Numbers still shuffle.** [Type, and the numbers that jitter](#type-and-the-numbers-that-jitter) is the entry for that, and the record panel is the only place it has been fixed — everything else still sets a changing figure in a proportional face.
 
 None of this is a rewrite. The pieces the menu needed already exist: `theme::Metrics` holds the sizes, `words` holds the strings, and `hue` holds the colours. What is missing is somebody applying them to the other four views.
+
+## How to play
+
+**Designed.** A page of its own, reached from the home screen, saying the things a player cannot work out by clicking. The key list at `?` is not it: that is a lookup table for somebody who already knows what they are looking for, and this is for somebody who has just arrived and does not know that placing is confined to ground they already hold.
+
+What it has to say, in the order it bites. Each of these is a rule somebody loses to before they learn it, and none of them is visible on the board.
+
+**You can only build where your influence already reaches.** This is the first thing anybody runs into and nothing on screen explains it — a click lands, says "not yours to build on", and the player has no idea what would make it theirs. The answer is that territory is a field with sources: your granted patch is a spring that never runs dry, and live cells feed it, so you grow ground by growing life outward from what you have. See [game.md](game.md#where-you-may-build).
+
+**A mine pays on turnover, not on holdings.** A block of mines is a still life, never gives birth, and earns nothing at all — which is the exact opposite of what "I own a lot of mines" suggests. An oscillator earns every period and a gun earns forever. This is the single most counter-intuitive rule in the game and the one that decides whether somebody's economy works.
+
+**A turret is the other way round, so it is placed in fours.** It works by standing still, and one on its own dies of loneliness in a generation. The block that is a mine's worst shape is a turret's best: four is the cheapest thing in Conway that never dies and never gives birth.
+
+**Ice cannot be taken back.** It stops time over whatever it covers and only life reaching it breaks it, so a misplaced pane is a decision you live with. Worth saying before somebody spends on one.
+
+Then the part that is a *tip* rather than a rule, and it is the one that opens the game up: **other people's patterns work here.** Liveness is exactly B3/S23 — `sim::world`'s `liveness_is_exactly_b3_s23` measures it against a longhand stepper, and an R-pentomino stabilises at generation 1103 with 116 cells, which is the figure in every book. So a glider is a glider, a gun is a gun, and fifty years of published patterns are things you can build here and expect to behave. That is what the [laboratory](#experiments) is for, and it is why [RLE](#what-to-take-from-golly-in-order) is worth more than anything else on that list.
+
+### And a word about Conway, at the end
+
+At the foot of the page, after the tips, briefly and without ceremony — because the rule this game is built on is his, and because he would have wanted the sentence after it.
+
+**John Horton Conway did not want to be remembered for the Game of Life.** He was open about finding it a nuisance: it was a Sunday afternoon's play with counters on a Go board in 1970, it went round the world through Martin Gardner's column, and it then stood in front of everything else he did for fifty years. He came to a sort of peace with it late on, but the irritation was real and it is worth being honest about rather than quoting him as its proud father.
+
+So the page should say what he would rather you looked up:
+
+- **The surreal numbers**, which he thought his best work: a single construction that yields the reals, the ordinals and a great deal besides, built out of nothing but games. Knuth wrote a novella about them.
+- **The Conway groups**, three sporadic simple groups he pulled out of the Leech lattice — famously in one sitting, having set aside two long slots for it and needing only the first.
+- **Monstrous moonshine**, the conjecture he and Simon Norton made connecting the Monster group to modular functions, which Borcherds proved and won a Fields Medal for.
+- **Combinatorial game theory**, which he largely founded — *On Numbers and Games*, and *Winning Ways* with Berlekamp and Guy.
+- **The doomsday algorithm** for working out the day of the week in your head, which he delighted in and practised daily.
+
+He died in April 2020. The nod should be short, should link out rather than explain, and should not be sentimental — one paragraph and a list. The point is that somebody who enjoyed this enough to read to the bottom of the page is exactly the person who should be told there is far more, and where it is.
 
 ## Bots
 
