@@ -648,73 +648,41 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
 
 /// Shape, with the size inside the option it belongs to.
 ///
-/// **Two of the same block, side by side.** They were a bare button and a
-/// framed panel, matched by computing a height for the row and forcing both to
-/// it — which is a way of saying they are the same shape without making them
-/// one, and it went wrong twice: the plain half sat at the top of a row sized
-/// for its neighbour and read as misaligned, and the forced height was left
-/// over from a layout where the size sat *under* the label rather than beside
-/// it, so the row carried a band of nothing.
+/// **A toggle that can hold the number fields**, which is what the row wanted
+/// all along and what two attempts at it missed. It was a bare button beside a
+/// framed panel, then two framed panels — and a frame brings its own padding,
+/// so the row came out half again as tall as every other toggle on the form
+/// and then twice as tall once a text field was in it.
 ///
-/// So both are the frame now, with the same padding and the same label row.
-/// The wrapping one has two fields in that row and the boundless one does not,
-/// which is the only difference there should ever have been — and the heights
-/// match because they are built the same way rather than because two numbers
-/// were made to agree.
+/// So the cell is a rectangle of exactly [`Metrics::button_height`], painted
+/// like a toggle and laid out inside itself. Nothing can push it taller,
+/// because nothing is measured: the box is the size and the contents go in it.
+///
+/// [`Metrics::button_height`]: crate::client::views::theme::Metrics::button_height
 fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
-    let p = theme.palette;
     let m = theme.metrics;
     let wrapping = draft.shape == Shape::Wrapping;
 
-    ui.horizontal_top(|ui| {
+    ui.horizontal(|ui| {
         let each = (ui.available_width() - m.item_spacing) / 2.0;
-
-        // One option: a framed, centred label, and whatever else belongs to it
-        // on the same line. Pressing anywhere on it that is not a field
-        // chooses it, which is what keeps it a button.
-        let mut option =
-            |ui: &mut egui::Ui, chosen: bool, label: &str, extra: &mut dyn FnMut(&mut egui::Ui)| {
-                let frame = egui::Frame::new()
-                    .fill(if chosen { p.accent } else { p.surface })
-                    .stroke(egui::Stroke::new(1.0, p.line))
-                    .corner_radius(m.rounding)
-                    .inner_margin(m.panel_padding * 0.5)
-                    .show(ui, |ui| {
-                        ui.set_width(each - m.panel_padding);
-                        ui.horizontal(|ui| {
-                            ui.set_min_height(m.button_height);
-                            ui.colored_label(
-                                if chosen { p.ground } else { p.text },
-                                egui::RichText::new(label).size(m.text_small),
-                            );
-                            extra(ui);
-                        });
-                    });
-                frame.response.interact(egui::Sense::click()).clicked()
-            };
-
-        if option(ui, !wrapping, words::make::BOUNDLESS, &mut |_| {}) {
+        if cell(ui, theme, each, !wrapping, words::make::BOUNDLESS, |_, _| {}) {
             draft.shape = Shape::Boundless;
         }
-
         // **Shown either way**, greyed when the world does not wrap. Appearing
         // and disappearing made the button change width as you chose, so the
-        // two options moved under the pointer and the row jumped — and a
-        // control that is not there cannot be read before it matters.
+        // two options moved under the pointer — and a control that is not
+        // there cannot be read before it matters.
         //
         // `12x12`, which is how a size is written and how `--torus` takes one.
-        // Labelled fields said "rows" and "cols" over two boxes that could
-        // only be a size, in a row whose whole subject is the shape of a
-        // world. The unit is on hover: worth knowing once and worth no space
-        // after that.
+        // The unit is on hover: worth knowing once and worth no space after.
         let (rows, cols) = (&mut draft.rows, &mut draft.cols);
-        let mut size = |ui: &mut egui::Ui| {
-            let ink = if wrapping { p.ground } else { p.text_dim };
+        let pressed = cell(ui, theme, each, wrapping, words::make::WRAPPING, |ui, ink| {
             ui.add_enabled_ui(wrapping, |ui| {
                 let box_ = |ui: &mut egui::Ui, field: &mut String| {
                     ui.add(
                         egui::TextEdit::singleline(field)
-                            .desired_width(m.button_height * 1.4)
+                            .desired_width(m.button_height * 0.9)
+                            .margin(egui::Margin::symmetric(2, 0))
                             .horizontal_align(egui::Align::Center),
                     )
                     .on_hover_text(words::make::SIZE_NOTE);
@@ -723,27 +691,50 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
                 ui.colored_label(ink, egui::RichText::new(words::make::BY).size(m.text_small));
                 box_(ui, cols);
             });
-        };
-        if option(ui, wrapping, words::make::WRAPPING, &mut size) {
+        });
+        if pressed {
             draft.shape = Shape::Wrapping;
         }
     });
 }
 
-/// One option in a toggle row: the chosen one wears the accent.
-fn toggle(theme: &Theme, label: &str, on: bool) -> egui::Button<'static> {
-    let p = theme.palette;
-    egui::Button::new(
-        egui::RichText::new(label.to_string()).size(theme.metrics.text_small).color(if on {
-            p.ground
-        } else {
-            p.text
-        }),
-    )
-    .fill(if on { p.accent } else { p.surface })
+/// One option of a shape row: a toggle-shaped box of a fixed height, with its
+/// label and whatever else belongs to it centred inside.
+///
+/// The box is allocated first and everything is drawn *into* it, so the height
+/// is the height whatever goes in — which is the whole point, and what a
+/// `Frame` cannot promise because a frame grows to fit.
+fn cell(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    width: f32,
+    on: bool,
+    label: &str,
+    inside: impl FnOnce(&mut egui::Ui, egui::Color32),
+) -> bool {
+    let (p, m) = (theme.palette, theme.metrics);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, m.button_height), egui::Sense::click());
+    ui.painter().rect(
+        rect,
+        m.rounding,
+        if on { p.accent } else { p.surface },
+        egui::Stroke::new(1.0, p.line),
+        egui::StrokeKind::Inside,
+    );
+    let ink = if on { p.ground } else { p.text };
+    // Centred on both axes, so the label sits where a button's label sits and
+    // the two halves of the row read as a pair.
+    let inner = rect.shrink2(egui::vec2(m.item_spacing, 0.0));
+    let layout =
+        egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(layout));
+    child.spacing_mut().item_spacing.x = m.item_spacing * 0.5;
+    child.colored_label(ink, egui::RichText::new(label).size(m.text_small));
+    inside(&mut child, ink);
+    response.clicked()
 }
 
-// Add a type of button which can have the number inputs inside.
 // fn toggle_inset(theme: &Theme, label: &str, on: bool, )
 
 /// One decision as a row of buttons, the chosen one wearing the accent.

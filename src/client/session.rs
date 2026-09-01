@@ -355,13 +355,15 @@ impl Session {
         !self.watching && self.lobby.as_ref().is_none_or(|l| l.phase.accepts_actions())
     }
 
-    /// **Whether the clock is this client's to press.**
+    /// **Whether the clock is this client's to press**, which is to say
+    /// whether this is a laboratory.
     ///
-    /// Offline it always is: there is nobody else keeping time. In a room it
-    /// is the laboratory's, and nowhere else — a game's clock belongs to the
-    /// server, which is the rule that makes prediction work at all.
+    /// A world runs, and a match runs when the whistle goes; stopping either
+    /// is not a thing the game offers, and a solitary world is still a world.
+    /// It was `link.is_none()` as well, so a plain solo game had a pause
+    /// button that nothing in the design ever meant it to have.
     pub fn own_clock(&self) -> bool {
-        self.link.is_none() || self.rules.laboratory
+        self.rules.laboratory
     }
 
     /// Whether this client may put something on that square.
@@ -1359,13 +1361,20 @@ mod tests {
     ///
     /// It lived on a struct that also held the GPU pipeline and the sprite
     /// atlas, so reaching any of it meant a window.
+    ///
+    /// The clock is a **laboratory's**, not an offline client's: a world runs
+    /// and a solitary world is still a world, so a plain solo game has nothing
+    /// to press.
     #[test]
     fn a_solitary_session_is_the_authority_and_keeps_its_own_time() {
         let mut world = World::infinite();
         crate::net::grant(&mut world, PlayerId(1));
         let mut s = Session::new();
         assert!(!s.connected());
-        assert!(s.own_clock(), "there is nobody else keeping time");
+        assert!(!s.own_clock(), "a plain world runs, alone or not");
+
+        s.set_rules(Rules { laboratory: true, ..s.rules });
+        assert!(s.own_clock(), "and a laboratory's is yours");
 
         let at = world.generation;
         s.set_rules(Rules { paused: true, ..s.rules });

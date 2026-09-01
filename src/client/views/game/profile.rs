@@ -39,8 +39,15 @@ pub enum Look<'a> {
         /// at from a lobby or a standings bar, and the swatch is what joins
         /// the panel to the row it was opened from.
         hue: Option<egui::Color32>,
-        /// Whether this is the client's own.
-        mine: bool,
+        /// **Your own diary**, when the profile is yours. `None` for anybody
+        /// else's, and that is a rule rather than an omission: a server can
+        /// only vouch for what happened on it, and what this client has played
+        /// elsewhere is not something anybody else should be shown as a fact.
+        ///
+        /// Shown beside the server's count deliberately. The two disagreeing
+        /// is fine and readable — one is "what I have played" and the other is
+        /// "what I have played *here*".
+        yours: Option<&'a crate::client::record::Summary>,
     },
 }
 
@@ -58,7 +65,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) ->
             Look::Unknown => {
                 ui.colored_label(p.text_dim, words::UNKNOWN);
             }
-            Look::Found { it, hue, mine } => body(ui, theme, it, *hue, *mine),
+            Look::Found { it, hue, yours } => body(ui, theme, it, *hue, *yours),
         },
     )
 }
@@ -68,7 +75,7 @@ fn body(
     theme: &Theme,
     it: &crate::net::Profile,
     hue: Option<egui::Color32>,
-    mine: bool,
+    yours: Option<&crate::client::record::Summary>,
 ) {
     let (p, m) = (theme.palette, theme.metrics);
 
@@ -88,7 +95,7 @@ fn body(
         // headline: the name is what somebody reads and this is what settles
         // which of two of them it is.
         ui.colored_label(p.text_dim, egui::RichText::new(it.who.short()).size(m.text_small));
-        if mine {
+        if yours.is_some() {
             ui.colored_label(p.text_dim, egui::RichText::new(words::YOU).size(m.text_small));
         }
     });
@@ -117,4 +124,20 @@ fn body(
 
     ui.label(words::matches(it.games));
     ui.label(words::best(it.best));
+
+    // **And your own diary under it, when it is yours.** Two counts that sound
+    // like the same thing and are not: above is what this server has seen you
+    // do, below is every game this client has played anywhere. They disagree,
+    // and the two headings are what makes that readable rather than a bug.
+    let Some(mine) = yours else { return };
+    ui.add_space(m.item_spacing * 2.0);
+    ui.separator();
+    ui.colored_label(p.text_dim, egui::RichText::new(words::EVERYWHERE).size(m.text_small));
+    ui.add_space(m.item_spacing);
+    if mine.any() {
+        ui.label(words::played(mine.games, mine.won));
+        ui.label(words::best(mine.best as usize));
+    } else {
+        ui.colored_label(p.text_dim, crate::client::views::words::record::NOTHING_YET);
+    }
 }

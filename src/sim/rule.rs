@@ -366,7 +366,12 @@ fn parent(neighbours: &Neighbours, roll: Roll) -> Cell {
     let chosen = parents[roll.pick(stream::PARENT, found)];
     debug_assert!(chosen.player().is_owned(), "every parent is a live cell, so owned");
     if chosen.kind().inherits() {
-        chosen
+        // **The kind travels and the age does not.** A birth is a new cell, so
+        // whatever its parent was part way through, this one is at the start:
+        // a payload carried by a glider arms itself from nought rather than
+        // arriving already about to go off, and a mine's depletion is a fact
+        // about a mine rather than about its line.
+        chosen.with_age(0)
     } else {
         // Ownership alone: the ground changes hands, the machine does not copy.
         Cell::alive(chosen.player())

@@ -38,7 +38,7 @@ pub const PLAY: &str = "\u{e3d0}";
 /// Stop it.
 pub const PAUSE: &str = "\u{e39e}";
 /// One generation, and stay stopped.
-pub const STEP: &str = "\u{e5a6}";
+pub const STEP: &str = "\u{e01a}";
 /// The rules panel: what the game is doing here.
 pub const GEAR: &str = "\u{e270}";
 /// Out of this screen. The one control whose job is to be recognised at a

@@ -271,6 +271,11 @@ pub struct GameApp {
     /// The address last written down, so it is written again only when it
     /// would say something different.
     said_where: Option<crate::client::route::Route>,
+    /// **What this client has played, anywhere.** Its own diary, as against
+    /// what a server will say about it — see [`crate::client::record`]. Read
+    /// once and refreshed when a game is filed, rather than off disk every
+    /// frame a profile is open.
+    record: crate::client::record::Summary,
     /// **What this client is to a server** — the link, the seat, the purse,
     /// and the machinery that keeps this world in step with another.
     ///
@@ -1548,6 +1553,7 @@ impl App for GameApp {
             stamps: stamp::Library::remembered(),
             icons: icons::Icons::default(),
             said_where: None,
+            record: crate::client::record::Summary::of(&crate::client::record::games()),
             session,
         };
         app.world.dirty = false;
@@ -1789,7 +1795,11 @@ impl App for GameApp {
                         let (r, g, b) = crate::client::views::hue::player_colour(seat.id);
                         Some(egui::Color32::from_rgb(r, g, b))
                     }),
-                    mine: self.session.profile.as_ref().map(|p| &p.who) == Some(who),
+                    // Only ever your own, which is the rule: a server can
+                    // vouch for what happened on it, and this is the diary of
+                    // every game this client has played anywhere.
+                    yours: (self.session.profile.as_ref().map(|p| &p.who) == Some(who))
+                        .then_some(&self.record),
                     it,
                 },
             }

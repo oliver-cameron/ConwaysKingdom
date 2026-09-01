@@ -485,6 +485,19 @@ pub mod profile {
     /// never met them, as against not having replied.
     pub const UNKNOWN: &str = "this server has never met them.";
     pub const YOU: &str = "(you)";
+    /// **Your own diary**, against the server's count above it. The two
+    /// headings are what make the two numbers readable rather than a
+    /// contradiction.
+    pub const EVERYWHERE: &str = "Everywhere you have played:";
+
+    pub fn played(games: usize, won: usize) -> String {
+        let g = if games == 1 { "game" } else { "games" };
+        match won {
+            0 => format!("{games} {g}"),
+            1 => format!("{games} {g}, 1 match won"),
+            n => format!("{games} {g}, {n} matches won"),
+        }
+    }
     /// **On the panel, once.** A server can only speak for what happened on
     /// it, and a screen that did not say so would read as a record of a person
     /// rather than of a visit.
