@@ -121,6 +121,7 @@ mod tests {
                 laboratory: true,
             }),
             ClientMessage::StepOnce,
+            ClientMessage::Profile { who: crate::net::PersonId("3f2a91c4".into()) },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -144,7 +145,16 @@ mod tests {
                     at: 2000,
                 },
                 victory: Some(crate::net::Victory::Timer { generations: 2000 }),
-                players: vec![(PlayerId(1), "alice".into()), (PlayerId(4), "bob".into())],
+                players: vec![
+                    crate::net::Seat {
+                        id: PlayerId(1),
+                        name: "alice".into(),
+                        who: Some(crate::net::PersonId("3f2a91c4".into())),
+                    },
+                    // Somebody with no key: a person this server will not
+                    // remember, and so has nothing to say about.
+                    crate::net::Seat { id: PlayerId(4), name: "bob".into(), who: None },
+                ],
             }),
             ServerMessage::Match(crate::net::Lobby {
                 teams: Vec::new(),
@@ -164,11 +174,17 @@ mod tests {
             },
             ServerMessage::Standing { tick: 0, held: Vec::new() },
             ServerMessage::Welcome {
-                person: Some(crate::net::PersonId("3f2a".into())),
+                profile: Some(crate::net::Profile {
+                    who: crate::net::PersonId("3f2a91c4".into()),
+                    name: "alice".into(),
+                    rating: 1200,
+                    provisional: true,
+                    games: 3,
+                    best: 80,
+                }),
                 you: PlayerId(2),
                 tick: 5,
                 spawn: (-144, -96),
-                rating: 1200,
                 value: 73,
                 room: "main".into(),
                 name: "main".into(),
@@ -178,11 +194,12 @@ mod tests {
             // The shape of a wrapping world has to survive the round trip, or
             // a client is told the world ends somewhere it does not.
             ServerMessage::Welcome {
-                person: Some(crate::net::PersonId("3f2a".into())),
+                // A client with no key: nobody this server remembers, and a
+                // dashboard showing it the starting rating would invent one.
+                profile: None,
                 you: PlayerId(7),
                 tick: 900,
                 spawn: (0, 0),
-                rating: 1200,
                 value: 0,
                 room: "ring".into(),
                 name: "ring".into(),
@@ -228,6 +245,16 @@ mod tests {
                 world: crate::sim::WorldKind::Infinite,
                 rules: crate::net::Rules::default(),
             },
+            ServerMessage::Profile(Some(crate::net::Profile {
+                who: crate::net::PersonId("3f2a91c4".into()),
+                name: "alice".into(),
+                rating: 1417,
+                provisional: false,
+                games: 22,
+                best: 1204,
+            })),
+            // Somebody this server has never met, which is a real answer.
+            ServerMessage::Profile(None),
             ServerMessage::Rules(crate::net::Rules {
                 paused: false,
                 place_anywhere: true,

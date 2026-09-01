@@ -167,7 +167,7 @@ pub struct Rooms {
     /// What each of them is rated here. Beside `people` and for the same
     /// reason: a person outlives every world on this server, and so does their
     /// number.
-    ratings: crate::server::ratings::Ratings,
+    profiles: crate::server::profiles::Profiles,
     /// The code that reaches each private room.
     ///
     /// A credential, not an identity: it is separate from the id so that a
@@ -275,7 +275,7 @@ impl Rooms {
         }
 
         let people = crate::server::people::People::load(&people_path(&dir))?;
-        let ratings = crate::server::ratings::Ratings::load(&ratings_path(&dir))?;
+        let profiles = crate::server::profiles::Profiles::load(&profiles_path(&dir))?;
         if !people.is_empty() {
             log::info!("{} player key(s) known", people.len());
         }
@@ -286,7 +286,7 @@ impl Rooms {
             default_room,
             names,
             people,
-            ratings,
+            profiles,
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -305,7 +305,7 @@ impl Rooms {
             default_room: id.clone(),
             names: BTreeMap::from([(id, name)]),
             people: crate::server::people::People::new(),
-            ratings: crate::server::ratings::Ratings::new(),
+            profiles: crate::server::profiles::Profiles::new(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -439,6 +439,12 @@ impl Rooms {
                 laboratory,
             ))];
         }
+        // Answered without a seat for the same reason `Rooms` is: a profile is
+        // looked at from a lobby, from a standings bar and from a menu, and
+        // only one of those is inside a room.
+        if let ClientMessage::Profile { who } = &msg {
+            return vec![ServerMessage::Profile(self.profile_of(who))];
+        }
         // Admitted at any generation, and that is the point rather than an
         // oversight: **no late joining is a rule about players.** Somebody
         // turning up at generation four hundred is exactly what watching is
@@ -541,8 +547,9 @@ impl Rooms {
             return Vec::new();
         }
         let seat = caller.seat.as_ref();
-        if let ClientMessage::Join { room, person, .. } = &msg {
+        if let ClientMessage::Join { room, person, name: joining_as, .. } = &msg {
             let asked = room.clone();
+            let joining_as = joining_as.clone();
             // **Who, before where.** People are a server's table and a room is
             // one world on it, so this is settled once here rather than
             // fifteen times by fifteen rooms each with their own idea of who
@@ -593,13 +600,22 @@ impl Rooms {
                     }
                     let owner = self.owner.get(&name).copied();
                     let code = self.codes.get(&name).cloned();
+                    // What this server has to say about them, which a room
+                    // cannot know: a profile outlives every room here. A join
+                    // is also when a name is taken, so a profile can be looked
+                    // at before anybody has finished a match.
+                    let profile = who.as_ref().and_then(|who| {
+                        self.profiles.met(who, &joining_as);
+                        self.profile_of(who)
+                    });
                     for reply in &mut out {
-                        if let ServerMessage::Welcome { room, name: called, rating, .. } = reply {
+                        if let ServerMessage::Welcome {
+                            room, name: called, profile: mine, ..
+                        } = reply
+                        {
                             *room = name.clone();
                             *called = room_name.clone();
-                            if let Some(who) = &who {
-                                *rating = self.ratings.of(who);
-                            }
+                            mine.clone_from(&profile);
                         }
                         stamp(reply, owner, code.clone());
                     }
@@ -688,12 +704,12 @@ impl Rooms {
                 continue;
             }
             let finishers = server.finishers();
-            let moved = self.ratings.settle(&finishers);
+            let moved = self.profiles.settle(&finishers);
             if moved.is_empty() {
                 continue;
             }
             for (who, change) in &moved {
-                log::info!("{who} is now rated {} ({change:+})", self.ratings.of(who));
+                log::info!("{who} is now rated {} ({change:+})", self.profiles.rating_of(who));
             }
             // Told, not left to be found on the next join: the screen somebody
             // is looking at when a match ends is the one this belongs on.
@@ -703,12 +719,12 @@ impl Rooms {
                     id.clone(),
                     ServerMessage::Rated {
                         who: f.who.clone(),
-                        rating: self.ratings.of(&f.who),
+                        rating: self.profiles.rating_of(&f.who),
                         change,
                     },
                 ))
             }));
-            self.save_ratings();
+            self.save_profiles();
         }
         out
     }
@@ -741,19 +757,39 @@ impl Rooms {
     /// Write the ratings table, and say so if it will not go. Not fatal, for
     /// the reason `save_people` is not: a server that cannot write a number is
     /// a bad day rather than a reason to refuse everybody entry.
-    fn save_ratings(&self) {
+    fn save_profiles(&self) {
         if self.dir.as_os_str().is_empty() {
             return;
         }
-        let path = ratings_path(&self.dir);
-        if let Err(e) = self.ratings.save(&path) {
+        let path = profiles_path(&self.dir);
+        if let Err(e) = self.profiles.save(&path) {
             log::error!("saving the ratings to {}: {e}", path.display());
         }
     }
 
     /// What somebody is rated here, which is what a `Welcome` carries.
+    /// What this server has to say about somebody, as a client is told it.
+    ///
+    /// `None` for an id it never issued, which is a real answer rather than a
+    /// failure: a client can ask about anybody, and "not here" is what it
+    /// should get for a name it made up.
+    pub fn profile_of(&self, who: &crate::net::PersonId) -> Option<crate::net::Profile> {
+        if !self.people.knows(who) {
+            return None;
+        }
+        let row = self.profiles.of(who);
+        Some(crate::net::Profile {
+            who: who.clone(),
+            name: row.name.clone(),
+            rating: row.rating(),
+            provisional: row.provisional(),
+            games: row.games,
+            best: row.best,
+        })
+    }
+
     pub fn rating_of(&self, who: &crate::net::PersonId) -> i32 {
-        self.ratings.of(who)
+        self.profiles.rating_of(who)
     }
 
     pub fn save(&self) -> std::io::Result<()> {
@@ -761,7 +797,7 @@ impl Rooms {
             return Ok(());
         }
         self.save_people();
-        self.save_ratings();
+        self.save_profiles();
         let mut first_error = None;
         for (id, server) in &self.rooms {
             // A match is an event rather than a world to keep: it has an end,
@@ -1218,8 +1254,8 @@ fn people_path(dir: &Path) -> PathBuf {
     dir.join("people.tsv")
 }
 
-fn ratings_path(dir: &Path) -> PathBuf {
-    dir.join("ratings.tsv")
+fn profiles_path(dir: &Path) -> PathBuf {
+    dir.join("profiles.tsv")
 }
 
 fn save_path(dir: &Path, room: &RoomId) -> PathBuf {
@@ -1873,22 +1909,40 @@ mod tests {
         };
 
         let out = rooms.handle(&Caller::new(1), join(Some(me.clone())));
-        let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
-        let first = person.clone().expect("no name was issued");
+        let [ServerMessage::Welcome { you, profile, .. }] = &out[..] else { panic!("{out:?}") };
+        let mine = profile.clone().expect("no profile was issued");
+        let first = mine.who.clone();
+        assert_eq!(mine.name, "alice", "the name a join was made under");
+        assert!(mine.provisional, "a first join has no result behind it");
         assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
         // Away, and back: the same secret finds the same seat and the same
         // name. Nothing was presented and nothing was reissued.
         rooms.handle(&Caller::sitting(1, (hall.clone(), *you)), ClientMessage::Leave);
         let out = rooms.handle(&Caller::new(2), join(Some(me)));
-        let [ServerMessage::Welcome { you, person, .. }] = &out[..] else { panic!("{out:?}") };
-        assert_eq!(person.as_ref(), Some(&first), "one secret was two people");
+        let [ServerMessage::Welcome { you, profile, .. }] = &out[..] else { panic!("{out:?}") };
+        assert_eq!(profile.as_ref().map(|p| &p.who), Some(&first), "one secret was two people");
         assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
         // And somebody else's secret is somebody else.
         let out = rooms.handle(&Caller::new(3), join(Some(Secret::new().unwrap())));
-        let [ServerMessage::Welcome { person, .. }] = &out[..] else { panic!("{out:?}") };
-        assert_ne!(person.as_ref(), Some(&first), "two secrets were one person");
+        let [ServerMessage::Welcome { profile, .. }] = &out[..] else { panic!("{out:?}") };
+        assert_ne!(profile.as_ref().map(|p| &p.who), Some(&first), "two secrets were one person");
+
+        // And what a server says about somebody is answerable from outside
+        // every room, because that is where it is looked at from.
+        let asked = rooms.handle(&Caller::nobody(), ClientMessage::Profile { who: first.clone() });
+        let [ServerMessage::Profile(Some(found))] = &asked[..] else { panic!("{asked:?}") };
+        assert_eq!(found.who, first);
+        assert_eq!(found.label(), format!("alice·{}", first.short()));
+
+        // Somebody this server never issued is "not here" rather than a
+        // failure: a client may ask about anything.
+        let none = rooms.handle(
+            &Caller::nobody(),
+            ClientMessage::Profile { who: crate::net::PersonId("nobody".into()) },
+        );
+        assert!(matches!(&none[..], [ServerMessage::Profile(None)]), "{none:?}");
     }
 
     /// A client with no key plays. It is nobody the server will remember,

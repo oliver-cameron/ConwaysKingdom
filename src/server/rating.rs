@@ -55,6 +55,27 @@ pub const SPREAD: f64 = 400.0;
 /// be right about a newcomer, and there is nothing to be steady about yet.
 pub const K: f64 = 32.0;
 
+/// How many settled matches it takes for a rating to stop being provisional.
+///
+/// Ten is the usual figure and the argument for it is the one [`START`] makes:
+/// the number is arbitrary, so the thing to optimise is recognition. What it
+/// buys is that a leaderboard is not topped by somebody who won once.
+pub const PROVISIONAL_AFTER: u32 = 10;
+
+/// The K a rating that has not settled yet moves by.
+///
+/// Twice the ordinary one, so somebody new reaches their level in a handful of
+/// matches rather than thirty. An Elo from a fixed start means nothing until
+/// it has moved, and the two usual answers are to move it faster and to mark
+/// it until it has; this is both.
+///
+/// **Each entrant moves by their own K**, so a settled player is not dragged
+/// about by whoever they happened to draw. That makes a match between a
+/// provisional player and a settled one *not* zero-sum, which is the point
+/// rather than a defect: the two are not equally uncertain, so the same result
+/// is not equally informative about them.
+pub const K_PROVISIONAL: f64 = 64.0;
+
 /// The score `a` is expected to take against `b`, between nought and one.
 ///
 /// Symmetric by construction — `expected(a, b) + expected(b, a) == 1` — which
@@ -96,6 +117,26 @@ pub struct Entrant {
     /// so two allies with wildly different ground still take the same result,
     /// which is what being on a side means.
     pub score: usize,
+    /// How many matches this server has already settled for them. Under
+    /// [`PROVISIONAL_AFTER`] their rating moves by [`K_PROVISIONAL`] rather
+    /// than by [`K`], and is marked as unearned wherever it is shown.
+    pub games: u32,
+}
+
+impl Entrant {
+    /// Whether their number has been earned yet.
+    pub fn provisional(&self) -> bool {
+        self.games < PROVISIONAL_AFTER
+    }
+
+    /// The most one match may move *their* rating.
+    fn k(&self) -> f64 {
+        if self.provisional() {
+            K_PROVISIONAL
+        } else {
+            K
+        }
+    }
 }
 
 /// What each entrant's rating should change by, in the order they were given.
@@ -154,7 +195,7 @@ pub fn deltas(entrants: &[Entrant]) -> Vec<i32> {
             if count == 0 {
                 return 0;
             }
-            (K * (actual - expectation) / count as f64).round() as i32
+            (me.k() * (actual - expectation) / count as f64).round() as i32
         })
         .collect()
 }
@@ -176,11 +217,19 @@ pub fn after(entrants: &[Entrant]) -> Vec<i32> {
 mod tests {
     use super::*;
 
+    /// A free-for-all of players whose ratings have **settled**. These tests
+    /// are about the pairwise reduction rather than about K, and a provisional
+    /// entrant moves by a different one — see [`a_new_rating_moves_faster`].
     fn ffa(ratings_and_scores: &[(i32, usize)]) -> Vec<Entrant> {
         ratings_and_scores
             .iter()
             .enumerate()
-            .map(|(i, &(rating, score))| Entrant { rating, team: i as u8, score })
+            .map(|(i, &(rating, score))| Entrant {
+                rating,
+                team: i as u8,
+                score,
+                games: PROVISIONAL_AFTER,
+            })
             .collect()
     }
 
@@ -279,10 +328,10 @@ mod tests {
         // Two on a side. The winning side scored more ground; both of its
         // members beat both of the other side's.
         let match_ = [
-            Entrant { rating: 1200, team: 1, score: 40 },
-            Entrant { rating: 1200, team: 1, score: 40 },
-            Entrant { rating: 1200, team: 2, score: 10 },
-            Entrant { rating: 1200, team: 2, score: 10 },
+            Entrant { rating: 1200, team: 1, score: 40, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1200, team: 1, score: 40, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1200, team: 2, score: 10, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1200, team: 2, score: 10, games: PROVISIONAL_AFTER },
         ];
         let d = deltas(&match_);
         assert_eq!(d[0], d[1], "allies on equal ratings took different results");
@@ -294,10 +343,10 @@ mod tests {
         // side's score is what is compared, so the two differ only by what
         // their own ratings predicted.
         let mixed = [
-            Entrant { rating: 1000, team: 1, score: 40 },
-            Entrant { rating: 1400, team: 1, score: 40 },
-            Entrant { rating: 1200, team: 2, score: 10 },
-            Entrant { rating: 1200, team: 2, score: 10 },
+            Entrant { rating: 1000, team: 1, score: 40, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1400, team: 1, score: 40, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1200, team: 2, score: 10, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1200, team: 2, score: 10, games: PROVISIONAL_AFTER },
         ];
         let d = deltas(&mixed);
         assert!(d[0] > d[1], "the underrated ally should gain more for the same win: {d:?}");
@@ -310,8 +359,8 @@ mod tests {
         assert_eq!(deltas(&ffa(&[(1200, 9)])), vec![0]);
         assert_eq!(deltas(&[]), Vec::<i32>::new());
         let one_side = [
-            Entrant { rating: 1200, team: 1, score: 9 },
-            Entrant { rating: 1400, team: 1, score: 4 },
+            Entrant { rating: 1200, team: 1, score: 9, games: PROVISIONAL_AFTER },
+            Entrant { rating: 1400, team: 1, score: 4, games: PROVISIONAL_AFTER },
         ];
         assert_eq!(deltas(&one_side), vec![0, 0]);
     }
@@ -322,8 +371,10 @@ mod tests {
     fn a_rating_never_goes_below_nought() {
         // Against an equal, so there is a full loss to take: nobody loses much
         // to somebody they were never expected to beat.
-        let hopeless =
-            [Entrant { rating: 3, team: 1, score: 0 }, Entrant { rating: 3, team: 2, score: 500 }];
+        let hopeless = [
+            Entrant { rating: 3, team: 1, score: 0, games: PROVISIONAL_AFTER },
+            Entrant { rating: 3, team: 2, score: 500, games: PROVISIONAL_AFTER },
+        ];
         assert_eq!(after(&hopeless)[0], 0, "a rating went below nought");
         assert_eq!(after(&hopeless)[1], 19);
     }
@@ -331,6 +382,31 @@ mod tests {
     /// Played out over many matches, a rating finds the level of the player
     /// rather than wandering: somebody who wins two thirds of their games
     /// against a fixed opponent settles above them and stays there.
+    /// **A number nobody has earned yet moves faster, and says so.**
+    ///
+    /// An Elo from a fixed start means nothing until it has moved, so the two
+    /// usual answers are to move it faster and to mark it until it has. Each
+    /// entrant moves by their own K, which is what stops a settled player
+    /// being dragged about by whoever they happened to draw — and is why a
+    /// match between the two is not zero-sum.
+    #[test]
+    fn a_new_rating_moves_faster_than_a_settled_one() {
+        let newcomer = Entrant { rating: START, team: 1, score: 9, games: 0 };
+        let regular = Entrant { rating: START, team: 2, score: 4, games: PROVISIONAL_AFTER };
+        assert!(newcomer.provisional() && !regular.provisional());
+
+        let d = deltas(&[newcomer, regular]);
+        assert!(d[0] > 0 && d[1] < 0, "the winner should gain and the loser lose: {d:?}");
+        assert!(d[0] > -d[1], "an unearned rating should move further for one result: {d:?}");
+        assert_eq!(d[0], (K_PROVISIONAL / 2.0) as i32, "and by its own K");
+        assert_eq!(d[1], -(K / 2.0) as i32, "leaving the settled one on the ordinary one");
+
+        // One result short of settled is still provisional, and the next one
+        // is not: the threshold is what has been *settled*, not what is being.
+        let nearly = Entrant { games: PROVISIONAL_AFTER - 1, ..newcomer };
+        assert!(nearly.provisional());
+    }
+
     #[test]
     fn a_rating_converges_on_who_keeps_winning() {
         let (mut me, mut them) = (START, START);
@@ -338,8 +414,8 @@ mod tests {
             // Two wins in three, for ever.
             let (mine, theirs) = if game % 3 == 2 { (4, 9) } else { (9, 4) };
             let after = after(&[
-                Entrant { rating: me, team: 1, score: mine },
-                Entrant { rating: them, team: 2, score: theirs },
+                Entrant { rating: me, team: 1, score: mine, games: PROVISIONAL_AFTER },
+                Entrant { rating: them, team: 2, score: theirs, games: PROVISIONAL_AFTER },
             ]);
             (me, them) = (after[0], after[1]);
         }

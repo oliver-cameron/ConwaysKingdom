@@ -152,7 +152,7 @@ pub struct Menu {
     /// Passed in rather than read, like everything else on this screen: the
     /// menu holds what it was told and what was typed, and a rating is neither
     /// of this client's business to work out nor kept anywhere it could look.
-    pub rating: Option<(i32, Option<i32>)>,
+    pub rating: Option<crate::client::session::Rating>,
     pub advanced: bool,
     /// Whether the secret half is on screen. Shut on every build of the menu,
     /// because a secret nobody is looking at should not be one anybody can

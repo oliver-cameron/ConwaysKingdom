@@ -1,0 +1,426 @@
+//! **What this server can vouch for about each person it has met.**
+//!
+//! The table [`crate::server::rating`] was waiting for, and then some. The
+//! arithmetic had nothing to be keyed by, because a `PlayerId` is a seat that
+//! gets handed on and a rejoin token was filed per room — and a match *is* a
+//! room, so a number kept against either was earned in a match and thrown away
+//! with it. A person outlives both, so there is finally something to file
+//! against.
+//!
+//! It holds more than a rating now, and that is the line [player profiles]
+//! draws: **anything another player is shown has to be the server's.** Client
+//! state is self-asserted, so a rating you keep is a rating you can type — and
+//! the same goes for how many matches you have played and how much ground you
+//! have held. `client::record` stays as a client's own diary; this is what a
+//! server will say about you to somebody else.
+//!
+//! **Per server, deliberately.** Numbers that travelled between servers would
+//! need servers to trust each other's results, which is a much larger thing
+//! than a key. These are facts about how somebody has done *here*.
+//!
+//! One line per person, tab separated with a version on the front, beside
+//! `people.tsv` and for the same reasons: a store you can read with `cat` is
+//! one you can debug, and a line this build cannot read is skipped rather than
+//! fatal.
+//!
+//! [player profiles]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#player-profiles
+
+use std::collections::HashMap;
+use std::io;
+use std::path::Path;
+
+use crate::net::PersonId;
+use crate::server::rating::{self, Entrant};
+
+/// Bumped to 2 when a row stopped being a rating and became a profile: a
+/// version 1 line is a person and a number, and is read forward with the
+/// counts starting at nought, which is the honest answer — the server was not
+/// counting them.
+const VERSION: u8 = 2;
+
+/// **What one person has done here.**
+///
+/// Everything on it was counted by this server, which is the whole of what it
+/// is allowed to say about anybody.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Record {
+    /// The name they last joined under. Self-chosen, so it is shown as a name
+    /// and never as a fact — the fingerprint beside it is the part that is.
+    pub name: String,
+    /// Matches settled for them here. What makes a rating provisional, and
+    /// what a profile shows beside it.
+    pub games: u32,
+    /// The most ground they have held at once, in squares, over every match.
+    pub best: usize,
+    /// Their number, once a match has moved it. `None` is somebody who has
+    /// been met and has not finished a match: [`rating::START`] is where they
+    /// would start, and showing it as though it had been earned is the thing
+    /// the provisional mark exists to stop.
+    rating: Option<i32>,
+}
+
+impl Record {
+    /// What they are rated. Everybody starts on the same number, so somebody
+    /// with no result yet is not a special case in the arithmetic — only in
+    /// what is said about it.
+    pub fn rating(&self) -> i32 {
+        self.rating.unwrap_or(rating::START)
+    }
+
+    /// Whether that number has been earned yet.
+    pub fn provisional(&self) -> bool {
+        self.games < rating::PROVISIONAL_AFTER
+    }
+}
+
+/// Everybody this server can say something about.
+#[derive(Default)]
+pub struct Profiles {
+    known: HashMap<PersonId, Record>,
+}
+
+/// One person's result out of a finished match, before their rating is known.
+///
+/// The server holds the seat, the team and the ground; the rating is this
+/// table's business, which is why the two are put together here rather than by
+/// whatever noticed the match was over.
+pub struct Finisher {
+    pub who: PersonId,
+    pub name: String,
+    pub team: u8,
+    pub score: usize,
+}
+
+impl Profiles {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.known.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.known.is_empty()
+    }
+
+    /// What this server has to say about somebody, which for anybody it has
+    /// not met is nothing — an empty record rather than an absence, so the
+    /// caller has one shape to read.
+    pub fn of(&self, who: &PersonId) -> Record {
+        self.known.get(who).cloned().unwrap_or_default()
+    }
+
+    /// What somebody is rated. Everybody starts at the same number, so
+    /// somebody this server has never rated is not a special case.
+    pub fn rating_of(&self, who: &PersonId) -> i32 {
+        self.of(who).rating()
+    }
+
+    /// Apply a finished match, and say what each person's rating moved by.
+    ///
+    /// Returns the changes rather than only writing them, because the reason
+    /// to compute them is to tell somebody: a rating that moves silently is a
+    /// number people learn not to look at.
+    ///
+    /// Anybody who was in the match without a key is skipped — they are not a
+    /// person this server can remember, so there is nowhere to put a result.
+    /// The rest are still rated against each other, which is the right answer:
+    /// a stranger in the room is somebody you played, and refusing to rate the
+    /// match because of them would make an unkeyed client a way to avoid a
+    /// loss.
+    pub fn settle(&mut self, finishers: &[Finisher]) -> Vec<(PersonId, i32)> {
+        let entrants: Vec<Entrant> = finishers
+            .iter()
+            .map(|f| {
+                let was = self.of(&f.who);
+                Entrant { rating: was.rating(), team: f.team, score: f.score, games: was.games }
+            })
+            .collect();
+        let mut moved = Vec::new();
+        for (finisher, delta) in finishers.iter().zip(rating::deltas(&entrants)) {
+            let was = self.of(&finisher.who);
+            // **The match counts whether or not the number moved.** A draw
+            // between equals says nothing about who is better and everything
+            // about how much this table knows, so it is one of the results a
+            // rating stops being provisional after.
+            let now = Record {
+                name: finisher.name.clone(),
+                games: was.games + 1,
+                best: was.best.max(finisher.score),
+                rating: (delta != 0).then(|| (was.rating() + delta).max(0)).or(was.rating),
+            };
+            self.known.insert(finisher.who.clone(), now);
+            if delta != 0 {
+                moved.push((finisher.who.clone(), delta));
+            }
+        }
+        moved
+    }
+
+    /// Take a name from somebody who has joined, so a profile can be looked at
+    /// before they have finished anything.
+    ///
+    /// A name and nothing else: everything else on a [`Record`] is counted
+    /// from results, and taking any of it from a client would be taking a
+    /// player's word for what a server is supposed to vouch for.
+    pub fn met(&mut self, who: &PersonId, name: &str) {
+        let row = self.known.entry(who.clone()).or_default();
+        if row.name != name {
+            row.name = name.to_string();
+        }
+    }
+
+    pub fn to_lines(&self) -> String {
+        // Sorted, so a save is the same bytes for the same table and a diff
+        // between two of them says what changed rather than what moved.
+        let mut all: Vec<_> = self.known.iter().collect();
+        all.sort_by(|a, b| a.0.cmp(b.0));
+        all.iter()
+            .map(|(who, r)| {
+                // A rating nobody has earned is written as an empty field
+                // rather than as the starting number, so reading the table
+                // back cannot invent a result.
+                let rating = r.rating.map(|n| n.to_string()).unwrap_or_default();
+                format!("{VERSION}\t{who}\t{rating}\t{}\t{}\t{}\n", r.games, r.best, r.name)
+            })
+            .collect()
+    }
+
+    /// Read a table back, **including the one this replaced**.
+    ///
+    /// A version 1 line is a person and a rating, which is a version 2 line
+    /// with the counts at nought — and nought is the honest answer, because
+    /// the server was not counting them. The alternative was to skip those
+    /// lines, which throws away every rating anybody has earned to gain three
+    /// numbers that would have been guesses.
+    pub fn from_lines(text: &str) -> Self {
+        let mut known = HashMap::new();
+        for (n, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            let Some(row) = read_row(&fields) else {
+                log::warn!("skipped line {} of the profiles file", n + 1);
+                continue;
+            };
+            known.insert(row.0, row.1);
+        }
+        Self { known }
+    }
+
+    pub fn load(path: &Path) -> io::Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Self::from_lines(&text)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, self.to_lines())
+    }
+}
+
+/// One stored line, of either version, or `None` for one this build cannot
+/// make sense of.
+///
+/// An empty rating field is somebody who has been met and has not finished a
+/// match, which is a different thing from being on the starting number — see
+/// [`Record::rating`].
+fn read_row(fields: &[&str]) -> Option<(PersonId, Record)> {
+    let (version, who, rating) = match fields {
+        [v, who, rating, ..] => (v.parse::<u8>().ok()?, *who, *rating),
+        _ => return None,
+    };
+    if who.is_empty() {
+        return None;
+    }
+    let rating = match rating {
+        "" => None,
+        n => Some(n.parse::<i32>().ok()?),
+    };
+    let record = match (version, fields) {
+        // What this replaced: a person and a number, and no counts because
+        // nothing was counting.
+        (1, [_, _, _]) => Record { rating, ..Default::default() },
+        (VERSION, [_, _, _, games, best, name]) => Record {
+            rating,
+            games: games.parse().ok()?,
+            best: best.parse().ok()?,
+            name: name.to_string(),
+        },
+        _ => return None,
+    };
+    Some((PersonId(who.to_string()), record))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn who(n: &str) -> PersonId {
+        PersonId(format!("{n}{}", "0".repeat(64 - n.len())))
+    }
+
+    fn solo(name: &str, team: u8, score: usize) -> Finisher {
+        Finisher { who: who(name), name: name.to_string(), team, score }
+    }
+
+    /// Somebody this server has never rated is on the starting number rather
+    /// than nothing, so a first match is scored against a real expectation.
+    #[test]
+    fn everybody_starts_on_the_same_number() {
+        let table = Profiles::new();
+        assert_eq!(table.rating_of(&who("a")), rating::START);
+        assert!(table.of(&who("a")).provisional(), "and nobody has earned it yet");
+        assert!(table.is_empty(), "asking about somebody invented them");
+    }
+
+    /// A finished match moves both numbers and says by how much, because a
+    /// rating that changes silently is one people learn not to look at.
+    #[test]
+    fn a_match_moves_the_numbers_and_reports_it() {
+        let mut table = Profiles::new();
+        let moved = table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        assert_eq!(moved.len(), 2);
+        let (up, down) = (table.rating_of(&who("a")), table.rating_of(&who("b")));
+        assert!(up > rating::START && down < rating::START, "{up} and {down}");
+        assert_eq!(up - rating::START, rating::START - down, "a match was not zero-sum");
+        assert_eq!(moved.iter().map(|(_, d)| d).sum::<i32>(), 0);
+    }
+
+    /// Playing on: the second result is scored against what the first left
+    /// behind, which is the whole of a rating being a running number rather
+    /// than a per-match score.
+    #[test]
+    fn a_second_match_is_scored_against_the_first() {
+        let mut table = Profiles::new();
+        table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        let after_one = table.rating_of(&who("a"));
+        // Beating the same person again is worth less, because they are worth
+        // less now and a is expected to.
+        let first_gain = after_one - rating::START;
+        table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        let second_gain = table.rating_of(&who("a")) - after_one;
+        assert!(second_gain < first_gain, "{second_gain} was not less than {first_gain}");
+    }
+
+    /// **A result that says nothing moves nothing, and still counts.**
+    ///
+    /// Two equals drawing tells the table nothing about who is better and
+    /// everything about how much it now knows, so it is one of the matches a
+    /// rating stops being provisional after — and there is nothing to report,
+    /// because nothing moved.
+    #[test]
+    fn a_draw_between_equals_moves_nothing_and_still_counts() {
+        let mut table = Profiles::new();
+        assert!(table.settle(&[solo("a", 1, 5), solo("b", 2, 5)]).is_empty());
+        let drawn = table.of(&who("a"));
+        assert_eq!(drawn.games, 1, "the match did not happen");
+        assert_eq!(drawn.rating(), rating::START, "and nothing moved");
+        assert_eq!(drawn.best, 5, "and the ground held was counted");
+    }
+
+    /// **A rating is provisional until enough matches have settled it**, and
+    /// what a profile shows is the mark rather than a different number: an Elo
+    /// from a fixed start means nothing until it has moved, and a leaderboard
+    /// topped by somebody who won once is the thing that stops.
+    #[test]
+    fn a_rating_stops_being_provisional_after_enough_matches() {
+        let mut table = Profiles::new();
+        for _ in 0..rating::PROVISIONAL_AFTER - 1 {
+            table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+            assert!(table.of(&who("a")).provisional());
+        }
+        table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        let settled = table.of(&who("a"));
+        assert_eq!(settled.games, rating::PROVISIONAL_AFTER);
+        assert!(!settled.provisional(), "ten results and still unearned");
+    }
+
+    /// **The most ground ever held**, which is a high-water mark and not the
+    /// last figure: a profile says what somebody has managed, so a bad match
+    /// after a good one does not erase the good one.
+    #[test]
+    fn the_best_held_is_a_high_water_mark() {
+        let mut table = Profiles::new();
+        table.settle(&[solo("a", 1, 400), solo("b", 2, 10)]);
+        table.settle(&[solo("a", 1, 7), solo("b", 2, 10)]);
+        assert_eq!(table.of(&who("a")).best, 400, "a bad match erased a good one");
+        assert_eq!(table.of(&who("a")).name, "a", "and the name is the one last used");
+    }
+
+    /// A name is the one thing a client is taken at its word for, and it is
+    /// taken on joining so a profile can be looked at before anybody has
+    /// finished anything.
+    #[test]
+    fn meeting_somebody_records_a_name_and_nothing_else() {
+        let mut table = Profiles::new();
+        table.met(&who("a"), "alice");
+        let met = table.of(&who("a"));
+        assert_eq!(met.name, "alice");
+        assert_eq!((met.games, met.best), (0, 0), "a join is not a result");
+        assert_eq!(met.rating(), rating::START);
+    }
+
+    /// Somebody with no key was in the room and cannot be rated -- but the
+    /// people who *can* be are still rated against each other, or an unkeyed
+    /// client would be a way to avoid a loss.
+    #[test]
+    fn a_match_is_still_rated_when_somebody_is_nobody() {
+        let mut table = Profiles::new();
+        // The unkeyed player simply is not in the list handed over.
+        let moved = table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
+        assert_eq!(moved.len(), 2);
+    }
+
+    /// Written down and read back, and the same bytes each time so one save is
+    /// comparable with the one before it.
+    #[test]
+    fn a_table_survives_being_written_down() {
+        let mut table = Profiles::new();
+        table.settle(&[solo("a", 1, 40), solo("b", 2, 10), solo("c", 3, 30)]);
+        let lines = table.to_lines();
+        assert_eq!(lines, table.to_lines(), "two saves of one table differ");
+
+        let back = Profiles::from_lines(&lines);
+        for name in ["a", "b", "c"] {
+            assert_eq!(back.of(&who(name)), table.of(&who(name)), "{name} was lost");
+        }
+    }
+
+    /// **The table this replaced reads forward.** A version 1 line is a person
+    /// and a rating, and the counts start at nought because the server was not
+    /// counting them — which is the honest answer, and better than skipping
+    /// the line and throwing away every rating anybody has earned.
+    #[test]
+    fn a_rating_from_the_old_table_survives_the_new_one() {
+        let table = Profiles::from_lines("1\tabc\t1300\n");
+        let row = table.of(&PersonId("abc".into()));
+        assert_eq!(row.rating(), 1300, "a rating was lost in the migration");
+        assert_eq!((row.games, row.best), (0, 0), "and nothing was invented");
+        assert!(row.provisional(), "with no games behind it, it is unearned");
+    }
+
+    /// A line this build cannot read is skipped rather than fatal. Losing one
+    /// person's number is a nuisance; refusing to start is not better.
+    #[test]
+    fn a_line_this_build_cannot_read_is_skipped() {
+        let table = Profiles::from_lines(&format!(
+            "{VERSION}\tabc\t1300\t4\t80\tabby\n\
+             9\tfrom\tthe\tfuture\n\n\
+             {VERSION}\tdef\tnot-a-number\t0\t0\t\n\
+             rubbish\n"
+        ));
+        assert_eq!(table.len(), 1, "a bad line took a good one with it");
+        assert_eq!(table.rating_of(&PersonId("abc".into())), 1300);
+        assert_eq!(table.of(&PersonId("abc".into())).best, 80);
+        assert_eq!(table.rating_of(&PersonId("def".into())), rating::START);
+    }
+}

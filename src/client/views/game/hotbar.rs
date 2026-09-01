@@ -517,13 +517,18 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
         // Silent when there is none: a client that has reached no server has
         // no rating rather than a starting figure, and a dash where a number
         // goes is one more thing to read.
-        if let Some((rating, change)) = status.rating {
-            let ink = match change {
+        //
+        // No provisional mark here, deliberately. That mark exists so a rating
+        // read as a *claim* is not taken for one it is not — a leaderboard,
+        // somebody else's profile — and this bar is your own readout of your
+        // own number. It is on the home screen and on a profile.
+        if let Some(r) = status.rating {
+            let ink = match r.change {
                 Some(c) if c > 0 => p.good,
                 Some(c) if c < 0 => p.bad,
                 _ => p.text,
             };
-            stat(ui, words::RATING, rating.max(0) as u64, 4, ink);
+            stat(ui, words::RATING, r.number.max(0) as u64, 4, ink);
         }
     });
 }

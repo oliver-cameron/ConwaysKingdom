@@ -44,6 +44,10 @@ pub struct Status<'a> {
     pub holding: &'a str,
     /// Who holds how much ground, most first. Empty until the server has said.
     pub standing: &'a [crate::net::Holding],
+    /// Who is in the room, so a bar can be followed to a profile. A bar is a
+    /// `PlayerId` and a profile is a person, and the roster is the only thing
+    /// that joins the two.
+    pub roster: &'a [crate::net::Seat],
     /// How badly this client and the server are disagreeing, as a decaying
     /// rate. Shown beside "connected" because that is the claim it qualifies:
     /// a link that is open and a link that is keeping up are two facts, and
@@ -59,7 +63,7 @@ pub struct Status<'a> {
     /// the number a match is played *for* was the one thing you could not see
     /// while playing one. `None` until a server has said — a client that has
     /// reached nobody has no rating rather than a starting figure.
-    pub rating: Option<(i32, Option<i32>)>,
+    pub rating: Option<crate::client::session::Rating>,
     /// Whether a match is running here, which is what makes giving up and
     /// calling it off mean anything.
     pub in_a_match: bool,
@@ -77,7 +81,7 @@ pub struct Status<'a> {
 /// live game is the thing it exists to avoid — and the back arrow beside these
 /// *leaves the room*, giving up the seat. Somebody who wants out of a match
 /// they are losing should be able to concede it rather than walk out of it.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub enum Did {
     #[default]
     Nothing,
@@ -87,6 +91,9 @@ pub enum Did {
     Forfeit,
     /// Call the whole match off, with the score as it stands.
     EndMatch,
+    /// A standings bar was pressed: show what this server says about whoever
+    /// it belongs to.
+    Look(crate::net::PersonId),
 }
 
 /// Whether the panel shows what it shows for a developer rather than a player.
@@ -168,7 +175,9 @@ pub fn show(
                 ui.label(format!("Zoom  {:.1} px/cell", status.zoom));
             }
 
-            standings(ui, theme, status);
+            if let Some(who) = standings(ui, theme, status) {
+                did = Did::Look(who);
+            }
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -206,9 +215,7 @@ pub fn show(
             // What the last match did to the rating. The rating itself is on
             // the bar; this is the half that is only worth a line for as long
             // as it is news.
-            if let Some((_, Some(change))) =
-                status.rating.filter(|(_, c)| c.is_some_and(|c| c != 0))
-            {
+            if let Some(change) = status.rating.and_then(|r| r.change).filter(|c| *c != 0) {
                 let colour = if change > 0 { theme.palette.good } else { theme.palette.bad };
                 ui.colored_label(colour, words::rating_change(change));
             }
@@ -287,10 +294,15 @@ pub fn show(
 /// Each bar is drawn in **its player's own colour**, the same one the shader
 /// gives their cells, so a bar and the ground it counts cannot disagree about
 /// whose it is.
-fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, status: &Status<'_>) {
+fn standings(
+    ui: &mut egui::Ui,
+    theme: &crate::client::views::theme::Theme,
+    status: &Status<'_>,
+) -> Option<crate::net::PersonId> {
     if status.standing.is_empty() {
-        return;
+        return None;
     }
+    let mut look = None;
     ui.separator();
     ui.small(words::HOLDING);
 
@@ -299,7 +311,17 @@ fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, stat
     for &crate::net::Holding { who: player, score: held, .. } in status.standing.iter().take(SHOWN)
     {
         let (r, g, b) = player_colour(player);
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 14.0), egui::Sense::hover());
+        // **A bar is a way in**, the same as a name in a lobby: this is the
+        // one place a player who is not in a lobby is on screen at all, and
+        // "who is that ahead of me" is the question a standings bar provokes.
+        // Nothing about it looks like a button, which is right — it is a bar,
+        // and the pointer over it is what says it can be pressed.
+        let (rect, press) = ui.allocate_exact_size(egui::vec2(width, 14.0), egui::Sense::click());
+        if press.clicked() {
+            // Only for somebody the room still holds a seat for. A standing
+            // outlives whoever left, and there is nothing behind that bar.
+            look = status.roster.iter().find(|s| s.id == player).and_then(|s| s.who.clone());
+        }
 
         // The full width in the faintest ink, so a short bar reads as a
         // fraction of something rather than as a stub floating in space.
@@ -329,6 +351,7 @@ fn standings(ui: &mut egui::Ui, theme: &crate::client::views::theme::Theme, stat
     if status.standing.len() > SHOWN {
         ui.small(format!("+{} more", status.standing.len() - SHOWN));
     }
+    look
 }
 
 /// How many bars fit before the panel is a leaderboard rather than a HUD.

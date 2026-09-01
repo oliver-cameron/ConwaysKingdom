@@ -20,6 +20,7 @@ pub mod hud;
 pub mod input;
 pub mod lobby;
 pub mod overlay;
+pub mod profile;
 mod rules;
 pub mod stamp;
 pub mod start;
@@ -169,6 +170,14 @@ struct Ui {
     editing_stamp: stamp::Editing,
     /// Whether the stamps that did not fit on the bar are on screen.
     picking_stamp: bool,
+    /// **Whose profile is open**, if one is.
+    ///
+    /// Held here rather than reading `session.looked_up`, because those are
+    /// two different questions: this is "a panel is open on this person", and
+    /// that is "the answer, when it comes". A panel opened on the click and
+    /// filled when the answer lands is what makes a slow server a wait rather
+    /// than a press that appears to do nothing — see [`profile::Look`].
+    showing_profile: Option<crate::net::PersonId>,
     /// Whether the key list is on screen.
     ///
     /// Above every screen rather than on one, because the keys it lists work
@@ -1113,7 +1122,7 @@ impl GameApp {
                 // here and a home screen showing the count from before it
                 // would say the last game did not happen.
                 m.record = crate::client::record::Summary::of(&crate::client::record::games());
-                m.rating = self.session.rating.map(|r| (r, self.session.rating_change));
+                m.rating = self.session.rating();
             }
             Screen::Playing => {
                 let address = self.address_hint();
@@ -1122,7 +1131,7 @@ impl GameApp {
                 // Carried over, because the menu is where a rating is read and
                 // the app is the only thing that has been told one. A match
                 // that has just ended is the commonest way to arrive here.
-                m.rating = self.session.rating.map(|r| (r, self.session.rating_change));
+                m.rating = self.session.rating();
                 self.ui.screen = Screen::Menu(m);
             }
         }
@@ -1159,8 +1168,11 @@ impl GameApp {
             }
             // The home screen reads this when it is built, and it is already
             // built if we are looking at it.
+            // Into the panel that is already open on them: it went up on the
+            // click, so this fills it rather than putting it there.
+            Effect::LookedUp => {}
             Effect::Rated => {
-                let now = self.session.rating.map(|r| (r, self.session.rating_change));
+                let now = self.session.rating();
                 if let Screen::Menu(m) = &mut self.ui.screen {
                     m.rating = now;
                 }
@@ -1480,6 +1492,7 @@ impl App for GameApp {
                 naming_stamp: None,
                 editing_stamp: None,
                 picking_stamp: false,
+                showing_profile: None,
                 helping: false,
                 showing_rules: false,
                 refused_start: None,
@@ -1616,9 +1629,10 @@ impl App for GameApp {
             last_action: self.last_action.as_deref(),
             holding: &holding,
             standing: &self.session.standing,
+            roster: self.session.lobby.as_ref().map(|l| &l.players[..]).unwrap_or_default(),
             geiger: self.session.geiger,
             watching: self.session.watching,
-            rating: self.session.rating.map(|r| (r, self.session.rating_change)),
+            rating: self.session.rating(),
             in_a_match: matches!(
                 self.session.lobby.as_ref().map(|l| &l.phase),
                 Some(crate::net::MatchPhase::Running { .. })
@@ -1729,6 +1743,27 @@ impl App for GameApp {
                 ),
         };
         let me = self.session.player();
+        // **Three states, not two**: asked-for-and-waiting, never-met, and an
+        // answer. A panel that showed nothing for the first two would make a
+        // slow server and a stranger look like the same thing.
+        let profile_look = self.ui.showing_profile.as_ref().map(|who| {
+            match self.session.looked_up.as_ref().filter(|found| &found.who == who) {
+                None if self.session.looked_up.is_some() => profile::Look::Unknown,
+                None => profile::Look::Asking,
+                Some(it) => profile::Look::Found {
+                    // The colour joins the panel to the row it was opened
+                    // from, which was a colour before it was a name.
+                    hue: self.session.lobby.as_ref().and_then(|l| {
+                        let seat = l.players.iter().find(|s| s.who.as_ref() == Some(who))?;
+                        let (r, g, b) = crate::client::views::hue::player_colour(seat.id);
+                        Some(egui::Color32::from_rgb(r, g, b))
+                    }),
+                    mine: self.session.profile.as_ref().map(|p| &p.who) == Some(who),
+                    it,
+                },
+            }
+        });
+        let mut profile_closed = false;
         let helping = self.ui.helping;
         let mut help_closed = false;
         // **One borrow, not five takes.** The closure needs `&mut` on the
@@ -1885,6 +1920,14 @@ impl App for GameApp {
                 help_closed = closed;
                 rects.extend(rect);
             }
+            // Over everything, and over the lobby it is usually opened from: a
+            // profile answers a question about the screen underneath it, so it
+            // sits on that screen rather than replacing it.
+            if let Some(look) = &profile_look {
+                let shown = profile::show(ctx, &theme, look);
+                profile_closed = shown.did.close;
+                rects.extend(shown.rect);
+            }
             rects
         });
 
@@ -1978,6 +2021,10 @@ impl App for GameApp {
                 // quarter of a second is a button people press twice.
                 self.session.forfeited = true;
             }
+            hud::Did::Look(who) => {
+                self.ui.showing_profile = Some(who.clone());
+                self.session.look_up(who);
+            }
             hud::Did::EndMatch => {
                 log::info!("asking to end the match");
                 self.session.tell(ClientMessage::EndMatch);
@@ -2002,9 +2049,19 @@ impl App for GameApp {
             lobby_view::Did::NameTeam(team, name) => {
                 self.session.tell(ClientMessage::NameTeam { team, name });
             }
+            // **The panel goes up on the press, not on the answer.** A server
+            // that is slow, or one that never replies, would otherwise be a
+            // name you can click that does nothing.
+            lobby_view::Did::Look(who) => {
+                self.ui.showing_profile = Some(who.clone());
+                self.session.look_up(who);
+            }
         }
         if help_closed {
             self.ui.helping = false;
+        }
+        if profile_closed {
+            self.ui.showing_profile = None;
         }
         if leaving {
             self.back_to_menu();

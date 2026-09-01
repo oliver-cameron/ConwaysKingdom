@@ -43,6 +43,8 @@ pub enum Did {
     Leave,
     /// Blow the whistle. Only offered to whoever made the match.
     Start,
+    /// A name was pressed: show what this server says about them.
+    Look(crate::net::PersonId),
     /// Take the controls of this team's player, or step off by naming your
     /// own number.
     JoinTeam(PlayerId),
@@ -63,7 +65,7 @@ pub struct Look<'a> {
     pub refused: Option<&'a str>,
     pub phase: &'a MatchPhase,
     pub victory: Option<Victory>,
-    pub players: &'a [(PlayerId, String)],
+    pub players: &'a [crate::net::Seat],
     /// Whose match it is: the player who may start it.
     pub owner: Option<PlayerId>,
     /// Who blew the whistle, once somebody has.
@@ -78,6 +80,24 @@ pub struct Look<'a> {
     /// A team is a player, so everybody at one team's controls draws from one
     /// swatch — there is no family of hue to sort out.
     pub hues: &'a [f32; PlayerId::COUNT],
+}
+
+impl Look<'_> {
+    /// Who is sitting in this seat, if anybody here is.
+    pub fn seat(&self, id: PlayerId) -> Option<&crate::net::Seat> {
+        self.players.iter().find(|s| s.id == id)
+    }
+
+    /// What to call a number, which is a name if the roster has one and the
+    /// number itself if it does not.
+    ///
+    /// One function because three places were doing this lookup by hand, each
+    /// with its own spelling of the fallback — and a match's *winner* is the
+    /// one place it matters, since a player who has left is exactly who a
+    /// result is most likely to name.
+    pub fn name_of(&self, id: PlayerId) -> String {
+        self.seat(id).map(|s| s.name.clone()).unwrap_or_else(|| format!("player {}", id.0))
+    }
 }
 
 pub fn show(
@@ -143,12 +163,7 @@ pub fn show(
                     match look.phase {
                         MatchPhase::Over { winner, held, .. } => match winner {
                             Some(id) => {
-                                let who = look
-                                    .players
-                                    .iter()
-                                    .find(|(p, _)| p == id)
-                                    .map(|(_, name)| name.clone())
-                                    .unwrap_or_else(|| format!("player {}", id.0));
+                                let who = look.name_of(*id);
                                 swatch(ui, drawn_as(*id, look.teams), look.hues);
                                 ui.heading(if *id == look.me {
                                     words::YOU_WON.to_string()
@@ -160,12 +175,7 @@ pub fn show(
                                 // who called it is a result somebody has to
                                 // ask about.
                                 if let Some(who) = look.started_by {
-                                    let name = look
-                                        .players
-                                        .iter()
-                                        .find(|(id, _)| *id == who)
-                                        .map(|(_, n)| n.clone())
-                                        .unwrap_or_else(|| format!("player {}", who.0));
+                                    let name = look.name_of(who);
                                     ui.colored_label(
                                         p.text_dim,
                                         egui::RichText::new(whistle::started_by(&name))
@@ -180,13 +190,16 @@ pub fn show(
                         _ => {
                             ui.label(words::who(look.players.len()));
                             if look.teams.is_empty() {
-                                for (id, name) in look.players {
+                                for seat in look.players {
                                     ui.horizontal(|ui| {
-                                        swatch(ui, drawn_as(*id, look.teams), look.hues);
-                                        if *id == look.me {
-                                            ui.label(format!("{name}  ({})", words::YOU));
-                                        } else {
-                                            ui.label(name);
+                                        swatch(ui, drawn_as(seat.id, look.teams), look.hues);
+                                        // **A name is a way in**, which is the
+                                        // whole reason a seat carries a person:
+                                        // "who is that" is asked here more than
+                                        // anywhere else, and the answer is what
+                                        // this server has seen them do.
+                                        if let Some(what) = who_row(ui, seat, look.me) {
+                                            did = what;
                                         }
                                     });
                                 }
@@ -273,18 +286,11 @@ fn team_picker(
     let p = theme.palette;
     let m = theme.metrics;
     let mut did = None;
-    let (me, teams, players) = (look.me, look.teams, look.players);
+    let (me, teams) = (look.me, look.teams);
     // Which team's controls this seat is at, if any. Read out of the roster
     // rather than out of a map of allegiances, because the roster is what a
     // team *is* now: the player, and who is driving it.
     let mine = teams.iter().find(|t| t.players.contains(&me)).map(|t| t.id);
-    let name_of = |id: PlayerId| {
-        players
-            .iter()
-            .find(|(who, _)| *who == id)
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| format!("player {}", id.0))
-    };
 
     for team in teams {
         let ours = Some(team.id) == mine;
@@ -335,16 +341,23 @@ fn team_picker(
                 for &id in &team.players {
                     ui.horizontal(|ui| {
                         swatch(ui, drawn_as(id, look.teams), look.hues);
-                        let who = name_of(id);
-                        ui.colored_label(
-                            if id == me { p.text } else { p.text_dim },
-                            egui::RichText::new(if id == me {
-                                format!("{who}  ({})", words::YOU)
-                            } else {
-                                who
-                            })
-                            .size(m.text_small),
-                        );
+                        // A name on a side is a way into a profile too, which
+                        // is where it is most wanted: a team match is where
+                        // "who is that" gets asked about somebody you are
+                        // about to play against.
+                        match look.seat(id) {
+                            Some(seat) => {
+                                if let Some(what) = who_row(ui, seat, me) {
+                                    did = Some(what);
+                                }
+                            }
+                            None => {
+                                ui.colored_label(
+                                    p.text_dim,
+                                    egui::RichText::new(look.name_of(id)).size(m.text_small),
+                                );
+                            }
+                        }
                     });
                 }
 
@@ -369,18 +382,34 @@ fn team_picker(
     // who is the wrong place to find that out.
     let on_a_team: Vec<PlayerId> = teams.iter().flat_map(|t| t.players.iter().copied()).collect();
     let stray: Vec<PlayerId> =
-        players.iter().map(|(id, _)| *id).filter(|id| !on_a_team.contains(id)).collect();
+        look.players.iter().map(|s| s.id).filter(|id| !on_a_team.contains(id)).collect();
     if !stray.is_empty() {
         ui.colored_label(
             p.warn,
             egui::RichText::new(words::not_picked(
-                &stray.iter().map(|&id| name_of(id)).collect::<Vec<_>>().join(", "),
+                &stray.iter().map(|&id| look.name_of(id)).collect::<Vec<_>>().join(", "),
             ))
             .size(m.text_small),
         );
     }
 
     did
+}
+
+/// One person in a roster: their name, and their fingerprint if they have one.
+///
+/// A button rather than a label, because it opens their profile — and a
+/// **frameless** one, so a roster still reads as a list of names rather than
+/// as a column of controls. What says it can be pressed is the pointer
+/// changing over it, which is the promise every other name-shaped thing on
+/// this screen already makes.
+fn who_row(ui: &mut egui::Ui, seat: &crate::net::Seat, me: PlayerId) -> Option<Did> {
+    let label =
+        if seat.id == me { format!("{}  ({})", seat.label(), words::YOU) } else { seat.label() };
+    let pressed = ui.add(egui::Button::new(label).frame(false)).clicked();
+    // Nobody to look up: a client with no key is somebody this server will not
+    // remember, so there is nothing behind the name to show.
+    seat.who.clone().filter(|_| pressed).map(Did::Look)
 }
 
 /// The same colour the shader gives this player's cells, so the lobby and the

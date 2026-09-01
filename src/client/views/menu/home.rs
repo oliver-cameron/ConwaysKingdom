@@ -34,14 +34,16 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // its own store — and a rating is what a *server* thinks of you against
     // everybody else there. Folding the second into the first would suggest
     // the client had worked it out, which it must never look like it can.
-    if let Some((rating, change)) = menu.rating {
+    if let Some(r) = menu.rating {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(words::home::rating(rating)).size(m.text_action).color(p.text),
+                egui::RichText::new(crate::client::views::words::rating(r.number))
+                    .size(m.text_action)
+                    .color(p.text),
             );
             // Said once, after the match that caused it. A number that moves
             // with no account of why is one people stop reading.
-            if let Some(change) = change.filter(|c| *c != 0) {
+            if let Some(change) = r.change.filter(|c| *c != 0) {
                 ui.label(
                     egui::RichText::new(words::home::rating_change(change))
                         .size(m.text_small)
@@ -49,6 +51,16 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
                 );
             }
         });
+        // **Under the number rather than beside it.** An unearned rating is
+        // still the number you have, so it is shown at full size and marked;
+        // dimming or hiding it would answer "what am I rated" with a riddle.
+        if r.provisional {
+            ui.colored_label(
+                p.text_dim,
+                egui::RichText::new(crate::client::views::words::provisional(r.games))
+                    .size(m.text_small),
+            );
+        }
         ui.add_space(m.item_spacing);
     }
     crate::client::views::record::show(ui, theme, &menu.games, &menu.record);

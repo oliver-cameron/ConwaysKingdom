@@ -100,6 +100,8 @@ pub enum Effect {
     LookAt((i32, i32)),
     /// This client's rating moved, and a home screen showing one should say so.
     Rated,
+    /// Somebody's profile arrived, into whatever asked for it.
+    LookedUp,
     /// The server would not have us, and this is why. The link is kept and its
     /// room list asked for again, so the next choice is a click.
     Refused(String),
@@ -119,6 +121,32 @@ pub enum Effect {
     /// The link closed. What that means depends on which screen is up, which
     /// is why it is not decided here.
     Closed,
+}
+
+/// **A rating as a screen shows it**: the number, whether it has been earned,
+/// and what the last result moved it by.
+///
+/// Three named things rather than a tuple of three, two of which are the same
+/// shape — the argument [`Shown`] makes, and the one `here()` was rewritten
+/// for.
+///
+/// [`Shown`]: crate::client::views::Shown
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rating {
+    pub number: i32,
+    /// Unearned. An Elo from a fixed start means nothing until it has moved,
+    /// so it is marked until it has.
+    ///
+    /// The **server's** answer rather than a comparison done here: the
+    /// threshold is its policy, and a client that re-derived it would show a
+    /// different mark the day the server changed its mind.
+    pub provisional: bool,
+    /// How many matches are behind it, which is the whole of what the mark
+    /// means. Shown beside the word, because "provisional" on its own is a
+    /// label somebody has to already know.
+    pub games: u32,
+    /// What the last result moved it by. Shown once, beside the number.
+    pub change: Option<i32>,
 }
 
 /// The client's side of a room.
@@ -155,20 +183,23 @@ pub struct Session {
     /// Whether this seat has given up, as the server last said. Held so the
     /// control can say so rather than offer to concede twice.
     pub forfeited: bool,
-    /// **What this server calls this client**, from the `Welcome`.
+    /// **What this server says about this client** — who it calls them, what
+    /// they are rated, and what they have done here.
     ///
-    /// The client cannot derive it — the server issues it — so it is learnt
-    /// and remembered. `None` before a first join, or for a client with no
-    /// secret to offer.
-    pub person: Option<crate::net::PersonId>,
-    /// What this client is rated on the server it is talking to.
-    ///
-    /// `None` until a server has said, which is a different thing from the
-    /// starting number: a client that has reached nobody has no rating rather
-    /// than an average one.
-    pub rating: Option<i32>,
-    /// What the last result moved it by, so the dashboard can say so once.
+    /// The client cannot derive any of it, which is the point: anything
+    /// another player is shown has to be the server's, or a rating you keep is
+    /// a rating you can type. `None` until a server has said, which is a
+    /// different thing from the starting number — a client that has reached
+    /// nobody has no rating rather than an average one, and a dashboard
+    /// showing 1200 to somebody who has never connected would be inventing it.
+    pub profile: Option<crate::net::Profile>,
+    /// What the last result moved the rating by, so the dashboard can say so
+    /// once. Beside the profile rather than in it: a change is a fact about
+    /// the match just finished, not about a person.
     pub rating_change: Option<i32>,
+    /// Somebody else's profile, once it has been asked for. Whose is on it, so
+    /// a slow answer cannot be shown against the wrong name.
+    pub looked_up: Option<crate::net::Profile>,
     /// Which room the server put us in, once it has said.
     ///
     /// Taken from the `Welcome` rather than from what was asked for: a client
@@ -246,9 +277,9 @@ impl Session {
             plays_as: None,
             watching: false,
             forfeited: false,
-            person: crate::net::keep::person(),
-            rating: None,
+            profile: None,
             rating_change: None,
+            looked_up: None,
             room: None,
             room_name: None,
             lobby: None,
@@ -282,6 +313,27 @@ impl Session {
     /// rather than a game of nobody.
     pub fn player(&self) -> PlayerId {
         self.plays_as.or(self.me).unwrap_or(PlayerId(1))
+    }
+
+    /// What this client is rated here, and whether that number is earned yet.
+    ///
+    /// `None` before a server has said. Every screen that shows a rating asks
+    /// this rather than reaching into the profile, so "not connected", "not
+    /// earned" and a figure are three answers to one question.
+    pub fn rating(&self) -> Option<Rating> {
+        self.profile.as_ref().map(|p| Rating {
+            number: p.rating,
+            provisional: p.provisional,
+            games: p.games,
+            change: self.rating_change,
+        })
+    }
+
+    /// Ask what this server says about somebody. The answer is an
+    /// [`Effect::LookedUp`].
+    pub fn look_up(&mut self, who: crate::net::PersonId) {
+        self.looked_up = None;
+        self.tell(ClientMessage::Profile { who });
     }
 
     /// Whether this room is a match that has not started.
@@ -570,26 +622,24 @@ impl Session {
             match msg {
                 ServerMessage::Welcome {
                     you,
-                    person,
                     tick,
                     spawn,
-                    rating,
+                    profile,
                     value,
                     room,
                     name,
                     world: shape,
                     rules,
                 } => {
-                    self.rating = Some(rating);
                     // The way back is the secret this client already has, so
                     // there is nothing to file per room. What is kept is who
                     // the server said we are, so the settings screen can say
                     // it without waiting for the next join — the server issues
                     // it, so this is the only way the client ever has it.
-                    if let Some(id) = &person {
-                        crate::net::keep::remember_person(id);
+                    if let Some(mine) = &profile {
+                        crate::net::keep::remember_person(&mine.who);
                     }
-                    self.person = person;
+                    self.profile = profile;
                     // A different room is a different match, or none.
                     self.lobby = None;
                     log::info!(
@@ -642,14 +692,32 @@ impl Session {
                 // makes it a comparison rather than a score, and is worth a
                 // line in the log until there is a screen for it.
                 ServerMessage::Rated { who, rating, change } => {
-                    if self.person.as_ref() == Some(&who) {
+                    if self.profile.as_ref().map(|p| &p.who) == Some(&who) {
                         log::info!("rated {rating} ({change:+})");
-                        self.rating = Some(rating);
+                        if let Some(mine) = &mut self.profile {
+                            mine.rating = rating;
+                            // A result is one of the matches a rating stops
+                            // being provisional after, and the server said so
+                            // by sending this — but only it knows the count,
+                            // so what this can do is show the new number and
+                            // wait for the next join to settle the mark.
+                            mine.games += 1;
+                        }
                         self.rating_change = Some(change);
                         effects.push(Effect::Rated);
                     } else {
                         log::info!("{who} is now rated {rating} ({change:+})");
                     }
+                }
+                // What this server says about somebody else, asked for from a
+                // lobby or a standings bar.
+                ServerMessage::Profile(found) => {
+                    match &found {
+                        Some(p) => log::debug!("{} is rated {}", p.label(), p.rating),
+                        None => log::debug!("this server has not met them"),
+                    }
+                    self.looked_up = found;
+                    effects.push(Effect::LookedUp);
                 }
                 // Somebody was given their opening ground. Ours moves the
                 // camera, because a match lays everybody out at the whistle
@@ -1197,7 +1265,7 @@ impl Session {
         self.lobby = victory.map(|victory| crate::net::Lobby {
             phase: crate::net::MatchPhase::Running { from: 0 },
             victory: Some(victory),
-            players: vec![(PlayerId(1), String::new())],
+            players: vec![crate::net::Seat { id: PlayerId(1), name: String::new(), who: None }],
             teams: Vec::new(),
             owner: None,
             started_by: None,

@@ -17,7 +17,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | | status | |
 |---|---|---|
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
-| [Player profiles](#player-profiles) | Designed | a person, rather than a seat in one room |
+| [Player profiles](#player-profiles) | Part built | a person rather than a seat; what is left is devices and the name field |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
@@ -179,13 +179,25 @@ And what is not next. [The simulation on the GPU](#the-simulation-on-the-gpu) is
 
 ## Player profiles
 
+**Part built.** The server keeps a profile per person — `server::profiles`, which is what `server::ratings` became when a row stopped being a number. It holds the name last joined under, the rating, how many matches have been settled and the most ground ever held, and `net::Profile` is that on the wire. `ClientMessage::Profile` asks about anybody and is answerable **without a seat**, because a profile is looked at from a lobby, from a standings bar and from a menu and only one of those is inside a room.
+
+**Ratings are provisional until ten matches.** `rating::PROVISIONAL_AFTER` is the threshold and `K_PROVISIONAL` is twice the ordinary K, so somebody new reaches their level in a handful of matches rather than thirty. Each entrant moves by **their own** K, which stops a settled player being dragged about by whoever they happened to draw — and makes a match between the two not zero-sum, which is the point rather than a defect: the two are not equally uncertain, so the same result is not equally informative about them. A draw between equals moves nothing and still counts, because it says everything about how much the table now knows.
+
+The mark is shown on the home screen and on a profile and **not on the bar**: it exists so a rating read as a *claim* is not taken for one it is not, and the bar is your own readout of your own number rather than a comparison. It says the count as well as the word, because "provisional" on its own is a label somebody has to already know.
+
+**A name is a way in.** `net::Seat` carries the number, the name and the person, so a lobby row and a standings bar both open `views::game::profile` — a panel over the world rather than a page, because a profile answers a question about the screen underneath it. It has three states and not two: asking, never-met, and an answer, because a slow server and a stranger otherwise look the same.
+
+What is **left**: the name is not editable anywhere but the menu's join field, and devices — the control that authorises a second machine — waits on [identity being a keypair](#identity-is-a-keypair-and-today-it-is-not), which is item 1 on this list. `first_seen` is not kept: it needs a clock threaded through `Rooms::handle`, which nothing else there wants, and it is the least useful of the three facts the table holds.
+
+The rest of this entry is the design, and it still reads.
+
 **A person, rather than a seat in one room.** Everything a player accumulates is currently filed against something that does not survive what it should: a `PlayerId` is a seat in one world, a rejoin token is per room, a rating is per server, and a stamp library is per browser. Somebody who plays two games on two machines is four different people to this code.
 
 The identity exists already, in the weak form. `net::auth` mints a `Secret`, the client keeps it — **at startup now, not at the first join**, because a record and a stamp library both exist before a server has been reached and both want an owner — and `Join` carries it. A server can already say *which person* is asking. Two things are missing: everything that should be filed against the answer, and a way of asking that does not hand the server a credential it could reuse elsewhere — see [identity is a keypair, and today it is not](#identity-is-a-keypair-and-today-it-is-not).
 
-### It subtracts before it adds
+### It subtracts before it adds — done
 
-**A profile deletes the rejoin token.** The token exists so that a dropped connection comes back to the same seat, and [networking.md](networking.md#coming-back) is honest about what it costs: it is filed per room rather than per server, so two servers both running `main` share one secret; whoever holds it *is* you; and a token whose player is already connected joins you as somebody new. A key does the same job strictly better — the server maps person to seat per room, the claim is signed rather than presented, and there is one key for everywhere rather than one secret per room per server.
+**A profile deletes the rejoin token**, and it has: a seat is found by the person in it, `persist` is at version 7 for it, and there is no token anywhere in the tree. The token exists so that a dropped connection comes back to the same seat, and [networking.md](networking.md#coming-back) is honest about what it costs: it is filed per room rather than per server, so two servers both running `main` share one secret; whoever holds it *is* you; and a token whose player is already connected joins you as somebody new. A key does the same job strictly better — the server maps person to seat per room, the claim is signed rather than presented, and there is one key for everywhere rather than one secret per room per server.
 
 So the first version of this is not a feature on top. It is `Join` carrying a person and nothing else, `Server::join_with` looking a seat up by `PersonId`, and the token machinery going.
 
@@ -216,9 +228,9 @@ Four hex characters is enough for a room of fifteen and is not meant to be enoug
 
 **Somebody else's**, from the lobby or the standings: name and fingerprint, their colour, their rating, and what they have done **on this server**. Not their key file, not their stamps, not their record from elsewhere — a server can only vouch for what happened on it.
 
-### Ratings need a provisional state
+### Ratings need a provisional state — done
 
-A new profile has no games, and an Elo from a fixed start is a number that means nothing until it has moved. The usual answer is a high K for the first *n* results and a mark on the figure until then, so a leaderboard is not topped by somebody who won once. `server::rating` already computes deltas; this is a count and a threshold.
+A high K for the first ten results and a mark on the figure until then, so a leaderboard is not topped by somebody who won once. See the summary at the top of this entry for what each entrant moving by their own K costs and buys.
 
 ### What it must not become
 

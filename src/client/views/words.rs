@@ -86,12 +86,6 @@ pub mod menu {
         pub const WHO: &str = "You are";
         pub const RECORD: &str = "So far";
 
-        /// A rating, said as a rating rather than as a bare number: five
-        /// figures on a screen of other figures is one nobody can place.
-        pub fn rating(rating: i32) -> String {
-            format!("Rated {rating}")
-        }
-
         /// The sign is the whole message, so it is always there -- `+0` never
         /// appears, because a result that moved nothing is not shown at all.
         pub fn rating_change(change: i32) -> String {
@@ -448,6 +442,65 @@ pub mod clock {
 
     pub fn squares_left(target: u64, most: u64) -> String {
         format!("{most} of {target} squares")
+    }
+}
+
+/// A rating, said as a rating rather than as a bare number: five figures on a
+/// screen of other figures is one nobody can place.
+///
+/// Up here rather than under [`menu::home`] because two screens show it — the
+/// home screen and a profile — and one wording is what stops them drifting
+/// into saying the same number two ways.
+pub fn rating(rating: i32) -> String {
+    format!("Rated {rating}")
+}
+
+/// **A rating that has not been earned yet**, and how far off it is.
+///
+/// Said with the count rather than as the bare word, because "provisional" on
+/// its own is a label somebody has to already know the meaning of, and the
+/// number is the whole of what it means.
+///
+/// Shown on the home screen and on a profile, and **not on the bar**: the mark
+/// exists so a rating read as a *claim* is not taken for one it is not, and
+/// the bar is your own readout of your own number rather than a comparison.
+pub fn provisional(games: u32) -> String {
+    format!("provisional · {games} {} so far", if games == 1 { "match" } else { "matches" })
+}
+
+/// What a server says about somebody.
+pub mod profile {
+    pub const TITLE: &str = "Player";
+    pub const CLOSE: &str = "Close";
+    /// Asked for, and not answered yet. Its own line rather than an empty
+    /// panel, because a wait and a blank look the same and only one of them is
+    /// worth waiting through.
+    pub const ASKING: &str = "asking…";
+    /// A real answer, and it says which kind of nothing it is: this server has
+    /// never met them, as against not having replied.
+    pub const UNKNOWN: &str = "this server has never met them.";
+    pub const YOU: &str = "(you)";
+    /// **On the panel, once.** A server can only speak for what happened on
+    /// it, and a screen that did not say so would read as a record of a person
+    /// rather than of a visit.
+    pub const HERE: &str = "On this server:";
+
+    pub fn matches(n: u32) -> String {
+        match n {
+            0 => "No matches finished yet".to_string(),
+            1 => "1 match finished".to_string(),
+            n => format!("{n} matches finished"),
+        }
+    }
+
+    /// The **most** ever held, not the last: a profile says what somebody has
+    /// managed, so a bad match after a good one does not erase the good one.
+    pub fn best(squares: usize) -> String {
+        match squares {
+            0 => "No ground held yet".to_string(),
+            1 => "1 square at their largest".to_string(),
+            n => format!("{n} squares at their largest"),
+        }
     }
 }
 

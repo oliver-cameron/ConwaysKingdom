@@ -611,6 +611,79 @@ pub struct Made {
     pub code: Option<String>,
 }
 
+/// **Somebody in a room**, as everybody else in it is told.
+///
+/// Three things rather than the `(PlayerId, String)` this was: a number is a
+/// seat in one world and a name is what they typed, and neither of those is
+/// enough to look a [`Profile`] up — which is what a name in a lobby is *for*
+/// being clicked on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seat {
+    pub id: PlayerId,
+    pub name: String,
+    /// Who they are on this server. `None` for a client with no key, which is
+    /// somebody the server will not remember and so has nothing to say about.
+    pub who: Option<PersonId>,
+}
+
+impl Seat {
+    /// Name and fingerprint, or the bare name for somebody with no key —
+    /// there is nothing to disambiguate them by, and a dangling separator
+    /// would read as a fingerprint that failed to load.
+    pub fn label(&self) -> String {
+        match &self.who {
+            Some(who) => label(&self.name, who),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// **What a server can vouch for about somebody**, which is only what
+/// happened on it.
+///
+/// The line [player profiles] draws: anything another player is shown has to
+/// be the server's, because client state is self-asserted and a rating you
+/// keep is a rating you can type. So a name is the one thing here a client
+/// chose, and it is shown as a name rather than as a fact — the fingerprint
+/// beside it is the part that cannot be picked.
+///
+/// [player profiles]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#player-profiles
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Profile {
+    pub who: PersonId,
+    /// What they last joined under here.
+    pub name: String,
+    pub rating: i32,
+    /// Whether that number has been earned yet. An Elo from a fixed start
+    /// means nothing until it has moved, so it is marked until it has — see
+    /// `server::rating::PROVISIONAL_AFTER`.
+    pub provisional: bool,
+    /// Matches this server has settled for them.
+    pub games: u32,
+    /// The most ground they have held at once, in squares.
+    pub best: usize,
+}
+
+impl Profile {
+    /// **Name and fingerprint**, which is how two players who picked one name
+    /// are told apart.
+    ///
+    /// Nothing stops two people calling themselves alice, and an account
+    /// system is what this game is deliberately not — so the name keeps its
+    /// spelling and the id says which alice. Four characters is enough for a
+    /// room of fifteen and is not meant to be enough for the world; the whole
+    /// id is what identifies anybody absolutely.
+    pub fn label(&self) -> String {
+        label(&self.name, &self.who)
+    }
+}
+
+/// The same, for anywhere a name and an id are to hand without a whole
+/// profile behind them — a lobby row, a standings bar.
+pub fn label(name: &str, who: &PersonId) -> String {
+    format!("{name}·{}", who.short())
+}
+
 /// **What a room's match is doing, and who is in it.**
 ///
 /// A struct rather than seven fields inline in [`ServerMessage::Match`],
@@ -621,9 +694,10 @@ pub struct Made {
 pub struct Lobby {
     pub phase: MatchPhase,
     pub victory: Option<Victory>,
-    /// Names as well as numbers: a lobby is the one screen where players are
-    /// people rather than colours.
-    pub players: Vec<(PlayerId, String)>,
+    /// Who is in the room. A lobby is the one screen where players are people
+    /// rather than colours, so this is the one place a seat carries a name and
+    /// a person as well as a number.
+    pub players: Vec<Seat>,
     /// The sides this match has and who sits on them. Empty in a free-for-all.
     /// Also how a client learns **which number its own cells carry**: it finds
     /// its seat in a side and plays as that side's id.
@@ -707,6 +781,12 @@ pub enum ClientMessage {
     /// outside every room. It names no world itself, which is why it is one of
     /// the messages a connection with no seat may send.
     Rooms,
+    /// What does this server say about this person?
+    ///
+    /// Answerable **without a seat**, like [`Self::Rooms`] and for the same
+    /// reason: a profile is looked at from a lobby, from a standings bar, and
+    /// from a menu, and only one of those is inside a room.
+    Profile { who: PersonId },
     /// Watch a room without taking a seat in it.
     ///
     /// A spectator is a connection with a room and no `PlayerId`, not a player
@@ -807,16 +887,14 @@ pub enum ServerMessage {
         you: PlayerId,
         tick: Tick,
         spawn: (i32, i32),
-        /// **What this server calls you**, issued the first time it saw this
-        /// client's secret. The client cannot work it out, so it is told and
-        /// remembers it. `None` for a client that offered no secret.
-        person: Option<PersonId>,
-        /// What this client is rated on this server.
+        /// **What this server says about you**, which is what it calls you
+        /// and what you have done here.
         ///
-        /// Everybody starts on the same number, so this is a figure rather
-        /// than an option: a client that has never been rated here is not a
-        /// special case, it is somebody at the start.
-        rating: i32,
+        /// `None` for a client that offered no secret: it is nobody this
+        /// server remembers, and a dashboard showing it the starting rating
+        /// would be inventing one. Two fields before this — a `PersonId` and a
+        /// bare `i32` — and the `i32` was exactly that invention.
+        profile: Option<Profile>,
         /// What this player has to spend. Sent because a returning player has a
         /// value already and the client cannot know it — assuming the starting
         /// figure left the two disagreeing from the first frame.
@@ -889,6 +967,9 @@ pub enum ServerMessage {
         player: PlayerId,
         at: (i32, i32),
     },
+    /// The answer to [`ClientMessage::Profile`]. `None` is somebody this
+    /// server has never met, which is a real answer and not a failure.
+    Profile(Option<Profile>),
     /// Somebody's rating here, and what the match just finished moved it by.
     /// Broadcast, because a result is a comparison and the interesting half is
     /// what happened to everybody else.

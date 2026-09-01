@@ -16,8 +16,8 @@ pub mod console;
 pub mod matches;
 pub mod people;
 pub mod persist;
+pub mod profiles;
 pub mod rating;
-pub mod ratings;
 pub mod rooms;
 #[cfg(feature = "server")]
 pub mod ws;
@@ -445,11 +445,19 @@ impl Server {
     /// ever seen, because their number is written into their ground, and a
     /// lobby listing people who left months ago is a lobby nobody can count.
     pub fn lobby(&self) -> ServerMessage {
-        let mut players: Vec<(PlayerId, String)> =
-            self.players.values().filter(|p| p.online).map(|p| (p.id, p.name.clone())).collect();
+        let mut players: Vec<crate::net::Seat> = self
+            .players
+            .values()
+            .filter(|p| p.online)
+            .map(|p| crate::net::Seat {
+                id: p.id,
+                name: p.name.clone(),
+                who: p.person.clone().map(crate::net::PersonId),
+            })
+            .collect();
         // By number, which is the order they arrived, so the list does not
         // reshuffle itself between two frames.
-        players.sort_by_key(|&(id, _)| id);
+        players.sort_by_key(|s| s.id);
         ServerMessage::Match(crate::net::Lobby {
             teams: self.teams(),
             started_by: self.started_by,
@@ -686,12 +694,15 @@ impl Server {
     ///
     /// Side rows are skipped for free: they carry no person, and a result has
     /// nowhere to go without one.
-    pub fn finishers(&self) -> Vec<crate::server::ratings::Finisher> {
+    pub fn finishers(&self) -> Vec<crate::server::profiles::Finisher> {
         let held = self.territory();
         self.players()
             .filter_map(|p| {
-                Some(crate::server::ratings::Finisher {
+                Some(crate::server::profiles::Finisher {
                     who: crate::net::PersonId(p.person.clone()?),
+                    // What they last joined under, so a profile has a name on
+                    // it before anybody looks it up.
+                    name: p.name.clone(),
                     team: p.plays_as.0,
                     score: held[p.plays_as.0 as usize],
                 })
@@ -962,11 +973,10 @@ impl Server {
                             you,
                             tick: self.tick(),
                             spawn,
-                            person: who.cloned(),
-                            // Filled in by `rooms::Rooms`, which holds the table:
-                            // a rating outlives every room here, so a room does
-                            // not get to keep one.
-                            rating: crate::server::rating::START,
+                            // Filled in by `rooms::Rooms`, which holds the
+                            // table: a profile outlives every room here, so a
+                            // room does not get to keep one.
+                            profile: None,
                             value,
                             room: crate::net::RoomId(self.room.clone()),
                             name: self.room.clone(),
@@ -1145,6 +1155,9 @@ impl Server {
             }
             // Answered by `Rooms::handle`, which owns the seat this gives up.
             ClientMessage::Leave => Vec::new(),
+            // And by `Rooms`, which holds the table. A room is one world on a
+            // server and a person outlives every one of them.
+            ClientMessage::Profile { .. } => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::JoinTeam { team } => {
@@ -1796,7 +1809,8 @@ mod tests {
 
         let alice = s.join_with("alice", None).unwrap();
         let (players, _) = lobby(&s.step()).expect("somebody arrived");
-        assert_eq!(players, vec![(alice, "alice".to_string())]);
+        assert_eq!(players.len(), 1);
+        assert_eq!((players[0].id, players[0].name.as_str()), (alice, "alice"));
 
         s.leave(alice);
         let (players, _) = lobby(&s.step()).expect("and left");
@@ -2400,10 +2414,13 @@ mod tests {
             ClientMessage::Join { name: "alice".into(), room: None, person: None },
         );
         match welcome.as_slice() {
-            [ServerMessage::Welcome { you, person, value, .. }] => {
+            [ServerMessage::Welcome { you, value, profile, .. }] => {
                 assert_eq!(*you, me, "the same number");
-                assert_eq!(person.as_ref(), Some(&who), "and told who they are");
                 assert_eq!(*value, spent, "and the value they had");
+                // A room does not fill this in. A profile outlives every room
+                // on a server, so `Rooms` is what holds the table and what
+                // stamps the answer — see `Rooms::profile_of`.
+                assert!(profile.is_none());
             }
             other => panic!("expected a welcome, got {other:?}"),
         }
