@@ -184,12 +184,17 @@ pub const KIND_COARSE: u32 = 2;
 
 /// Below this many pixels per cell, the world is drawn coarsely.
 ///
-/// Four is where the antialiasing stops being exact — `MAX_AA` is four samples
-/// a side and a cell is sixteen texels — so it is also where the sprite stops
-/// being legible, which is the thing the coarse path drops. Above it the fine
-/// path is exact; below it the fine path cannot even be *resident*, since one
-/// chunk is one array layer and a 1080p screen wants more than 256 of them
-/// under about zoom five.
+/// Four is where the fine path stops being able to be *resident*: one chunk is
+/// one array layer, and a 1080p screen wants more than the guaranteed 256 of
+/// them under about zoom five. It is also about where a sprite stops being
+/// legible, which is the thing the coarse path drops.
+///
+/// **It is not where the picture stops being right**, and that gap is a known
+/// fault. The world pass takes one reading a pixel, so below sixteen — one
+/// screen pixel to a texel — there are texels no pixel ever reads, and the
+/// sprites are one- and two-texel strokes. Everything between here and there
+/// is drawn from a subset of the art it is meant to show. See
+/// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#texels-nothing-samples).
 pub const COARSE_BELOW: f32 = 4.0;
 
 /// And back to the fine path only above this.

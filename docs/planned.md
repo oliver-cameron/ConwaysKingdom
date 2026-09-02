@@ -40,6 +40,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [How to play](#how-to-play) | Designed | the rules nobody can infer, the four tips that matter, and who wrote the rule underneath |
 | [A profile screen worth visiting](#a-profile-screen-worth-visiting) | Designed | stamps edited out of play, a face, and finding somebody |
 | [Antialias always](#antialias-always) | Built | one rule at every zoom, a box filter one pixel wide |
+| [Texels nothing samples](#texels-nothing-samples) | **Open** | between zoom 5 and 16 the art is drawn from a subset of itself |
 | [Something to see when it goes off](#something-to-see-when-it-goes-off) | Designed | a blast is a frame of noise and nothing else says it happened |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
@@ -895,6 +896,64 @@ trick — one sample, edges softened over a pixel by `fwidth` — which needs
 derivatives and so needs the sampling out of non-uniform control flow, and
 needs care at tile boundaries because the sheet is an atlas and a bilinear tap
 across one would bleed a neighbouring picture in.
+
+## Texels nothing samples
+
+**Open.** Between about zoom five and sixteen the picture falls apart, and it
+gets worse fast rather than gradually. The cause is not the filter, and no
+amount of work on the filter will fix it.
+
+**One reading a pixel is not enough below one pixel a texel.** The world pass
+samples the world once per screen pixel — deliberately, so that nothing blends
+before the resolve. A cell is sixteen texels of art, so at zoom sixteen one
+texel gets exactly one pixel, and below that some texels get **none**: no
+sample lands in them and nothing that happens later can know they were there.
+The resolve filters over one *screen* pixel, which by then is too late; the
+information is already gone.
+
+It degrades quickly because the art is high frequency. A mine is a diamond
+outline and a turret a plus, both drawn in strokes one and two texels wide, so
+the moment the sample rate drops below two a stroke they stop being sampled
+consistently and start winking in and out with the camera.
+
+**The coarse path does not cover it.** `COARSE_BELOW` is four pixels a cell,
+chosen for residency — one chunk is one array layer and a 1080p screen wants
+more than 256 of them below about zoom five. So the fine sprite path is used
+from five upward, and everything from five to sixteen is drawn from a subset of
+its own art. That band is most of the useful zoom range.
+
+### What would fix it, worst first
+
+**Mipmaps on the sheet, which is the obvious answer and is wrong here.** The
+sheet is an atlas: a mip level averages across tile boundaries, so level one of
+a tile contains a quarter of each of its neighbours. It could be made to work
+with gutters, or by giving each kind its own array layer, but both are a change
+to the sheet's layout and to the tile arithmetic that `Cell::sprite` and
+`sprite_index` share — and the second costs a texture array binding to save a
+problem the next option does not have.
+
+**Draw the world larger and let the resolve read a block, which is the cheap
+one to try.** The offscreen target already exists, and it is the whole of the
+machinery: render at twice the width and height and have the resolve average
+each 2×2 group, on top of the phase weighting it already does. Four times the
+fragment cost, no change to the art, no atlas problem, and it composes with
+what is there rather than replacing it. This is the first thing to do.
+
+**Reduced tiles, drawn once, which is the principled one.** The sheet has two
+hundred and forty free tiles, and a kind's four states at half, quarter and
+eighth size are twelve of them. Mipmapping by hand, with the atlas problem
+solved by construction: each reduced tile is a tile, so nothing bleeds. Pick by
+zoom and cross-fade between two levels, or the switch pops the way the coarse
+path does. It also gives the art a say — a mine at four texels can be *drawn*
+as something legible rather than averaged into a grey smudge, which is what
+every pixel-art game with a zoom does.
+
+**Or raise the coarse path to meet it.** `COARSE_BELOW` at sixteen removes the
+band entirely by never drawing sprites into it. Honest, one line, and it loses
+the art far earlier than anybody would want — worth remembering as the fallback
+if the others are ever in doubt, and worth measuring against, since a cell
+without its art at zoom twelve may read better than a sprite sampled at half
+its detail.
 
 ## Something to see when it goes off
 
