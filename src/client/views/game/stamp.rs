@@ -204,11 +204,18 @@ impl Stamp {
     /// The sheet can fail to build, and then the kinds fall back to
     /// lightness: paler for a mine, paler still for a turret. That keeps the
     /// distinction visible without art rather than losing it.
+    /// **A stamp is a shape, so it is drawn as one.**
+    ///
+    /// It used to be drawn in whatever the hotbar was holding, on the
+    /// reasoning that a preview should show what it would put down. That is
+    /// the wrong question here: the bar already says what is held, and a
+    /// pattern redrawn in a mine's art every time somebody changed material
+    /// made the same glider look like a different pattern. What the square is
+    /// for is telling one saved shape from another.
     pub fn draw(
         &self,
         painter: &egui::Painter,
         rect: egui::Rect,
-        what: Placement,
         player: PlayerId,
         sheet: Option<egui::TextureId>,
     ) {
@@ -222,11 +229,14 @@ impl Stamp {
                 origin + egui::vec2(c as f32 * step, r as f32 * step),
                 egui::vec2(step, step),
             );
-            // Shrunk a hair, so neighbouring cells read as cells rather than as
-            // a solid blob -- the difference between a shape and a smear.
-            let box_ = at.shrink(step * 0.12);
-
-            cell(painter, box_, what, player, sheet);
+            // **Whole cells, touching.** They were shrunk an eighth so a block
+            // of them would not read as one blob, which at this size took the
+            // shape apart instead: a five-cell glider came out as five specks
+            // with more gap than cell between them. The sprite carries its own
+            // outline — a texel of transparency on every side, drawn there for
+            // exactly this — so full tiles already read as cells and the shrink
+            // was a second answer to a solved question.
+            cell(painter, at, player, sheet);
         }
     }
 
@@ -251,7 +261,6 @@ fn pad(
     ui: &mut egui::Ui,
     theme: &Theme,
     sketch: &mut Sketch,
-    what: Placement,
     player: PlayerId,
     sheet: Option<egui::TextureId>,
 ) -> Option<Picked> {
@@ -280,7 +289,11 @@ fn pad(
                 rect.min + egui::vec2(col as f32 * step, row as f32 * step),
                 egui::vec2(step, step),
             );
-            cell(ui.painter(), box_.shrink(step * 0.08), what, player, sheet);
+            // Whole cells here too. The ruling is drawn over them a few lines
+            // down, which is what separates one from the next on the pad — so
+            // shrinking them as well left a gap *and* a line between every
+            // pair, and a drawn shape looked like a sieve.
+            cell(ui.painter(), box_, player, sheet);
         }
     }
     // Drawn over the cells, so the grid reads as ruling on paper rather than
@@ -346,29 +359,34 @@ fn pad(
 /// The sheet can fail to build, and then the kinds fall back to lightness —
 /// paler for a mine, paler still for a turret — so the distinction survives
 /// losing the art rather than going with it.
+/// One cell of a saved shape, in the player's colour.
+///
+/// **Always plain life**, never the placement the bar is holding — see
+/// [`Stamp::draw`]. A stamp records where the cells are and nothing about what
+/// they are made of, so drawing it as a mine claims something the stamp does
+/// not say.
 fn cell(
     painter: &egui::Painter,
     rect: egui::Rect,
-    what: Placement,
     player: PlayerId,
     sheet: Option<egui::TextureId>,
 ) {
     match sheet {
-        // The tile this cell would draw as once it is placed: alive, and of
-        // this placement's kind. The sheet is already in the player's colour
-        // and the tile byte carries the state, so there is nothing to look up.
+        // The sheet is already in the player's colour and the tile byte
+        // carries the state, so there is nothing to look up.
         Some(sheet) => {
-            let tile = what.apply_to(Cell::DEAD, player).sprite();
+            let tile = Placement::Life.apply_to(Cell::DEAD, player).sprite();
             painter.image(sheet, rect, Icons::uv(tile), egui::Color32::WHITE);
         }
+        // No sheet yet, so a flat square stands in — and this one *is* a solid
+        // block when cells touch, so it keeps a corner radius to break it up.
         None => {
-            let lightness = match what {
-                Placement::Turret => 0.90,
-                Placement::Mine => 0.78,
-                _ => 0.62,
-            };
-            let (red, green, blue) = crate::client::views::hue::shade(lightness, 1.0, player);
-            painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(red, green, blue));
+            let (red, green, blue) = crate::client::views::hue::shade(0.62, 1.0, player);
+            painter.rect_filled(
+                rect,
+                (rect.width() * 0.18).min(3.0),
+                egui::Color32::from_rgb(red, green, blue),
+            );
         }
     }
 }
@@ -685,7 +703,6 @@ pub fn show(
     theme: &Theme,
     library: &Library,
     sketch: &mut Sketch,
-    what: Placement,
     player: PlayerId,
     sheet: Option<egui::TextureId>,
     // What is being typed into a name box. Held by the client because this
@@ -731,7 +748,7 @@ pub fn show(
                                     egui::Stroke::new(1.0, p.line),
                                     egui::StrokeKind::Inside,
                                 );
-                                stamp.draw(ui.painter(), rect.shrink(4.0), what, player, sheet);
+                                stamp.draw(ui.painter(), rect.shrink(4.0), player, sheet);
                                 if response.clicked() {
                                     picked = Picked::Hold(i);
                                 }
@@ -800,7 +817,7 @@ pub fn show(
 
                     ui.separator();
                     ui.label(words::DRAW);
-                    if let Some(drawn) = pad(editing, ui, theme, sketch, what, player, sheet) {
+                    if let Some(drawn) = pad(editing, ui, theme, sketch, player, sheet) {
                         picked = drawn;
                     }
 

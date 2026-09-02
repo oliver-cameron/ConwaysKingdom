@@ -240,6 +240,14 @@ impl CoarseTexture {
     /// texture with no window to scroll and no seam to get wrong.
     pub const SIDE: u32 = 1024;
 
+    /// How far the view's middle must travel before the window follows it.
+    ///
+    /// Four chunks. Small against [`Self::SIDE`], so the window always keeps
+    /// hundreds of cells of margin on every side and nothing can be seen to
+    /// pop in at its edge; large enough that ordinary panning and zooming
+    /// cross it rarely rather than every frame. See [`Self::window_for`].
+    pub const STEP: i32 = CHUNK_N as i32 * 4;
+
     pub fn new(device: &wgpu::Device) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("coarse world"),
@@ -279,6 +287,22 @@ impl CoarseTexture {
         }
         let ((r0, c0), (r1, c1)) = visible;
         let middle = ((r0 + r1) / 2, (c0 + c1) / 2);
+        // **Snapped, because the window is what decides whether to refill.**
+        //
+        // Centred exactly on the middle of the view, this moved whenever the
+        // middle moved by one cell — which is every frame of a pan and every
+        // frame of a zoom, since zooming about the pointer walks the centre
+        // too. Each move rebuilds two megabytes and uploads them, so zooming
+        // out cost a full texture a frame: about 120 MB/s at sixty frames,
+        // and a walk of every cell in the world to build each one.
+        //
+        // A window a thousand cells wide does not need to be centred to a
+        // cell. Snapping the centre to [`Self::STEP`] means a pan inside that
+        // distance costs nothing at all, and the window still holds a wide
+        // margin around the view on every side because it is far larger than
+        // the step.
+        let snap = |v: i32| v.div_euclid(Self::STEP) * Self::STEP;
+        let middle = (snap(middle.0), snap(middle.1));
         ((middle.0 - side / 2, middle.1 - side / 2), (side, side))
     }
 
@@ -300,8 +324,21 @@ impl CoarseTexture {
         // Walked by stored chunk rather than cell by cell: an infinite world
         // holds only what life has reached, so this is the resident set and
         // not the window. A torus holds everything, and then it is the world.
+        // A torus of the largest shape holds sixteen thousand chunks and four
+        // million cells, and all of them used to be walked whether or not the
+        // window could show them. Skipped whole, before the inner loop, on the
+        // cheap test — and never for a world that wraps, where a chunk outside
+        // the window on one side is inside it on the other.
+        let wraps = world.size_in_cells().is_some_and(|(h, w)| rows == h && cols == w);
         for (at, chunk) in world.stored() {
             let base = (at.0 * CHUNK_N as i32, at.1 * CHUNK_N as i32);
+            if !wraps {
+                let span = CHUNK_N as i32;
+                let (r, c) = (base.0 - row0, base.1 - col0);
+                if r + span <= 0 || c + span <= 0 || r >= rows || c >= cols {
+                    continue;
+                }
+            }
             for cr in 0..CHUNK_N as i32 {
                 for cc in 0..CHUNK_N as i32 {
                     let (row, col) = (base.0 + cr, base.1 + cc);
@@ -951,13 +988,62 @@ mod tests {
         let visible = ((100, 200), (300, 400));
         let ((row, col), size) = CoarseTexture::window_for(&world, visible);
         assert_eq!(size, (CoarseTexture::SIDE as i32, CoarseTexture::SIDE as i32));
-        // Centred on the middle of what is on screen.
+        // On the middle of what is on screen, to within the step it snaps to
+        // — see `window_for`, where the snapping is what stops a pan of one
+        // cell rebuilding two megabytes.
         let side = CoarseTexture::SIDE as i32;
-        assert_eq!((row + side / 2, col + side / 2), (200, 300));
+        let centre = (row + side / 2, col + side / 2);
+        assert!(
+            (centre.0 - 200).abs() < CoarseTexture::STEP
+                && (centre.1 - 300).abs() < CoarseTexture::STEP,
+            "{centre:?} is not on (200, 300)"
+        );
     }
 
     /// **The swap has hysteresis**, or a zoom resting on the threshold flips
     /// between two paths that do not draw alike.
+
+    /// **The window is what decides whether to refill**, and each refill
+    /// rebuilds two megabytes and uploads them — so what has to be true is
+    /// that it moves rarely, not that it never moves.
+    ///
+    /// Unsnapped it followed the view's middle exactly, so it changed on every
+    /// frame of a pan and every frame of a zoom, which is a full texture a
+    /// frame. Snapped it can change only when the middle crosses a step, so a
+    /// pan of a thousand cells costs at most a refill every `STEP` of it.
+    #[test]
+    fn the_coarse_window_moves_at_most_once_a_step() {
+        let world = World::infinite();
+        let view = |r: i32, c: i32| ((r, c), (r + 200, c + 200));
+        let travel = CoarseTexture::STEP * 10;
+        let mut last = CoarseTexture::window_for(&world, view(0, 0));
+        let mut moves = 0;
+        for step in 1..=travel {
+            let now = CoarseTexture::window_for(&world, view(step, 0));
+            if now != last {
+                moves += 1;
+                last = now;
+            }
+        }
+        assert_eq!(moves, 10, "{travel} cells of pan cost {moves} refills");
+    }
+
+    /// And it does follow, eventually — a window that never moved would leave
+    /// the view behind.
+    #[test]
+    fn the_coarse_window_follows_a_long_pan() {
+        let world = World::infinite();
+        let view = |r: i32, c: i32| ((r, c), (r + 200, c + 200));
+        let first = CoarseTexture::window_for(&world, view(0, 0));
+        let far = CoarseTexture::window_for(&world, view(CoarseTexture::STEP * 4, 0));
+        assert_ne!(far, first, "the window never followed the view");
+        // And it still surrounds what is being looked at, with room to spare.
+        let ((row0, col0), (rows, cols)) = far;
+        let ((r0, c0), (r1, c1)) = view(CoarseTexture::STEP * 4, 0);
+        assert!(r0 > row0 && r1 < row0 + rows, "the view is outside the window's rows");
+        assert!(c0 > col0 && c1 < col0 + cols, "the view is outside the window's columns");
+    }
+
     #[test]
     fn the_two_paths_do_not_flicker_at_the_boundary() {
         assert!(COARSE_BELOW < FINE_ABOVE, "one threshold is not hysteresis");

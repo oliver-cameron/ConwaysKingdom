@@ -2005,7 +2005,6 @@ impl App for GameApp {
                                 &theme,
                                 &self.stamps,
                                 &mut ui.sketch,
-                                what,
                                 me,
                                 sheet,
                                 &mut ui.naming_stamp,
