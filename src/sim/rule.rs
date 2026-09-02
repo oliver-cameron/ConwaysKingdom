@@ -187,8 +187,55 @@ pub const PAYLOAD_COST: i32 = 40;
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
 pub const RECLAIM: i32 = 1;
-/// One birth of [`super::Kind::MINE`].
+/// One birth of [`super::Kind::MINE`] that pays.
 pub const MINE_YIELD: i32 = 1;
+
+/// The age a mine pays most often at, and how often it pays there and when it
+/// is spent — out of [`super::OUT_OF`].
+///
+/// **Mine income used to scale faster than territory.** A mine pays when one of
+/// its kind is born, and births scale with the perimeter of a growing pattern,
+/// so a player with four times the ground earned more than four times as much
+/// and could spend it on more ground. Nothing pushed back. See
+/// [docs/planned.md#depleted-mines].
+///
+/// What pushes back is the square. A mine born where a mine has been born
+/// before inherits that square's depletion and adds to it, so a pattern that
+/// keeps re-birthing over the same cells wears them out — and the wear stays on
+/// the corpse, so it is not escaped by dying. It is cleared only when the
+/// corpse is finally swept to ordinary ground, which is [`MINE_UPKEEP`].
+///
+/// **A parabola rather than a fade, so there is an age worth holding.** A curve
+/// that only fell would make every mine worth most on the generation it was
+/// laid, and the only decision would be to lay more. With a peak at
+/// [`MINE_PRIME`] the shape rewards letting a field mature and then retiring
+/// it, and most of a mine's life is on the falling side, so "older pays less"
+/// is still what a player sees:
+///
+/// ```text
+///   age    0   1   2   3   4   5   6   7
+///   pays  55  62  64  62  55  43  26   4     out of 64
+/// ```
+pub const MINE_PRIME: u8 = 2;
+/// What a mine at its prime pays, out of [`super::OUT_OF`].
+pub const MINE_BEST: Chance = 64;
+/// And what one worn all the way out still pays. Not nought: a mine that could
+/// never pay again is a cell to be told about, and it is told by the sprite
+/// rather than by a surprise.
+pub const MINE_SPENT: Chance = 4;
+
+/// How likely a mine this depleted is to pay for a birth.
+///
+/// Integer arithmetic throughout, because two peers must agree exactly and a
+/// float is a way for them not to — see [docs/simulation.md] on determinism.
+pub fn mine_chance(age: u8) -> Chance {
+    let prime = MINE_PRIME as i64;
+    let far = (age as i64 - prime).abs();
+    // The longer arm of the parabola, so the far end lands exactly on spent.
+    let widest = (bits::MAX_AGE as i64 - prime).max(prime).max(1);
+    let fall = (MINE_BEST as i64 - MINE_SPENT as i64) * far * far / (widest * widest);
+    (MINE_BEST as i64 - fall).max(MINE_SPENT as i64) as Chance
+}
 /// One upkeep charge on a dead mine.
 pub const MINE_DRAIN: i32 = 2;
 
@@ -346,7 +393,18 @@ fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
             cell.with_alive(false)
         }
     } else if BORN_ON.contains(&live) {
-        parent(neighbours, roll).with_ice(false).with_home(cell.is_home())
+        let born = parent(neighbours, roll).with_ice(false).with_home(cell.is_home());
+        // **A mine inherits the square's depletion, not its parent's.** What
+        // wears out is the ground: a pattern that keeps re-birthing over the
+        // same cells is what income has to be bounded by, and a lineage that
+        // travels is not. `parent` clears the age for every other kind, which
+        // is right — a payload carried by a glider arms itself from nought —
+        // and this is the one kind whose age is a fact about where it is.
+        if born.kind() == super::Kind::MINE {
+            born.with_age((cell.age() + 1).min(bits::MAX_AGE))
+        } else {
+            born
+        }
     } else {
         cell
     })
@@ -377,9 +435,16 @@ mod stream {
     pub const BLAST: u64 = 9;
     /// Which of the centres that tie for nearest a blast is thrown to.
     pub const THROW: u64 = 10;
+    /// Whether a mine's birth paid, which falls with the square's depletion.
+    ///
+    /// **Its own stream**, like every other roll here. Two questions asked of
+    /// one stream on one square in one generation get the same answer, so a
+    /// mine's payout would have been decided by whatever the upkeep roll said.
+    pub const YIELD: u64 = 11;
 }
 
 pub use stream::UPKEEP as UPKEEP_STREAM;
+pub use stream::YIELD as YIELD_STREAM;
 pub use stream::{BLAST as BLAST_STREAM, THROW as THROW_STREAM};
 pub use stream::{TURRET as TURRET_STREAM, TURRET_ROT as TURRET_ROT_STREAM};
 

@@ -3,7 +3,8 @@ use bytemuck::{Pod, Zeroable};
 use super::dir::Dir;
 use super::player::PlayerId;
 use super::rule::{
-    next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM, UPKEEP_STREAM,
+    mine_chance, next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM,
+    UPKEEP_STREAM, YIELD_STREAM,
 };
 use super::seed::Roll;
 use std::ops::{Index, IndexMut};
@@ -476,6 +477,16 @@ pub enum Ages {
     /// Nothing. The field stays at nought and the kind is one row of the
     /// sheet.
     Never,
+    /// **How worn out the square under it is**, counted up by the rule when
+    /// this kind is born there and never on its own.
+    ///
+    /// A mine's yield rises to [`super::rule::MINE_PRIME`] and falls away
+    /// after it — see [`super::rule::mine_chance`] — so a pattern that keeps
+    /// re-birthing over the same cells wears them out and income stops scaling
+    /// with how big one lineage got. It survives the cell's death, so dying is
+    /// not a way out of it, and it clears when the corpse is finally swept to
+    /// ordinary ground.
+    Depletes,
     /// **A fuse, while it lives**, advancing on this chance a generation —
     /// and certainly from [`super::rule::PAYLOAD_WARN`], so the last sprite is
     /// on screen for exactly one generation.
@@ -513,7 +524,7 @@ kinds! {
     /// it.
     ///
     /// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
-    MINE = 1, inherited: true, ages: Ages::Never, corpse: true,
+    MINE = 1, inherited: true, ages: Ages::Depletes, corpse: true,
     /// A cell that claims ground at range: every generation it takes the
     /// nearest square that is not its owner's and makes it theirs.
     ///
@@ -724,7 +735,16 @@ impl Halo {
                 let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
                 if after.kind() == Kind::MINE && after.player().is_owned() {
                     if after.is_alive() {
-                        if !before.is_alive() {
+                        // **Paid on a chance that peaks and then falls away**,
+                        // so a square that has been mined over and over stops
+                        // being worth mining — see [`super::rule::mine_chance`],
+                        // which is the whole of the diminishing return. The age
+                        // is the square's depletion and the rule has already
+                        // put this birth's on the cell, so what is rolled
+                        // against is what the sprite is showing.
+                        if !before.is_alive()
+                            && Roll::new(cell_seed).chance(YIELD_STREAM, mine_chance(after.age()))
+                        {
                             mined.born[after.player().0 as usize] += 1;
                         }
                     } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, MINE_UPKEEP) {
