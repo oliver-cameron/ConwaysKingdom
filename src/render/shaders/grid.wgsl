@@ -332,24 +332,18 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
 /// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#zooming-out-without-lying).
 /// It is a dial: raise it for a better picture at low zoom, lower it if the
 /// fragment cost ever shows up.
-/// **Four, and cell boundaries are why.**
+/// **One, because `point_colour` is already a one-pixel filter.**
 ///
-/// The coordinate is what antialiases *inside* a tile now — see
-/// `point_colour` — and that snap deliberately stops at the tile's edge,
-/// because the sheet is an atlas and a tap past the edge would blend an
-/// unrelated picture. So the one place it cannot help is exactly where it
-/// matters most: the boundary between two cells, which is two different
-/// sprites and the line the eye actually follows.
+/// This was four, to buy an edge five states as it crossed a pixel — and that
+/// was a second box filter stacked on the one the coordinate was already
+/// doing. Two one-pixel filters in a row is a two-pixel filter, which is what
+/// a blur looks like, and it is what a blur *was*.
 ///
-/// That is this loop's job, and the number of samples is the number of states
-/// an edge has as it crosses a pixel: `k + 1`. Two gave three — on, half, off
-/// — which still visibly steps. Four gives five, which does not.
-///
-/// It is the expensive way to buy them, and the cheap way is exact: a pixel
-/// straddling a cell boundary wants the two cells' colours mixed by how much
-/// of it each covers, which is two taps and a `lerp` rather than sixteen
-/// samples. That is the next thing to do here if the fragment cost shows up.
-const MIN_AA: i32 = 4;
+/// So the loop is left doing the job it is actually for and nothing else:
+/// averaging over the **cells** a pixel covers, once one covers more than one.
+/// At any zoom somebody plays at that is a single sample and the filtering all
+/// happens in `point_colour`, exactly a pixel wide.
+const MIN_AA: i32 = 1;
 const MAX_AA: i32 = 4;
 
 fn aa_side() -> i32 {
@@ -381,41 +375,30 @@ fn sprite_index(tile: u32) -> f32 {
     return f32((row << 4u) | column);
 }
 
-fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
-    // local is in texels across the chunk; the cell is that divided by a
-    // tile's width, and where we are inside the cell is the remainder.
-    let cell_coord = vec2<i32>(floor(local / f32(TILE_N)));
-    let within = local % f32(TILE_N);
+/// The colour of one **texel** of the board, from its position in chunk texels.
+///
+/// Everything is resolved from that position — which cell it falls in, that
+/// cell's sprite, its owner, its outline — so a caller may ask about texels on
+/// either side of a *cell* boundary and get the right answer for each. That is
+/// what lets the filter below treat a cell edge and a texel edge as the same
+/// thing, which they are: both are a line where one flat block of colour meets
+/// another.
+fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
+    // Clamped into the chunk, because a tap for a pixel on the very edge of
+    // one reaches half a texel past it. A quad draws its own chunk and nothing
+    // else, so the honest answer at the edge is the edge.
+    let span = n * f32(TILE_N);
+    let here = clamp(at, vec2<f32>(0.0), vec2<f32>(span - 0.5));
+    let cell_coord = vec2<i32>(floor(here / f32(TILE_N)));
+    let within = here - vec2<f32>(cell_coord) * f32(TILE_N);
 
     // r is the owner byte, g is what the cell is. Nothing to look up and
     // nothing to branch on: the sheet position is arithmetic on the fields.
     let texel = textureLoad(chunks, cell_coord, i32(layer), 0);
     let tile = sprite_index(texel.g);
-
     // Low nibble across the sheet, high nibble down it.
     let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
-
-    // **A box filter one pixel wide, done in the coordinate rather than by
-    // sampling more.** Supersampling gives an edge `k+1` states as it crosses
-    // a pixel, and at four samples that is three — which still steps, and
-    // stepping is the thing being fixed.
-    //
-    // So the sheet coordinate is bent instead: it snaps to the middle of a
-    // texel everywhere except within one pixel of a boundary, where it ramps
-    // across. With a linear sampler that is exactly a one-pixel box filter,
-    // continuous, in a single tap — a texel is a flat block of colour and only
-    // its edge is soft, which is what pixel art wants.
-    //
-    // The footprint is known rather than measured: one pixel is
-    // `TILE_N / zoom` texels. `fwidth` would say the same thing and may not be
-    // taken in non-uniform control flow, which the loop above is.
-    let per_pixel = max(f32(TILE_N) / cam.zoom, 1e-4);
-    let ramp = clamp((fract(within) - 0.5) / per_pixel + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
-    // **Clamped inside the tile.** The sheet is an atlas, so a tap that
-    // wandered past a tile's edge would blend in an unrelated picture; the
-    // outer half-texel of every tile therefore stays flat.
-    let soft = clamp(floor(within) + ramp, vec2<f32>(0.5), vec2<f32>(f32(TILE_N) - 0.5));
-    let sheet_uv = (tile_xy * f32(TILE_N) + soft) / f32(SHEET_N);
+    let sheet_uv = (tile_xy * f32(TILE_N) + within) / f32(SHEET_N);
     // **An explicit level, not an implicit one.** `textureSample` needs
     // derivatives, and derivatives may not be taken in non-uniform control
     // flow -- which a loop and a branch on the quad's kind both are. The sheet
@@ -461,6 +444,46 @@ fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
         colour = mix(colour, colour * EDGE_SHADE, min(open, 1.0) * sprite.a);
     }
     return colour;
+}
+
+/// The colour of one point, in texels across a chunk.
+///
+/// **A box filter exactly one pixel wide, and only one of them.**
+///
+/// Two texels meet at a line, and so do two cells — the second is just a line
+/// where the two blocks come out of different pictures. So this asks for the
+/// four texels around the point and mixes them, and every one of them resolves
+/// its own cell: a cell boundary antialiases by the same arithmetic as a texel
+/// boundary, with no special case and nothing clamped off at the edge of a
+/// tile.
+///
+/// The weight is what makes it a *pixel* wide rather than a texel wide. Away
+/// from the midpoint between two texel centres it is nought or one and the
+/// texel is flat — which is what keeps this pixel art — and within half a
+/// screen pixel of that midpoint it ramps across. One screen pixel is
+/// `TILE_N / zoom` texels, which is known rather than measured, so no
+/// derivatives and no trouble with the loop this sits inside.
+///
+/// It replaced a snap that bent the sheet coordinate and let a linear sampler
+/// do the mixing. That could not cross a tile edge — the sheet is an atlas, so
+/// a tap past one blends an unrelated picture — so cell boundaries went back
+/// to the supersample, and the supersample is a second box filter of its own.
+/// Two one-pixel filters in a row is a two-pixel filter, which is what a blur
+/// looks like.
+fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
+    // One screen pixel, in texels.
+    let per_pixel = max(f32(TILE_N) / cam.zoom, 1e-4);
+    // Texel centres sit at half-integers in `local`, so shift to put them on
+    // integers: the two bracketing this point are then `floor(t)` and the next.
+    let t = local - 0.5;
+    let base = floor(t);
+    let w = clamp((t - base - 0.5) / per_pixel + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
+
+    let c00 = texel_colour(base + vec2<f32>(0.5, 0.5), layer, n);
+    let c10 = texel_colour(base + vec2<f32>(1.5, 0.5), layer, n);
+    let c01 = texel_colour(base + vec2<f32>(0.5, 1.5), layer, n);
+    let c11 = texel_colour(base + vec2<f32>(1.5, 1.5), layer, n);
+    return mix(mix(c00, c10, w.x), mix(c01, c11, w.x), w.y);
 }
 
 /// Where in the chunk texture a sample `offset` cells away from this fragment

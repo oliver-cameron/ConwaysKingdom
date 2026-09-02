@@ -98,7 +98,11 @@ Written for blue, which is hue. `cnvt` writes it because it is the honest decomp
 
  There was a generator that drew them from ASCII art, in Python because the crate embeds these files with `include_bytes!` and so cannot build until they exist — which rules out a cargo example. It is gone: the art is edited directly now, and a generator that nobody runs is a second definition of the sprites waiting to disagree with the first.
 
-**No anti-aliasing.** Nearest sampling, no mip chain, hard edges — a test asserts every alpha is one of a few fixed inks. The cost is that far-out zoom point-samples a 16×16 tile down to a pixel and will shimmer, which is why the camera does not go below one pixel per cell.
+**Nearest sampling and no mip chain** — the art is flat blocks of a few fixed inks and a test asserts it. What smooths an edge is the shader, not the sampler: `point_colour` asks for the four texels around a point and mixes them itself, with a weight that is nought or one away from the line between two texel centres and ramps across within half a screen pixel of it. That is a box filter **exactly one pixel wide**, so a texel stays a flat block and only its edge is soft.
+
+Each of the four taps resolves its own cell, which is the part that matters: a **cell** boundary is a line where two blocks come out of different pictures, and it antialiases by the same arithmetic as a texel boundary with no special case. Doing it in the sampler cannot reach that far, because the sheet is an atlas and a linear tap past a tile's edge blends an unrelated picture.
+
+One filter and one only. `MIN_AA` is 1 for that reason: the supersampling loop above averages over the *cells* a pixel covers, which is a different job and only starts once one covers more than one. Stacking the two gave a two-pixel kernel, which is what a blur is.
 
 ## Colour
 

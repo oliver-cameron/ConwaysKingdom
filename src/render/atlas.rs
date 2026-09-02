@@ -97,16 +97,15 @@ impl Atlas {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            // **Linear, and it is still pixel art.** The shader hands this a
-            // coordinate that has already been snapped to the middle of a
-            // texel except within one screen pixel of a boundary — see
-            // `point_colour` — so what linear filtering has to interpolate is
-            // that one pixel of ramp and nothing else. Nearest gave the same
-            // blocks with a hard edge that jumped a whole pixel at a time as
-            // the camera moved, which is the shimmer the whole arrangement is
-            // for.
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            // **Nearest, because the shader does its own filtering.** It
+            // asks for four texels at their exact centres and mixes them
+            // itself — see `point_colour` — which is what lets a tap on the
+            // far side of a *cell* boundary read the neighbouring cell's
+            // sprite. Linear filtering here would blend within one tile of the
+            // sheet, which is an atlas: the tile next door is an unrelated
+            // picture.
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
