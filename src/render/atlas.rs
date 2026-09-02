@@ -21,6 +21,33 @@ pub const SHEET_TILES: u32 = 16;
 /// A sheet's edge in texels.
 pub const SHEET_N: u32 = TILE_N * SHEET_TILES;
 
+/// **Where the half-size level of detail starts**, in texels, on both axes.
+///
+/// A cell is sixteen texels of art, so at sixteen pixels a cell one texel gets
+/// one pixel and below that some texels get no sample at all — which is the
+/// band the picture falls apart in. The answer is art made for the size it is
+/// shown at, and the neat part is that it needs no second texture: a half-size
+/// tile is eight texels, so all 256 of them fit in 128x128, which is one
+/// quadrant of the sheet exactly.
+///
+/// That quadrant is what the tile arithmetic reads as **kinds six and seven**,
+/// so those two indices are spent on this and
+/// `no_kind_lands_in_the_reduced_quadrant` says so out loud. Kinds nought to
+/// three are used and a fourth is spoken for by depleted mines, so it leaves
+/// one.
+///
+/// Built by `tools/cnvt.rs` on the way in and read by `sheet_at` in
+/// `grid.wgsl`. See `docs/planned.md#texels-nothing-samples`.
+pub const HALF_ORIGIN: u32 = SHEET_N / 2;
+/// Texels along a tile at the half-size level.
+pub const HALF_TILE_N: u32 = TILE_N / 2;
+
+/// Whether a tile index is part of the half-size level rather than a picture in
+/// its own right — the bottom-right quadrant of the grid.
+pub const fn reduced_slot(tile: u8) -> bool {
+    (tile >> 4) >= (SHEET_TILES / 2) as u8 && (tile & 15) >= (SHEET_TILES / 2) as u8
+}
+
 /// The one sheet. A cell's tile byte is the index into it: low nibble across,
 /// high nibble down, so 256 tiles in a 16x16 grid of 16x16 texels.
 ///
@@ -209,6 +236,66 @@ mod tests {
                         kind.0
                     );
                 }
+            }
+        }
+    }
+
+    /// **The reduced level costs two kind indices, and nothing may spend them
+    /// twice.** The quadrant it lives in is what the tile arithmetic reads as
+    /// kinds six and seven, so a kind added there would be drawn with the
+    /// half-size art of some other cell — silently, and only at one zoom.
+    #[test]
+    fn no_kind_lands_in_the_reduced_quadrant() {
+        for kind in Kind::ALL {
+            for age in 0..=crate::sim::bits::MAX_AGE {
+                for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let tile = Cell::DEAD
+                        .with_kind(kind)
+                        .with_age(age)
+                        .with_alive(alive)
+                        .with_ice(ice)
+                        .sprite();
+                    assert!(
+                        !reduced_slot(tile),
+                        "Kind({}) age {age} is at tile {tile}, which is reduced art",
+                        kind.0
+                    );
+                }
+            }
+        }
+        assert!(!reduced_slot(crate::sim::bits::NOBODY), "the unowned tile is reduced art");
+    }
+
+    /// **Every picture has a half-size copy**, or a cell drawn at eight pixels
+    /// fades into nothing partway down the band rather than into smaller art.
+    #[test]
+    fn every_state_has_art_at_the_half_size_level_too() {
+        let texels = decode(SHEET).expect("the sheet must decode");
+        let covered = |x0: u32, y0: u32, side: u32| {
+            (0..side)
+                .flat_map(|y| (0..side).map(move |x| (x, y)))
+                .filter(|&(x, y)| texels[((((y0 + y) * SHEET_N + x0 + x) * 4) + 3) as usize] > 8)
+                .count()
+        };
+        for kind in Kind::ALL {
+            for (alive, ice) in [(true, false), (false, true), (true, true)] {
+                let tile = Cell::DEAD
+                    .with_kind(kind)
+                    .with_alive(alive)
+                    .with_ice(ice)
+                    .with_player(PlayerId(1))
+                    .sprite();
+                let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
+                let half = covered(
+                    HALF_ORIGIN + tx * HALF_TILE_N,
+                    HALF_ORIGIN + ty * HALF_TILE_N,
+                    HALF_TILE_N,
+                );
+                assert!(
+                    half > 0,
+                    "Kind({}) alive={alive} ice={ice}: tile {tile} has no half-size art",
+                    kind.0
+                );
             }
         }
     }

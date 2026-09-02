@@ -285,6 +285,15 @@ fn main() {
         (false, false) => forward(&pixels, width),
     };
 
+    // **After the conversion, and only forward.** The half-size level is built
+    // out of the sheet's own texels, so it has to be made in the space the
+    // shader reads rather than in the picture somebody drew — and reversing a
+    // sheet reverses what is already there rather than rebuilding it.
+    let mut out = out;
+    if !back_wards && width as usize == SHEET_N && height as usize == SHEET_N {
+        reduce(&mut out);
+    }
+
     if let Err(e) = write_rgba(Path::new(output), width, height, &out) {
         eprintln!("cnvt: {e}");
         std::process::exit(1);
@@ -412,6 +421,89 @@ fn hsl_round_trip(pixels: &[u8]) -> String {
 ///
 /// The worst error any visible pixel takes on a round trip, so a sheet that
 /// will not survive one says so here rather than on screen.
+/// Texels along a tile at full size, and the sheet's side. Same numbers as
+/// `render::atlas`, which this cannot import: `cnvt` builds under any feature
+/// set precisely so the sheet can be made before the crate that embeds it
+/// compiles.
+const TILE_N: usize = 16;
+const SHEET_TILES: usize = 16;
+const SHEET_N: usize = TILE_N * SHEET_TILES;
+/// Where the half-size level starts, in texels, on both axes. See
+/// `render::atlas::HALF_ORIGIN`.
+const HALF_ORIGIN: usize = SHEET_N / 2;
+const HALF_TILE_N: usize = TILE_N / 2;
+
+/// Whether a tile is part of the half-size level rather than a picture of its
+/// own — the bottom-right quadrant, which the tile arithmetic reads as kinds
+/// six and seven and which nothing may use while this level lives there.
+fn reserved(tile: usize) -> bool {
+    tile / SHEET_TILES >= SHEET_TILES / 2 && tile % SHEET_TILES >= SHEET_TILES / 2
+}
+
+/// **Build the half-size level from the full one.**
+///
+/// Every tile reduced two-to-one into the reserved quadrant, so a cell drawn
+/// at eight pixels has art made for eight pixels rather than sixteen texels
+/// sampled by eight. It is generated rather than drawn because the sheet is
+/// still a stand-in; the layout is what matters, and the day somebody draws a
+/// mine at eight texels it goes in the same place and this stops running over
+/// it. See `docs/planned.md#texels-nothing-samples`.
+///
+/// **Coverage stays binary.** `sprites_have_hard_edges` means it: a texel is
+/// on or off at every level, because sampling is nearest and a half-covered
+/// texel is half-covered at every zoom rather than art that resolves when you
+/// look closer. So alpha is a vote of the four and colour is the mean of
+/// whichever of them were actually there — averaging in the transparent ones
+/// would drag every edge towards black.
+fn reduce(sheet: &mut [u8]) {
+    let at = |x: usize, y: usize| (y * SHEET_N + x) * 4;
+    for tile in 0..SHEET_TILES * SHEET_TILES {
+        // Its own slot is inside the quadrant, so a reserved tile would be
+        // reduced from whatever this loop had already written there.
+        if reserved(tile) {
+            continue;
+        }
+        let (tx, ty) = ((tile % SHEET_TILES) * TILE_N, (tile / SHEET_TILES) * TILE_N);
+        let (hx, hy) = (
+            HALF_ORIGIN + (tile % SHEET_TILES) * HALF_TILE_N,
+            HALF_ORIGIN + (tile / SHEET_TILES) * HALF_TILE_N,
+        );
+        for y in 0..HALF_TILE_N {
+            for x in 0..HALF_TILE_N {
+                let mut sum = [0u32; 3];
+                let mut covered = 0u32;
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        let o = at(tx + x * 2 + dx, ty + y * 2 + dy);
+                        if sheet[o + 3] == 0 {
+                            continue;
+                        }
+                        covered += 1;
+                        for c in 0..3 {
+                            sum[c] += sheet[o + c] as u32;
+                        }
+                    }
+                }
+                let o = at(hx + x, hy + y);
+                if covered * 2 >= 2 {
+                    // Two of four is enough to keep the texel, so a diagonal
+                    // stroke one texel wide survives being halved instead of
+                    // dropping out of the picture entirely.
+                    for c in 0..3 {
+                        sheet[o + c] = (sum[c] / covered) as u8;
+                    }
+                    sheet[o + 3] = 255;
+                } else {
+                    sheet[o] = 0;
+                    sheet[o + 1] = 0;
+                    sheet[o + 2] = 0;
+                    sheet[o + 3] = 0;
+                }
+            }
+        }
+    }
+}
+
 fn forward(pixels: &[u8], width: u32) -> (Vec<u8>, String) {
     let mut out = Vec::with_capacity(pixels.len());
     let mut worst = 0i32;

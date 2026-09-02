@@ -43,6 +43,79 @@ const AGE_SHIFT: u32 = 5u;      // byte 1, bits 5..8
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
 const SHEET_N: f32 = 256.0;      // texels across the sheet, TILE_N * SHEET_TILES
+// --- levels of detail -------------------------------------------------------
+//
+// **The half-size level lives in the sheet**, in the quadrant the tile
+// arithmetic reads as kinds six and seven. A half-size tile is eight texels, so
+// all 256 of them fit in 128x128 exactly — one quadrant — and nothing needs a
+// second texture, a second binding, or a mip chain the atlas could not have.
+// MUST MATCH `render::atlas::HALF_ORIGIN`, and `tools/cnvt.rs`, which builds it.
+//
+// Why at all: a cell is sixteen texels of art, so at zoom sixteen a texel gets
+// one pixel and below that some texels get none. Reduced art is drawn (here,
+// generated) for the size it is shown at, so nothing has to be sampled by
+// nothing. See docs/planned.md#texels-nothing-samples.
+const HALF_ORIGIN: f32 = 128.0;
+const HALF_TILE_N: f32 = 8.0;
+
+/// Where the level runs out and where it takes over, in pixels per cell.
+///
+/// **A band and not a threshold**, which is the whole point. Hysteresis stops a
+/// swap flickering and does not stop it *popping*: two levels meeting at a line
+/// are two pictures meeting at a line, and the line is on the screen. Across a
+/// band the change happens over a range of zoom instead of at a value of it, so
+/// there is never a frame where the picture is disjoint.
+const HALF_BELOW: f32 = 16.0;
+const HALF_FULLY: f32 = 9.0;
+
+/// How much of the half-size level to show. Nought is all full art.
+fn half_fade(zoom: f32) -> f32 {
+    return clamp((HALF_BELOW - zoom) / (HALF_BELOW - HALF_FULLY), 0.0, 1.0);
+}
+
+/// Where the art gives out entirely, in pixels per cell.
+///
+/// **The other boundary, and the one that pops hardest.** Below
+/// `render::chunks::COARSE_BELOW` the world is drawn from the coarse texture as
+/// one flat texel a cell, with no sprites and no outlines, and the swap between
+/// the two is a different *quad* rather than a different sample — so it cannot
+/// be blended by mixing two taps the way the levels above it are.
+///
+/// It does not have to be. The coarse path's colour is lightness from the two
+/// state bits and hue from the owner, and the fine path is already holding both
+/// of those for the cell it is drawing. So instead of blending two pictures, the
+/// fine path **fades into the answer the coarse path would give** as the zoom
+/// falls, and by the time the swap happens it is already drawing it. Nothing is
+/// disjoint and it costs no texture read, no second quad and no blend state.
+///
+/// Fully flat at `FLAT_BY`, which is under `COARSE_BELOW` and so under either
+/// side of that threshold's hysteresis — the handover looks the same going down
+/// as coming back up.
+const FLAT_FROM: f32 = 8.0;
+const FLAT_BY: f32 = 4.0;
+
+/// How much of the cell's art to give up. One is the cell without it.
+fn flat_fade(zoom: f32) -> f32 {
+    return clamp((FLAT_FROM - zoom) / (FLAT_FROM - FLAT_BY), 0.0, 1.0);
+}
+
+/// A cell without its art: what the coarse path draws, from a cell in hand.
+///
+/// The same three constants and the same sum as `coarse_colour`, off the fine
+/// path's own texel instead of the coarse texture — which is what lets the two
+/// meet exactly rather than within a shade of each other.
+fn flat_colour(owner: u32, tile: u32) -> vec3<f32> {
+    var light = COARSE_DEAD;
+    if (tile & ALIVE) != 0u {
+        light = COARSE_ALIVE;
+    }
+    if (tile & ICE) != 0u {
+        light = light + COARSE_ICE;
+    }
+    let player = owner >> PLAYER_SHIFT;
+    return shade(light, player_saturation(player), player_hue(player));
+}
+
 /// **The tile for ground nobody holds.** MUST MATCH `sim::cell::bits::NOBODY`.
 ///
 /// Row 1 of the dead-nothing column, which the arithmetic below can address
@@ -326,6 +399,56 @@ fn sprite_index(tile: u32) -> f32 {
     return f32((row << 4u) | column);
 }
 
+/// Where a tile's texels sit on the sheet, at one level of detail.
+///
+/// Low nibble across the sheet, high nibble down it. The half-size level is the
+/// same grid at half the pitch, in its own quadrant, so the sum is the same one
+/// with two numbers changed.
+fn sheet_at(tile: f32, within: vec2<f32>, half: bool) -> vec2<f32> {
+    let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
+    if half {
+        return (vec2<f32>(HALF_ORIGIN) + tile_xy * HALF_TILE_N + within * 0.5) / f32(SHEET_N);
+    }
+    return (tile_xy * f32(TILE_N) + within) / f32(SHEET_N);
+}
+
+/// One tap. **An explicit level, not an implicit one**: `textureSample` needs
+/// derivatives, and derivatives may not be taken in non-uniform control flow —
+/// which a branch on the quad's kind is. The sheet has one mip, so level zero
+/// is what the implicit path would have chosen; the levels here are the sheet's
+/// own, not the sampler's.
+fn tap(tile: f32, within: vec2<f32>, half: bool) -> vec4<f32> {
+    return textureSampleLevel(sprites, sprite_sampler, sheet_at(tile, within, half), 0.0);
+}
+
+/// A cell's art, at whatever level of detail this zoom wants.
+///
+/// **The finer level is double-sampled while it fades out.** Fading between two
+/// pictures is not enough on its own: the one being faded *out* is the one that
+/// is undersampled here, so a straight blend carries its shimmer into the band
+/// at a reducing weight rather than removing it. Two taps half a texel apart
+/// average it over the pixel's own footprint first, which is what makes the
+/// crossing look like one picture changing rather than two pictures swapping.
+///
+/// The two taps are clamped inside the tile. The sheet is an atlas and the tile
+/// next door is an unrelated picture, so half a texel past the edge must read
+/// the edge — the same answer `texel_colour` gives at a chunk boundary and for
+/// the same reason.
+///
+/// Outside the band this is one tap and one branch on a uniform, which is most
+/// of the screen most of the time.
+fn art(tile: f32, within: vec2<f32>) -> vec4<f32> {
+    let fade = half_fade(cam.zoom);
+    let full = tap(tile, within, false);
+    if fade <= 0.0 {
+        return full;
+    }
+    let edge = f32(TILE_N) - 0.5;
+    let over = clamp(within + vec2<f32>(0.5, 0.5), vec2<f32>(0.0), vec2<f32>(edge));
+    let softened = 0.5 * (full + tap(tile, over, false));
+    return mix(softened, tap(tile, within, true), fade);
+}
+
 /// The colour of one **texel** of the board, from its position in chunk texels.
 ///
 /// Everything is resolved from that position — which cell it falls in, that
@@ -360,14 +483,7 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     if player == 0u && (texel.g & (ALIVE | ICE)) == 0u {
         tile = NOBODY_TILE;
     }
-    // Low nibble across the sheet, high nibble down it.
-    let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
-    let sheet_uv = (tile_xy * f32(TILE_N) + within) / f32(SHEET_N);
-    // **An explicit level, not an implicit one.** `textureSample` needs
-    // derivatives, and derivatives may not be taken in non-uniform control
-    // flow -- which a loop and a branch on the quad's kind both are. The sheet
-    // has one mip, so level zero is what the implicit path would have chosen.
-    let sprite = textureSampleLevel(sprites, sprite_sampler, sheet_uv, 0.0);
+    let sprite = art(tile, within);
 
     var colour = grid_tint(vec2<f32>(cell_coord), n);
 
@@ -406,7 +522,10 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
             + (f32((sides & 8u) == 0u) * step(within.x, edge));
         colour = mix(colour, colour * EDGE_SHADE, min(open, 1.0) * sprite.a);
     }
-    return colour;
+    // Into the cell without its art, so the coarse path is not a different
+    // picture when it arrives — see `flat_fade`. Last, so the outline fades
+    // with everything else rather than surviving into a flat field.
+    return mix(colour, flat_colour(texel.r, texel.g), flat_fade(cam.zoom));
 }
 
 /// The colour of one point, in texels across a chunk.

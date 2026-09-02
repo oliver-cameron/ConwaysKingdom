@@ -205,6 +205,15 @@ pub const COARSE_BELOW: f32 = 4.0;
 /// colour — so the swap is visible and must not happen twice a second.
 pub const FINE_ABOVE: f32 = 5.0;
 
+/// The fine path is already drawing the coarse answer by the time either of
+/// those is reached, so the swap has nothing left to show.
+///
+/// `grid.wgsl` fades a cell into its art-less colour between `FLAT_FROM` and
+/// `FLAT_BY`, and `FLAT_BY` is under both thresholds above — which is what
+/// makes the handover look the same going down as coming back up. **Kept in
+/// step by hand**: lowering either of these under `FLAT_BY` puts the pop back.
+pub const FLAT_BY_IN_SHADER: f32 = 4.0;
+
 /// The world as one texel a cell: the cell without its art.
 ///
 /// **What low zoom actually needs.** The fine path spends 16x16 texels of
@@ -1000,9 +1009,6 @@ mod tests {
         );
     }
 
-    /// **The swap has hysteresis**, or a zoom resting on the threshold flips
-    /// between two paths that do not draw alike.
-
     /// **The window is what decides whether to refill**, and each refill
     /// rebuilds two megabytes and uploads them — so what has to be true is
     /// that it moves rarely, not that it never moves.
@@ -1044,9 +1050,19 @@ mod tests {
         assert!(c0 > col0 && c1 < col0 + cols, "the view is outside the window's columns");
     }
 
+    /// **The swap has hysteresis**, or a zoom resting on the threshold flips
+    /// between two paths that do not draw alike — and it no longer needs to
+    /// carry the whole burden, because by the time either threshold is reached
+    /// the fine path has already faded into what the coarse one draws.
     #[test]
     fn the_two_paths_do_not_flicker_at_the_boundary() {
         assert!(COARSE_BELOW < FINE_ABOVE, "one threshold is not hysteresis");
+        // The shader has finished fading the art out by the time either side
+        // of that hysteresis is crossed, so neither crossing is a visible one.
+        assert!(
+            FLAT_BY_IN_SHADER <= COARSE_BELOW,
+            "the swap happens while the fine path still has art on it"
+        );
         // Coming down: fine until below COARSE_BELOW.
         let mut coarse = false;
         for zoom in [8.0, 5.0, 4.5, 4.0, 3.9] {
