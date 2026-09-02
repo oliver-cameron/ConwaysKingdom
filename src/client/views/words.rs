@@ -113,6 +113,10 @@ pub mod menu {
     pub mod account {
         pub const TITLE: &str = "Your account";
         pub const RATED: &str = "Rated here";
+        /// Before a first join. **Not an error and not a blank**: a face comes
+        /// off the key a server issues, so there is nothing to draw one from
+        /// until you have played somewhere.
+        pub const UNNAMED: &str = "No server has met you yet";
     }
 
     /// What somebody who has just arrived cannot work out by clicking. Every

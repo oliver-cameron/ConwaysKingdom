@@ -18,6 +18,43 @@
 //! list arrives from `ServerMessage::Rooms` and the menu shows nothing until
 //! it does, rather than offering a name that might be there.
 
+/// A button whose label starts at the left, at the full width it was given.
+///
+/// **Left, because a column of buttons is a list**, and a list is read down its
+/// left edge. Centred labels put every word at a different place across the
+/// column, so the eye has to hunt for each one instead of running down them —
+/// which is what a menu of full-width buttons is for. `Atom::grow` after the
+/// text is what pushes it over; egui centres by default.
+pub(super) fn wide(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    label: egui::RichText,
+    height: f32,
+    fill: egui::Color32,
+) -> egui::Response {
+    let _ = theme;
+    ui.add_sized(
+        [ui.available_width(), height],
+        egui::Button::new((label, egui::Atom::grow())).fill(fill),
+    )
+}
+
+/// **A stable player number for somebody, so their colour is theirs.**
+///
+/// Off the fingerprint rather than off a seat or a position in a list: a
+/// person's colour has to be the same in a lobby, on the leaderboard and on
+/// their own face, and a seat number is none of those things outside one room.
+///
+/// Never nought, which is nobody and draws grey — see `hue::player_colour`.
+pub(crate) fn person_hue(who: &crate::net::PersonId) -> u8 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in who.as_str().as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    1 + (h % (crate::sim::PlayerId::COUNT as u64 - 1)) as u8
+}
+
 mod account;
 mod alone;
 pub mod draft;
@@ -198,6 +235,13 @@ pub struct Menu {
     /// sockets and asks no questions; it holds what it was told and returns
     /// what was chosen.
     pub people: Option<(String, Vec<crate::net::Profile>)>,
+    /// Who the last server said you are, once one has. Put here by the client
+    /// the way the room list and the player list are; the menu asks nothing.
+    ///
+    /// `None` offline and before a first join, which is a real state rather
+    /// than a missing value — a face is derived from the key, so there is
+    /// nothing to draw one from until a server has issued one.
+    pub whoami: Option<crate::net::PersonId>,
 }
 
 /// Whether a world ends, and how. Three answers to one question rather than a
@@ -319,6 +363,7 @@ impl Menu {
             draft: None,
             finding: String::new(),
             people: None,
+            whoami: None,
         }
     }
 
@@ -377,6 +422,13 @@ pub struct Where {
     /// Whether a server has actually been reached, so a control that can only
     /// be answered by one is only offered when there is one to answer it.
     pub reached: bool,
+    /// The sprite sheet, once the interface has registered it.
+    ///
+    /// The menu draws no world and still wants this: **how to play is about
+    /// cells**, and a page explaining what a mine does while showing no mine is
+    /// a page of assertions. `None` before the first frame that registers it,
+    /// and every page that uses it has to read without it.
+    pub sheet: Option<egui::TextureId>,
 }
 
 pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> super::Shown<Chose> {
@@ -505,7 +557,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                     Page::Alone => chose = alone::show(ui, theme, menu),
                                     Page::People => chose = people::show(ui, theme, menu),
                                     Page::Account => chose = account::show(ui, theme, menu, at),
-                                    Page::HowToPlay => chose = howto::show(ui, theme, menu),
+                                    Page::HowToPlay => chose = howto::show(ui, theme, menu, at),
                                 }
                             });
                             ui.add_space(m.margin * 2.0);
@@ -670,9 +722,12 @@ mod tests {
                 "the home screen does not reach one of its three"
             );
         }
-        // And solo, from Play.
+        // And solo, from Play — but only once a server has answered. With
+        // none, `make_column` *is* the solo form and its own action says so,
+        // which is why the way out is not offered twice.
         let mut menu = Menu::new("ws://host:8080/ws".into(), false);
         menu.page = Page::Play;
+        menu.stage = Stage::Choosing { rooms: Vec::new(), note: None };
         assert!(
             probe(&mut menu, at(1.0, false), |m, _| m.page == Page::Alone),
             "the play screen does not reach playing alone"
@@ -857,7 +912,7 @@ mod tests {
     }
 
     fn at(now: f64, on_web: bool) -> Where {
-        Where { now, on_web, waiting_in_a_match: false, reached: true }
+        Where { now, on_web, waiting_in_a_match: false, reached: true, sheet: None }
     }
 
     /// Run a frame with these events and say what the menu chose.

@@ -42,56 +42,66 @@ const AGE_SHIFT: u32 = 5u;      // byte 1, bits 5..8
 // See render::atlas. One sheet, sixteen tiles each way.
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
-const SHEET_N: f32 = 256.0;      // texels across the sheet, TILE_N * SHEET_TILES
+const SHEET_W: f32 = 256.0;      // texels across the sheet, TILE_N * SHEET_TILES
+const SHEET_H: f32 = 384.0;      // and down it: the grid, plus the strip of levels
+const LEVELS: f32 = 5.0;         // full size and four reductions
 // --- levels of detail -------------------------------------------------------
 //
-// **The half-size level lives in the sheet**, in the quadrant the tile
-// arithmetic reads as kinds six and seven. A half-size tile is eight texels, so
-// all 256 of them fit in 128x128 exactly — one quadrant — and nothing needs a
-// second texture, a second binding, or a mip chain the atlas could not have.
-// MUST MATCH `render::atlas::HALF_ORIGIN`, and `tools/cnvt.rs`, which builds it.
+// **A cell is sixteen texels of art**, so at sixteen pixels a cell a texel gets
+// one pixel and below that some texels get no sample at all. Nothing later can
+// put back what nothing sampled, so there is art for the size it is shown at,
+// all the way down to one texel a cell.
 //
-// Why at all: a cell is sixteen texels of art, so at zoom sixteen a texel gets
-// one pixel and below that some texels get none. Reduced art is drawn (here,
-// generated) for the size it is shown at, so nothing has to be sampled by
-// nothing. See docs/planned.md#texels-nothing-samples.
-const HALF_ORIGIN: f32 = 128.0;
-const HALF_TILE_N: f32 = 8.0;
+// The reduced levels live in a **strip under the tile grid**, not in a corner
+// of it — so every tile index is still a picture of its own and no kind index
+// is spent on them. The strip packs left to right by halving: level L is a grid
+// `256 >> L` wide starting at `256 - 512 / 2^L`, which is exactly where the
+// level above it ended. MUST MATCH `render::atlas::LEVEL_ORIGIN`.
 
-/// Where the level runs out and where it takes over, in pixels per cell.
+/// Where a level's grid starts and how big its tiles are: x, y, texels.
+fn level_at(level: f32) -> vec3<f32> {
+    if level < 0.5 {
+        return vec3<f32>(0.0, 0.0, f32(TILE_N));
+    }
+    let scale = pow(2.0, level);
+    return vec3<f32>(SHEET_W - SHEET_W * 2.0 / scale, SHEET_W, f32(TILE_N) / scale);
+}
+
+/// Which level this zoom wants, as a fraction between two of them.
 ///
-/// **A band and not a threshold**, which is the whole point. Hysteresis stops a
-/// swap flickering and does not stop it *popping*: two levels meeting at a line
-/// are two pictures meeting at a line, and the line is on the screen. Across a
-/// band the change happens over a range of zoom instead of at a value of it, so
-/// there is never a frame where the picture is disjoint.
-const HALF_BELOW: f32 = 16.0;
-const HALF_FULLY: f32 = 9.0;
-
-/// How much of the half-size level to show. Nought is all full art.
-fn half_fade(zoom: f32) -> f32 {
-    return clamp((HALF_BELOW - zoom) / (HALF_BELOW - HALF_FULLY), 0.0, 1.0);
+/// Level `L` holds `16 >> L` texels a cell and so is exact at `16 >> L` pixels
+/// a cell — one texel, one pixel. So the level is the log of the shortfall, and
+/// a zoom between two of them lands between two levels rather than on one.
+fn level_for(zoom: f32) -> f32 {
+    return clamp(log2(f32(TILE_N) / max(zoom, 1e-4)), 0.0, LEVELS - 1.0);
 }
 
 /// Where the art gives out entirely, in pixels per cell.
 ///
-/// **The other boundary, and the one that pops hardest.** Below
+/// **The last boundary, and the only one left that is not a level.** Below
 /// `render::chunks::COARSE_BELOW` the world is drawn from the coarse texture as
-/// one flat texel a cell, with no sprites and no outlines, and the swap between
-/// the two is a different *quad* rather than a different sample — so it cannot
-/// be blended by mixing two taps the way the levels above it are.
+/// one flat texel a cell out of a single quad — a different *quad*, not a
+/// different sample, so it cannot be blended by mixing two taps the way the
+/// levels are. And that threshold is there for **residency** rather than for
+/// sampling: one chunk is one texture array layer and a screen wants more of
+/// them than the guaranteed 256 below about zoom five, so it is not something
+/// another level of art can push further down.
 ///
-/// It does not have to be. The coarse path's colour is lightness from the two
-/// state bits and hue from the owner, and the fine path is already holding both
-/// of those for the cell it is drawing. So instead of blending two pictures, the
-/// fine path **fades into the answer the coarse path would give** as the zoom
-/// falls, and by the time the swap happens it is already drawing it. Nothing is
-/// disjoint and it costs no texture read, no second quad and no blend state.
+/// It does not have to be blended. The coarse path's colour is lightness from
+/// the two state bits and hue from the owner, and the fine path is already
+/// holding both for the cell it is drawing — so instead of blending two
+/// pictures, the fine path **fades into the answer the coarse path would give**
+/// and is already drawing it when the swap happens. No second quad, no blend
+/// state, no extra texture read.
 ///
-/// Fully flat at `FLAT_BY`, which is under `COARSE_BELOW` and so under either
-/// side of that threshold's hysteresis — the handover looks the same going down
-/// as coming back up.
-const FLAT_FROM: f32 = 8.0;
+/// **Narrow, and deliberately.** This used to run from eight, which threw away
+/// the art across the whole band the reduced levels exist to serve — the levels
+/// were there and were fading out under a flat wash before anybody could see
+/// them. It now covers the hysteresis window and nothing more: fully flat by
+/// `COARSE_BELOW`, fully art again by a little over `FINE_ABOVE`, so the
+/// handover looks the same going down as coming back up and every level above
+/// it is drawn at full strength.
+const FLAT_FROM: f32 = 5.5;
 const FLAT_BY: f32 = 4.0;
 
 /// How much of the cell's art to give up. One is the cell without it.
@@ -307,16 +317,6 @@ fn vs_main(
     return out;
 }
 
-/// The faint ring drawn on a chunk's outer cells, so chunk boundaries stay
-/// visible and loading is something you can watch.
-fn grid_tint(cell_in_chunk: vec2<f32>, n: f32) -> vec3<f32> {
-    if cell_in_chunk.x < 1.0 || cell_in_chunk.y < 1.0
-        || cell_in_chunk.x >= n - 1.0 || cell_in_chunk.y >= n - 1.0 {
-        return vec3<f32>(0.012, 0.012, 0.02);
-    }
-    return vec3<f32>(0.0);
-}
-
 /// What a cell looks like when there is no room to draw its art.
 ///
 /// **Lightness carries the state and hue carries the owner**, which is the
@@ -401,52 +401,64 @@ fn sprite_index(tile: u32) -> f32 {
 
 /// Where a tile's texels sit on the sheet, at one level of detail.
 ///
-/// Low nibble across the sheet, high nibble down it. The half-size level is the
-/// same grid at half the pitch, in its own quadrant, so the sum is the same one
-/// with two numbers changed.
-fn sheet_at(tile: f32, within: vec2<f32>, half: bool) -> vec2<f32> {
+/// Low nibble across the grid, high nibble down it — the same sum at every
+/// level, with the level's own origin and pitch. `within` is always in
+/// full-size texels, so it is scaled by how much smaller this level's tile is.
+fn sheet_at(tile: f32, within: vec2<f32>, level: f32) -> vec2<f32> {
+    let g = level_at(level);
     let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
-    if half {
-        return (vec2<f32>(HALF_ORIGIN) + tile_xy * HALF_TILE_N + within * 0.5) / f32(SHEET_N);
-    }
-    return (tile_xy * f32(TILE_N) + within) / f32(SHEET_N);
+    let texel = g.xy + tile_xy * g.z + within * (g.z / f32(TILE_N));
+    return texel / vec2<f32>(SHEET_W, SHEET_H);
 }
 
 /// One tap. **An explicit level, not an implicit one**: `textureSample` needs
 /// derivatives, and derivatives may not be taken in non-uniform control flow —
 /// which a branch on the quad's kind is. The sheet has one mip, so level zero
-/// is what the implicit path would have chosen; the levels here are the sheet's
-/// own, not the sampler's.
-fn tap(tile: f32, within: vec2<f32>, half: bool) -> vec4<f32> {
-    return textureSampleLevel(sprites, sprite_sampler, sheet_at(tile, within, half), 0.0);
+/// is what the implicit path would have chosen; the levels here are the
+/// sheet's own, laid out by hand, not the sampler's.
+fn tap(tile: f32, within: vec2<f32>, level: f32) -> vec4<f32> {
+    return textureSampleLevel(sprites, sprite_sampler, sheet_at(tile, within, level), 0.0);
 }
 
 /// A cell's art, at whatever level of detail this zoom wants.
 ///
-/// **The finer level is double-sampled while it fades out.** Fading between two
-/// pictures is not enough on its own: the one being faded *out* is the one that
-/// is undersampled here, so a straight blend carries its shimmer into the band
-/// at a reducing weight rather than removing it. Two taps half a texel apart
-/// average it over the pixel's own footprint first, which is what makes the
-/// crossing look like one picture changing rather than two pictures swapping.
+/// **Never one level, always the two either side of where the zoom falls.** A
+/// level picked by a threshold is a line on the screen where the picture
+/// changes; picked as a fraction between two, the change happens over a range
+/// of zoom and there is no frame in which anything is disjoint.
 ///
-/// The two taps are clamped inside the tile. The sheet is an atlas and the tile
-/// next door is an unrelated picture, so half a texel past the edge must read
-/// the edge — the same answer `texel_colour` gives at a chunk boundary and for
-/// the same reason.
+/// **And the finer of the two is double-sampled while it fades out.** Blending
+/// two pictures is not enough on its own: the one being faded *out* is the
+/// undersampled one, so a straight mix carries its shimmer into the band at a
+/// reducing weight rather than removing it. Two taps half of *its* texel apart
+/// average it over the pixel's footprint first, which is what makes the
+/// crossing read as one picture changing rather than two swapping. Half a texel
+/// at level `L` is `2^L` in `within`, because `within` is in full-size texels
+/// however small this level's are.
 ///
-/// Outside the band this is one tap and one branch on a uniform, which is most
-/// of the screen most of the time.
+/// The offset tap is clamped inside the tile. The sheet is an atlas and the
+/// tile next door is an unrelated picture, so half a texel past the edge must
+/// read the edge — the same answer `texel_colour` gives at a chunk boundary and
+/// for the same reason.
+///
+/// Landing exactly on a level costs one tap, which is the top of the zoom range
+/// and the bottom of it; everywhere between costs three.
 fn art(tile: f32, within: vec2<f32>) -> vec4<f32> {
-    let fade = half_fade(cam.zoom);
-    let full = tap(tile, within, false);
-    if fade <= 0.0 {
-        return full;
+    let level = level_for(cam.zoom);
+    let finer = floor(level);
+    let toward = level - finer;
+    let here = tap(tile, within, finer);
+    if toward <= 0.0 {
+        return here;
     }
-    let edge = f32(TILE_N) - 0.5;
-    let over = clamp(within + vec2<f32>(0.5, 0.5), vec2<f32>(0.0), vec2<f32>(edge));
-    let softened = 0.5 * (full + tap(tile, over, false));
-    return mix(softened, tap(tile, within, true), fade);
+    let half_texel = pow(2.0, finer) * 0.5;
+    let over = clamp(
+        within + vec2<f32>(half_texel),
+        vec2<f32>(0.0),
+        vec2<f32>(f32(TILE_N) - 0.5),
+    );
+    let softened = 0.5 * (here + tap(tile, over, finer));
+    return mix(softened, tap(tile, within, finer + 1.0), toward);
 }
 
 /// The colour of one **texel** of the board, from its position in chunk texels.
@@ -479,13 +491,27 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     // The one place appearance depends on the owner as well as the tile byte,
     // which is why it is here and not in `sprite_index`: this is the only
     // function holding both. See `sim::cell::bits::NOBODY`.
+    let nobodys = player == 0u && (texel.g & (ALIVE | ICE)) == 0u;
     var tile = sprite_index(texel.g);
-    if player == 0u && (texel.g & (ALIVE | ICE)) == 0u {
+    if nobodys {
         tile = NOBODY_TILE;
     }
     let sprite = art(tile, within);
 
-    var colour = grid_tint(vec2<f32>(cell_coord), n);
+    // **Nothing behind the art but the ground.**
+    //
+    // A faint ring used to be drawn on every chunk's outer cells, so that
+    // chunk boundaries stayed visible and loading was something you could
+    // watch. That is a thing to see while building the renderer and a defect
+    // once it works: a sprite has a texel of transparency on every side, so
+    // whatever is behind it shows through the gap between cells — and the ring
+    // made that gap a different colour on a chunk's edge than in its middle.
+    // The result was a faint grid over the board at chunk pitch, visible
+    // mostly on dead ground where there is least else to look at, and *only*
+    // on some of it: unclaimed ground draws an edgeless tile with no gap, and
+    // the coarse path has no ring at all, so the same field was ruled in some
+    // places and not others.
+    var colour = vec3<f32>(0.0);
 
     colour = mix(
         colour,
@@ -509,10 +535,21 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     // outline instead of sixteen tiles that happen to touch, which is the
     // whole of what the mask was wanted for.
     //
-    // Nothing at all on a dead, ice-free cell -- empty ground has no shape to
+    // **Nothing at all on ground nobody holds** — empty ground has no shape to
     // outline, and the backdrop is exactly that, so the mask is ignored there
     // rather than ringing every square of nothing.
-    if sprite.a > 0.0 {
+    //
+    // Said outright rather than left to the alpha. This was `sprite.a > 0.0`,
+    // and it worked by accident: the dead tile's outermost texels were
+    // transparent, so the outline had nothing to multiply against and vanished.
+    // The moment unclaimed ground got an edgeless tile of its own, the accident
+    // stopped holding and every unloaded cell grew a full border — all four
+    // sides, because the unloaded layer is written as zeros and a zero mask
+    // means "no side continues into a neighbour". Loaded ground was fine, since
+    // `render::chunks::neighbours` computes a real mask there, which is exactly
+    // the shape of the bug: a ruled grid over the ground nobody had reached and
+    // none over the ground they had.
+    if sprite.a > 0.0 && !nobodys {
         let sides = texel.b;
         let edge = f32(TILE_N) * EDGE;
         let open =

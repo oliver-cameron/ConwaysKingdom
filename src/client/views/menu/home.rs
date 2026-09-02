@@ -29,15 +29,14 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // Above the three, and only when there is one: a match you have already
     // joined is not a fourth way in, it is the way back to where you were.
     if at.waiting_in_a_match {
-        if ui
-            .add_sized(
-                [ui.available_width(), m.action_height],
-                egui::Button::new(
-                    egui::RichText::new(words::BACK_TO_MATCH).size(m.text_action).color(p.ground),
-                )
-                .fill(p.accent),
-            )
-            .clicked()
+        if super::wide(
+            ui,
+            theme,
+            egui::RichText::new(words::BACK_TO_MATCH).size(m.text_action).color(p.ground),
+            m.action_height,
+            p.accent,
+        )
+        .clicked()
         {
             chose = Chose::Resume;
         }
@@ -86,19 +85,32 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     }
 
     ui.add_space(m.item_spacing);
-    let flat = |ui: &mut egui::Ui, label: &str| {
-        ui.add_sized(
-            [ui.available_width(), m.action_height],
-            egui::Button::new(egui::RichText::new(label).size(m.text_body).color(p.text))
-                .fill(p.surface),
-        )
-        .clicked()
-    };
-    if flat(ui, words::home::ACCOUNT) {
+    // **Your own name on your own button.** The account page is about you, and
+    // a label saying who you are is worth more than one naming a category.
+    // Falls back to the category before anybody has typed a name.
+    let mine = menu.name.trim();
+    let account = if mine.is_empty() { words::home::ACCOUNT.to_string() } else { mine.to_string() };
+    if super::wide(
+        ui,
+        theme,
+        egui::RichText::new(account).size(m.text_body).color(p.text),
+        m.action_height,
+        p.surface,
+    )
+    .clicked()
+    {
         menu.page = Page::Account;
     }
     ui.add_space(m.item_spacing);
-    if flat(ui, words::home::HOWTO) {
+    if super::wide(
+        ui,
+        theme,
+        egui::RichText::new(words::home::HOWTO).size(m.text_body).color(p.text),
+        m.action_height,
+        p.surface,
+    )
+    .clicked()
+    {
         menu.page = Page::HowToPlay;
     }
 

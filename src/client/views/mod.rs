@@ -30,6 +30,7 @@
 //! targets, and a HUD needs only pointer, wheel and modifiers — the IME and
 //! clipboard handling that egui-winit exists for is not in play.
 
+pub mod face;
 pub mod game;
 pub mod glyph;
 pub mod hue;

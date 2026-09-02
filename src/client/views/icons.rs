@@ -14,7 +14,7 @@
 //! Rebuilt when the player number changes, which happens once — on `Welcome` —
 //! so "once" is the honest cost.
 
-use crate::render::atlas::{SHEET_N, TILE_N};
+use crate::render::atlas::{SHEET_H, SHEET_W, TILE_N};
 use crate::sim::PlayerId;
 
 /// The sheet, tinted for one player, as an egui texture.
@@ -40,7 +40,7 @@ impl Icons {
     /// the whole image. Low nibble across, high nibble down, which is the tile
     /// byte's own arithmetic.
     pub fn uv(tile: u8) -> egui::Rect {
-        let across = (SHEET_N / TILE_N) as f32;
+        let across = (SHEET_W / TILE_N) as f32;
         let (x, y) = ((tile % 16) as f32 / across, (tile / 16) as f32 / across);
         let edge = 1.0 / across;
         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(edge, edge))
@@ -51,7 +51,7 @@ impl Icons {
 /// player's colours.
 fn tint(player: PlayerId) -> Option<egui::ColorImage> {
     let sheet = crate::render::atlas::decoded()?;
-    let mut pixels = Vec::with_capacity((SHEET_N * SHEET_N) as usize);
+    let mut pixels = Vec::with_capacity((SHEET_W * SHEET_H) as usize);
     for texel in sheet.chunks_exact(4) {
         let (r, g, b) = crate::client::views::hue::shade(
             texel[1] as f32 / 255.0,
@@ -61,9 +61,9 @@ fn tint(player: PlayerId) -> Option<egui::ColorImage> {
         pixels.push(egui::Color32::from_rgba_unmultiplied(r, g, b, texel[3]));
     }
     Some(egui::ColorImage {
-        size: [SHEET_N as usize, SHEET_N as usize],
+        size: [SHEET_W as usize, SHEET_H as usize],
         pixels,
-        source_size: egui::vec2(SHEET_N as f32, SHEET_N as f32),
+        source_size: egui::vec2(SHEET_W as f32, SHEET_H as f32),
     })
 }
 

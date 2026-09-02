@@ -18,35 +18,51 @@
 pub const TILE_N: u32 = 16;
 /// Tiles along one edge of a sheet, so 256 of them per state.
 pub const SHEET_TILES: u32 = 16;
-/// A sheet's edge in texels.
-pub const SHEET_N: u32 = TILE_N * SHEET_TILES;
+/// A sheet's width in texels: the tile grid, and nothing else is this wide.
+pub const SHEET_W: u32 = TILE_N * SHEET_TILES;
+/// Its height. The tile grid is square and the strip under it holds every
+/// reduced level — see [`LEVEL_ORIGIN`].
+pub const SHEET_H: u32 = SHEET_W + SHEET_W / 2;
 
-/// **Where the half-size level of detail starts**, in texels, on both axes.
+/// How many levels of detail the sheet carries, full size included.
 ///
-/// A cell is sixteen texels of art, so at sixteen pixels a cell one texel gets
-/// one pixel and below that some texels get no sample at all — which is the
-/// band the picture falls apart in. The answer is art made for the size it is
-/// shown at, and the neat part is that it needs no second texture: a half-size
-/// tile is eight texels, so all 256 of them fit in 128x128, which is one
-/// quadrant of the sheet exactly.
-///
-/// That quadrant is what the tile arithmetic reads as **kinds six and seven**,
-/// so those two indices are spent on this and
-/// `no_kind_lands_in_the_reduced_quadrant` says so out loud. Kinds nought to
-/// three are used and a fourth is spoken for by depleted mines, so it leaves
-/// one.
-///
-/// Built by `tools/cnvt.rs` on the way in and read by `sheet_at` in
-/// `grid.wgsl`. See `docs/planned.md#texels-nothing-samples`.
-pub const HALF_ORIGIN: u32 = SHEET_N / 2;
-/// Texels along a tile at the half-size level.
-pub const HALF_TILE_N: u32 = TILE_N / 2;
+/// **A cell is sixteen texels of art**, so at sixteen pixels a cell a texel
+/// gets one pixel and below that some texels get no sample at all — which is
+/// the band the picture falls apart in, and no filter downstream can put back
+/// what nothing sampled. The answer is art made for the size it is shown at,
+/// and the levels run all the way down to one texel a cell.
+pub const LEVELS: usize = 5;
 
-/// Whether a tile index is part of the half-size level rather than a picture in
-/// its own right — the bottom-right quadrant of the grid.
-pub const fn reduced_slot(tile: u8) -> bool {
-    (tile >> 4) >= (SHEET_TILES / 2) as u8 && (tile & 15) >= (SHEET_TILES / 2) as u8
-}
+/// Texels along a tile at each level: sixteen, halving to one.
+pub const LEVEL_TILE_N: [u32; LEVELS] = [16, 8, 4, 2, 1];
+
+/// Where each level's grid of tiles starts, in texels.
+///
+/// **Level nought is the sheet as it always was**, the full 16x16 grid of
+/// 16-texel tiles, with every tile index still its own picture — the reduced
+/// levels live in a strip *under* it rather than in a corner of it, so no kind
+/// index is spent on them and all eight stay available.
+///
+/// The strip packs left to right by halving, which is why the origins look
+/// arbitrary and are not: level `L` is a grid `256 >> L` wide starting at
+/// `256 - 512 / 2^L`, so each one begins exactly where the last one ended.
+/// 128 + 64 + 32 + 16 is 240, inside the 256 the strip has.
+///
+/// Built by `tools/cnvt.rs` and read by `sheet_at` in `grid.wgsl`, which does
+/// that sum rather than carrying this table. See
+/// `docs/planned.md#texels-nothing-samples`.
+pub const LEVEL_ORIGIN: [(u32, u32); LEVELS] = [
+    (0, 0),
+    (0, SHEET_W),
+    (SHEET_W / 2, SHEET_W),
+    (SHEET_W * 3 / 4, SHEET_W),
+    (SHEET_W * 7 / 8, SHEET_W),
+];
+
+/// The half-size level, named because the tests and `cnvt` talk about it.
+pub const HALF_ORIGIN: (u32, u32) = LEVEL_ORIGIN[1];
+/// Texels along a tile at that level.
+pub const HALF_TILE_N: u32 = LEVEL_TILE_N[1];
 
 /// The one sheet. A cell's tile byte is the index into it: low nibble across,
 /// high nibble down, so 256 tiles in a 16x16 grid of 16x16 texels.
@@ -82,7 +98,7 @@ impl Atlas {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprites"),
-            size: wgpu::Extent3d { width: SHEET_N, height: SHEET_N, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: SHEET_W, height: SHEET_H, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -107,10 +123,10 @@ impl Atlas {
             &texels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(SHEET_N * 4),
-                rows_per_image: Some(SHEET_N),
+                bytes_per_row: Some(SHEET_W * 4),
+                rows_per_image: Some(SHEET_H),
             },
-            wgpu::Extent3d { width: SHEET_N, height: SHEET_N, depth_or_array_layers: 1 },
+            wgpu::Extent3d { width: SHEET_W, height: SHEET_H, depth_or_array_layers: 1 },
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -156,9 +172,9 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
     let info = reader.info();
-    if info.width != SHEET_N || info.height != SHEET_N {
+    if info.width != SHEET_W || info.height != SHEET_H {
         return Err(format!(
-            "sheet is {}x{}, expected {SHEET_N}x{SHEET_N}",
+            "sheet is {}x{}, expected {SHEET_W}x{SHEET_H}",
             info.width, info.height
         ));
     }
@@ -170,17 +186,17 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if frame.bit_depth != png::BitDepth::Eight {
         return Err(format!("{:?} PNG; needs 8 bits per channel", frame.bit_depth));
     }
-    buf.truncate((SHEET_N * SHEET_N * 4) as usize);
+    buf.truncate((SHEET_W * SHEET_H * 4) as usize);
     Ok(buf)
 }
 
 /// A hollow square, so a missing sprite is obvious rather than invisible.
 fn placeholder() -> Vec<u8> {
-    let mut out = vec![0u8; (SHEET_N * SHEET_N * 4) as usize];
-    for y in 0..SHEET_N {
-        for x in 0..SHEET_N {
+    let mut out = vec![0u8; (SHEET_W * SHEET_H * 4) as usize];
+    for y in 0..SHEET_H {
+        for x in 0..SHEET_W {
             let edge = x % TILE_N == 0 || y % TILE_N == 0;
-            let at = ((y * SHEET_N + x) * 4) as usize;
+            let at = ((y * SHEET_W + x) * 4) as usize;
             out[at] = 255;
             out[at + 1] = 128;
             out[at + 3] = if edge { 255 } else { 0 };
@@ -200,9 +216,21 @@ mod tests {
     #[test]
     fn the_sheet_is_the_shape_the_tile_byte_assumes() {
         let texels = decode(SHEET).expect("the sheet must decode");
-        assert_eq!(texels.len(), (SHEET_N * SHEET_N * 4) as usize);
-        assert_eq!(SHEET_N, TILE_N * SHEET_TILES);
+        assert_eq!(texels.len(), (SHEET_W * SHEET_H * 4) as usize);
+        assert_eq!(SHEET_W, TILE_N * SHEET_TILES);
         assert_eq!(SHEET_TILES * SHEET_TILES, 256, "a tile byte must reach every tile");
+        // **Every reduced level fits in the strip, side by side.** The origins
+        // are a halving run, so this is the sum that says the run lands inside
+        // the sheet rather than off the end of it.
+        for level in 1..LEVELS {
+            let (x, y) = LEVEL_ORIGIN[level];
+            let span = LEVEL_TILE_N[level] * SHEET_TILES;
+            assert!(x + span <= SHEET_W, "level {level} runs off the right");
+            assert!(y + span <= SHEET_H, "level {level} runs off the bottom");
+            if level + 1 < LEVELS {
+                assert_eq!(x + span, LEVEL_ORIGIN[level + 1].0, "level {level} leaves a gap");
+            }
+        }
     }
 
     /// Every state a cell can be in must have art drawn at the tile its byte
@@ -226,7 +254,7 @@ mod tests {
                     .flat_map(|y| (0..TILE_N).map(move |x| (x, y)))
                     .filter(|&(x, y)| {
                         let (px, py) = (tx * TILE_N + x, ty * TILE_N + y);
-                        texels[(((py * SHEET_N + px) * 4) + 3) as usize] > 8
+                        texels[(((py * SHEET_W + px) * 4) + 3) as usize] > 8
                     })
                     .count();
                 if alive || ice {
@@ -240,41 +268,19 @@ mod tests {
         }
     }
 
-    /// **The reduced level costs two kind indices, and nothing may spend them
-    /// twice.** The quadrant it lives in is what the tile arithmetic reads as
-    /// kinds six and seven, so a kind added there would be drawn with the
-    /// half-size art of some other cell — silently, and only at one zoom.
-    #[test]
-    fn no_kind_lands_in_the_reduced_quadrant() {
-        for kind in Kind::ALL {
-            for age in 0..=crate::sim::bits::MAX_AGE {
-                for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let tile = Cell::DEAD
-                        .with_kind(kind)
-                        .with_age(age)
-                        .with_alive(alive)
-                        .with_ice(ice)
-                        .sprite();
-                    assert!(
-                        !reduced_slot(tile),
-                        "Kind({}) age {age} is at tile {tile}, which is reduced art",
-                        kind.0
-                    );
-                }
-            }
-        }
-        assert!(!reduced_slot(crate::sim::bits::NOBODY), "the unowned tile is reduced art");
-    }
-
-    /// **Every picture has a half-size copy**, or a cell drawn at eight pixels
-    /// fades into nothing partway down the band rather than into smaller art.
+    /// **Every picture exists at every level**, or a cell fades into nothing
+    /// partway down the zoom range rather than into smaller art.
+    ///
+    /// All four reductions, not just the first: the levels blend into each
+    /// other, so a gap at any one of them is a gap the blend carries into its
+    /// neighbours.
     #[test]
     fn every_state_has_art_at_the_half_size_level_too() {
         let texels = decode(SHEET).expect("the sheet must decode");
         let covered = |x0: u32, y0: u32, side: u32| {
             (0..side)
                 .flat_map(|y| (0..side).map(move |x| (x, y)))
-                .filter(|&(x, y)| texels[((((y0 + y) * SHEET_N + x0 + x) * 4) + 3) as usize] > 8)
+                .filter(|&(x, y)| texels[((((y0 + y) * SHEET_W + x0 + x) * 4) + 3) as usize] > 8)
                 .count()
         };
         for kind in Kind::ALL {
@@ -286,17 +292,27 @@ mod tests {
                     .with_player(PlayerId(1))
                     .sprite();
                 let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
-                let half = covered(
-                    HALF_ORIGIN + tx * HALF_TILE_N,
-                    HALF_ORIGIN + ty * HALF_TILE_N,
-                    HALF_TILE_N,
-                );
-                assert!(
-                    half > 0,
-                    "Kind({}) alive={alive} ice={ice}: tile {tile} has no half-size art",
-                    kind.0
-                );
+                for level in 1..LEVELS {
+                    let (ox, oy) = LEVEL_ORIGIN[level];
+                    let side = LEVEL_TILE_N[level];
+                    assert!(
+                        covered(ox + tx * side, oy + ty * side, side) > 0,
+                        "Kind({}) alive={alive} ice={ice}: tile {tile} is blank at level {level}",
+                        kind.0
+                    );
+                }
             }
+        }
+        // And the one tile chosen by an owner rather than by a tile byte.
+        let (tx, ty) =
+            ((crate::sim::bits::NOBODY % 16) as u32, (crate::sim::bits::NOBODY / 16) as u32);
+        for level in 1..LEVELS {
+            let (ox, oy) = LEVEL_ORIGIN[level];
+            let side = LEVEL_TILE_N[level];
+            assert!(
+                covered(ox + tx * side, oy + ty * side, side) > 0,
+                "unclaimed ground is blank at level {level}"
+            );
         }
     }
 

@@ -13,14 +13,63 @@ use crate::client::views::theme::Theme;
 pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let (m, p) = (theme.metrics, theme.palette);
     let mut chose = Chose::Nothing;
+    // Whoever this server has said you are. `None` offline, and before a first
+    // join, which is what the two arms below are for.
+    let mine = menu.whoami.clone();
 
     ui.horizontal(|ui| {
         if ui.small_button(words::BACK).clicked() {
             menu.page = Page::Home;
         }
-        ui.heading(words::account::TITLE);
     });
     ui.add_space(m.item_spacing);
+
+    // **You, at the top: your face and your name**, rather than a heading
+    // naming the category of page you are on. You know you opened your own
+    // account; what is worth the space is which account it is.
+    ui.horizontal(|ui| {
+        let side = m.action_height * 1.4;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+        match mine.as_ref() {
+            // Derived from the key, so it is yours and nobody chose it — see
+            // [`crate::client::views::face`].
+            Some(who) => crate::client::views::face::show(ui.painter(), rect, who),
+            // No server has named you yet, so there is no key to draw one
+            // from. An outline rather than a stand-in face, because a face
+            // that changed the moment you joined would look like a bug.
+            None => {
+                ui.painter().rect_stroke(
+                    rect,
+                    m.rounding,
+                    egui::Stroke::new(1.0, p.line),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        ui.add_space(m.item_spacing);
+        ui.vertical(|ui| {
+            let shown = menu.name.trim();
+            ui.heading(if shown.is_empty() { words::account::TITLE } else { shown });
+            match mine.as_ref() {
+                Some(who) => {
+                    ui.label(
+                        egui::RichText::new(who.short())
+                            .size(m.text_small)
+                            .color(p.text_dim)
+                            .monospace(),
+                    );
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new(words::account::UNNAMED)
+                            .size(m.text_small)
+                            .color(p.text_dim),
+                    );
+                }
+            }
+        });
+    });
+    ui.add_space(m.item_spacing * 2.0);
 
     // Here rather than on the way in: it is who you are, and it is the same
     // answer whichever world you end up in.
@@ -70,10 +119,12 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     }
 
     let flat = |ui: &mut egui::Ui, label: &str| {
-        ui.add_sized(
-            [ui.available_width(), m.button_height],
-            egui::Button::new(egui::RichText::new(label).size(m.text_small).color(p.text))
-                .fill(p.surface),
+        super::wide(
+            ui,
+            theme,
+            egui::RichText::new(label).size(m.text_small).color(p.text),
+            m.button_height,
+            p.surface,
         )
         .clicked()
     };

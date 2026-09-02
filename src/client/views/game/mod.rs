@@ -1561,9 +1561,10 @@ impl App for GameApp {
 
         let vertex_buffers = vec![chunks.instance_buffer().clone()];
         log::info!(
-            "client ready: one {}x{} sprite sheet, chunk {}x{} cells, cell {} bytes",
-            crate::render::atlas::SHEET_N,
-            crate::render::atlas::SHEET_N,
+            "client ready: one {}x{} sprite sheet ({} levels), chunk {}x{} cells, cell {} bytes",
+            crate::render::atlas::SHEET_W,
+            crate::render::atlas::SHEET_H,
+            crate::render::atlas::LEVELS,
             CHUNK_N,
             CHUNK_N,
             size_of::<crate::sim::Cell>(),
@@ -1837,6 +1838,7 @@ impl App for GameApp {
                     Some(crate::net::MatchPhase::Gathering)
                 ),
             reached: self.session.connected(),
+            sheet,
         };
         let me = self.session.player();
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
@@ -1896,6 +1898,7 @@ impl App for GameApp {
         // the room list does.
         if let Screen::Menu(m) = &mut self.ui.screen {
             m.people = self.session.people.clone();
+            m.whoami = self.session.profile.as_ref().map(|p| p.who.clone());
         }
         let ui = &mut self.ui;
         let editing = ui.editing_stamp;

@@ -15,18 +15,6 @@ use crate::client::views::theme::Theme;
 /// short form of the key is what tells them apart — the same thing
 /// `net::Seat::label` prints in a lobby, so a row here and a row there name a
 /// person the same way.
-/// A stable player number for somebody, so their swatch is theirs.
-///
-/// Never nought, which is nobody and draws grey — see `hue::player_colour`.
-fn person_hue(who: &crate::net::PersonId) -> u8 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in who.as_str().as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x1000_0000_01b3);
-    }
-    1 + (h % (crate::sim::PlayerId::COUNT as u64 - 1)) as u8
-}
-
 fn row(
     ui: &mut egui::Ui,
     theme: &Theme,
@@ -58,7 +46,8 @@ fn row(
                 // another. `PersonId` is what a person is, so it is what the
                 // colour comes off — the same reasoning as the identicon in
                 // planned.md#a-face, which this is the cheap version of.
-                let (r, g, b) = hue::player_colour(crate::sim::PlayerId(person_hue(&who.who)));
+                let (r, g, b) =
+                    hue::player_colour(crate::sim::PlayerId(super::person_hue(&who.who)));
                 let (swatch, _) =
                     ui.allocate_exact_size(egui::vec2(6.0, m.text_body), egui::Sense::hover());
                 ui.painter().rect_filled(swatch, 1.0, egui::Color32::from_rgb(r, g, b));
