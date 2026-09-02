@@ -592,14 +592,14 @@ impl World {
                 group.iter().fold((0, 0), |(r, c), &i| (r + ready[i].0 .0, c + ready[i].0 .1));
             let at = (rows / group.len() as i32, cols / group.len() as i32);
             let seed = super::seed::cell_seed(generation, at.0, at.1);
-            blasts.push((self.blast_centre(at, owner, seed, reach), seed, reach));
+            blasts.push((self.blast_centre(at, owner, seed, reach), owner, seed, reach));
         }
 
         // Every payload that went off is consumed, whichever blast it was
         // part of — the first blast's seed decides them all, which is one roll
         // per square either way.
-        let seed_for = blasts.first().map(|&(_, seed, _)| seed).unwrap_or(generation);
-        for ((row, col), _) in &ready {
+        let seed_for = blasts.first().map(|&(_, _, seed, _)| seed).unwrap_or(generation);
+        for ((row, col), owner) in &ready {
             // **Consumed, and it takes the same roll as the ground it threw.**
             // Left alive it is a cell standing in the middle of noise that
             // nothing else in the blast could have produced, which reads as a
@@ -607,33 +607,41 @@ impl World {
             // same way. So it comes up alive or dead on its own square's own
             // roll, exactly like everything else the blast touched.
             let cell = self.cell_at(*row, *col).unwrap_or(Cell::DEAD);
-            let square = super::seed::cell_seed(seed_for, *row, *col);
-            let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
             self.set_cell_at(
                 *row,
                 *col,
-                cell.with_kind(Kind::NORMAL).with_age(0).with_alive(alive),
+                Self::blasted(cell, *owner, seed_for, *row, *col).with_age(0),
             );
         }
 
-        for (centre, seed, reach) in blasts {
-            self.scramble(centre, seed, reach);
+        for (centre, owner, seed, reach) in blasts {
+            self.scramble(centre, owner, seed, reach);
         }
     }
 
     /// Turn a disc of ground into noise, and light every payload it reaches.
     ///
-    /// **The ground decides whose noise it is.** A square brought to life
-    /// takes the owner already on it, and a square nobody holds cannot come
-    /// alive at all — `Cell::alive` asserts a live cell has an owner. That one
-    /// rule does the whole balance job: into somebody's country it turns their
-    /// ordered pattern into *their* noise, over no-man's-land it does nothing,
-    /// and it can never give you a square, so it stays a weapon and does not
-    /// compete with a turret.
+    /// **The blast decides whose noise it is**, which is the whole of what a
+    /// payload buys. Every square it reaches is re-rolled: the roughly one in
+    /// three that comes up alive is *yours*, and the rest is reset to
+    /// no-man's-land. So a bomb does not merely animate what was already
+    /// there — it breaks a country apart and leaves you a third of the pieces.
     ///
-    /// Ice is untouched, because a pane stops time over whatever it covers and
-    /// that is every rule.
-    fn scramble(&mut self, centre: (i32, i32), seed: u64, reach: i32) {
+    /// It used to leave the owner alone and set only alive or dead, which
+    /// meant a blast into somebody's empty ground **manufactured life for
+    /// them**: a disc of theirs at [`rule::PAYLOAD_DENSITY`] where there had
+    /// been nothing, on ground they still held. Aimed at an empty frontier a
+    /// payload was a gift.
+    ///
+    /// Two squares are left alone. **Ice**, because a pane stops time over
+    /// whatever it covers and that is every rule. And **granted ground** —
+    /// see [`Cell::is_home`] — which no rule moves: [`rule::territory`] returns
+    /// before it, so a home square only ever changes hands by being written,
+    /// and `net::already_granted` reads exactly that to keep a returning
+    /// player's seat. A blast that took one would evict somebody from their
+    /// spawn permanently and hand them a second patch on their next join. Life
+    /// standing on it is still scrambled; the owner is not.
+    fn scramble(&mut self, centre: (i32, i32), owner: PlayerId, seed: u64, reach: i32) {
         let mut chained = Vec::new();
         for dr in -reach..=reach {
             for dc in -reach..=reach {
@@ -654,21 +662,54 @@ impl World {
                     chained.push(((row, col), cell.with_age(super::cell::bits::MAX_AGE)));
                     continue;
                 }
-                // Nobody holds it, so nothing can live on it.
-                if !cell.player().is_owned() {
-                    continue;
-                }
-                // Its own square's own roll, on the blast's own stream, so two
-                // overlapping blasts do not decide the same square twice the
-                // same way — and so a peer that never saw the payload placed
-                // still lands on the same board.
-                let square = super::seed::cell_seed(seed, row, col);
-                let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
-                self.set_cell_at(row, col, cell.with_alive(alive).with_kind(Kind::NORMAL));
+                self.set_cell_at(row, col, Self::blasted(cell, owner, seed, row, col));
             }
         }
         for ((row, col), cell) in chained {
             self.set_cell_at(row, col, cell);
+        }
+    }
+
+    /// What a blast leaves on one square, which is the whole of what a payload
+    /// does to the board.
+    ///
+    /// One roll, and it decides ownership as well as life: alive is *yours*,
+    /// dead is nobody's. That is what makes a bomb take ground rather than
+    /// only stir it, and it is deliberately the same roll for both — a square
+    /// that came up alive for you and stayed somebody else's would be a live
+    /// cell of theirs standing in your crater, which is the state this whole
+    /// change is about.
+    ///
+    /// **Full strength when it lives**, because [`Cell::alive`] is: level and
+    /// influence have to agree on a source, and a corpse owned at level nought
+    /// is a state the rule says cannot exist.
+    ///
+    /// **Level nought and nobody when it does not.** Ground with an owner and
+    /// no strength is the same impossible state from the other side, so the
+    /// two move together.
+    ///
+    /// Granted ground keeps its owner whatever the roll says — see
+    /// [`Self::scramble`] for why nothing may move one.
+    fn blasted(cell: Cell, owner: PlayerId, seed: u64, row: i32, col: i32) -> Cell {
+        // Its own square's own roll, on the blast's own stream, so two
+        // overlapping blasts do not decide the same square twice the same way
+        // — and so a peer that never saw the payload placed still lands on the
+        // same board.
+        let square = super::seed::cell_seed(seed, row, col);
+        let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
+        let cell = cell.with_kind(Kind::NORMAL);
+        if cell.is_home() {
+            // **Cleared, not scrambled.** Its owner cannot move, so a square
+            // that came up alive here would be alive *for them* — which is
+            // the gift this whole rule exists to stop, and a spawn is exactly
+            // where somebody would aim to exploit it. So the blast may only
+            // take life off a granted patch, never put it there.
+            return cell.with_alive(false);
+        }
+        if alive {
+            cell.with_player(owner).with_alive(true).with_level(super::cell::bits::MAX_LEVEL)
+        } else {
+            cell.with_alive(false).with_player(PlayerId::UNOWNED).with_level(0)
         }
     }
 
@@ -993,17 +1034,20 @@ impl World {
 
     /// Whether a blast centred here would be worth setting off.
     ///
-    /// **Somebody else's ground, not merely "not mine".** This asked whether
-    /// enough of the disc was *not* the owner's, and unowned ground passes
-    /// that trivially — so a payload walked out of its own country to go off
-    /// over the nearest empty stretch, which does nothing to anybody. Worse,
-    /// the debris of an earlier blast is mostly unowned, so payloads queued up
-    /// to detonate in each other's craters.
+    /// **Ground that is not already yours**, which now includes no-man's-land.
     ///
-    /// What makes a blast worth anything is turning **somebody's** ordered
-    /// pattern into **their** noise, so that is what is counted. Over
-    /// no-man's-land it does nothing, which the design said all along and this
-    /// test did not.
+    /// This counted somebody *else's* ground and skipped the empty kind, on
+    /// the reasoning that a blast over no-man's-land does nothing to anybody.
+    /// That was true while a blast only disturbed what it reached. It claims
+    /// what it reaches now — see [`Self::scramble`] — so open country is worth
+    /// hitting, and refusing to go off over it would leave a payload unable to
+    /// do the thing it was just given.
+    ///
+    /// What that re-admits is the crater loop the old rule was written to
+    /// stop: the debris of a blast is mostly unowned, so one can be aimed at
+    /// the last one's hole. It costs [`rule::PAYLOAD_COST`] a time and pays a
+    /// third of a disc, which is a worse rate than any of the ordinary ways to
+    /// hold ground, so it is priced out rather than ruled out.
     ///
     /// A count and not a cost, and it stops the moment it has seen enough — so
     /// a payload on a frontier answers in a handful of reads.
@@ -1020,10 +1064,9 @@ impl World {
                 if dr * dr + dc * dc > reach * reach {
                     continue;
                 }
-                let held_by_another = self
-                    .cell_at(centre.0 + dr, centre.1 + dc)
-                    .is_some_and(|c| c.player().is_owned() && c.player() != owner);
-                if held_by_another {
+                let not_yet_mine =
+                    self.cell_at(centre.0 + dr, centre.1 + dc).is_some_and(|c| c.player() != owner);
+                if not_yet_mine {
                     theirs += 1;
                     if theirs * 64 >= total * rule::PAYLOAD_FOREIGN {
                         return true;
@@ -1410,6 +1453,148 @@ mod tests {
         );
     }
 
+    /// **A blast takes ground; it does not make life for whoever it lands on.**
+    ///
+    /// `scramble` set only alive or dead and left the owner alone, so a
+    /// payload thrown into somebody's *empty* country filled a third of it
+    /// with live cells that were still theirs. Aimed at an empty frontier a
+    /// bomb was a gift, which is the opposite of what it is for.
+    ///
+    /// Detonated on its own rather than stepped, so the answer is what the
+    /// blast left and not what Conway did with it afterwards.
+    #[test]
+    fn a_blast_leaves_no_life_belonging_to_anybody_else() {
+        let mut world = World::infinite();
+        let me = PlayerId(1);
+        let them = PlayerId(2);
+        crate::net::grant(&mut world, me);
+        let (row, col) = crate::net::spawn_for(me, &world);
+
+        // Their country, clear of my patch: ground they hold with nothing
+        // standing on it, which is what most of anybody's territory looks like
+        // most of the time.
+        let patch = crate::net::SPAWN_N;
+        for dr in -14..=14 {
+            for dc in patch + 2..=patch + 30 {
+                let (r, c) = (row + dr, col + dc);
+                let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+                assert!(!cell.is_home(), "the enemy block overlaps the granted patch");
+                world.set_cell_at(r, c, cell.with_player(them).with_alive(false));
+            }
+        }
+        let live_for = |w: &World, who: PlayerId| {
+            w.live_cells()
+                .into_iter()
+                .filter(|&(r, c)| w.cell_at(r, c).is_some_and(|x| x.player() == who))
+                .count()
+        };
+        assert_eq!(live_for(&world, them), 0, "they start with nothing standing");
+
+        // On the frontier, so the blast has their ground within reach.
+        let at = (row, col + patch - 1);
+        let armed = crate::net::Placement::Payload
+            .apply_to(world.cell_at(at.0, at.1).unwrap_or(Cell::DEAD), me)
+            .with_age(super::super::cell::bits::MAX_AGE);
+        world.set_cell_at(at.0, at.1, armed.with_player(me).with_home(false));
+
+        world.detonate();
+
+        assert_eq!(live_for(&world, them), 0, "the blast made life for the player it was aimed at");
+        assert!(live_for(&world, me) > 0, "the blast left the bomber nothing");
+    }
+
+    /// **What the blast does not roll up is nobody's**, so a crater is
+    /// no-man's-land rather than ground that quietly stayed with whoever held
+    /// it. Owner and strength move together: an owner at level nought is a
+    /// state the rule says cannot exist, and so is the reverse.
+    #[test]
+    fn a_crater_is_no_mans_land_where_it_is_not_the_bombers() {
+        let mut world = World::infinite();
+        let me = PlayerId(1);
+        crate::net::grant(&mut world, me);
+        let (row, col) = crate::net::spawn_for(me, &world);
+        // Clear of the granted patch, which is exempt and would answer for
+        // most of the disc from the spawn itself.
+        let at = (row, col + crate::net::SPAWN_N + 12);
+        let armed = crate::net::Placement::Payload
+            .apply_to(Cell::DEAD, me)
+            .with_age(super::super::cell::bits::MAX_AGE);
+        world.set_cell_at(at.0, at.1, armed.with_player(me));
+        world.detonate();
+
+        let reach = rule::PAYLOAD_REACH;
+        let (mut live, mut empty) = (0, 0);
+        for dr in -reach..=reach {
+            for dc in -reach..=reach {
+                if dr * dr + dc * dc > reach * reach {
+                    continue;
+                }
+                let Some(cell) = world.cell_at(at.0 + dr, at.1 + dc) else { continue };
+                if cell.is_home() {
+                    continue;
+                }
+                if cell.is_alive() {
+                    live += 1;
+                    assert_eq!(cell.player(), me, "a live crater square is not the bomber's");
+                    assert_eq!(cell.level(), super::super::cell::bits::MAX_LEVEL);
+                } else {
+                    empty += 1;
+                    assert_eq!(
+                        cell.player(),
+                        PlayerId::UNOWNED,
+                        "a dead crater square kept an owner"
+                    );
+                    assert_eq!(cell.level(), 0, "unowned ground with strength on it");
+                }
+            }
+        }
+        assert!(live > 0 && empty > 0, "not a crater: {live} alive, {empty} empty");
+    }
+
+    /// **A granted patch is not takeable, and nothing grows one either.**
+    ///
+    /// [`rule::territory`] returns before a home square, so no rule moves one
+    /// and `net::already_granted` reads exactly that to know a returning
+    /// player still has a seat — a blast that converted one would evict
+    /// somebody permanently and hand them a second patch on their next join.
+    /// And because the owner cannot move, a square there that came up *alive*
+    /// would be alive for them, which is the gift this rule exists to stop. So
+    /// a blast may only take life off a patch, never put it there.
+    #[test]
+    fn a_blast_clears_a_granted_patch_without_taking_or_feeding_it() {
+        let mut world = World::infinite();
+        let me = PlayerId(1);
+        let them = PlayerId(2);
+        crate::net::grant(&mut world, them);
+        let (row, col) = crate::net::spawn_for(them, &world);
+        let home: Vec<(i32, i32)> = (row..row + crate::net::SPAWN_N)
+            .flat_map(|r| (col..col + crate::net::SPAWN_N).map(move |c| (r, c)))
+            .filter(|&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_home()))
+            .collect();
+        assert!(!home.is_empty(), "the grant marked no home ground");
+        // Something of theirs standing on it, so "cleared" has something to
+        // mean.
+        for &(r, c) in home.iter().take(6) {
+            world.set_cell_at(r, c, world.cell_at(r, c).expect("a home square").with_alive(true));
+        }
+
+        // Mine, armed, just outside their patch, so the blast reaches in
+        // without my having to overwrite one of the squares under test.
+        let at = (row - 1, col - 1);
+        let armed = crate::net::Placement::Payload
+            .apply_to(Cell::DEAD, me)
+            .with_age(super::super::cell::bits::MAX_AGE);
+        world.set_cell_at(at.0, at.1, armed.with_player(me));
+        world.detonate();
+
+        for (r, c) in home {
+            let cell = world.cell_at(r, c).expect("a home square");
+            assert!(cell.is_home(), "the blast cleared the home mark at {r},{c}");
+            assert_eq!(cell.player(), them, "the blast took a granted square at {r},{c}");
+            assert!(!cell.is_alive(), "the blast made life on their patch at {r},{c}");
+        }
+    }
+
     /// **The blast is what a payload is for**, and it is noise rather than a
     /// hole: every square in the disc takes its own roll, so some come up
     /// alive and some do not.
@@ -1418,7 +1603,19 @@ mod tests {
         let mut world = World::infinite();
         let me = PlayerId(1);
         crate::net::grant(&mut world, me);
-        let (row, col) = crate::net::spawn_for(me, &world);
+        let spawn = crate::net::spawn_for(me, &world);
+        // **Clear of the granted patch**, which a blast clears rather than
+        // scrambles — see [`World::blasted`]. Centred on the spawn there is
+        // nothing in reach but home ground and unloaded chunks, so the disc
+        // comes back empty and says nothing about the filter under test.
+        let (row, col) = (spawn.0, spawn.1 + crate::net::SPAWN_N + 12);
+        for dr in -12..=12 {
+            for dc in -12..=12 {
+                let (r, c) = (row + dr, col + dc);
+                let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+                world.set_cell_at(r, c, cell.with_player(me));
+            }
+        }
 
         // Armed and about to go, which is the state the fuse takes a while to
         // reach on its own.

@@ -68,7 +68,7 @@ Three things came out of building it that the design did not say.
 
 **A mine's age is not for this, and the table is where that is written down.** A dead mine still clears on `MINE_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spoken for by [depleted mines](#depleted-mines) below — a mine's age is a fade where a flag would be a cliff, so `Ages::Never` on that row is a reservation and not an absence.
 
-**The detonating payload takes its own blast's roll.** Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
+**The detonating payload takes its own blast's roll**, and goes through the same `World::blasted` as every other square in the disc. Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
 
 ### The fuse
 
@@ -96,12 +96,11 @@ Three more reasons to drop the search, beyond not needing it:
 
 ### Where it goes off, which is not always where it is
 
-**A blast wasted on its owner's own ground is a blast wasted.** The rule above
-says a square brought to life takes the owner already on it, so a detonation
-inside your own country turns your own patterns into your own noise — and a
-second one over ground you have already scrambled adds nothing to what is
-already scrambled. Both are the same mistake, and a player standing a payload
-deep in their own territory is making it by accident rather than on purpose.
+**A blast wasted on its owner's own ground is a blast wasted.** A square the
+blast rolls up is already yours afterwards, so a detonation inside your own
+country buys you what you had and destroys your own patterns to do it. A player
+standing a payload deep in their own territory is making that mistake by
+accident rather than on purpose.
 
 So the blast **walks outward** until it is worth something: search rings at
 increasing distance from the payload for a centre whose disc is not already
@@ -155,15 +154,22 @@ It cannot recurse, and that is worth saying because it reads as though it might:
 
 ### Whose noise is it
 
-**The ground decides.** A square brought to life takes the owner already on it, and a square nobody holds cannot come alive at all — `Cell::alive` asserts a live cell has an owner, because unowned life has nobody to attribute a birth to.
+**The blast decides**, and one roll decides both halves: a square that comes up alive is the bomber's, and a square that does not is nobody's. `World::blasted` is the whole rule.
 
-That one rule does the whole balance job, which is why it is the rule rather than a price:
+It used to be the other way round — the ground decided, a square brought to life kept the owner already on it, and a square nobody held could not come alive at all. That read well and was wrong in play, because most of anybody's territory is ground with nothing standing on it. A payload thrown at an empty frontier filled a third of it with live cells that were **still the defender's**, on ground they still held. The bomb was a gift, and the more of their country was empty the bigger the gift. `a_blast_leaves_no_life_belonging_to_anybody_else` is the test that says so.
 
-- Into somebody's country, it turns their ordered pattern into **their** noise: their mines' corpses cost them upkeep, their shapes stop being shapes, and their territory destabilises because the sources moved.
-- Over no-man's-land it does nothing, so nobody wastes one there.
-- It is **never a land grab**. A payload cannot give you a square, so it stays a weapon and does not compete with a turret, which is the tool that takes ground.
+So, per square in the disc:
 
-It also needs no new placement rule. `net::may_place` confines you to your own influence, so a payload is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
+- **Alive: yours**, at full strength, because `Cell::alive` is — level and influence have to agree on a source, and a corpse owned at level nought is a state the rule says cannot exist.
+- **Dead: nobody's**, at level nought, which is that same impossible state from the other side. So the two move together and a crater is genuine no-man's-land.
+
+What that buys is that a bomb **breaks a country apart and leaves you a third of the pieces**, rather than merely animating what was there. Their mines' corpses still cost them upkeep and their shapes still stop being shapes; what is new is that you hold what is left.
+
+It is now a land grab, deliberately, and that is the thing to watch in `examples/balance.rs`: at `PAYLOAD_COST` a payload buys about a third of a disc of `PAYLOAD_REACH`, and if that rate ever beats growing life outward then the turret stops being the tool that takes ground.
+
+**Two squares are exempt.** Ice, because a pane stops time over whatever it covers and that is every rule. And **granted ground**, which is subtler and matters more: `rule::territory` returns before a home square, so nothing else in the game moves one, and `net::already_granted` reads exactly that to know a returning player still has a seat. A blast that converted one would evict somebody from their spawn permanently and hand them a second patch on their next join. And because the owner there cannot move, a home square that came up *alive* would be alive **for them** — the gift bug again, in the one place somebody would aim to exploit it. So a blast may take life off a granted patch and may never put it there. `a_blast_clears_a_granted_patch_without_taking_or_feeding_it`.
+
+It needs no new placement rule. `net::may_place` confines you to your own influence, so a payload is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
 
 ### What it is made of
 
