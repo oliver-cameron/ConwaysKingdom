@@ -155,6 +155,61 @@ pub mod menu {
             "Life is exactly B3/S23 — an R-pentomino settles at generation 1103 with 116              cells, which is the figure in every book. So a glider is a glider, a gun is a              gun, and fifty years of published patterns are things you can build here and              expect to behave.";
     }
 
+    /// **A word about Conway, at the end.**
+    ///
+    /// The rule this game is built on is his, and he did not want to be
+    /// remembered for it — he was open about finding it a nuisance. It was a
+    /// Sunday afternoon with counters on a Go board in 1970, it went round the
+    /// world through Martin Gardner's column, and it stood in front of
+    /// everything else he did for fifty years.
+    ///
+    /// So this says what he would rather you looked up, briefly and without
+    /// ceremony. Somebody who read to the bottom of a page about the Game of
+    /// Life is exactly the person who should be told there is far more.
+    pub mod conway {
+        pub const TITLE: &str = "About John Conway";
+        pub const BODY: &str = "The rule underneath all of this is John Horton Conway's, from a \
+             Sunday afternoon with counters on a Go board in 1970. He did not want to be \
+             remembered for it, and said so often — it went round the world through Martin \
+             Gardner's column and then stood in front of everything else he did for fifty \
+             years. He died in April 2020. What he would rather you looked up:";
+
+        /// Name, what it is, and where. Links rather than explanations: the
+        /// point is to say there is more and where it is, not to teach it.
+        pub const WORK: &[(&str, &str, &str)] = &[
+            (
+                "Surreal numbers",
+                "He thought them his best work. One construction, built out of nothing but \
+                 games, that yields the reals and the ordinals and a great deal besides.",
+                "https://en.wikipedia.org/wiki/Surreal_number",
+            ),
+            (
+                "The Conway groups",
+                "Three sporadic simple groups, pulled out of the Leech lattice — he set aside \
+                 two long slots for the work and needed only the first.",
+                "https://en.wikipedia.org/wiki/Conway_group",
+            ),
+            (
+                "Monstrous moonshine",
+                "His conjecture with Simon Norton connecting the Monster group to modular \
+                 functions. Borcherds proved it and won a Fields Medal for it.",
+                "https://en.wikipedia.org/wiki/Monstrous_moonshine",
+            ),
+            (
+                "Combinatorial game theory",
+                "Which he largely founded: On Numbers and Games, and Winning Ways with \
+                 Berlekamp and Guy.",
+                "https://en.wikipedia.org/wiki/Combinatorial_game_theory",
+            ),
+            (
+                "The doomsday algorithm",
+                "Working out the day of the week in your head. He delighted in it and \
+                 practised it daily.",
+                "https://en.wikipedia.org/wiki/Doomsday_rule",
+            ),
+        ];
+    }
+
     pub mod home {
         pub const PLAY: &str = "Play";
         pub const WHO: &str = "You are";

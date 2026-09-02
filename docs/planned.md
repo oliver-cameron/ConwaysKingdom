@@ -889,7 +889,10 @@ What it has to say, in the order it bites. Each of these is a rule somebody lose
 
 Then the part that is a *tip* rather than a rule, and it is the one that opens the game up: **other people's patterns work here.** Liveness is exactly B3/S23 — `sim::world`'s `liveness_is_exactly_b3_s23` measures it against a longhand stepper, and an R-pentomino stabilises at generation 1103 with 116 cells, which is the figure in every book. So a glider is a glider, a gun is a gun, and fifty years of published patterns are things you can build here and expect to behave. That is what the [laboratory](#experiments) is for, and it is why [RLE](#what-to-take-from-golly-in-order) is worth more than anything else on that list.
 
-### And a word about Conway, at the end
+### And a word about Conway, at the end — built
+
+`words::conway`, at the foot of `menu::Page::HowToPlay`: one paragraph and five
+links, no explanations. What follows is why it says what it says.
 
 At the foot of the page, after the tips, briefly and without ceremony — because the rule this game is built on is his, and because he would have wanted the sentence after it.
 

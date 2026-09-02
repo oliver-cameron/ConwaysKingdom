@@ -57,6 +57,39 @@ fn face(
     }
 }
 
+/// A block of prose that actually wraps.
+///
+/// **Width has to be handed to it.** Inside a horizontal layout egui has no
+/// bound to wrap against, so a paragraph set beside a picture ran on in one
+/// line and pushed the card wider than the screen. Allocating the remaining
+/// width before writing into it is what makes these read as paragraphs.
+fn column(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui)) {
+    let rest = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(rest, 0.0),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.set_max_width(rest);
+            contents(ui);
+        },
+    );
+}
+
+/// One card: a panel with padding, at the full width of the page.
+fn card(ui: &mut egui::Ui, theme: &Theme, accent: bool, contents: impl FnOnce(&mut egui::Ui)) {
+    let (m, p) = (theme.metrics, theme.palette);
+    let mut frame =
+        egui::Frame::new().fill(p.surface).corner_radius(m.rounding).inner_margin(m.panel_padding);
+    if accent {
+        frame = frame.stroke(egui::Stroke::new(1.0, p.accent));
+    }
+    frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        contents(ui);
+    });
+    ui.add_space(m.item_spacing);
+}
+
 pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let (m, p) = (theme.metrics, theme.palette);
     // Somebody reading this has usually not been given a number yet, and the
@@ -70,8 +103,10 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         }
         ui.heading(words::howto::TITLE);
     });
-    ui.add_space(m.item_spacing * 0.5);
-    ui.label(egui::RichText::new(words::howto::NOTE).size(m.text_body).color(p.text_dim));
+    ui.add_space(4.0);
+    column(ui, |ui| {
+        ui.label(egui::RichText::new(words::howto::NOTE).size(m.text_small).color(p.text_dim));
+    });
     ui.add_space(m.item_spacing);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -80,52 +115,61 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
             // has to hold on to rather than five paragraphs of one argument.
             // Run together they read as a wall and get skipped, which is the
             // one outcome a page like this cannot afford.
-            egui::Frame::new()
-                .fill(p.surface)
-                .corner_radius(m.rounding)
-                .inner_margin(m.panel_padding)
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_top(|ui| {
-                        let side = m.slot;
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
-                        face(ui.painter(), rect, FACES[i], me, at.sheet);
-                        ui.add_space(m.item_spacing);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(*heading).size(m.text_body).color(p.text));
-                            ui.add_space(2.0);
-                            // Body at the same size as everything else on the
-                            // screen. It was `text_small` and dim, which is
-                            // how a footnote is set — and these are the page.
-                            ui.label(
-                                egui::RichText::new(*body).size(m.text_small).color(p.text_dim),
-                            );
-                        });
+            card(ui, theme, false, |ui| {
+                ui.horizontal_top(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(m.slot, m.slot), egui::Sense::hover());
+                    face(ui.painter(), rect, FACES[i], me, at.sheet);
+                    ui.add_space(m.panel_padding);
+                    column(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(*heading).size(m.text_body).color(p.text).strong(),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(*body).size(m.text_small).color(p.text_dim));
                     });
                 });
-            ui.add_space(m.item_spacing);
+            });
         }
 
-        // **Last, and set apart**, because it is a tip rather than a rule —
-        // and it is the one that opens the game up.
+        // **Set apart**, because it is a tip rather than a rule — and it is the
+        // one that opens the game up.
         ui.add_space(m.item_spacing);
-        egui::Frame::new()
-            .fill(p.surface)
-            .stroke(egui::Stroke::new(1.0, p.accent))
-            .corner_radius(m.rounding)
-            .inner_margin(m.panel_padding)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    egui::RichText::new(words::howto::TIP_TITLE).size(m.text_body).color(p.accent),
-                );
-                ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new(words::howto::TIP).size(m.text_small).color(p.text_dim),
-                );
-            });
+        card(ui, theme, true, |ui| {
+            ui.label(
+                egui::RichText::new(words::howto::TIP_TITLE)
+                    .size(m.text_body)
+                    .color(p.accent)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(words::howto::TIP).size(m.text_small).color(p.text_dim));
+        });
+
+        // **And a word about Conway, at the end.** The rule underneath all of
+        // this is his and he did not want to be remembered for it, so this says
+        // what he would rather you looked up — briefly, linking out rather than
+        // explaining, and not sentimental. Somebody who has read to the bottom
+        // of a page about the Game of Life is exactly the person who should be
+        // told there is far more.
         ui.add_space(m.item_spacing * 2.0);
+        ui.separator();
+        ui.add_space(m.item_spacing);
+        column(ui, |ui| {
+            ui.label(egui::RichText::new(words::conway::TITLE).size(m.text_body).color(p.text));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(words::conway::BODY).size(m.text_small).color(p.text_dim));
+            ui.add_space(m.item_spacing);
+            for (name, what, url) in words::conway::WORK {
+                ui.hyperlink_to(
+                    egui::RichText::new(*name).size(m.text_small).color(p.accent),
+                    *url,
+                );
+                ui.label(egui::RichText::new(*what).size(m.text_small).color(p.text_dim));
+                ui.add_space(m.item_spacing * 0.75);
+            }
+        });
+        ui.add_space(m.item_spacing * 3.0);
     });
     Chose::Nothing
 }
