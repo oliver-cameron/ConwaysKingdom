@@ -39,11 +39,47 @@ impl Icons {
     /// Where a cell's tile sits in the sheet, as egui wants it: fractions of
     /// the whole image. Low nibble across, high nibble down, which is the tile
     /// byte's own arithmetic.
+    ///
+    /// **Each axis by its own edge, because the sheet is not square.** It has
+    /// not been since the reduced levels of detail moved into a strip below the
+    /// tile grid — see [`crate::render::atlas::LEVEL_ORIGIN`] — and this
+    /// divided both axes by the width, so every icon was drawn two thirds of
+    /// its height and squashed. A tile is square in texels and is a *taller*
+    /// fraction of a taller image, which is exactly what the two divisors say.
     pub fn uv(tile: u8) -> egui::Rect {
-        let across = (SHEET_W / TILE_N) as f32;
-        let (x, y) = ((tile % 16) as f32 / across, (tile / 16) as f32 / across);
-        let edge = 1.0 / across;
-        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(edge, edge))
+        let (wide, tall) = (TILE_N as f32 / SHEET_W as f32, TILE_N as f32 / SHEET_H as f32);
+        let at = egui::pos2((tile % 16) as f32 * wide, (tile / 16) as f32 * tall);
+        egui::Rect::from_min_size(at, egui::vec2(wide, tall))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A tile is square in texels, so its patch of the sheet is not square in
+    /// fractions.** This divided both axes by the width, which was right while
+    /// the sheet was square and squashed every icon to two thirds of its height
+    /// the moment the levels of detail moved in below the grid.
+    #[test]
+    fn a_tile_covers_one_tile_of_the_sheet_on_both_axes() {
+        for tile in [0u8, 5, 16, 255] {
+            let uv = Icons::uv(tile);
+            assert!(
+                (uv.width() * SHEET_W as f32 - TILE_N as f32).abs() < 0.001,
+                "tile {tile} is {} texels wide",
+                uv.width() * SHEET_W as f32
+            );
+            assert!(
+                (uv.height() * SHEET_H as f32 - TILE_N as f32).abs() < 0.001,
+                "tile {tile} is {} texels tall",
+                uv.height() * SHEET_H as f32
+            );
+        }
+        // And the last tile of the grid still ends inside the grid rather than
+        // in the strip of reduced art below it.
+        let last = Icons::uv(255);
+        assert!(last.max.x <= 1.0 && last.max.y <= (SHEET_W as f32 / SHEET_H as f32) + 0.001);
     }
 }
 

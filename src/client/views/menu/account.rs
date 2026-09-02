@@ -35,16 +35,16 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
             // [`crate::client::views::face`].
             Some(who) => crate::client::views::face::show(ui.painter(), rect, who),
             // No server has named you yet, so there is no key to draw one
-            // from. An outline rather than a stand-in face, because a face
-            // that changed the moment you joined would look like a bug.
-            None => {
-                ui.painter().rect_stroke(
-                    rect,
-                    m.rounding,
-                    egui::Stroke::new(1.0, p.line),
-                    egui::StrokeKind::Inside,
-                );
-            }
+            // from — but an empty box is worse than a stand-in. Derived from
+            // the name instead and drawn dim, so it is visibly provisional
+            // rather than silently becoming somebody else's on your first
+            // join.
+            None => crate::client::views::face::show_placeholder(
+                ui.painter(),
+                rect,
+                &menu.name,
+                p.text_dim,
+            ),
         }
         ui.add_space(m.item_spacing);
         ui.vertical(|ui| {
@@ -119,9 +119,8 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     }
 
     let flat = |ui: &mut egui::Ui, label: &str| {
-        super::wide(
+        crate::client::views::wide(
             ui,
-            theme,
             egui::RichText::new(label).size(m.text_small).color(p.text),
             m.button_height,
             p.surface,

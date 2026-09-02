@@ -18,27 +18,6 @@
 //! list arrives from `ServerMessage::Rooms` and the menu shows nothing until
 //! it does, rather than offering a name that might be there.
 
-/// A button whose label starts at the left, at the full width it was given.
-///
-/// **Left, because a column of buttons is a list**, and a list is read down its
-/// left edge. Centred labels put every word at a different place across the
-/// column, so the eye has to hunt for each one instead of running down them —
-/// which is what a menu of full-width buttons is for. `Atom::grow` after the
-/// text is what pushes it over; egui centres by default.
-pub(super) fn wide(
-    ui: &mut egui::Ui,
-    theme: &Theme,
-    label: egui::RichText,
-    height: f32,
-    fill: egui::Color32,
-) -> egui::Response {
-    let _ = theme;
-    ui.add_sized(
-        [ui.available_width(), height],
-        egui::Button::new((label, egui::Atom::grow())).fill(fill),
-    )
-}
-
 /// **A stable player number for somebody, so their colour is theirs.**
 ///
 /// Off the fingerprint rather than off a seat or a position in a list: a

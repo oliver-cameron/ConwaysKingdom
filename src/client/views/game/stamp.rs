@@ -823,12 +823,13 @@ pub fn show(
 
                     ui.separator();
                     ui.small(words::HOW);
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 26.0],
-                            egui::Button::new(crate::client::views::words::CLOSE),
-                        )
-                        .clicked()
+                    if crate::client::views::wide(
+                        ui,
+                        egui::RichText::new(crate::client::views::words::CLOSE),
+                        26.0,
+                        theme.palette.surface,
+                    )
+                    .clicked()
                     {
                         picked = Picked::Close;
                     }

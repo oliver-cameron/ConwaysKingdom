@@ -30,6 +30,25 @@
 //! targets, and a HUD needs only pointer, wheel and modifiers — the IME and
 //! clipboard handling that egui-winit exists for is not in play.
 
+/// A button whose label starts at the left, at the full width it was given.
+///
+/// **Left, because a column of buttons is a list**, and a list is read down its
+/// left edge. Centred labels put every word at a different place across the
+/// column, so the eye has to hunt for each one instead of running down them —
+/// which is what a menu of full-width buttons is for. `Atom::grow` after the
+/// text is what pushes it over; egui centres by default.
+pub fn wide(
+    ui: &mut egui::Ui,
+    label: egui::RichText,
+    height: f32,
+    fill: egui::Color32,
+) -> egui::Response {
+    ui.add_sized(
+        [ui.available_width(), height],
+        egui::Button::new((label, egui::Atom::grow())).fill(fill),
+    )
+}
+
 pub mod face;
 pub mod game;
 pub mod glyph;

@@ -29,9 +29,8 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // Above the three, and only when there is one: a match you have already
     // joined is not a fourth way in, it is the way back to where you were.
     if at.waiting_in_a_match {
-        if super::wide(
+        if crate::client::views::wide(
             ui,
-            theme,
             egui::RichText::new(words::BACK_TO_MATCH).size(m.text_action).color(p.ground),
             m.action_height,
             p.accent,
@@ -47,19 +46,17 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // **Play is the accent unless the match above took it.** One accent a
     // screen, on the thing you are meant to press next.
     let lead = !at.waiting_in_a_match;
-    if ui
-        .add_sized(
-            [ui.available_width(), m.action_height],
-            egui::Button::new(
-                egui::RichText::new(words::home::PLAY).size(m.text_action).color(if lead {
-                    p.ground
-                } else {
-                    p.text
-                }),
-            )
-            .fill(if lead { p.accent } else { p.surface }),
-        )
-        .clicked()
+    if crate::client::views::wide(
+        ui,
+        egui::RichText::new(words::home::PLAY).size(m.text_action).color(if lead {
+            p.ground
+        } else {
+            p.text
+        }),
+        m.action_height,
+        if lead { p.accent } else { p.surface },
+    )
+    .clicked()
     {
         // **Solo is not a fourth button**, because it is not a different
         // errand: the same form describes a world either way and answers
@@ -90,9 +87,8 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // Falls back to the category before anybody has typed a name.
     let mine = menu.name.trim();
     let account = if mine.is_empty() { words::home::ACCOUNT.to_string() } else { mine.to_string() };
-    if super::wide(
+    if crate::client::views::wide(
         ui,
-        theme,
         egui::RichText::new(account).size(m.text_body).color(p.text),
         m.action_height,
         p.surface,
@@ -102,9 +98,8 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         menu.page = Page::Account;
     }
     ui.add_space(m.item_spacing);
-    if super::wide(
+    if crate::client::views::wide(
         ui,
-        theme,
         egui::RichText::new(words::home::HOWTO).size(m.text_body).color(p.text),
         m.action_height,
         p.surface,

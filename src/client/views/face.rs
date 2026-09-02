@@ -125,14 +125,41 @@ pub fn face(who: &PersonId) -> [[bool; N]; N] {
     last
 }
 
+/// **A face before a server has issued you a key.**
+///
+/// The real one comes off the key, and there is no key until you have joined
+/// somewhere — so this is the gap, and an empty box is the wrong thing to put
+/// in it. Github's answer is the right one: derive a placeholder from whatever
+/// identity there *is*, which here is the name being typed, and let it change
+/// when the real thing arrives.
+///
+/// **Drawn muted, and that is the whole of what makes it honest.** A face that
+/// silently became a different face on your first join would read as a bug; one
+/// that was visibly provisional and then became yours reads as what it is. So
+/// this is the same arithmetic in [`crate::client::views::theme`]'s dim ink
+/// rather than in a player's colour.
+///
+/// Empty name and no key at all still gets a shape, because the point of the
+/// scheme is that everybody has one without choosing it.
+pub fn show_placeholder(painter: &egui::Painter, rect: egui::Rect, name: &str, dim: egui::Color32) {
+    let stand_in = PersonId(if name.trim().is_empty() {
+        "nobody".to_string()
+    } else {
+        name.trim().to_lowercase()
+    });
+    draw(painter, rect, &face(&stand_in), dim);
+}
+
 /// Draw one, in the colour that person's cells are.
 ///
+pub fn show(painter: &egui::Painter, rect: egui::Rect, who: &PersonId) {
+    let (r, g, b) = super::hue::player_colour(crate::sim::PlayerId(super::menu::person_hue(who)));
+    draw(painter, rect, &face(who), egui::Color32::from_rgb(r, g, b));
+}
+
 /// Whole squares that touch, the way a stamp's preview is drawn and for the
 /// same reason: a shape this small taken apart by gaps stops being a shape.
-pub fn show(painter: &egui::Painter, rect: egui::Rect, who: &PersonId) {
-    let cells = face(who);
-    let (r, g, b) = super::hue::player_colour(crate::sim::PlayerId(super::menu::person_hue(who)));
-    let ink = egui::Color32::from_rgb(r, g, b);
+fn draw(painter: &egui::Painter, rect: egui::Rect, cells: &[[bool; N]; N], ink: egui::Color32) {
     let side = rect.width().min(rect.height()) / N as f32;
     let origin = rect.center() - egui::vec2(side * N as f32, side * N as f32) * 0.5;
     for (row, line) in cells.iter().enumerate() {

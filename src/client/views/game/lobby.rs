@@ -213,17 +213,15 @@ pub fn show(
                             // wait for their friends to arrive.
                             let mine = look.owner.is_some_and(|o| o == look.me);
                             if mine {
-                                if ui
-                                    .add_sized(
-                                        [ui.available_width(), m.action_height],
-                                        egui::Button::new(
-                                            egui::RichText::new(whistle::START)
-                                                .size(m.text_action)
-                                                .color(p.ground),
-                                        )
-                                        .fill(p.accent),
-                                    )
-                                    .clicked()
+                                if crate::client::views::wide(
+                                    ui,
+                                    egui::RichText::new(whistle::START)
+                                        .size(m.text_action)
+                                        .color(p.ground),
+                                    m.action_height,
+                                    p.accent,
+                                )
+                                .clicked()
                                 {
                                     did = Did::Start;
                                 }
@@ -253,12 +251,13 @@ pub fn show(
                     ui.separator();
                     // A lobby with no way out is a room you are locked in
                     // until somebody else decides otherwise.
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 30.0],
-                            egui::Button::new(crate::client::views::words::hud::BACK_HINT),
-                        )
-                        .clicked()
+                    if crate::client::views::wide(
+                        ui,
+                        egui::RichText::new(crate::client::views::words::hud::BACK_HINT),
+                        30.0,
+                        p.surface,
+                    )
+                    .clicked()
                     {
                         did = Did::Leave;
                     }
@@ -364,12 +363,13 @@ fn team_picker(
                 // Taking the side you are already on steps off it, so there is
                 // a way back to undecided without a second control.
                 let label = if ours { words::LEAVE_SIDE } else { words::TAKE_SIDE };
-                if ui
-                    .add_sized(
-                        [ui.available_width(), m.button_height],
-                        egui::Button::new(egui::RichText::new(label).size(m.text_small)),
-                    )
-                    .clicked()
+                if crate::client::views::wide(
+                    ui,
+                    egui::RichText::new(label).size(m.text_small),
+                    m.button_height,
+                    p.surface,
+                )
+                .clicked()
                 {
                     did = Some(Did::JoinTeam(if ours { me } else { team.id }));
                 }

@@ -119,9 +119,8 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.add_space(m.item_spacing * 2.0);
         ui.separator();
         ui.add_space(m.item_spacing);
-        if super::wide(
+        if crate::client::views::wide(
             ui,
-            theme,
             egui::RichText::new(words::ALONE).size(m.text_body).color(theme.palette.text),
             m.button_height,
             theme.palette.surface,
@@ -611,24 +610,17 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                     p.text_dim,
                     egui::RichText::new(words::make::MAKING).size(m.text_small),
                 );
-            } else if ui
-                .add_sized(
-                    [ui.available_width(), m.action_height],
-                    egui::Button::new(
-                        egui::RichText::new(if reached {
-                            words::make::MAKE
-                        } else {
-                            words::make::ALONE
-                        })
-                        .size(m.text_action)
-                        // The accent is for the thing you are meant to
-                        // press next, and until a server has answered that
-                        // is not this one.
-                        .color(if reached { p.ground } else { p.text }),
-                    )
-                    .fill(if reached { p.accent } else { p.surface }),
-                )
-                .clicked()
+            } else if crate::client::views::wide(
+                ui,
+                egui::RichText::new(if reached { words::make::MAKE } else { words::make::ALONE })
+                    .size(m.text_action)
+                    // The accent is for the thing you are meant to press next,
+                    // and until a server has answered that is not this one.
+                    .color(if reached { p.ground } else { p.text }),
+                m.action_height,
+                if reached { p.accent } else { p.surface },
+            )
+            .clicked()
             {
                 // Refused here or refused there, into the same line under the
                 // same form: a name that is too long and a name already taken
@@ -666,12 +658,13 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 }
             }
             ui.add_space(m.item_spacing);
-            if ui
-                .add_sized(
-                    [ui.available_width(), m.button_height],
-                    egui::Button::new(egui::RichText::new(words::make::CLEAR).size(m.text_small)),
-                )
-                .clicked()
+            if crate::client::views::wide(
+                ui,
+                egui::RichText::new(words::make::CLEAR).size(m.text_small),
+                m.button_height,
+                p.surface,
+            )
+            .clicked()
             {
                 chose = Some(Chose::Clear);
             }
