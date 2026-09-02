@@ -17,6 +17,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | | status | |
 |---|---|---|
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
+| [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
 | [Player profiles](#player-profiles) | Part built | a person rather than a seat; what is left is devices and the name field |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
@@ -1302,3 +1303,93 @@ What is left is the layout rather than the plumbing. The HUD is a desktop panel:
 - **Building large structures** is still done by freezing ground with ice, which works but is not what ice is for. Deferred deliberately — schematics, a blueprint region, or players simply learning to work within the rules.
 - **`client::views::game` is 1900 lines doing five jobs.** The camera came out of it because it was pure arithmetic that could not be tested without a window; the same argument now applies twice over. The gesture machine — `Gesture`, `Drag`, `Pending`, the stroke and rectangle arithmetic — is already tested without a GPU at the bottom of that file. The session — `pump_link`, `advance_to`, `send_checkpoint`, `subscribe_to_view`, `chose`, `to_menu`, and the `me`, `room`, `value`, `screen` and `subscribed` fields — is everything about talking to a server and nothing about drawing. The menu made that worse rather than better: the screen the client is on and the connection it is holding are the same state machine, and it now lives in the same struct as the sprite atlas.
 
+
+
+## Cloudflare, and which half of this fits
+
+**Thought about, not costed.** The two halves of what the server does come
+apart cleanly, and one of them is a fifteen-minute job while the other is a
+port. Worth writing down before anybody starts with the easy half and discovers
+the hard one.
+
+### The page fits Pages, and one line of design is in the way
+
+`index.html`, `pkg/` and `assets/` are static files. Pages serves them, sets
+`application/wasm` without being asked, and puts the whole thing behind a CDN,
+which is a real improvement over one process in one place serving a 7.5 MB
+module.
+
+Two things to check rather than assume. The **loading bar** wants a
+`Content-Length` and falls back to an indeterminate sweep without one — see
+`index.html` — so if Pages answers the wasm with `Transfer-Encoding: chunked`
+the bar stops being a percentage. And Pages is **HTTPS**, which is worth having
+for a reason unrelated to security: a secure origin is what makes
+`navigator.gpu` exist, so the browser gets WebGPU instead of falling back to
+WebGL2. That fallback works and is slower and less capable, and today it is
+what anybody visiting by IP gets.
+
+What is actually in the way is that **same origin is load-bearing**. The
+browser client derives its socket from the page — `link_web::origin_url`, which
+already gets `https` to `wss` right — and the README makes a feature of it:
+"the browser client connects back to whatever served it, so there is nothing to
+configure". Put the page on Pages and the server anywhere else and that
+derivation points at Pages, which has no socket. So splitting them means the
+client needs a configured default server: a build-time constant, a `meta` tag
+the page carries, or the menu's existing server field pre-filled. The menu
+already knows how to be told an address; what is missing is a default that is
+not the origin.
+
+### The server is not a Worker
+
+It is a long-lived stateful process: worlds in memory, a tick every 250 ms per
+room, websockets held open, and `.ckw` files written on the way out. A Worker
+has no memory between requests and no timer of its own, so none of that
+survives the model.
+
+**Durable Objects are the right shape**, and it is a close fit rather than a
+coincidence. One DO per room maps onto `server::rooms::Room` almost exactly:
+single-threaded, addressable by name, with hibernatable WebSockets and alarms.
+`--room NAME` becomes a DO id and the room list becomes a DO of its own.
+
+Four things to weigh before believing that:
+
+**It is a third transport, and the second server.** The crate would compile to
+wasm32 for workerd, so `axum` and `tokio` leave the server path entirely — the
+`server` feature already draws that line, which is the one piece of this that
+is free. `workers-rs` supports DOs in Rust. What has no equivalent is
+`tokio::time` driving the step loop.
+
+**Alarms are not a metronome.** Four ticks a second is at the edge of what DO
+alarms are for; they are scheduled, not periodic, so each tick reschedules the
+next and the drift is real. A room that steps late is a room whose clients all
+see it step late — the server is the clock, per [networking.md]. Whether that
+is acceptable is measurable and nobody has measured it.
+
+**CPU is metered per invocation.** Stepping a 16384-chunk torus four times a
+second is the most expensive thing in the game and it happens whether or not
+anybody is looking. On a VPS that is a core; on a DO it is a bill and possibly
+a limit. The infinite worlds are fine — they only hold what players have
+touched — and the large tori are the question.
+
+**Storage is not a file.** A `.ckw` is one blob and DO storage is key-value
+with a per-value ceiling, so persistence becomes many keys rather than one
+write. That suits the format better than it sounds — the file is chunk-based
+already — but `server::persist` is written as a stream over a whole world and
+would be rewritten rather than adapted.
+
+### The cheap answer, which is probably the right first one
+
+Pages for the client, the Rust server unchanged on anything that runs a
+container, and Cloudflare in front of it proxying the websocket. No port, no
+DO, and the only code change is the configured-server-address one above, which
+is wanted anyway the moment there is more than one server — see
+[many servers](#many-servers-and-what-must-not-be-decentralised), which is the
+entry this eventually collides with.
+
+The order that avoids wasted work: **the default-server address first**,
+because every arrangement here needs it and it is small; then the page on
+Pages, which is then free; then the server wherever it is cheapest, with
+Durable Objects looked at only if per-room isolation or scale-to-zero turns out
+to be worth a port.
+
+[networking.md]: networking.md#the-server-is-the-clock
