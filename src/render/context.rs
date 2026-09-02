@@ -41,14 +41,33 @@ pub struct Offscreen {
     bind_group: wgpu::BindGroup,
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
+    /// Where the world's texel grid falls on the screen, so the resolve can
+    /// weight its blend by **phase** rather than averaging blindly. See
+    /// [`Self::set_grid`].
+    grid: wgpu::Buffer,
 }
 
 impl Offscreen {
+    /// **Where the texel grid sits, in world terms**: the camera's origin in
+    /// cells and its zoom in pixels per cell.
+    ///
+    /// Without it the resolve can only average its neighbours by a fixed
+    /// amount, which softens a pixel sitting dead in the middle of a texel
+    /// exactly as much as one straddling two — a blur rather than
+    /// antialiasing. With it, a pixel whose footprint lies inside one texel
+    /// keeps its own colour and only one that overlaps a neighbour takes any
+    /// of it, in proportion to how much.
+    pub fn set_grid(&self, queue: &wgpu::Queue, origin: (f32, f32), zoom: f32) {
+        let grid = [origin.0, origin.1, zoom, 0.0];
+        queue.write_buffer(&self.grid, 0, bytemuck::cast_slice(&grid));
+    }
+
     fn target(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
         size: (u32, u32),
+        grid: &wgpu::Buffer,
     ) -> (wgpu::TextureView, wgpu::BindGroup) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("world"),
@@ -71,10 +90,13 @@ impl Offscreen {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("resolve"),
             layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry { binding: 1, resource: grid.as_entire_binding() },
+            ],
         });
         (view, bind_group)
     }
@@ -82,19 +104,31 @@ impl Offscreen {
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("resolve"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    // Read with `textureLoad`, so there is no sampler and
-                    // nothing to configure: the four taps are named, not
-                    // filtered for.
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        // Read with `textureLoad`, so there is no sampler and
+                        // nothing to configure: the four taps are named, not
+                        // filtered for.
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let pipeline = crate::render::pipeline::create_pipeline_with(
             device,
@@ -106,12 +140,18 @@ impl Offscreen {
                 ..Default::default()
             },
         );
-        let (view, bind_group) = Self::target(device, &layout, format, size);
-        Self { view, bind_group, layout, pipeline }
+        let grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("resolve grid"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (view, bind_group) = Self::target(device, &layout, format, size, &grid);
+        Self { view, bind_group, layout, pipeline, grid }
     }
 
     fn resize(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) {
-        let (view, bind_group) = Self::target(device, &self.layout, format, size);
+        let (view, bind_group) = Self::target(device, &self.layout, format, size, &self.grid);
         self.view = view;
         self.bind_group = bind_group;
     }

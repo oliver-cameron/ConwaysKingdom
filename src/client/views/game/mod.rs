@@ -321,6 +321,13 @@ impl GameApp {
             self.chunks.coarse_wraps(&self.world),
         );
         gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        // **And where that puts the texel grid on the screen.** The resolve
+        // pass weights its blend by how far a pixel's footprint reaches past
+        // the texel it is centred in, which it cannot know without the camera
+        // — see `render::context::Offscreen::set_grid`. Written beside the
+        // camera it is derived from, so the two cannot describe different
+        // frames.
+        gpu.offscreen.set_grid(&gpu.queue, self.camera.origin(), self.camera.zoom);
     }
 
     fn cell_under_cursor(&self, at: (f64, f64)) -> (i32, i32) {
