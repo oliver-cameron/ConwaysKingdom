@@ -20,6 +20,101 @@ pub struct GpuState {
     /// way the platform expects rather than in raw device pixels.
     pub scale_factor: f32,
     pub window: Arc<Window>,
+    /// **What the world is drawn into**, before the one-pixel filter that puts
+    /// it on the screen — see [`Resolve`] and `shaders/resolve.wgsl`.
+    pub offscreen: Offscreen,
+}
+
+/// The texture the world is drawn into, and the pipeline that resolves it onto
+/// the surface.
+///
+/// A pass of its own rather than filtering in the world shader, because in
+/// screen space there are no tiles: a pixel's neighbour is its neighbour
+/// whether the two came from one cell, two cells or the backdrop, so one rule
+/// covers every edge in the picture. See `shaders/resolve.wgsl`.
+///
+/// The interface is **not** in it. It is drawn in the second pass, onto the
+/// surface, after the resolve — text and panel edges are already exactly where
+/// they should be and filtering them would only soften them.
+pub struct Offscreen {
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl Offscreen {
+    fn target(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) -> (wgpu::TextureView, wgpu::BindGroup) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("world"),
+            size: wgpu::Extent3d {
+                width: size.0.max(1),
+                height: size.1.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // The surface's own format, so the resolve is a filter and not a
+            // conversion: whatever the world shader decided about encoding has
+            // already been decided.
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("resolve"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            }],
+        });
+        (view, bind_group)
+    }
+
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("resolve"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    // Read with `textureLoad`, so there is no sampler and
+                    // nothing to configure: the four taps are named, not
+                    // filtered for.
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline = crate::render::pipeline::create_pipeline_with(
+            device,
+            format,
+            &crate::render::pipeline::PipelineDescriptor {
+                label: "resolve",
+                shader_source: include_str!("shaders/resolve.wgsl"),
+                bind_group_layouts: &[Some(&layout)],
+                ..Default::default()
+            },
+        );
+        let (view, bind_group) = Self::target(device, &layout, format, size);
+        Self { view, bind_group, layout, pipeline }
+    }
+
+    fn resize(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) {
+        let (view, bind_group) = Self::target(device, &self.layout, format, size);
+        self.view = view;
+        self.bind_group = bind_group;
+    }
 }
 
 /// Whether the browser will actually hand over a WebGPU adapter.
@@ -180,6 +275,7 @@ impl GpuState {
         // changed underneath us rather than that the browser cannot do it.
         log::debug!("formats offered: {:?}", surface_caps.formats);
 
+        let offscreen = Offscreen::new(&device, config.format, (width, height));
         Self {
             surface,
             device,
@@ -188,6 +284,7 @@ impl GpuState {
             size: (width, height),
             scale_factor: scale_factor as f32,
             window,
+            offscreen,
         }
     }
 
@@ -210,6 +307,9 @@ impl GpuState {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        // The world is drawn at the screen's own resolution, so the target it
+        // is drawn into follows the screen.
+        self.offscreen.resize(&self.device, self.config.format, self.size);
     }
 }
 
@@ -319,9 +419,9 @@ impl Frame {
             let mut pass = self
                 .encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("frame render pass"),
+                    label: Some("world"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.view,
+                        view: &gpu.offscreen.view,
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
@@ -363,6 +463,39 @@ impl Frame {
                     }
                 }
             }
+        }
+
+        // **The world through the filter, then the interface on top of it.**
+        // Two passes rather than one, and the split is the point: the world is
+        // resolved through a one-pixel box — see `shaders/resolve.wgsl` — and
+        // the interface is not, because text and panel edges are already
+        // exactly where they should be and filtering them would only soften
+        // them.
+        {
+            let mut pass = self
+                .encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("resolve and overlay"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            // Every pixel is written by the triangle below, so
+                            // there is nothing to clear and nothing to load.
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            pass.set_pipeline(&gpu.offscreen.pipeline);
+            pass.set_bind_group(0, &gpu.offscreen.bind_group, &[]);
+            pass.draw(0..3, 0..1);
 
             overlay(&mut self.encoder, &mut pass);
         }

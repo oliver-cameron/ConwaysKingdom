@@ -797,6 +797,24 @@ mod tests {
     /// bracket and validation catches the mistakes anybody actually makes:
     /// assigning to a `let`, a `vec3` where a `vec4` goes, a function called
     /// with the wrong arity.
+    /// The resolve pass compiles too — it is the last thing that touches the
+    /// world and nothing else would notice it failing until a frame was drawn.
+    #[test]
+    fn the_resolve_shader_compiles() {
+        let source = include_str!("shaders/resolve.wgsl");
+        let module = match wgpu::naga::front::wgsl::parse_str(source) {
+            Ok(m) => m,
+            Err(e) => panic!("resolve.wgsl does not parse: {}", e.emit_to_string(source)),
+        };
+        let mut validator = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!("resolve.wgsl does not validate: {}", e.emit_to_string(source));
+        }
+    }
+
     #[test]
     fn the_shader_compiles() {
         let module = match wgpu::naga::front::wgsl::parse_str(SHADER_SOURCE) {

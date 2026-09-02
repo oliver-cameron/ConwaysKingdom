@@ -98,11 +98,13 @@ Written for blue, which is hue. `cnvt` writes it because it is the honest decomp
 
  There was a generator that drew them from ASCII art, in Python because the crate embeds these files with `include_bytes!` and so cannot build until they exist — which rules out a cargo example. It is gone: the art is edited directly now, and a generator that nobody runs is a second definition of the sprites waiting to disagree with the first.
 
-**Nearest sampling and no mip chain** — the art is flat blocks of a few fixed inks and a test asserts it. What smooths an edge is the shader, not the sampler: `point_colour` asks for the four texels around a point and mixes them itself, with a weight that is nought or one away from the line between two texel centres and ramps across within half a screen pixel of it. That is a box filter **exactly one pixel wide**, so a texel stays a flat block and only its edge is soft.
+**Nearest sampling and no mip chain** — the art is flat blocks of a few fixed inks and a test asserts it. The world shader point-samples, and what smooths an edge is a **pass of its own**: the world is drawn into a texture, and `shaders/resolve.wgsl` puts it on the screen through a box filter one pixel across, taking each pixel with the two beside it and the corner between them.
 
-Each of the four taps resolves its own cell, which is the part that matters: a **cell** boundary is a line where two blocks come out of different pictures, and it antialiases by the same arithmetic as a texel boundary with no special case. Doing it in the sampler cannot reach that far, because the sheet is an atlas and a linear tap past a tile's edge blends an unrelated picture.
+**Why a pass and not the world shader.** Three attempts at filtering the content all foundered on the same rock. A sprite lives in an atlas, so a filter that stays inside a tile cannot smooth a *cell* boundary — which is the line the eye follows — and one that crosses tiles has to resolve a different cell per tap. Every arrangement either missed cell edges or ran two filters in a row and blurred. In screen space none of that exists: a pixel's neighbour is its neighbour whether the two came from one cell, two cells or the backdrop, so one rule covers every edge in the picture.
 
-One filter and one only. `MIN_AA` is 1 for that reason: the supersampling loop above averages over the *cells* a pixel covers, which is a different job and only starts once one covers more than one. Stacking the two gave a two-pixel kernel, which is what a blur is.
+**Flat stays flat**, which is the whole of "still pixelated": inside a block of one colour all four taps agree and the average is that colour, so only an edge gets an intermediate pixel — exactly one, because the kernel is one pixel across.
+
+The interface is **not** filtered. It is drawn in the second pass, onto the surface, after the resolve: text and panel edges are already where they should be and softening them would buy nothing.
 
 ## Colour
 

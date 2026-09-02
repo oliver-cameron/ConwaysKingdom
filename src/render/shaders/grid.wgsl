@@ -448,42 +448,14 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
 
 /// The colour of one point, in texels across a chunk.
 ///
-/// **A box filter exactly one pixel wide, and only one of them.**
-///
-/// Two texels meet at a line, and so do two cells — the second is just a line
-/// where the two blocks come out of different pictures. So this asks for the
-/// four texels around the point and mixes them, and every one of them resolves
-/// its own cell: a cell boundary antialiases by the same arithmetic as a texel
-/// boundary, with no special case and nothing clamped off at the edge of a
-/// tile.
-///
-/// The weight is what makes it a *pixel* wide rather than a texel wide. Away
-/// from the midpoint between two texel centres it is nought or one and the
-/// texel is flat — which is what keeps this pixel art — and within half a
-/// screen pixel of that midpoint it ramps across. One screen pixel is
-/// `TILE_N / zoom` texels, which is known rather than measured, so no
-/// derivatives and no trouble with the loop this sits inside.
-///
-/// It replaced a snap that bent the sheet coordinate and let a linear sampler
-/// do the mixing. That could not cross a tile edge — the sheet is an atlas, so
-/// a tap past one blends an unrelated picture — so cell boundaries went back
-/// to the supersample, and the supersample is a second box filter of its own.
-/// Two one-pixel filters in a row is a two-pixel filter, which is what a blur
-/// looks like.
+/// **A point, and nothing around it.** Filtering happens once, in screen
+/// space, after this pass — see `shaders/resolve.wgsl`. Three attempts at
+/// doing it here all foundered on the same rock: the sheet is an atlas, so a
+/// filter that stays inside a tile cannot smooth a *cell* boundary, and one
+/// that crosses tiles has to resolve two cells per tap. In screen space a
+/// pixel's neighbour is its neighbour and none of that exists.
 fn point_colour(local: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
-    // One screen pixel, in texels.
-    let per_pixel = max(f32(TILE_N) / cam.zoom, 1e-4);
-    // Texel centres sit at half-integers in `local`, so shift to put them on
-    // integers: the two bracketing this point are then `floor(t)` and the next.
-    let t = local - 0.5;
-    let base = floor(t);
-    let w = clamp((t - base - 0.5) / per_pixel + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
-
-    let c00 = texel_colour(base + vec2<f32>(0.5, 0.5), layer, n);
-    let c10 = texel_colour(base + vec2<f32>(1.5, 0.5), layer, n);
-    let c01 = texel_colour(base + vec2<f32>(0.5, 1.5), layer, n);
-    let c11 = texel_colour(base + vec2<f32>(1.5, 1.5), layer, n);
-    return mix(mix(c00, c10, w.x), mix(c01, c11, w.x), w.y);
+    return texel_colour(local, layer, n);
 }
 
 /// Where in the chunk texture a sample `offset` cells away from this fragment
