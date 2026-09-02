@@ -17,8 +17,13 @@
 /// cells, and its zoom in pixels per cell.
 struct Grid {
     origin: vec2<f32>,
+    /// Pixels per cell **in the world pass's own terms**, so already multiplied
+    /// by `over`.
     zoom: f32,
-    spare: f32,
+    /// How many samples across one screen pixel the world was drawn at. Two
+    /// normally; one where the target had to fall back to the screen's own
+    /// size — see `render::context::Offscreen::offscreen_size`.
+    over: f32,
 };
 
 @group(0) @binding(0) var world: texture_2d<f32>;
@@ -44,37 +49,27 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     return out;
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let at = vec2<i32>(floor(in.clip.xy));
-    let last = vec2<i32>(textureDimensions(world)) - vec2<i32>(1, 1);
+/// One sample of the world, filtered against its neighbours by phase.
+///
+/// **This is what a single-sample buffer needs and a supersampled one does
+/// not.** With one reading a pixel there is nothing inside the pixel to
+/// average, so the only thing left is to ask how far the pixel's footprint
+/// reaches past the texel it is centred in and take that much of the
+/// neighbour. It is a reconstruction from too little, and it is why the
+/// weighting has to be by phase rather than flat: a quarter of each of four
+/// softens a sample sitting dead in the middle of a texel exactly as much as
+/// one straddling two, and that is a blur.
+fn phased(at: vec2<i32>, last: vec2<i32>, grid_zoom: f32) -> vec4<f32> {
     let here = textureLoad(world, at, 0);
-
-    // **Weighted by where the pixel actually falls, not a flat average.**
-    //
-    // This took a quarter of each of four pixels, which softens a pixel
-    // sitting dead in the middle of a texel exactly as much as one straddling
-    // two — that is a blur, and it is what a blur is. What decides how much a
-    // neighbour is worth is *phase*: how far this pixel's footprint reaches
-    // past the texel it is centred in.
-    //
-    // So: where the pixel's centre sits inside its texel, and how wide the
-    // pixel is in texels.
-    // Guarded, because a zero here is a divide by nought and a screen of
-    // NaN — and the buffer is zero for exactly as long as it takes the first
-    // camera to be written into it.
-    let zoom = max(grid.zoom, 1e-4);
-    // `clip.xy` is in framebuffer pixels with y down, which is what
-    // `vs_main` in grid.wgsl builds its clip position from, so the two agree
-    // on both axes and neither needs flipping.
-    let texels = (grid.origin + in.clip.xy / zoom) * TILE_N;
+    // Guarded, because a zero here is a divide by nought and a screen of NaN —
+    // and the buffer is zero for exactly as long as it takes the first camera
+    // to be written into it.
+    let zoom = max(grid_zoom, 1e-4);
+    let texels = (grid.origin + vec2<f32>(at) / zoom) * TILE_N;
     let f = fract(texels);
     let half = 0.5 * TILE_N / zoom;
 
-    // How much of the footprint spills into the texel before and the one
-    // after. Below one pixel per texel only one of the two can be non-zero,
-    // and a pixel wholly inside a texel spills into neither — which is the
-    // case that has to cost nothing, because it is most of the screen.
+    // How much of the footprint spills into the texel before and the one after.
     let before = max(vec2<f32>(0.0), vec2<f32>(half) - f);
     let after = max(vec2<f32>(0.0), f + half - 1.0);
     // Chosen in floats and converted, rather than as `select(vec2<i32>, ...)`.
@@ -96,4 +91,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let row = mix(here, textureLoad(world, side, 0), w.x);
     let next = mix(textureLoad(world, over, 0), textureLoad(world, corner, 0), w.x);
     return mix(row, next, w.y);
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let last = vec2<i32>(textureDimensions(world)) - vec2<i32>(1, 1);
+    let over = max(i32(grid.over), 1);
+
+    // **The real samples, averaged, which is the only thing here that adds
+    // information rather than rearranging it.**
+    //
+    // The world pass draws at `over` times the screen's size, so each screen
+    // pixel has `over^2` readings of the world underneath it and the honest
+    // answer is their mean. That is what antialiasing is; everything the
+    // resolve did before this was a reconstruction from a single reading,
+    // making the best of a sample that had already thrown the detail away.
+    if over > 1 {
+        let base = vec2<i32>(floor(in.clip.xy)) * over;
+        var sum = vec4<f32>(0.0);
+        for (var y = 0; y < over; y = y + 1) {
+            for (var x = 0; x < over; x = x + 1) {
+                sum = sum + textureLoad(world, clamp(base + vec2<i32>(x, y), vec2<i32>(0), last), 0);
+            }
+        }
+        return sum / f32(over * over);
+    }
+
+    // No room for a larger target on this display, so the old reconstruction
+    // is still the best available — see `phased`.
+    return phased(vec2<i32>(floor(in.clip.xy)), last, grid.zoom);
 }

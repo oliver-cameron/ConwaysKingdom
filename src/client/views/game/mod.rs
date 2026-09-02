@@ -319,6 +319,7 @@ impl GameApp {
             // the fine path is drawing, which the shader never reads.
             self.chunks.coarse_window().unwrap_or(((0, 0), (0, 0))),
             self.chunks.coarse_wraps(&self.world),
+            gpu.offscreen.over(),
         );
         gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
         // **And where that puts the texel grid on the screen.** The resolve
@@ -327,7 +328,14 @@ impl GameApp {
         // — see `render::context::Offscreen::set_grid`. Written beside the
         // camera it is derived from, so the two cannot describe different
         // frames.
-        gpu.offscreen.set_grid(&gpu.queue, self.camera.origin(), self.camera.zoom);
+        // In the world pass's own terms, which is where the resolve is
+        // reading: at twice the size, a texel is twice as many samples across
+        // and a footprint half as wide in them.
+        gpu.offscreen.set_grid(
+            &gpu.queue,
+            self.camera.origin(),
+            self.camera.zoom * gpu.offscreen.over(),
+        );
     }
 
     fn cell_under_cursor(&self, at: (f64, f64)) -> (i32, i32) {

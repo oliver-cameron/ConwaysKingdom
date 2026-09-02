@@ -45,6 +45,8 @@ pub struct Offscreen {
     /// weight its blend by **phase** rather than averaging blindly. See
     /// [`Self::set_grid`].
     grid: wgpu::Buffer,
+    /// Samples across one screen pixel, after the size clamp.
+    over: f32,
 }
 
 impl Offscreen {
@@ -58,8 +60,49 @@ impl Offscreen {
     /// keeps its own colour and only one that overlaps a neighbour takes any
     /// of it, in proportion to how much.
     pub fn set_grid(&self, queue: &wgpu::Queue, origin: (f32, f32), zoom: f32) {
-        let grid = [origin.0, origin.1, zoom, 0.0];
+        let grid = [origin.0, origin.1, zoom, self.over];
         queue.write_buffer(&self.grid, 0, bytemuck::cast_slice(&grid));
+    }
+
+    /// How many samples across one screen pixel the world was drawn at.
+    ///
+    /// One when the target had to fall back to the screen's own size, which is
+    /// a large display against the device's texture limit — see
+    /// [`Self::offscreen_size`]. The resolve reads this and does what it can.
+    pub fn over(&self) -> f32 {
+        self.over
+    }
+
+    /// **How much larger than the screen the world is drawn.**
+    ///
+    /// The world pass takes one sample a pixel, so anything finer than a pixel
+    /// is decided by which side of the sample it happened to fall — and at low
+    /// zoom that is most of the picture. Drawing at twice the width and height
+    /// takes four samples where there was one and lets the resolve average
+    /// them, which is the only thing here that adds information rather than
+    /// rearranging it. `docs/planned.md#texels-nothing-samples` calls this the
+    /// cheap one to try, and it is: the offscreen target already existed and
+    /// this is its size.
+    ///
+    /// Four times the fragment cost of the world pass, which is why it is a
+    /// named number and not a two.
+    pub const SUPERSAMPLE: u32 = 2;
+
+    /// The size of the offscreen target for a given surface.
+    ///
+    /// Clamped, because the product is what gets allocated: a 4K display at two
+    /// is a 7680x4320 texture, and the limit a device guarantees is 8192. Above
+    /// the cap the world is drawn at the screen's own size, which is where it
+    /// was before this existed.
+    fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> (u32, u32) {
+        let most = device.limits().max_texture_dimension_2d;
+        let (w, h) = (size.0.max(1), size.1.max(1));
+        let (big_w, big_h) = (w * Self::SUPERSAMPLE, h * Self::SUPERSAMPLE);
+        if big_w <= most && big_h <= most {
+            (big_w, big_h)
+        } else {
+            (w, h)
+        }
     }
 
     fn target(
@@ -69,13 +112,10 @@ impl Offscreen {
         size: (u32, u32),
         grid: &wgpu::Buffer,
     ) -> (wgpu::TextureView, wgpu::BindGroup) {
+        let (width, height) = Self::offscreen_size(device, size);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("world"),
-            size: wgpu::Extent3d {
-                width: size.0.max(1),
-                height: size.1.max(1),
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -147,13 +187,23 @@ impl Offscreen {
             mapped_at_creation: false,
         });
         let (view, bind_group) = Self::target(device, &layout, format, size, &grid);
-        Self { view, bind_group, layout, pipeline, grid }
+        let over = Self::over_for(device, size);
+        Self { view, bind_group, layout, pipeline, grid, over }
     }
 
     fn resize(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) {
         let (view, bind_group) = Self::target(device, &self.layout, format, size, &self.grid);
         self.view = view;
         self.bind_group = bind_group;
+        // Recomputed, because the clamp depends on the size: a window dragged
+        // onto a 4K display can cross the device's texture limit.
+        self.over = Self::over_for(device, size);
+    }
+
+    /// What the clamp actually left, as a number the shader can use.
+    fn over_for(device: &wgpu::Device, size: (u32, u32)) -> f32 {
+        let (w, _) = Self::offscreen_size(device, size);
+        (w as f32 / size.0.max(1) as f32).max(1.0)
     }
 }
 

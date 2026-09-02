@@ -241,19 +241,29 @@ impl Camera {
     /// uniform is the only thing bound to the fragment stage that has room
     /// for it. `hues` rides here for the same reason and is nobody's business
     /// either: it is who is on whose team, which is the client's.
+    /// `over` is how many times larger than the screen the world is being
+    /// drawn — see [`crate::render::context::Offscreen::SUPERSAMPLE`].
+    ///
+    /// **Both the viewport and the zoom scale by it, and that is why nothing
+    /// else has to.** Clip space is `position * zoom / viewport`, so doubling
+    /// the two leaves every vertex exactly where it was and only the number of
+    /// samples under it changes. The camera is still described in screen
+    /// pixels everywhere else, which is what the pointer and the hover box and
+    /// the visible-cell arithmetic all want.
     pub fn uniform(
         &self,
         encode_srgb: bool,
         hues: &[f32; crate::sim::PlayerId::COUNT],
         coarse: ((i32, i32), (i32, i32)),
         coarse_wraps: bool,
+        over: f32,
     ) -> CameraUniform {
         let (ox, oy) = self.origin();
         let ((row, col), (rows, cols)) = coarse;
         CameraUniform {
             origin: [ox, oy],
-            viewport: [self.viewport.0, self.viewport.1],
-            zoom: self.zoom,
+            viewport: [self.viewport.0 * over, self.viewport.1 * over],
+            zoom: self.zoom * over,
             chunk_n: CHUNK_N as f32,
             encode_srgb: if encode_srgb { 1.0 } else { 0.0 },
             coarse_wraps: if coarse_wraps { 1.0 } else { 0.0 },

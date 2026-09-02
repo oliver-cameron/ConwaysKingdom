@@ -19,7 +19,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
 | [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
 | [A minimap](#a-minimap) | Noted | marching squares over the world, probably in a compute |
-| [Parties](#parties) | Noted | a private set of worlds for one group of players |
+| [Parties](#parties) | Thought about | a private set of worlds for one group of players |
+| [Buttons on a narrow screen](#buttons-on-a-screen-narrower-than-the-hotbar) | Thought about | shrink, wrap, or stop being full width |
 | [Better interfaces](#better-interfaces) | Part built | the home screen is three buttons; the in-game views are still a desktop |
 | [Player profiles](#player-profiles) | Part built | a person rather than a seat; what is left is devices and the name field |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
@@ -842,6 +843,46 @@ Each fix made the defaults better and none of them makes a default right for som
 
 **A way to bind a key the client cannot see.** A browser does not deliver every chord — `ctrl+W` closes the tab and never arrives — so capturing a press has to be able to say "that one does not reach here" rather than recording a binding that will never fire.
 
+## Buttons on a screen narrower than the hotbar
+
+**Thought about, not built.** The question is what a column of full-width
+controls does when the screen is narrower than the thing it is sitting beside,
+and the honest answer is that three of the four candidate answers are wrong for
+a different reason each.
+
+`hotbar::fit` already answers this **for the hotbar** and its rule is the one to
+copy: *shrink before you wrap*. A shorter row of smaller squares reads better
+than two rows of large ones, and a row costs height, which is what is scarce on
+a phone held sideways. It shrinks to a floor of 22 pixels and only then wraps.
+
+For the menu's buttons the same three options give different answers:
+
+**Shrink the text.** Wrong here where it is right for the hotbar, because a
+square is legible at 22 pixels and a word is not legible at 8 points. The
+hotbar's contents are pictures and a menu's are sentences, and the two scale
+differently.
+
+**Two lines.** A button whose label wraps is fine and is what should happen —
+egui will do it if the label is given a wrap mode and the button a min height.
+What it costs is that a column of buttons stops being one height, and the eye
+uses a uniform row height to count a list.
+
+**Vertical, or rather: stop being full width.** The menu is already a column of
+full-width controls, so there is no horizontal arrangement to give up. The thing
+that actually gives is `Metrics::panel_min` at 360 points — below that the panel
+is the screen and the margins are gone.
+
+So the answer is probably **wrap the label and let the row grow**, with the
+floor being that a button is never shorter than `action_height` — and the real
+work is elsewhere: `two_column_min` is consulted in exactly one place today
+(`menu::play`), and the four in-game views have no breakpoint at all. See
+[better interfaces](#better-interfaces), which is where that is written down.
+
+What is worth measuring first: the narrowest screen anybody will actually use is
+about 320 points, `panel_min` is 360, and nothing has ever been drawn at 320.
+Until that is tried, every answer here is a guess about a layout nobody has
+seen.
+
 ## Better interfaces
 
 **Decided.** The menu has had two passes and everything else has had none, so the client now reads as two different products depending on which screen you are on.
@@ -1149,7 +1190,38 @@ if the others are ever in doubt, and worth measuring against, since a cell
 without its art at zoom twelve may read better than a sprite sampled at half
 its detail.
 
-## Something to see when it goes off
+## Something to see when it goes off — thought about
+
+**The hard part is that this renderer has nowhere to put an effect.** Everything
+on screen is a cell: the world pass draws quads out of the chunk texture and the
+interface is egui on top, and there is no layer in between for something that is
+neither. So the question is not what a detonation should look like, it is where
+a thing that is not a cell is allowed to live. Three answers, cheapest first.
+
+**In the cell, on a timer nobody stores.** A blast already leaves a signature —
+a disc of noise whose owner just changed — and `World::generation` is on every
+client. So the shader could brighten cells whose *age* is low inside a region it
+is told about, with the region coming down as one small uniform per recent
+blast. No new pass, no new texture, and it dies out on its own. What it cannot
+do is anything outside a cell: no shockwave crossing empty ground, no light
+spilling onto a neighbour.
+
+**A second instanced quad, in the pass that already exists.** `KIND_COARSE` and
+`KIND_BACKDROP` show the shape: one more `kind` on the instance, a rect in world
+cells, and a fragment arm that draws a ring by distance from the centre. That
+buys a real expanding shockwave over any ground, costs one branch in a shader
+that already has two, and needs the blast list on the client — which it does not
+have, because a detonation is currently invisible on the wire: the client learns
+about it only as cells that changed.
+
+**Which is the actual missing piece.** Whatever it looks like, the client has to
+be *told* a blast happened, where, and how big — and that is a `ServerMessage`
+and a matching thing in the offline path, not a rendering decision. It is also
+what would let the sound, the screen shake and the notice in the corner all
+happen, none of which are rendering either. So: **the message first**, then the
+cheapest visual that uses it, and the ring is the one to try.
+
+The rest of this entry is the older design for what it should look like.
 
 **Designed.** A detonation is currently a generation in which a disc of ground
 quietly becomes different. There is no bang: the cells before and the cells
@@ -1584,24 +1656,56 @@ to be worth a port.
 
 ## Parties
 
-**Noted, not designed.** A party is a group of players with a **private set of
-worlds that only they can see or join** — not one room, a set, so a party is
-somewhere a group of people live rather than a game they are currently in.
+**Thought about.** What follows is the shape and the three things it collides
+with; the numbers and the screens are not decided.
 
-That is deliberately as far as this goes for now. What it will run into, so
-whoever picks it up starts from the right place:
+A party is a group of people with a **private set of worlds only they can see
+or join**. Not one room — a set — so it is somewhere a group *lives* rather
+than a game they are currently in. That distinction is the whole entry: a room
+is a world and is over when it is over, and a party outlives every room in it.
 
-- It is **not** the private room that exists today. A private room is reached
-  by a six-character code, which is a bearer credential — see
-  [invites](#friends-searching-and-inviting-somebody-in-particular). A party
-  is a membership, and membership is a thing a server has to hold.
-- Membership wants a **person**, not a seat. `Rooms::owner` is a `PlayerId`
-  today and has the same problem — see
-  [room ownership](#room-ownership-should-be-keyed-by-person).
-- A set of worlds visible only to a group is a **second listing**, so
-  `ClientMessage::Rooms` grows a notion of who is asking. Today it is answered
-  without a seat, which is exactly what a party listing cannot be.
+### It is a membership, and the server has nothing that holds one
 
+A private room today is reached by a six-character code, which is a **bearer
+credential**: whoever it is forwarded to gets in, and the room cannot tell. That
+is right for reading six characters to somebody sitting next to you and wrong
+for a group that persists — a party somebody left should stop being a party they
+can rejoin, and a code cannot express that.
+
+So a party is a **list of people**, which means `PersonId` and not `PlayerId`.
+A seat is per room and comes back on a reconnect; it means nothing across two
+rooms and nothing at all across a restart. `Rooms::owner` has the same problem
+and the same fix — see
+[room ownership](#room-ownership-should-be-keyed-by-person) — and doing the two
+together is most of the work of either.
+
+### The room list stops being one answer
+
+`ClientMessage::Rooms` is answered **without a seat**, deliberately: you have to
+see the rooms before you can pick one. A party listing cannot be — it is
+answered differently depending on who is asking, which is the first thing on the
+wire that has been. Two ways to take that:
+
+- **A second message.** `Parties` beside `Rooms`, answered only for a
+  connection that has presented a secret. Keeps `Rooms` exactly as it is, which
+  is worth something: it is the one message a client sends before it is anybody.
+- **`Rooms` learns who is asking.** One listing, filtered. Fewer concepts and it
+  makes the seatless answer conditional, which is the property that made it
+  simple.
+
+The first is probably right, and the reason is that a party listing wants
+different *contents* rather than a subset — who is in the party, who is online,
+which of its worlds are running — so it is a different answer and not a filtered
+one.
+
+### What it must not become
+
+An account system. There are no accounts here on purpose — no email, no
+password, no way to contact anybody — and a party is the first feature that
+would want one, because "invite Alice" needs a durable name for Alice.
+[Identity is a keypair](#identity-is-a-keypair-and-today-it-is-not) is the
+honest way to get that and it is the entry this waits on; anything else invents
+a login.
 
 ## A minimap
 

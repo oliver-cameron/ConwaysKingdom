@@ -927,12 +927,25 @@ impl Views {
             }
             WindowEvent::ModifiersChanged(state) => {
                 let s = state.state();
+                // **`command` is the platform's shortcut key, not control.**
+                //
+                // egui routes every text-editing shortcut off `command` —
+                // select-all, copy, cut, paste, undo. Wired to control alone, a
+                // Mac gets none of them: cmd+A selects nothing and cmd+C copies
+                // nothing, while control+A, which on macOS means "go to the
+                // start of the line", selects everything instead. That is the
+                // whole of highlighting not behaving the way it does in a
+                // browser — the modifier the platform actually uses was never
+                // reported. [`on_a_mac`] already existed for the key list and
+                // answers this too, including in a browser, where the build's
+                // own `target_os` says `unknown` for everybody.
+                let mac = on_a_mac();
                 self.modifiers = egui::Modifiers {
                     alt: s.alt_key(),
                     ctrl: s.control_key(),
                     shift: s.shift_key(),
-                    mac_cmd: false,
-                    command: s.control_key(),
+                    mac_cmd: mac && s.super_key(),
+                    command: if mac { s.super_key() } else { s.control_key() },
                 };
                 false
             }

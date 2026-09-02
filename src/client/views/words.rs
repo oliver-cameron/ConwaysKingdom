@@ -130,29 +130,29 @@ pub mod menu {
         pub const RULES: &[(&str, &str)] = &[
             (
                 "You can only build where your influence already reaches.",
-                "This is the first thing anybody runs into, and a refused click does not                  explain it. Territory is a field with sources: the patch you are granted                  is a spring that never runs dry, and your live cells feed it too. So you                  grow ground by growing life outward from what you have — not by clicking                  further away.",
+                "This is the first thing anybody runs into, and a refused click does not explain it. Territory is a field with sources: the patch you are granted is a spring that never runs dry, and your live cells feed it too. So you grow ground by growing life outward from what you have — not by clicking further away.",
             ),
             (
                 "A mine pays when it turns over, not when you own it.",
-                "The opposite of what owning a lot of mines suggests. A block of mines is                  a still life: it never gives birth, so it never pays anything at all. An                  oscillator earns every period and a gun earns forever. This one rule                  decides whether your economy works.",
+                "The opposite of what owning a lot of mines suggests. A block of mines is a still life: it never gives birth, so it never pays anything at all. An oscillator earns every period and a gun earns forever. This one rule decides whether your economy works.",
             ),
             (
                 "A turret is the other way round, so place it in fours.",
-                "It works by standing still, and one on its own dies of loneliness in a                  generation. The block that is a mine's worst shape is a turret's best —                  four cells is the cheapest thing in Conway that never dies and never                  gives birth.",
+                "It works by standing still, and one on its own dies of loneliness in a generation. The block that is a mine's worst shape is a turret's best — four cells is the cheapest thing in Conway that never dies and never gives birth.",
             ),
             (
                 "Ice cannot be taken back.",
-                "It stops time over whatever it covers, and only life reaching it breaks                  it. A pane put down in the wrong place is a decision you live with, so                  it is worth thinking about before you spend on one.",
+                "It stops time over whatever it covers, and only life reaching it breaks it. A pane put down in the wrong place is a decision you live with, so it is worth thinking about before you spend on one.",
             ),
             (
                 "A payload takes ground; it does not just make a mess.",
-                "It burns down on a fuse you can watch — the last warning sprite is on                  screen for exactly one generation — and then scrambles a disc. What comes                  up alive is yours and what does not belongs to nobody, so a bomb breaks a                  country apart and leaves you some of the pieces. Ice stops the fuse, and                  a payload has to stay alive to go off at all.",
+                "It burns down on a fuse you can watch — the last warning sprite is on screen for exactly one generation — and then scrambles a disc. What comes up alive is yours and what does not belongs to nobody, so a bomb breaks a country apart and leaves you some of the pieces. Ice stops the fuse, and a payload has to stay alive to go off at all.",
             ),
         ];
 
         pub const TIP_TITLE: &str = "Other people's patterns work here.";
         pub const TIP: &str =
-            "Life is exactly B3/S23 — an R-pentomino settles at generation 1103 with 116              cells, which is the figure in every book. So a glider is a glider, a gun is a              gun, and fifty years of published patterns are things you can build here and              expect to behave.";
+            "Life is exactly B3/S23 — an R-pentomino settles at generation 1103 with 116 cells, which is the figure in every book. So a glider is a glider, a gun is a gun, and fifty years of published patterns are things you can build here and expect to behave.";
     }
 
     /// **A word about Conway, at the end.**
@@ -984,5 +984,43 @@ pub mod refused {
 
     pub fn cannot_afford(cells: usize, costs: i32, have: i32) -> String {
         format!("{cells} cells costs {costs}, you have {have}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// **No paragraph carries the gap its source was wrapped at.**
+    ///
+    /// A long literal written across several lines *without* a trailing
+    /// backslash keeps every line's indentation, so each sentence arrives with
+    /// a run of spaces in the middle of it — which renders as a gap every
+    /// seventy characters or so and made the how-to page look shattered.
+    /// Nothing reads a string and everything renders one, so it went unnoticed.
+    ///
+    /// Only the prose is checked. A run of spaces is deliberate elsewhere: a
+    /// middot separator is set with one either side, which is what typography
+    /// asks for and is why this is not a rule about the whole file.
+    #[test]
+    fn no_paragraph_carries_the_gap_it_was_wrapped_at() {
+        let mut prose: Vec<&str> = vec![
+            super::menu::howto::NOTE,
+            super::menu::howto::TIP,
+            super::menu::howto::TIP_TITLE,
+            super::menu::conway::TITLE,
+            super::menu::conway::BODY,
+        ];
+        for (heading, body) in super::menu::howto::RULES {
+            prose.push(heading);
+            prose.push(body);
+        }
+        for (name, what, url) in super::menu::conway::WORK {
+            prose.push(name);
+            prose.push(what);
+            prose.push(url);
+        }
+        for line in prose {
+            assert!(!line.contains("  "), "a run of spaces in {line:?}");
+            assert!(!line.contains('\n'), "a newline in {line:?}");
+        }
     }
 }

@@ -85,16 +85,30 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // **Your own name on your own button.** The account page is about you, and
     // a label saying who you are is worth more than one naming a category.
     // Falls back to the category before anybody has typed a name.
-    let mine = menu.name.trim();
-    let account = if mine.is_empty() { words::home::ACCOUNT.to_string() } else { mine.to_string() };
-    if crate::client::views::wide(
+    let typed = menu.name.trim();
+    let account =
+        if typed.is_empty() { words::home::ACCOUNT.to_string() } else { typed.to_string() };
+    let button = crate::client::views::wide(
         ui,
-        egui::RichText::new(account).size(m.text_body).color(p.text),
+        egui::RichText::new(format!("        {account}")).size(m.text_body).color(p.text),
         m.action_height,
         p.surface,
-    )
-    .clicked()
-    {
+    );
+    // **Your face on your own button.** Painted over the label's leading space
+    // rather than made an image atom, because the face is drawn rather than
+    // loaded — there is no texture to hand egui, only eight by eight squares.
+    let side = m.action_height * 0.55;
+    let at = egui::Rect::from_center_size(
+        egui::pos2(button.rect.left() + m.panel_padding + side * 0.5, button.rect.center().y),
+        egui::vec2(side, side),
+    );
+    match &menu.whoami {
+        Some(who) => crate::client::views::face::show(ui.painter(), at, who),
+        None => {
+            crate::client::views::face::show_placeholder(ui.painter(), at, &menu.name, p.text_dim)
+        }
+    }
+    if button.clicked() {
         menu.page = Page::Account;
     }
     ui.add_space(m.item_spacing);
