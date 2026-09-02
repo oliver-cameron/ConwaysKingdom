@@ -123,6 +123,9 @@ mod tests {
             ClientMessage::StepOnce,
             ClientMessage::Wipe,
             ClientMessage::Profile { who: crate::net::PersonId("3f2a91c4".into()) },
+            ClientMessage::People { like: "ali".into() },
+            // The leaderboard, which is this with nothing asked.
+            ClientMessage::People { like: String::new() },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -258,6 +261,19 @@ mod tests {
             })),
             // Somebody this server has never met, which is a real answer.
             ServerMessage::Profile(None),
+            ServerMessage::People {
+                like: "ali".into(),
+                found: vec![crate::net::Profile {
+                    who: crate::net::PersonId("3f2a91c4".into()),
+                    name: "alice".into(),
+                    rating: 1240,
+                    provisional: false,
+                    games: 9,
+                    history: vec![1200, 1220, 1240],
+                    best: 512,
+                }],
+            },
+            ServerMessage::People { like: String::new(), found: Vec::new() },
             ServerMessage::Rules(crate::net::Rules {
                 paused: false,
                 place_anywhere: true,

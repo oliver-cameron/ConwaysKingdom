@@ -1157,7 +1157,7 @@ impl Server {
             ClientMessage::Leave => Vec::new(),
             // And by `Rooms`, which holds the table. A room is one world on a
             // server and a person outlives every one of them.
-            ClientMessage::Profile { .. } => Vec::new(),
+            ClientMessage::Profile { .. } | ClientMessage::People { .. } => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::JoinTeam { team } => {

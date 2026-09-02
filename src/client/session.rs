@@ -102,6 +102,8 @@ pub enum Effect {
     Rated,
     /// Somebody's profile arrived, into whatever asked for it.
     LookedUp,
+    /// A list of who else plays here arrived, into whatever asked for it.
+    FoundPeople,
     /// The server would not have us, and this is why. The link is kept and its
     /// room list asked for again, so the next choice is a click.
     Refused(String),
@@ -200,6 +202,10 @@ pub struct Session {
     /// Somebody else's profile, once it has been asked for. Whose is on it, so
     /// a slow answer cannot be shown against the wrong name.
     pub looked_up: Option<crate::net::Profile>,
+    /// Who else plays here, once it has been asked, with the query that
+    /// produced it — so a reply to a prefix the box no longer holds is
+    /// dropped rather than shown. `None` until the first ask.
+    pub people: Option<(String, Vec<crate::net::Profile>)>,
     /// Which room the server put us in, once it has said.
     ///
     /// Taken from the `Welcome` rather than from what was asked for: a client
@@ -280,6 +286,7 @@ impl Session {
             profile: None,
             rating_change: None,
             looked_up: None,
+            people: None,
             room: None,
             room_name: None,
             lobby: None,
@@ -334,6 +341,17 @@ impl Session {
     pub fn look_up(&mut self, who: crate::net::PersonId) {
         self.looked_up = None;
         self.tell(ClientMessage::Profile { who });
+    }
+
+    /// Ask who else plays here. An empty `like` asks for the best rated, which
+    /// is the leaderboard. The answer is an [`Effect::FoundPeople`].
+    ///
+    /// **What was asked is not cleared.** A search box is retyped a character
+    /// at a time and every keystroke asks again, so blanking the list on each
+    /// one makes it flicker; the previous answer stays up, slightly stale, and
+    /// is replaced when the new one lands.
+    pub fn find_people(&mut self, like: &str) {
+        self.tell(ClientMessage::People { like: like.to_string() });
     }
 
     /// Whether this room is a match that has not started.
@@ -743,6 +761,15 @@ impl Session {
                 // and the spawn in our `Welcome` was worked out before any of
                 // it existed — it is stale by the time it matters, which is
                 // why this used to need a reload.
+                // **Only if it still answers what is being asked.** Replies
+                // arrive in the order the server sent them and the box has
+                // moved on since; one that overwrote the list would show
+                // results for a prefix that is no longer there.
+                ServerMessage::People { like, found } => {
+                    log::debug!("{} people like {like:?}", found.len());
+                    self.people = Some((like, found));
+                    effects.push(Effect::FoundPeople);
+                }
                 ServerMessage::Spawned { player, at } => {
                     if Some(player) == self.plays_as {
                         log::info!("granted ground at {at:?}");

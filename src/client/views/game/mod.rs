@@ -1237,7 +1237,9 @@ impl GameApp {
             // built if we are looking at it.
             // Into the panel that is already open on them: it went up on the
             // click, so this fills it rather than putting it there.
-            Effect::LookedUp => {}
+            // Both land on `session`, which is what the frame reads them
+            // from, so there is nothing for the client to carry across.
+            Effect::LookedUp | Effect::FoundPeople => {}
             Effect::Rated => {
                 let now = self.session.rating();
                 if let Screen::Menu(m) = &mut self.ui.screen {

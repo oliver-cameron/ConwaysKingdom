@@ -445,6 +445,15 @@ impl Rooms {
         if let ClientMessage::Profile { who } = &msg {
             return vec![ServerMessage::Profile(self.profile_of(who))];
         }
+        // Answered without a seat for the same reason `Profile` is, and one
+        // more: this is how somebody finds a person to look up in the first
+        // place, and the menu is where they are standing when they do.
+        if let ClientMessage::People { like } = &msg {
+            return vec![ServerMessage::People {
+                like: like.clone(),
+                found: self.people_like(like),
+            }];
+        }
         // Admitted at any generation, and that is the point rather than an
         // oversight: **no late joining is a rule about players.** Somebody
         // turning up at generation four hundred is exactly what watching is
@@ -787,6 +796,20 @@ impl Rooms {
             history: row.history.clone(),
             best: row.best,
         })
+    }
+
+    /// The people this server can vouch for whose name matches, or the best
+    /// rated when nothing is asked.
+    ///
+    /// Only people it has actually **met** — `people.knows` is the same gate
+    /// `profile_of` uses, so a fingerprint that reached the ratings table
+    /// without ever joining cannot appear here either.
+    pub fn people_like(&self, like: &str) -> Vec<crate::net::Profile> {
+        self.profiles
+            .search(like, crate::net::PEOPLE_MOST)
+            .into_iter()
+            .filter_map(|who| self.profile_of(&who))
+            .collect()
     }
 
     pub fn rating_of(&self, who: &crate::net::PersonId) -> i32 {
@@ -1929,6 +1952,21 @@ mod tests {
         let out = rooms.handle(&Caller::new(3), join(Some(Secret::new().unwrap())));
         let [ServerMessage::Welcome { profile, .. }] = &out[..] else { panic!("{out:?}") };
         assert_ne!(profile.as_ref().map(|p| &p.who), Some(&first), "two secrets were one person");
+
+        // And so is who else plays here, for the same reason and one more:
+        // this is how you find a person to look up in the first place, and the
+        // menu is where you are standing when you do.
+        let asked = rooms.handle(&Caller::nobody(), ClientMessage::People { like: "ali".into() });
+        let [ServerMessage::People { like, found }] = &asked[..] else { panic!("{asked:?}") };
+        assert_eq!(like, "ali", "the query comes back, so a stale answer can be dropped");
+        assert!(found.iter().any(|p| p.who == first), "alice is not in a search for ali");
+        assert!(found.iter().all(|p| p.name.to_lowercase().contains("ali")));
+
+        // Nobody the server has never met, however the ratings table got their
+        // fingerprint into it.
+        let asked = rooms.handle(&Caller::nobody(), ClientMessage::People { like: "zzz".into() });
+        let [ServerMessage::People { found, .. }] = &asked[..] else { panic!("{asked:?}") };
+        assert!(found.is_empty(), "found somebody who is not here: {found:?}");
 
         // And what a server says about somebody is answerable from outside
         // every room, because that is where it is looked at from.

@@ -180,6 +180,49 @@ impl Profiles {
     /// A name and nothing else: everything else on a [`Record`] is counted
     /// from results, and taking any of it from a client would be taking a
     /// player's word for what a server is supposed to vouch for.
+    /// **Who else plays here**: the people whose name matches, or the best
+    /// rated when nothing is asked.
+    ///
+    /// One function for both because they are one question asked two ways, and
+    /// two would drift — the leaderboard is this list with an empty query.
+    ///
+    /// **A name is self-chosen**, so a search that matched only names would
+    /// let anybody put themselves in a list under somebody else's name. The
+    /// fingerprint travels on every row — `net::Profile::who`, which
+    /// `net::Seat::label` already prints beside a name — and it is the row's
+    /// identity; the name is a label on it.
+    ///
+    /// **Provisional players are left off the leaderboard and are still
+    /// findable.** A rating from one game is mostly the starting rating, so a
+    /// table of them is a table of luck; but somebody looking for a person by
+    /// name wants that person whether or not the server is sure about them
+    /// yet. See [`Record::provisional`].
+    ///
+    /// Sorted by rating, then by name, then by fingerprint — all three,
+    /// because a `HashMap` has no order of its own and a list that reshuffled
+    /// between two identical questions would look broken.
+    pub fn search(&self, like: &str, most: usize) -> Vec<PersonId> {
+        let needle = like.trim().to_lowercase();
+        let mut found: Vec<(&PersonId, &Record)> = self
+            .known
+            .iter()
+            .filter(|(_, row)| {
+                if needle.is_empty() {
+                    !row.provisional()
+                } else {
+                    row.name.to_lowercase().contains(&needle)
+                }
+            })
+            .collect();
+        found.sort_by(|(a_who, a), (b_who, b)| {
+            b.rating()
+                .cmp(&a.rating())
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a_who.cmp(b_who))
+        });
+        found.into_iter().take(most).map(|(who, _)| who.clone()).collect()
+    }
+
     pub fn met(&mut self, who: &PersonId, name: &str) {
         let row = self.known.entry(who.clone()).or_default();
         if row.name != name {
@@ -305,6 +348,92 @@ mod tests {
 
     fn who(n: &str) -> PersonId {
         PersonId(format!("{n}{}", "0".repeat(64 - n.len())))
+    }
+
+    /// A person the server has rated and settled enough to be sure about, so
+    /// they are off the provisional list and on the leaderboard.
+    fn rated(store: &mut Profiles, name: &str, rating: i32) {
+        store.met(&who(name), name);
+        let row = store.known.get_mut(&who(name)).expect("just met");
+        row.rating = Some(rating);
+        row.games = rating::PROVISIONAL_AFTER;
+    }
+
+    /// **A search matches the name and the row carries the fingerprint**, and
+    /// the second half is what stops the first being an impersonation: a name
+    /// is self-chosen, so two people may both be `alice` and the list has to
+    /// let you tell them apart.
+    #[test]
+    fn a_search_finds_both_alices_and_keeps_them_apart() {
+        let mut store = Profiles::new();
+        rated(&mut store, "alice", 1300);
+        rated(&mut store, "alicia", 1100);
+        rated(&mut store, "bob", 1400);
+
+        let found = store.search("ali", 25);
+        assert_eq!(found.len(), 2, "bob is not an alice");
+        assert_eq!(found[0], who("alice"), "the higher rated comes first");
+        assert_eq!(found[1], who("alicia"));
+        assert_ne!(found[0], found[1], "two rows, two fingerprints");
+    }
+
+    /// Case folded, because a name is typed by a person looking for somebody
+    /// and not by one reciting a key.
+    #[test]
+    fn a_search_does_not_care_about_case() {
+        let mut store = Profiles::new();
+        rated(&mut store, "Alice", 1300);
+        assert_eq!(store.search("ALI", 25), vec![who("Alice")]);
+        assert_eq!(store.search("  alice  ", 25), vec![who("Alice")]);
+    }
+
+    /// **Nothing asked is the leaderboard**, which is the same list ordered by
+    /// rating — one question, so the two cannot come to disagree.
+    #[test]
+    fn an_empty_search_is_the_leaderboard() {
+        let mut store = Profiles::new();
+        rated(&mut store, "cheap", 900);
+        rated(&mut store, "best", 1600);
+        rated(&mut store, "middling", 1200);
+        let board = store.search("", 25);
+        assert_eq!(board, vec![who("best"), who("middling"), who("cheap")]);
+    }
+
+    /// **A rating from one game is mostly the starting rating**, so a table of
+    /// provisional players is a table of luck. They stay findable by name,
+    /// because somebody looking for a person wants that person whether or not
+    /// the server is sure about them yet.
+    #[test]
+    fn the_leaderboard_leaves_off_the_provisional_and_the_search_does_not() {
+        let mut store = Profiles::new();
+        rated(&mut store, "settled", 1300);
+        store.met(&who("newcomer"), "newcomer");
+        store.known.get_mut(&who("newcomer")).expect("just met").rating = Some(9999);
+
+        assert_eq!(store.search("", 25), vec![who("settled")], "luck topped the board");
+        assert_eq!(store.search("newcomer", 25), vec![who("newcomer")], "and is unfindable");
+    }
+
+    /// **Capped, so this is not a way to read out everybody a server has met.**
+    #[test]
+    fn a_search_answers_no_more_than_it_is_asked_for() {
+        let mut store = Profiles::new();
+        for i in 0..40 {
+            rated(&mut store, &format!("p{i:02}"), 1000 + i as i32);
+        }
+        assert_eq!(store.search("", crate::net::PEOPLE_MOST).len(), crate::net::PEOPLE_MOST);
+        assert_eq!(store.search("p", crate::net::PEOPLE_MOST).len(), crate::net::PEOPLE_MOST);
+    }
+
+    /// A `HashMap` has no order of its own, so two identical questions have to
+    /// be broken to the same answer or the list reshuffles under the reader.
+    #[test]
+    fn two_identical_searches_answer_identically() {
+        let mut store = Profiles::new();
+        for i in 0..12 {
+            rated(&mut store, &format!("same{i:02}"), 1200);
+        }
+        assert_eq!(store.search("same", 25), store.search("same", 25));
     }
 
     fn solo(name: &str, team: u8, score: usize) -> Finisher {

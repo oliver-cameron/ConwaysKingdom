@@ -820,6 +820,17 @@ pub enum ClientMessage {
     /// reason: a profile is looked at from a lobby, from a standings bar, and
     /// from a menu, and only one of those is inside a room.
     Profile { who: PersonId },
+    /// **Who else plays here.** Names this server has met, filtered by `like`,
+    /// with an empty `like` answering the best rated — which is the
+    /// leaderboard, and is why it is one message rather than two.
+    ///
+    /// Answerable **without a seat**, like [`Self::Rooms`] and
+    /// [`Self::Profile`] and for the same reason: you look somebody up from a
+    /// menu as often as from a lobby.
+    ///
+    /// It must not become a way to enumerate everybody a server has met, so
+    /// the answer is capped at [`PEOPLE_MOST`] either way.
+    People { like: String },
     /// Watch a room without taking a seat in it.
     ///
     /// A spectator is a connection with a room and no `PlayerId`, not a player
@@ -1013,6 +1024,17 @@ pub enum ServerMessage {
     /// The answer to [`ClientMessage::Profile`]. `None` is somebody this
     /// server has never met, which is a real answer and not a failure.
     Profile(Option<Profile>),
+    /// The answer to [`ClientMessage::People`], with the query that produced
+    /// it.
+    ///
+    /// **The query comes back** so a client can drop an answer to something it
+    /// no longer asks. A search box moves faster than a round trip, so replies
+    /// arrive out of order with respect to typing, and one that overwrote the
+    /// list would show results for a prefix the box no longer holds.
+    People {
+        like: String,
+        found: Vec<Profile>,
+    },
     /// Somebody's rating here, and what the match just finished moved it by.
     /// Broadcast, because a result is a comparison and the interesting half is
     /// what happened to everybody else.
@@ -1075,6 +1097,13 @@ pub enum ServerMessage {
 /// owned nothing could do nothing at all. The grant is what makes that wall
 /// safe: a patch that never decays, with a live gradient around it, so there
 /// is always somewhere to build. It is also the seed the rest spreads from.
+/// How many people one [`ClientMessage::People`] may answer with.
+///
+/// A cap and not a page: what this is for is finding somebody and seeing who
+/// is at the top, and neither wants paging. It is also the whole of what keeps
+/// the message from being a way to read out everybody a server has ever met.
+pub const PEOPLE_MOST: usize = 25;
+
 pub const SPAWN_N: i32 = 12;
 
 /// How much of `player`'s influence reaches this square, nought to
