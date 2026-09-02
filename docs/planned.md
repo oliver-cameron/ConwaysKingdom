@@ -18,6 +18,8 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 |---|---|---|
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
 | [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
+| [A minimap](#a-minimap) | Noted | marching squares over the world, probably in a compute |
+| [Parties](#parties) | Noted | a private set of worlds for one group of players |
 | [Player profiles](#player-profiles) | Part built | a person rather than a seat; what is left is devices and the name field |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
@@ -426,11 +428,77 @@ It is that **two simulations must agree exactly.** The server steps on the CPU a
 
 Which suggests the shape: `examples/headless` already runs the simulation with no GPU, so the test is a world stepped both ways for a few hundred generations with the digests compared every step — the same comparison `examples/two` already makes between two peers.
 
-### What it buys, and when
+### What it buys, and when — the size has now been run
 
-Nothing yet. The world steps four times a second and a chunk is 256 cells; the server's cost is linear in *resident* chunks and the client only holds its viewport. This is worth doing when a room holds a world big enough that a quarter-second is not enough to step it, and that is a size nobody has run.
+This said the door opens when a room is big enough that a quarter-second is not
+enough to step it, "and that is a size nobody has run". `examples/frametime`
+runs it:
 
-The cheap thing to do now is not to close the door: `Rgba8Uint` is a format constant and a fourth byte on the cell, and it is the difference between swapping a constant and rewriting the storage layer.
+```
+     world   chunks      cells    ms/step  of 250ms
+       4x4       16       4096       0.17      0.1%
+     12x12      144      36864       1.55      0.6%
+     24x24      576     147456       6.25      2.5%
+     48x48     2304     589824      25.26     10.1%
+```
+
+Linear at about eleven nanoseconds a cell, so the largest torus the server will
+allocate — 16384 chunks, 4.2 million cells — is roughly **180 ms against a
+250 ms generation**. Seventy percent of the budget on one core, with the
+sockets, the standings and the checkpoints still to pay for. The door is
+reached rather than hypothetical, and the ceiling `docs/README.md` asserts is
+this number.
+
+### The server wants this and the client mostly does not
+
+Worth separating, because they are not one problem.
+
+**The server steps whole worlds.** Every resident chunk, every generation,
+whether or not anybody is looking at it — so its cost is the number above and
+it is the one that runs out.
+
+**A client steps only what it predicts**, which is its subscription and so its
+viewport. That is a few dozen chunks, which is microseconds, and it is not what
+makes a client's frame slow: `update` and the coarse texture are. A client also
+already has the GPU busy drawing the thing, so moving the simulation onto it
+competes with the frame rather than freeing it.
+
+So the case is **server-side**, which collides with
+[Cloudflare](#cloudflare-and-which-half-of-this-fits): a Durable Object has no
+GPU at all, and neither does the cheapest container anywhere. A GPU step is a
+reason to run the server on a machine chosen for it, and that is a deployment
+decision rather than a rendering one.
+
+### Which means the CPU path stays canonical
+
+Not a fallback — **canonical**. WebGL2 has no compute at all and a browser
+falls back to it whenever WebGPU is unavailable, so a client that cannot
+compute must still predict correctly. The GPU step is therefore an
+*acceleration that must be bit-identical*, and the test is the one the entry
+above already describes: a world stepped both ways with the digests compared
+every generation, which is what `examples/two` already does between two peers.
+
+### The storage layer is the part to change first
+
+The halo is the real obstacle and it is already a known one. Every rule is a
+function of a cell and its eight neighbours, and the world lives on the GPU as
+**one array layer per chunk** — so a cell on a chunk edge cannot reach the
+layer its neighbour is in. That is exactly why `render::chunks::neighbours`
+computes the outline mask on the CPU on the way to the GPU rather than in the
+shader.
+
+A compute step has the same problem and cannot solve it the same way, because
+the halo is the input to the rule rather than a decoration on the output. Which
+points at the change: for compute, the world wants to be **one large 2D
+texture** with chunks tiled into it, so a neighbour is `textureLoad` at an
+offset and the workgroup can stage a tile plus its border into shared memory —
+the standard shape for a stencil kernel, and the reason it is standard.
+
+That is a bigger change than a format constant, and it is the same change
+`CoarseTexture` already makes for its own purposes: one 2D texture holding a
+window on the world, addressed by cell. So the cheap thing to do now is still
+not to close the door — `Rgba8Uint` rather than `Rg8Uint`, and a fourth byte on
+the cell — but the thing to *design* first is the storage, not the shader.
 
 ## Making rooms from the client
 
@@ -967,14 +1035,61 @@ each 2×2 group, on top of the phase weighting it already does. Four times the
 fragment cost, no change to the art, no atlas problem, and it composes with
 what is there rather than replacing it. This is the first thing to do.
 
-**Reduced tiles, drawn once, which is the principled one.** The sheet has two
-hundred and forty free tiles, and a kind's four states at half, quarter and
-eighth size are twelve of them. Mipmapping by hand, with the atlas problem
-solved by construction: each reduced tile is a tile, so nothing bleeds. Pick by
-zoom and cross-fade between two levels, or the switch pops the way the coarse
-path does. It also gives the art a say — a mine at four texels can be *drawn*
-as something legible rather than averaged into a grey smudge, which is what
-every pixel-art game with a zoom does.
+**Reduced tiles, drawn once, which is the principled one — and they fit in the
+sheet that is already there.** Mipmapping by hand, with the atlas problem
+solved by construction: each reduced tile is a whole tile, so nothing bleeds
+across a boundary the way a real mip level would. It also gives the art a say,
+which is the part no amount of filtering buys — a mine at four texels can be
+*drawn* as something legible rather than averaged into a grey smudge, which is
+what every pixel-art game with a zoom does.
+
+The layout is the neat bit, and it needs no second texture and no second
+binding. **Give the next level down a quadrant.** The sheet is 256 texels
+square holding tiles of 16; a half-size tile is 8 texels, so all 256 of them
+fit in 128×128 — one quadrant of the sheet exactly. The level after that is 4
+texels, 256 of them in 64×64, a quadrant of that quadrant. So each level is the
+next power of two down, in the corner, and the address is arithmetic on the
+level: a shift on the tile size and a fixed offset, which is the same kind of
+sum `sprite_index` already is.
+
+What it costs is **kinds**. The bottom-right quadrant is rows 8-15 and columns
+8-15, which the tile arithmetic reads as kinds 6 and 7 at every age and state —
+so reserving it spends two of the three kind indices still free.
+[Depleted mines](#depleted-mines) wants a fourth kind, which leaves one spare
+after this rather than three. That is the trade and it should be made
+deliberately: a kind is a mechanic and a level is a zoom band, and there are
+currently three of one and none of the other.
+
+### Nothing is allowed to be disjoint, so the levels overlap
+
+The switch between two levels is the part that will look wrong if it is a
+threshold, and the coarse path already demonstrates it: `COARSE_BELOW` and
+`FINE_ABOVE` give the swap hysteresis so it cannot flicker, and hysteresis
+stops the flicker without stopping the **pop**. Two levels that meet at a line
+are two pictures meeting at a line.
+
+So the rule for every boundary, this one included: **hold the level you are on
+and fade the next one in over it.** Near a switch, sample the level above at
+twice its rate — two taps, which is what makes it line up with the finer level
+rather than sitting a half-texel off it — and blend towards the finer picture
+across the band rather than at a point. The band is a range of zoom, not an
+instant, so nothing is ever a hard cut between two ways of drawing the same
+cell.
+
+That costs two samples in the band and one everywhere else, which is the right
+shape: the band is a slice of the zoom range and the rest of it pays nothing.
+It applies to the coarse-to-fine swap that exists today as much as to the
+reduced tiles that do not, and doing it there first is the cheaper way to find
+out whether the blend reads correctly.
+
+**And there is a floor.** `camera::ZOOM_RANGE` stops at one pixel a cell.
+Below that a cell is smaller than the thing drawing it and no filter downstream
+can put it back — the level of detail has to keep going instead, which is what
+this entry is for.
+
+Last: **the reduced art has to be drawn**, which is the whole point and is not
+free. This is the one entry on the list whose cost is mostly somebody drawing
+rather than somebody typing.
 
 **Or raise the coarse path to meet it.** `COARSE_BELOW` at sixteen removes the
 band entirely by never drawing sprites into it. Honest, one line, and it loses
@@ -1414,3 +1529,58 @@ Durable Objects looked at only if per-room isolation or scale-to-zero turns out
 to be worth a port.
 
 [networking.md]: networking.md#the-server-is-the-clock
+
+
+## Parties
+
+**Noted, not designed.** A party is a group of players with a **private set of
+worlds that only they can see or join** — not one room, a set, so a party is
+somewhere a group of people live rather than a game they are currently in.
+
+That is deliberately as far as this goes for now. What it will run into, so
+whoever picks it up starts from the right place:
+
+- It is **not** the private room that exists today. A private room is reached
+  by a six-character code, which is a bearer credential — see
+  [invites](#friends-searching-and-inviting-somebody-in-particular). A party
+  is a membership, and membership is a thing a server has to hold.
+- Membership wants a **person**, not a seat. `Rooms::owner` is a `PlayerId`
+  today and has the same problem — see
+  [room ownership](#room-ownership-should-be-keyed-by-person).
+- A set of worlds visible only to a group is a **second listing**, so
+  `ClientMessage::Rooms` grows a notion of who is asking. Today it is answered
+  without a seat, which is exactly what a party listing cannot be.
+
+
+## A minimap
+
+**Noted, not designed.** Not a scaled-down picture of the board — a picture of
+**where the territory is**, which is a different question and has a much better
+answer. Trace the outlines of who holds what with **marching squares** and draw
+the borders, so a glance says where everybody's country is and where it meets.
+
+Two reasons it is worth doing that way rather than by shrinking the world:
+
+- Territory is exactly what marching squares is for. The input is a scalar per
+  cell — here, whether a square belongs to a given player — and the output is a
+  set of contours, which is a *border*. Shrinking a picture of the cells gives
+  a smudge at minimap size; a contour stays a line however small it is drawn.
+- It is the one view that stays legible when the board does not. The whole
+  [texels nothing samples](#texels-nothing-samples) problem is that art stops
+  being samplable below a couple of pixels a cell; a contour has no art in it.
+
+**In a compute shader, and possibly on the server.** The cell grid is already
+the natural input, one workgroup per tile of cells, and the marching-squares
+table is the standard sixteen-case lookup. Server-side is the interesting half
+of the idea: a contour set is small — some line segments per player, against a
+world of millions of cells — so a server that computed it once a generation
+could **send** it, and every client would get a minimap without holding the
+world it describes. That is the first thing in the game that would let a client
+see a shape it has not been sent the cells for, which is a change to what
+[subscription](networking.md) means and wants thinking about before it is
+built.
+
+What it runs into: a server has no GPU in most of the places one would deploy
+it — see [Cloudflare](#cloudflare-and-which-half-of-this-fits) — so "in a
+compute" and "on the server" pull against each other, and the CPU version wants
+costing before the GPU one is assumed.

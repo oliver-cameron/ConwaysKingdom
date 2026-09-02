@@ -26,10 +26,22 @@ use crate::sim::CHUNK_N;
 /// itself repeating** rather than into empty ground; and the antialiasing
 /// averages the cells a pixel covers rather than picking one of them.
 ///
-/// A quarter is four cells to a pixel, which is where four samples a side stop
-/// covering the footprint exactly. Lower wants a second coarse level, which is
-/// the same trick again rather than a new idea.
-pub const ZOOM_RANGE: (f32, f32) = (0.25, 64.0);
+/// **One pixel a cell is the floor**, because below it a cell is smaller than
+/// the thing drawing it and no filter downstream can put that back.
+///
+/// It was a quarter — four cells to a pixel — and the reason given was that a
+/// quarter "is where four samples a side stop covering the footprint exactly".
+/// That was true of a `k`x`k` supersample in the world shader, and there has
+/// not been one since antialiasing moved to a screen-space pass of its own.
+/// The world is point-sampled once a pixel now, so at a quarter three of every
+/// four cells are sampled by nothing at all and which three changes as the
+/// camera moves — which is the shimmer, and it is the same fault as
+/// [texels nothing samples](../../../../docs/planned.md) one level up.
+///
+/// A cap and not a fix. What is under it is unchanged, and getting further out
+/// honestly wants the level of detail to keep going rather than the camera to
+/// keep going without one.
+pub const ZOOM_RANGE: (f32, f32) = (1.0, 64.0);
 
 /// Seconds for a released pan to decay to a third of its speed. A flick
 /// coasts roughly `speed * GLIDE` cells and stops. Zero turns it off.
