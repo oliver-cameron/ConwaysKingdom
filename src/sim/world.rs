@@ -697,7 +697,12 @@ impl World {
         // same board.
         let square = super::seed::cell_seed(seed, row, col);
         let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
-        let cell = cell.with_kind(Kind::NORMAL);
+        // **The age goes with the kind.** A mine three quarters of the way
+        // through its rot, turned into ordinary ground, kept that three — and
+        // `Cell::sprite` reads the age as a sheet row, so it drew from a row
+        // that only ageing kinds have art in and came out as nothing at all.
+        // `Kind::NORMAL` is `Ages::Never`, so nought is the only age it has.
+        let cell = cell.with_kind(Kind::NORMAL).with_age(0);
         if cell.is_home() {
             // **Cleared, not scrambled.** Its owner cannot move, so a square
             // that came up alive here would be alive *for them* — which is

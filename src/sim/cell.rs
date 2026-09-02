@@ -79,6 +79,22 @@ pub mod bits {
     pub const AGE_MASK: u8 = (1 << AGE_WIDTH) - 1;
     pub const MAX_AGE: u8 = AGE_MASK;
 
+    /// **The tile for ground nobody holds**, which is not a cell's own picture
+    /// and so is not something [`super::Cell::sprite`] can answer.
+    ///
+    /// Every other tile is arithmetic on the tile byte. This one is chosen by
+    /// the *owner* — an unowned, dead, ice-free square draws it instead of the
+    /// dead-ground sprite — so it lives here as a number and is applied in
+    /// `render/shaders/grid.wgsl`, which is the only place holding the owner
+    /// and the tile byte in one hand. `sprite` stays pure arithmetic, and
+    /// `no_cell_draws_the_unowned_tile` is what keeps the two from colliding.
+    ///
+    /// Row 1 of the dead-nothing column. Column 0 is [`super::Kind::NORMAL`]
+    /// dead and ice-free, and `NORMAL` is `Ages::Never` — its age is always
+    /// nought, so rows 1-7 under it are reachable by the arithmetic and by no
+    /// cell. **Not** rows 8-15, which look free and are the four unused kinds.
+    pub const NOBODY: u8 = 16;
+
     /// Byte 1, bits 2..5: what kind of cell this is. Eight of them.
     ///
     /// **In one piece**, which it was not: the sheet wanted the two low bits
@@ -919,6 +935,38 @@ mod tests {
     /// the age to the top of the byte to put the kind back in one piece is
     /// what makes this a test of the arithmetic instead — the sheet did not
     /// change, only what computes a position on it.
+    /// **Nothing a cell can be lands on the unowned tile.** It is chosen by the
+    /// owner rather than by the tile byte — see [`bits::NOBODY`] — so the one
+    /// thing that has to stay true is that no real cell ever names it, or two
+    /// different things would be drawn with one picture.
+    #[test]
+    fn no_cell_draws_the_unowned_tile() {
+        for kind in 0..=bits::KIND_MASK {
+            // Only the ages this kind can hold. A kind that never ages
+            // has one, which is what makes rows 1-7 under it free — and what
+            // anything turning a cell into one has to respect, or it lands
+            // here. `World::blasted` did not, and drew a blank tile.
+            let oldest = match Kind(kind).ages() {
+                Ages::Never => 0,
+                _ => bits::MAX_AGE,
+            };
+            for age in 0..=oldest {
+                for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let cell = Cell::DEAD
+                        .with_kind(Kind(kind))
+                        .with_age(age)
+                        .with_alive(alive)
+                        .with_ice(ice);
+                    assert_ne!(
+                        cell.sprite(),
+                        bits::NOBODY,
+                        "kind {kind} age {age} alive {alive} ice {ice} lands on the unowned tile"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_kinds_ages_are_eight_rows_down_the_sheet() {
         for kind in 0..=bits::KIND_MASK {

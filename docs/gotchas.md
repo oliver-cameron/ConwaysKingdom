@@ -316,3 +316,46 @@ The general version of this is that defaults cannot be right, which is now
 [a roadmap entry](planned.md#keys-the-player-chooses): three separate faults
 have come out of this same place, each fixed by guessing better rather than by
 letting the player say.
+
+## `cnvt` forward from `art.png` silently deletes art the sheet has and the source does not
+
+`assets/sprites/art.png` is the editable picture and `assets/sprites/sheet.png`
+is what ships, and the pipeline reads one way:
+
+```
+cargo run --bin cnvt -- art.png assets/sprites/sheet.png
+```
+
+Nothing checks that the source has everything the sheet has. The payload art at
+tiles 12–15 was generated straight into `sheet.png` and never written back, so
+`art.png` had four blank tiles where the sheet had pictures — and one forward
+pass overwrote them with nothing. `every_state_has_art_at_the_tile_its_byte_names`
+is what caught it, with `Kind(3) alive=true ice=false: tile 13 is blank`.
+
+**So run the reverse first, always.** It is the true inverse of the forward
+pass, so it costs a round trip of at most 1/255 and it makes the source
+actually the source:
+
+```
+cargo run --bin cnvt -- --back assets/sprites/sheet.png assets/sprites/art.png
+# edit art.png
+cargo run --bin cnvt -- art.png assets/sprites/sheet.png
+```
+
+The two files are in step as of the unowned tile going in, and staying that way
+is a matter of doing the above rather than of anything enforcing it.
+
+## Coverage in the sheet is on or off, so "dimmer" is lightness and never alpha
+
+`sprites_have_hard_edges` asserts every texel's alpha is exactly 0 or 255, and
+it means it: sampling is nearest with no mip chain, so a half-covered texel is
+a half-covered texel at every zoom rather than art that resolves when you look
+closer.
+
+The unowned tile was drawn first as a flat grey at 165 alpha, so the dark
+ground would show through and it would read as open country rather than as a
+filled square. That is an anti-aliased edge by another name and the test says
+so. What it wanted was a lower **lightness** in the G channel at full coverage,
+which reaches the same place — `shade` builds the colour from lightness and
+composites at coverage, so the two are not interchangeable but they overlap
+across most of the range.

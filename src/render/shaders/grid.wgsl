@@ -43,6 +43,12 @@ const AGE_SHIFT: u32 = 5u;      // byte 1, bits 5..8
 const TILE_N: u32 = 16u;         // texels per tile, and cells per chunk
 const SHEET_TILES: f32 = 16.0;   // tiles across the sheet
 const SHEET_N: f32 = 256.0;      // texels across the sheet, TILE_N * SHEET_TILES
+/// **The tile for ground nobody holds.** MUST MATCH `sim::cell::bits::NOBODY`.
+///
+/// Row 1 of the dead-nothing column, which the arithmetic below can address
+/// and no cell can reach: column 0 is kind 0 dead and ice-free, and kind 0
+/// never ages. Not rows 8-15, which look free and are the four unused kinds.
+const NOBODY_TILE: f32 = 16.0;
 const KIND_BACKDROP: u32 = 1u;   // a quad standing in for every unloaded chunk
 const KIND_COARSE: u32 = 2u;     // one quad standing in for the whole world
 
@@ -340,7 +346,20 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     // r is the owner byte, g is what the cell is. Nothing to look up and
     // nothing to branch on: the sheet position is arithmetic on the fields.
     let texel = textureLoad(chunks, cell_coord, i32(layer), 0);
-    let tile = sprite_index(texel.g);
+    let player = texel.r >> PLAYER_SHIFT;
+    // **Ground nobody holds has a picture of its own**, rather than a player's
+    // dead cell drawn grey. `player_saturation` answers nought for player
+    // zero, so the two used to differ only in that the colour drained out of
+    // one of them — and a field of unclaimed ground read as a grid of
+    // somebody's empty squares rather than as open country.
+    //
+    // The one place appearance depends on the owner as well as the tile byte,
+    // which is why it is here and not in `sprite_index`: this is the only
+    // function holding both. See `sim::cell::bits::NOBODY`.
+    var tile = sprite_index(texel.g);
+    if player == 0u && (texel.g & (ALIVE | ICE)) == 0u {
+        tile = NOBODY_TILE;
+    }
     // Low nibble across the sheet, high nibble down it.
     let tile_xy = vec2<f32>(tile % SHEET_TILES, floor(tile / SHEET_TILES));
     let sheet_uv = (tile_xy * f32(TILE_N) + within) / f32(SHEET_N);
@@ -351,7 +370,6 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     let sprite = textureSampleLevel(sprites, sprite_sampler, sheet_uv, 0.0);
 
     var colour = grid_tint(vec2<f32>(cell_coord), n);
-    let player = texel.r >> PLAYER_SHIFT;
 
     colour = mix(
         colour,
