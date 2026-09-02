@@ -45,7 +45,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Something to see when it goes off](#something-to-see-when-it-goes-off) | Designed | a blast is a frame of noise and nothing else says it happened |
 | [Bots](#bots) | Decided | a player the server plays, and no protocol change |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
-| [A leaderboard](#a-leaderboard) | Decided | the second half of rating, waiting on the same thing |
+| [A leaderboard](#a-leaderboard) | Part built | per server it is built; across servers it waits on identity |
 | [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Built | what is left is the gesture-to-cells half |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
 | [Auto-mining](#auto-mining) | Built | |
@@ -861,18 +861,39 @@ Uploads are the thing to *not* do, and the reason is not effort: a picture
 somebody chose is a picture somebody has to moderate, and this is a game with
 no accounts, no email and no way to contact anybody about anything.
 
-### Finding somebody
+### Finding somebody — built
 
-Two messages, and the second is the first with an empty query. `ClientMessage::People { like: String }` answers with a `Vec<Profile>` — the names this server knows, filtered. Answerable **without a seat**, like `Rooms` and `Profile` and for the same reason: you look somebody up from a menu as often as from a lobby.
+`ClientMessage::People { like }` answers `ServerMessage::People { like, found }`,
+and an empty `like` answers the best rated, which **is** the leaderboard —
+one message rather than two, because two implementations of "who plays here"
+would come to disagree. Answered without a seat, like `Rooms` and `Profile`;
+sharper here, because this is how you find a person to look up in the first
+place and a menu is where you are standing when you do.
 
-The list is what "who else plays here" looks like, and it is also the way in to
-a leaderboard: [a leaderboard](#a-leaderboard) is this sorted by rating, and
-`server::profiles` is already keyed by person and already saved. Two things to
-be careful of. A name is **self-chosen**, so a search that matched only names
-would let anybody impersonate anybody in a list — the fingerprint has to be on
-every row, which it is in `net::Seat::label`. And it must not become a way to
-enumerate everybody a server has met: a bounded answer, and no empty-query
-listing on a public server unless somebody decides that is wanted.
+It came out one screen rather than two for the same reason: `menu::Page::People`
+is a field and a list, and typing in the field turns the board into a search.
+
+The four things to be careful of each have a test.
+
+- A name is **self-chosen**, so the fingerprint is on every row and is what a
+  row names when it is pressed — `pressing_a_row_looks_up_that_persons_fingerprint`
+  is two alices, which is the case it exists for.
+- It must not become a way to enumerate everybody a server has met, so the
+  answer is capped at `net::PEOPLE_MOST` either way. A cap and not a page:
+  finding somebody and seeing who is on top neither want paging.
+- **Provisional players are off the board and still findable.** A rating from
+  one game is mostly the starting rating, so an unbounded board is a table of
+  luck; somebody searching by name wants that person regardless.
+- Sorted by rating, then name, then fingerprint. A `HashMap` has no order and a
+  list that reshuffled between two identical questions looks broken.
+
+The query comes back with the answer and the client drops one that no longer
+matches what it is asking, because a search box is retyped a character at a
+time and replies arrive out of order with respect to the typing.
+
+What is **not** done here is the swatch. A person's colour is hashed from their
+fingerprint, which is stable and theirs and is the cheap version of
+[a face](#a-face) rather than a substitute for it.
 
 ## Antialias always
 

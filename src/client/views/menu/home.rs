@@ -81,6 +81,25 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     {
         chose = Chose::Profile;
     }
+    // Beside your own profile, because they are the same question about two
+    // people. Only where a server has been reached — there is nobody to ask
+    // otherwise, and a button that cannot work is worse than no button.
+    if at.reached
+        && ui
+            .add_sized(
+                [ui.available_width(), m.button_height],
+                egui::Button::new(
+                    egui::RichText::new(words::home::PEOPLE).size(m.text_small).color(p.text),
+                )
+                .fill(p.surface),
+            )
+            .clicked()
+    {
+        menu.page = Page::People;
+        // Asked on the way in, so the board is up before anybody types. The
+        // empty query is the leaderboard.
+        chose = Chose::FindPeople(String::new());
+    }
     ui.add_space(m.item_spacing);
     crate::client::views::record::show(ui, theme, &menu.games, &menu.record);
 

@@ -1405,6 +1405,19 @@ impl GameApp {
             // the missing way in: a profile was reachable from a lobby roster
             // and a standings bar and from nowhere else, so a player alone
             // could not look at their own.
+            // Asked on every keystroke. The cap on the answer is what makes
+            // that affordable, and the session holds the query beside the
+            // result so an answer to a prefix that has moved on is dropped
+            // rather than shown.
+            menu::Chose::FindPeople(like) => self.session.find_people(&like),
+            // **The panel goes up on the press, not on the answer**, the same
+            // as a name in the lobby: a server that is slow, or one that never
+            // replies, would otherwise be a row you can click that does
+            // nothing.
+            menu::Chose::LookAt(who) => {
+                self.ui.showing_profile = Some(Whose::Somebody(who.clone()));
+                self.session.look_up(who);
+            }
             menu::Chose::Profile => {
                 self.ui.showing_profile = Some(Whose::Mine);
                 if let Some(who) = self.session.profile.as_ref().map(|p| p.who.clone()) {
@@ -1823,6 +1836,7 @@ impl App for GameApp {
                     self.session.lobby.as_ref().map(|l| &l.phase),
                     Some(crate::net::MatchPhase::Gathering)
                 ),
+            reached: self.session.connected(),
         };
         let me = self.session.player();
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
@@ -1877,6 +1891,12 @@ impl App for GameApp {
         //
         // Last, after everything read off `&self`, so that from here the
         // interface's state is borrowed and the world's is untouched.
+        // Put on the menu rather than reached from it: `views::menu` opens no
+        // sockets and asks nothing, so what a server said arrives the same way
+        // the room list does.
+        if let Screen::Menu(m) = &mut self.ui.screen {
+            m.people = self.session.people.clone();
+        }
         let ui = &mut self.ui;
         let editing = ui.editing_stamp;
         let output = self.views.borrow_mut().run(gpu, self.elapsed, |ctx| {

@@ -21,6 +21,7 @@
 mod alone;
 pub mod draft;
 mod home;
+mod people;
 mod play;
 mod settings;
 
@@ -95,6 +96,9 @@ pub enum Page {
     /// those questions was only reachable by going to the server screen and
     /// finding it under a room list nobody had asked for.
     Alone,
+    /// Who else plays here, and the leaderboard, which is one screen because
+    /// the server answers both from one question.
+    People,
 }
 
 pub struct Menu {
@@ -180,6 +184,14 @@ pub struct Menu {
     /// wholesale — a half-filled form living in it would be wiped mid-typing,
     /// three seconds at a time.
     pub draft: Option<Draft>,
+    /// What is typed into the find-somebody box. Empty asks for the best
+    /// rated, which is the leaderboard.
+    pub finding: String,
+    /// What came back, with the query that produced it — put here by the
+    /// client from the session, the way the room list is. The menu opens no
+    /// sockets and asks no questions; it holds what it was told and returns
+    /// what was chosen.
+    pub people: Option<(String, Vec<crate::net::Profile>)>,
 }
 
 /// Whether a world ends, and how. Three answers to one question rather than a
@@ -262,6 +274,10 @@ pub enum Chose {
     /// else, so a player alone — or one who had simply not joined anything
     /// yet — could not look at their own.
     Profile,
+    /// Ask this server who plays here. Empty is the leaderboard.
+    FindPeople(String),
+    /// Open somebody's profile, from a row in that list.
+    LookAt(crate::net::PersonId),
 }
 
 impl Menu {
@@ -295,6 +311,8 @@ impl Menu {
             revealed: false,
             asking: None,
             draft: None,
+            finding: String::new(),
+            people: None,
         }
     }
 
@@ -350,6 +368,9 @@ pub struct Where {
     /// "Play alone" becomes "back to your match", because starting a solitary
     /// game while enrolled in one is never what the press meant.
     pub waiting_in_a_match: bool,
+    /// Whether a server has actually been reached, so a control that can only
+    /// be answered by one is only offered when there is one to answer it.
+    pub reached: bool,
 }
 
 pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> super::Shown<Chose> {
@@ -476,6 +497,7 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                     Page::Home => chose = home(ui, theme, menu, at),
                                     Page::Play => chose = play(ui, theme, menu, at),
                                     Page::Alone => chose = alone::show(ui, theme, menu),
+                                    Page::People => chose = people::show(ui, theme, menu),
                                 }
                             });
                             ui.add_space(m.margin * 2.0);
@@ -541,6 +563,53 @@ mod tests {
                 _ => panic!("a form describes a room"),
             }
         };
+    }
+
+    /// **The board is asked for on the way in**, so it is up before anybody
+    /// types. An empty query is the leaderboard, which is why the way in and
+    /// the search are one message.
+    #[test]
+    fn opening_the_player_list_asks_for_the_leaderboard() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        assert!(
+            probe(&mut menu, at(1.0, false), |m, chose| {
+                m.page == Page::People
+                    && matches!(chose, Chose::FindPeople(like) if like.is_empty())
+            }),
+            "opening the list did not ask for the board"
+        );
+    }
+
+    /// **A row names a person by fingerprint, not by the name beside it.** A
+    /// name is self-chosen and two people may share one, so the row pressed
+    /// has to be the person opened.
+    #[test]
+    fn pressing_a_row_looks_up_that_persons_fingerprint() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::People;
+        let person = |who: &str, name: &str| crate::net::Profile {
+            who: crate::net::PersonId(who.into()),
+            name: name.into(),
+            rating: 1200,
+            provisional: false,
+            games: 20,
+            history: Vec::new(),
+            best: 0,
+        };
+        // Two alices, which is the case the fingerprint exists for.
+        menu.people =
+            Some((String::new(), vec![person("aaaa1111", "alice"), person("bbbb2222", "alice")]));
+        let opened = std::cell::RefCell::new(None);
+        let found = probe(&mut menu, at(1.0, false), |_, chose| {
+            if let Chose::LookAt(who) = chose {
+                *opened.borrow_mut() = Some(who.clone());
+                return true;
+            }
+            false
+        });
+        assert!(found, "no row could be pressed");
+        let who = opened.into_inner().expect("pressed without naming anybody");
+        assert!(["aaaa1111", "bbbb2222"].contains(&who.as_str()), "named {who:?}");
     }
 
     #[test]
@@ -749,7 +818,7 @@ mod tests {
     }
 
     fn at(now: f64, on_web: bool) -> Where {
-        Where { now, on_web, waiting_in_a_match: false }
+        Where { now, on_web, waiting_in_a_match: false, reached: true }
     }
 
     /// Run a frame with these events and say what the menu chose.

@@ -81,6 +81,34 @@ pub mod menu {
     pub const LOST_CONNECTION: &str = "the connection went away";
 
     /// The home screen: who you are, what you have done, and the way in.
+    /// Who else plays here, and the leaderboard, which is the same list with
+    /// nothing typed into the box.
+    pub mod people {
+        pub const TITLE: &str = "Players";
+        pub const NOTE: &str = "The best rated here, or type a name to find somebody.";
+        pub const HINT: &str = "a name";
+        pub const ASKING: &str = "Asking the server…";
+        pub const NOBODY: &str = "Nobody here by that name.";
+        /// Not the same sentence as [`NOBODY`]. An empty board means the
+        /// server has met nobody it is sure about yet, which is a fact about
+        /// the server rather than about what was typed.
+        pub const NOBODY_YET: &str = "Nobody has played enough matches here to be rated yet.";
+
+        /// A provisional rating is marked rather than hidden: the number is
+        /// real and the server is not yet sure of it.
+        pub fn rating(rating: i32, provisional: bool) -> String {
+            if provisional {
+                format!("{rating}?")
+            } else {
+                rating.to_string()
+            }
+        }
+
+        pub fn capped(most: usize) -> String {
+            format!("The first {most}. Type a name to narrow it.")
+        }
+    }
+
     pub mod home {
         pub const PLAY: &str = "Play";
         pub const WHO: &str = "You are";
@@ -92,6 +120,7 @@ pub mod menu {
             format!("{change:+} from your last match")
         }
         pub const PROFILE: &str = "Your profile";
+        pub const PEOPLE: &str = "Who else plays here";
         pub const SETTINGS: &str = "Settings";
         pub const SETTINGS_HIDE: &str = "Close settings";
 
