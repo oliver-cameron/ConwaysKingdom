@@ -77,7 +77,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // case that has to cost nothing, because it is most of the screen.
     let before = max(vec2<f32>(0.0), vec2<f32>(half) - f);
     let after = max(vec2<f32>(0.0), f + half - 1.0);
-    let toward = select(vec2<i32>(-1, -1), vec2<i32>(1, 1), after > before);
+    // Chosen in floats and converted, rather than as `select(vec2<i32>, ...)`.
+    // A component-wise `select` lowers to GLSL's `mix(x, y, bvec)`, and that
+    // overload exists for floats in GLSL ES 3.00 and for integers only from
+    // 3.20 — so the integer form compiles everywhere except WebGL2, which is
+    // the one backend that reaches this shader through GLSL at all.
+    let toward = vec2<i32>(select(vec2<f32>(-1.0), vec2<f32>(1.0), after > before));
     let w = max(before, after) / (2.0 * half);
 
     // The neighbour in whichever direction the footprint reaches, and the
