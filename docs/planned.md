@@ -20,6 +20,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
 | [A minimap](#a-minimap) | Noted | marching squares over the world, probably in a compute |
 | [Parties](#parties) | Noted | a private set of worlds for one group of players |
+| [Better interfaces](#better-interfaces) | Part built | the home screen is three buttons; the in-game views are still a desktop |
 | [Player profiles](#player-profiles) | Part built | a person rather than a seat; what is left is devices and the name field |
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
@@ -847,6 +848,17 @@ Each fix made the defaults better and none of them makes a default right for som
 
 What is actually wrong, in the order it bites:
 
+**The home screen is done.** It is three buttons in the middle — Play, your
+account, how to play — and nothing else. It held a name field, a rating, a
+record, two lookups and a settings drawer, all of which are things you *read*,
+with the one control anybody opens the game to use underneath them. What a
+player is now lives on `menu::Page::Account`, which is a page to visit
+occasionally and read carefully, and solo hangs off Play rather than off Home
+because it is the same errand: one form, answering "make it here" or "make it
+on that server" depending on whether one replied.
+
+What is left is the four in-game views.
+
 **The HUD is a desktop panel.** It covers a third of a phone screen, and its hint lines name a left button, a right button, WASD and escape — none of which a phone has. It also has no hierarchy: every line is the same weight, so nothing on it says what matters, where the menu now has one accent per column and says exactly that.
 
 **There is no help a phone can open.** `?` shows the key list, and a phone has no `?` and nothing to do with a list of keys once it has one. What a touch client needs is not that list; it is the four or five gestures, shown once, dismissible.
@@ -859,7 +871,11 @@ None of this is a rewrite. The pieces the menu needed already exist: `theme::Met
 
 ## How to play
 
-**Designed.** A page of its own, reached from the home screen, saying the things a player cannot work out by clicking. The key list at `?` is not it: that is a lookup table for somebody who already knows what they are looking for, and this is for somebody who has just arrived and does not know that placing is confined to ground they already hold.
+**Built** — `menu::Page::HowToPlay`, reached from the home screen, with the
+five rules and the tip in `words::howto`. What follows is the argument for each
+and stays here; the page is the shortest form that still explains.
+
+**Designed, and this is the reasoning behind what is on the page.** A page of its own, reached from the home screen, saying the things a player cannot work out by clicking. The key list at `?` is not it: that is a lookup table for somebody who already knows what they are looking for, and this is for somebody who has just arrived and does not know that placing is confined to ground they already hold.
 
 What it has to say, in the order it bites. Each of these is a rule somebody loses to before they learn it, and none of them is visible on the board.
 

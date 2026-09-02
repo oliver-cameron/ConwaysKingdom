@@ -18,9 +18,11 @@
 //! list arrives from `ServerMessage::Rooms` and the menu shows nothing until
 //! it does, rather than offering a name that might be there.
 
+mod account;
 mod alone;
 pub mod draft;
 mod home;
+mod howto;
 mod people;
 mod play;
 mod settings;
@@ -99,6 +101,10 @@ pub enum Page {
     /// Who else plays here, and the leaderboard, which is one screen because
     /// the server answers both from one question.
     People,
+    /// You: the name, the rating, the record, who else is here, and the key.
+    Account,
+    /// What the board does not tell somebody who has just arrived.
+    HowToPlay,
 }
 
 pub struct Menu {
@@ -498,6 +504,8 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                     Page::Play => chose = play(ui, theme, menu, at),
                                     Page::Alone => chose = alone::show(ui, theme, menu),
                                     Page::People => chose = people::show(ui, theme, menu),
+                                    Page::Account => chose = account::show(ui, theme, menu, at),
+                                    Page::HowToPlay => chose = howto::show(ui, theme, menu),
                                 }
                             });
                             ui.add_space(m.margin * 2.0);
@@ -571,6 +579,8 @@ mod tests {
     #[test]
     fn opening_the_player_list_asks_for_the_leaderboard() {
         let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        // From the account page, which is where a player is kept now.
+        menu.page = Page::Account;
         assert!(
             probe(&mut menu, at(1.0, false), |m, chose| {
                 m.page == Page::People
@@ -631,12 +641,41 @@ mod tests {
     /// reachable from a lobby roster and a standings bar and from nowhere
     /// else, so a player alone could not look at their own.
     #[test]
-    fn the_home_screen_can_reach_your_own_profile() {
+    fn the_account_screen_can_reach_your_own_profile() {
         let mut menu = Menu::new("ws://host:8080/ws".into(), false);
-        assert!(menu.page == Page::Home);
+        // It moved here when the home screen became three buttons, which is
+        // where it belongs — but "reachable without other people" is the
+        // property, and it holds whichever page carries the control.
+        menu.page = Page::Account;
         assert!(
             probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Profile)),
-            "nothing on the home screen asks for your profile"
+            "nothing on the account screen asks for your profile"
+        );
+    }
+
+    /// **Every page is navigable to.** A page nothing reaches is a page nobody
+    /// sees, and the home screen going to three buttons moved four controls
+    /// onto pages that had to gain their own way in.
+    ///
+    /// Solo hangs off Play rather than off Home, because it is the same errand
+    /// — one form, answering "make it here" or "make it there" — which is why
+    /// it is checked from the screen it now lives on.
+    #[test]
+    fn every_page_has_a_way_in() {
+        for want in [Page::Play, Page::Account, Page::HowToPlay] {
+            let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+            assert!(menu.page == Page::Home);
+            assert!(
+                probe(&mut menu, at(1.0, false), |m, _| m.page == want),
+                "the home screen does not reach one of its three"
+            );
+        }
+        // And solo, from Play.
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Play;
+        assert!(
+            probe(&mut menu, at(1.0, false), |m, _| m.page == Page::Alone),
+            "the play screen does not reach playing alone"
         );
     }
 

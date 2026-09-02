@@ -13,107 +13,61 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     let m = theme.metrics;
     let mut chose = Chose::Nothing;
 
-    ui.heading(words::TITLE);
-    ui.add_space(m.item_spacing * 2.0);
+    // **Three, in the middle, and nothing else.** This screen held a name
+    // field, a rating, a record, two lookups and a settings drawer, all of
+    // which are things you read rather than things you press — and the one
+    // control anybody opens the game to use was underneath them. What a player
+    // *is* now lives on [`super::account`], which is a page you visit
+    // occasionally and read carefully; this one asks a single question and the
+    // answer is one of three presses.
+    ui.vertical_centered(|ui| {
+        ui.add_space(m.item_spacing * 4.0);
+        ui.heading(words::TITLE);
+        ui.add_space(m.item_spacing * 5.0);
+    });
 
-    // The name lives here rather than on the play screen, because it is who
-    // you are and not part of choosing a world -- and because it is the same
-    // answer whichever world you end up in.
-    ui.label(egui::RichText::new(words::home::WHO).size(m.text_small));
-    ui.add(
-        egui::TextEdit::singleline(&mut menu.name)
-            .desired_width(f32::INFINITY)
-            .hint_text(words::NAME_HINT),
-    );
-
-    ui.add_space(m.item_spacing * 2.0);
-    ui.label(egui::RichText::new(words::home::RECORD).size(m.text_small));
-    // **Above the record rather than inside it**, because they answer
-    // different questions and only one of them is comparable. What is in
-    // `views::record` is what this client has done — its own history, kept in
-    // its own store — and a rating is what a *server* thinks of you against
-    // everybody else there. Folding the second into the first would suggest
-    // the client had worked it out, which it must never look like it can.
-    if let Some(r) = menu.rating {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(crate::client::views::words::rating(r.number))
-                    .size(m.text_action)
-                    .color(p.text),
-            );
-            // Said once, after the match that caused it. A number that moves
-            // with no account of why is one people stop reading.
-            if let Some(change) = r.change.filter(|c| *c != 0) {
-                ui.label(
-                    egui::RichText::new(words::home::rating_change(change))
-                        .size(m.text_small)
-                        .color(if change > 0 { p.good } else { p.bad }),
-                );
-            }
-        });
-        // **Under the number rather than beside it.** An unearned rating is
-        // still the number you have, so it is shown at full size and marked;
-        // dimming or hiding it would answer "what am I rated" with a riddle.
-        if r.provisional {
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(crate::client::views::words::provisional(r.games))
-                    .size(m.text_small),
-            );
-        }
-        ui.add_space(m.item_spacing);
-    }
-    // **Under the rating, which is the thing it explains.** A number with no
-    // way to ask what is behind it is a number people stop reading.
-    //
-    // Full width like everything else on this screen and unaccented, because
-    // the one accent here is Play. A small button would be a word to aim at on
-    // a phone.
-    if ui
-        .add_sized(
-            [ui.available_width(), m.button_height],
-            egui::Button::new(
-                egui::RichText::new(words::home::PROFILE).size(m.text_small).color(p.text),
-            )
-            .fill(p.surface),
-        )
-        .clicked()
-    {
-        chose = Chose::Profile;
-    }
-    // Beside your own profile, because they are the same question about two
-    // people. Only where a server has been reached — there is nobody to ask
-    // otherwise, and a button that cannot work is worse than no button.
-    if at.reached
-        && ui
+    // Above the three, and only when there is one: a match you have already
+    // joined is not a fourth way in, it is the way back to where you were.
+    if at.waiting_in_a_match {
+        if ui
             .add_sized(
-                [ui.available_width(), m.button_height],
+                [ui.available_width(), m.action_height],
                 egui::Button::new(
-                    egui::RichText::new(words::home::PEOPLE).size(m.text_small).color(p.text),
+                    egui::RichText::new(words::BACK_TO_MATCH).size(m.text_action).color(p.ground),
                 )
-                .fill(p.surface),
+                .fill(p.accent),
             )
             .clicked()
-    {
-        menu.page = Page::People;
-        // Asked on the way in, so the board is up before anybody types. The
-        // empty query is the leaderboard.
-        chose = Chose::FindPeople(String::new());
+        {
+            chose = Chose::Resume;
+        }
+        ui.small(words::BACK_TO_MATCH_NOTE);
+        ui.add_space(m.item_spacing * 2.0);
     }
-    ui.add_space(m.item_spacing);
-    crate::client::views::record::show(ui, theme, &menu.games, &menu.record);
 
-    ui.add_space(m.item_spacing * 2.0);
+    // **Play is the accent unless the match above took it.** One accent a
+    // screen, on the thing you are meant to press next.
+    let lead = !at.waiting_in_a_match;
     if ui
         .add_sized(
             [ui.available_width(), m.action_height],
             egui::Button::new(
-                egui::RichText::new(words::home::PLAY).size(m.text_action).color(p.ground),
+                egui::RichText::new(words::home::PLAY).size(m.text_action).color(if lead {
+                    p.ground
+                } else {
+                    p.text
+                }),
             )
-            .fill(p.accent),
+            .fill(if lead { p.accent } else { p.surface }),
         )
         .clicked()
     {
+        // **Solo is not a fourth button**, because it is not a different
+        // errand: the same form describes a world either way and answers
+        // "make it here" or "make it on that server" depending on whether one
+        // replied. So Play goes to the one screen and the branch happens
+        // there — see [`super::play`], whose action reads "Play alone" until a
+        // server has answered.
         menu.page = Page::Play;
         // Never blank, and filled in **here** rather than while the field is
         // drawn. Refilling an empty field every frame is a field that cannot
@@ -131,53 +85,21 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         menu.attempted = None;
     }
 
-    // Offline sits here because it is a way to play, and because a player with
-    // no server to reach should not have to walk through a screen about
-    // servers to get to it.
-    //
-    // **Except when you are already enrolled in a match**, where the same
-    // press means the opposite: you left a lobby to look at this screen, and
-    // starting a solitary game is never what pressing the only other button
-    // meant. It becomes the way back in.
     ui.add_space(m.item_spacing);
-    let (label, note) = if at.waiting_in_a_match {
-        (words::BACK_TO_MATCH, Some(words::BACK_TO_MATCH_NOTE))
-    } else {
-        // No note. "The rules are the same offline" was answering a question
-        // nobody asks standing in front of a button that says Play alone.
-        (words::ALONE, None)
-    };
-    if ui
-        .add_sized(
-            [ui.available_width(), m.button_height],
-            egui::Button::new(egui::RichText::new(label).size(m.text_body)),
+    let flat = |ui: &mut egui::Ui, label: &str| {
+        ui.add_sized(
+            [ui.available_width(), m.action_height],
+            egui::Button::new(egui::RichText::new(label).size(m.text_body).color(p.text))
+                .fill(p.surface),
         )
         .clicked()
-    {
-        // **To the form, not into a world.** This used to build whatever the
-        // command line had said and drop you in it, so a solitary game could
-        // not be a small torus and could not end.
-        if at.waiting_in_a_match {
-            chose = Chose::Resume;
-        } else {
-            menu.page = Page::Alone;
-        }
+    };
+    if flat(ui, words::home::ACCOUNT) {
+        menu.page = Page::Account;
     }
-    if let Some(note) = note {
-        ui.small(note);
-    }
-
-    // **At the foot, and behind a press.** Everything above this is a way to
-    // play; a player key is not one, and it used to sit here as an editable
-    // field — which put the most destructive control in the client directly
-    // under the second thing anybody reads.
-    ui.add_space(m.item_spacing * 3.0);
-    let label = if menu.advanced { words::home::SETTINGS_HIDE } else { words::home::SETTINGS };
-    if ui.small_button(label).clicked() {
-        menu.advanced = !menu.advanced;
-    }
-    if menu.advanced {
-        chose = super::settings::show(ui, theme, menu);
+    ui.add_space(m.item_spacing);
+    if flat(ui, words::home::HOWTO) {
+        menu.page = Page::HowToPlay;
     }
 
     chose

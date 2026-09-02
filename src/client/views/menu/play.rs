@@ -55,6 +55,17 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
                 menu.page = Page::Home;
             }
             ui.heading(words::home::PLAY);
+            // **Solo branches from here rather than from the home screen**,
+            // because it is the same errand: the form below describes a world
+            // either way, and answers "make it here" or "make it on that
+            // server" depending on whether one replied. What this does is
+            // force the second answer, which is otherwise only reachable by
+            // having no server — see [`super::alone`].
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button(words::ALONE).clicked() {
+                    menu.page = Page::Alone;
+                }
+            });
             reach = server_field(ui, theme, menu, at, reached);
         },
     );

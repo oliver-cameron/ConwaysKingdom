@@ -109,6 +109,48 @@ pub mod menu {
         }
     }
 
+    /// You, as a page: the name, the rating, the record and the key.
+    pub mod account {
+        pub const TITLE: &str = "Your account";
+        pub const RATED: &str = "Rated here";
+    }
+
+    /// What somebody who has just arrived cannot work out by clicking. Every
+    /// entry is a rule people lose to before they learn it, in the order they
+    /// bite, and the argument for each is in docs/game.md.
+    pub mod howto {
+        pub const TITLE: &str = "How to play";
+        pub const NOTE: &str =
+            "Conway's Game of Life, with owners. Five things the board does not tell you.";
+
+        pub const RULES: &[(&str, &str)] = &[
+            (
+                "You can only build where your influence already reaches.",
+                "This is the first thing anybody runs into, and a refused click does not                  explain it. Territory is a field with sources: the patch you are granted                  is a spring that never runs dry, and your live cells feed it too. So you                  grow ground by growing life outward from what you have — not by clicking                  further away.",
+            ),
+            (
+                "A mine pays when it turns over, not when you own it.",
+                "The opposite of what owning a lot of mines suggests. A block of mines is                  a still life: it never gives birth, so it never pays anything at all. An                  oscillator earns every period and a gun earns forever. This one rule                  decides whether your economy works.",
+            ),
+            (
+                "A turret is the other way round, so place it in fours.",
+                "It works by standing still, and one on its own dies of loneliness in a                  generation. The block that is a mine's worst shape is a turret's best —                  four cells is the cheapest thing in Conway that never dies and never                  gives birth.",
+            ),
+            (
+                "Ice cannot be taken back.",
+                "It stops time over whatever it covers, and only life reaching it breaks                  it. A pane put down in the wrong place is a decision you live with, so                  it is worth thinking about before you spend on one.",
+            ),
+            (
+                "A payload takes ground; it does not just make a mess.",
+                "It burns down on a fuse you can watch — the last warning sprite is on                  screen for exactly one generation — and then scrambles a disc. What comes                  up alive is yours and what does not belongs to nobody, so a bomb breaks a                  country apart and leaves you some of the pieces. Ice stops the fuse, and                  a payload has to stay alive to go off at all.",
+            ),
+        ];
+
+        pub const TIP_TITLE: &str = "Other people's patterns work here.";
+        pub const TIP: &str =
+            "Life is exactly B3/S23 — an R-pentomino settles at generation 1103 with 116              cells, which is the figure in every book. So a glider is a glider, a gun is a              gun, and fifty years of published patterns are things you can build here and              expect to behave.";
+    }
+
     pub mod home {
         pub const PLAY: &str = "Play";
         pub const WHO: &str = "You are";
@@ -121,6 +163,8 @@ pub mod menu {
         }
         pub const PROFILE: &str = "Your profile";
         pub const PEOPLE: &str = "Who else plays here";
+        pub const ACCOUNT: &str = "Your account";
+        pub const HOWTO: &str = "How to play";
         pub const SETTINGS: &str = "Settings";
         pub const SETTINGS_HIDE: &str = "Close settings";
 
