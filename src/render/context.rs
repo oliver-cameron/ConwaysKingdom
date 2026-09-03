@@ -94,7 +94,7 @@ impl Offscreen {
     /// is a 7680x4320 texture, and the limit a device guarantees is 8192. Above
     /// the cap the world is drawn at the screen's own size, which is where it
     /// was before this existed.
-    fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> (u32, u32) {
+    pub(crate) fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> (u32, u32) {
         let most = device.limits().max_texture_dimension_2d;
         let (w, h) = (size.0.max(1), size.1.max(1));
         let (big_w, big_h) = (w * Self::SUPERSAMPLE, h * Self::SUPERSAMPLE);
@@ -191,7 +191,12 @@ impl Offscreen {
         Self { view, bind_group, layout, pipeline, grid, over }
     }
 
-    fn resize(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) {
+    pub(crate) fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+    ) {
         let (view, bind_group) = Self::target(device, &self.layout, format, size, &self.grid);
         self.view = view;
         self.bind_group = bind_group;
@@ -366,6 +371,20 @@ impl GpuState {
         log::debug!("formats offered: {:?}", surface_caps.formats);
 
         let offscreen = Offscreen::new(&device, config.format, (width, height));
+        // **Said out loud, because it is invisible when it fails.** The world
+        // is drawn into a target `over` times the screen and the resolve
+        // averages each block of samples down — and if the device's texture
+        // limit refuses the larger target, the factor silently comes back one
+        // and the picture is exactly what it was before any of this. There is
+        // no error and nothing looks broken, so this is the only way to know
+        // which of the two happened.
+        let (ow, oh) = Offscreen::offscreen_size(&device, (width, height));
+        log::info!(
+            "supersampling: world drawn at {ow}x{oh} for a {width}x{height} surface, \
+             {}x per axis (limit {})",
+            offscreen.over(),
+            device.limits().max_texture_dimension_2d,
+        );
         Self {
             surface,
             device,
