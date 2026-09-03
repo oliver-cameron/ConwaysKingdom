@@ -55,12 +55,19 @@ pub const STEP: f32 = 0.618_034;
 /// team's family depended on who else was on that team, so it could not be
 /// answered a player at a time. It can now, and this is that answer written
 /// out.
-pub fn table() -> [f32; PlayerId::COUNT] {
-    let mut hues = [0.0; PlayerId::COUNT];
-    for (i, hue) in hues.iter_mut().enumerate().skip(1) {
-        *hue = (i as f32 * STEP).fract();
-    }
-    hues
+pub fn table() -> &'static [f32; PlayerId::COUNT] {
+    /// **Worked out once.** It is a pure function of nothing, and it was being
+    /// recomputed three times a frame — once for the camera uniform and twice
+    /// for the lobby, which draws it in two places. `fract` is not const, so a
+    /// lock rather than a `const`.
+    static HUES: std::sync::LazyLock<[f32; PlayerId::COUNT]> = std::sync::LazyLock::new(|| {
+        let mut hues = [0.0; PlayerId::COUNT];
+        for (i, hue) in hues.iter_mut().enumerate().skip(1) {
+            *hue = (i as f32 * STEP).fract();
+        }
+        hues
+    });
+    &HUES
 }
 
 /// What the shader draws a sheet texel as, for this player.

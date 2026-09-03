@@ -273,6 +273,10 @@ pub struct GameApp {
     /// this a click that lands on empty ground is indistinguishable from a
     /// click that never arrived.
     last_action: Option<String>,
+    /// What each digit key prints, plain and with shift, as the hotbar wants
+    /// it. Cached because it is nineteen strings that change once a session —
+    /// see where it is filled in `update`.
+    typed_digits: Option<(Vec<Option<String>>, Vec<Option<String>>)>,
     /// A finished gesture waiting to be resolved to cells.
     pending: Option<Pending>,
     /// What the hotbar is holding.
@@ -1588,6 +1592,7 @@ impl App for GameApp {
         let mut app = Self {
             views: RefCell::new(Views::new(gpu)),
             ui_output: RefCell::new(None),
+            typed_digits: None,
             pipeline,
             bind_groups: vec![bind_group],
             vertex_buffers,
@@ -1759,7 +1764,21 @@ impl App for GameApp {
         // Once the browser has said what this keyboard prints, take it. It
         // answers on a promise, so this is the frame after it resolved and
         // every frame after that is a lock and a `None`.
-        self.views.borrow_mut().take_what_the_browser_said();
+        // **Rebuilt only when the answer changes.** These are nineteen owned
+        // strings — what each digit prints, plain and shifted — and they were
+        // built fresh every frame because the closures below outlive the borrow
+        // on `views` and so cannot hold a `&str` into it. What they could never
+        // do was *change* every frame: the browser answers once, on a promise,
+        // and after that it is the same nineteen strings for the rest of the
+        // session.
+        let relearned = self.views.borrow_mut().take_what_the_browser_said();
+        if relearned || self.typed_digits.is_none() {
+            let views = self.views.borrow();
+            self.typed_digits = Some((
+                (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect(),
+                (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect(),
+            ));
+        }
         let help_keys = {
             use winit::keyboard::KeyCode as K;
             const DIGITS: [K; 10] = [
@@ -1795,14 +1814,8 @@ impl App for GameApp {
                 tools: row(&DIGITS[..tools], true),
             }
         };
-        let (held, theme, shifted, bare) = {
-            let views = self.views.borrow();
-            let learned: Vec<Option<String>> =
-                (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect();
-            let bare: Vec<Option<String>> =
-                (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect();
-            (self.held, views.theme, learned, bare)
-        };
+        let (shifted, bare) = self.typed_digits.clone().unwrap_or_default();
+        let (held, theme) = (self.held, self.views.borrow().theme);
         // Registered before the frame rather than inside it: loading a texture
         // needs the context, and the context is borrowed for the whole build.
         let sheet = {
@@ -1833,8 +1846,14 @@ impl App for GameApp {
         // What a press in the lobby meant, acted on after the frame is built
         // because both answers change the screen the frame was drawn from.
         let mut in_lobby = lobby_view::Did::Nothing;
-        let lobby = self.session.lobby.clone();
-        let standing = self.session.standing.clone();
+        // **Borrowed, not cloned.** These were copied out of the session every
+        // frame — a `Lobby` is a `Vec<Seat>` of names and fingerprints and the
+        // standings are a `Vec<Holding>` — for no reason but that the closure
+        // below captures. `ui` is pre-borrowed for exactly that reason a few
+        // lines down, and the same trick works here: borrowing one field says
+        // nothing about another, so the frame can read these in place.
+        let lobby = &self.session.lobby;
+        let standing = &self.session.standing;
         let generation = self.world.generation;
         let paused = self.session.rules.paused;
         // Offline this client is the clock, and in a laboratory it is the

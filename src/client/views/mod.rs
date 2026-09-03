@@ -740,11 +740,13 @@ impl Views {
     /// Called each frame and does nothing on all but one of them. A press is
     /// still stronger evidence and still wins, because a press arrives later
     /// and overwrites; both are right, so which wins does not matter.
-    pub fn take_what_the_browser_said(&mut self) {
+    /// Whether anything changed, so a caller caching what the keys print knows
+    /// when to rebuild rather than doing it every frame.
+    pub fn take_what_the_browser_said(&mut self) -> bool {
         #[cfg(target_arch = "wasm32")]
         {
             let Some(found) = FROM_THE_BROWSER.lock().ok().and_then(|mut s| s.take()) else {
-                return;
+                return false;
             };
             for (code, shift) in named_keys() {
                 if shift {
@@ -755,7 +757,10 @@ impl Views {
                     self.learned.insert((code, false), text.clone());
                 }
             }
+            return true;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        false
     }
 
     /// What shift and this digit type here, for the squares on the hotbar.
