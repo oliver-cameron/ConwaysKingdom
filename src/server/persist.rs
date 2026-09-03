@@ -35,7 +35,7 @@ const MAGIC: &[u8; 4] = b"CKW\0";
 /// person's, which is the same silently-shuffled roster the last bump was
 /// about. Nothing to migrate: a seat whose person was never recorded is one
 /// nobody can come back to, and that was already true of a token nobody kept.
-const VERSION: u8 = 7;
+const VERSION: u8 = 8;
 
 const KIND_INFINITE: u8 = 0;
 const KIND_TOROIDAL: u8 = 1;

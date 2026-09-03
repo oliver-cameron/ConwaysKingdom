@@ -1240,11 +1240,18 @@ fn crowding(world: &World, (row, col): (i32, i32), player: PlayerId) -> usize {
 
 /// No-man's-land between one grant's edge and the next, in cells.
 ///
-/// In **chunks**, because that is the unit the world is drawn in and "how
-/// far away is my neighbour" is a question about the map. Three is far
-/// enough that neither can see the other's opening, and near enough that a
-/// glider crosses in a hundred generations.
-const SPAWN_GAP: i32 = 3 * CHUNK_N as i32;
+/// **In cells, and it used to be in chunks.** The reasoning for chunks was
+/// that they are the unit the world is drawn in and "how far away is my
+/// neighbour" is a question about the map. The number underneath it was never
+/// about chunks at all: forty-eight cells is far enough that neither player
+/// can see the other's opening and near enough that a glider crosses in a
+/// hundred generations, and both of those are distances in *cells*.
+///
+/// It mattered the day a chunk went from sixteen cells a side to sixty-four,
+/// which quadrupled the gap without anybody deciding to — four times the
+/// no-man's-land, four times the glider's journey, and a small torus that
+/// could no longer seat people at the spacing it wanted.
+const SPAWN_GAP: i32 = 48;
 
 /// Centre to centre between neighbouring grants, in cells: a patch, plus the
 /// ground between it and the next one.
@@ -2202,12 +2209,23 @@ mod tests {
         }
     }
 
-    /// And a world too small to go round says so rather than pretending. The
-    /// earlier players keep theirs; the later ones get what is left.
+    /// **No world a client or server can make is too small any more**, and
+    /// that is worth a test rather than a deletion.
+    ///
+    /// The smallest torus there is, is one chunk. At sixteen cells a side that
+    /// was 256 cells and could not seat everybody, so `too_cramped_for_grants`
+    /// had a case to answer; at sixty-four it is 4096, which holds a five by
+    /// five grid of patches against a ceiling of fifteen players. The guard is
+    /// still right and is now unreachable from outside, which is the state to
+    /// know about — if either number moves back it starts mattering again, and
+    /// this is what would notice.
     #[test]
-    fn a_torus_too_small_is_reported() {
-        let small = World::toroidal_empty(2, 2);
-        assert!(too_cramped_for_grants(&small), "32x32 cells cannot hold 31 squares");
+    fn no_world_anybody_can_make_is_too_small_to_go_round() {
+        let smallest = World::toroidal_empty(1, 1);
+        assert!(
+            !too_cramped_for_grants(&smallest),
+            "the smallest world there is cannot seat everybody"
+        );
         let roomy = World::toroidal_empty(24, 24);
         assert!(!too_cramped_for_grants(&roomy));
         assert!(!too_cramped_for_grants(&World::infinite_empty()), "infinite has room");
@@ -2272,7 +2290,10 @@ mod tests {
         // What is between them is the gap: the pitch less the patch they each
         // stand on.
         assert_eq!(SPAWN_PITCH - SPAWN_N, SPAWN_GAP);
-        assert_eq!(SPAWN_GAP, 3 * CHUNK_N as i32, "three chunks of no-man's-land");
+        // In cells, and stated as a distance rather than as a count of chunks
+        // — the number was always about how far a glider travels, and tying it
+        // to `CHUNK_N` quadrupled it the day a chunk grew.
+        assert_eq!(SPAWN_GAP, 48, "forty-eight cells of no-man's-land");
     }
 
     /// **The grid grows with the roster.** Six seats filled in reading order
@@ -2434,7 +2455,10 @@ mod tests {
             let d = (a - b).abs();
             d.min(extent - d)
         };
-        for chunks in [8, 12, 16, 24, 40] {
+        // A quarter the chunks a side for the same worlds, since a chunk grew
+        // fourfold on the edge — and the largest is the cap, which is the size
+        // this most wants to be checked at.
+        for chunks in [2, 3, 4, 6, 10] {
             let extent = chunks * CHUNK_N as i32;
             let world = World::toroidal(chunks, chunks);
             assert!(!too_cramped_for_grants(&world), "{chunks} chunks was called cramped");
@@ -2480,8 +2504,11 @@ mod tests {
         assert_eq!(seats.len(), PlayerId::MAX as usize, "two numbers shared a patch");
 
         // And where there *is* room, the comfortable spacing is untouched.
-        let roomy = World::toroidal(40, 40);
-        let extent = 40 * CHUNK_N as i32;
+        let roomy = World::toroidal(10, 10);
+        // The world's own extent, not a number repeated from the line above
+        // — which is how this came to describe a world four times the size of
+        // the one it was measuring, and wrapped every distance the wrong way.
+        let extent = roomy.size_in_cells().expect("a torus has a size").1;
         let (first, second) = (spawn_for(PlayerId(1), &roomy), spawn_for(PlayerId(2), &roomy));
         let along = (first.1 - second.1).abs().min(extent - (first.1 - second.1).abs());
         let down = (first.0 - second.0).abs().min(extent - (first.0 - second.0).abs());

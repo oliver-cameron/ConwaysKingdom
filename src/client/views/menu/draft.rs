@@ -333,7 +333,11 @@ mod tests {
 /// thousand cells and the world is about a megabyte of cells, which is
 /// nothing. It is here to stop a typo asking for a world that will not fit,
 /// not to say what makes a good arena.
-pub const MAX_CHUNKS: i32 = 64;
+/// **Divided by the same sixteen a chunk grew by.** A form that let somebody
+/// ask for a world the server refuses is a form that lies, and the server's
+/// answer is `MAX_TORUS_CHUNKS`, which is a count of cells wearing a count of
+/// chunks — see [`crate::sim::MAX_TORUS_SIDE`].
+pub const MAX_CHUNKS: i32 = 16;
 
 fn chunks(text: &str, which: &str) -> Result<i32, String> {
     let text = text.trim();

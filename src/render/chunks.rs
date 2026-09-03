@@ -195,7 +195,7 @@ pub const KIND_COARSE: u32 = 2;
 /// sprites are one- and two-texel strokes. Everything between here and there
 /// is drawn from a subset of the art it is meant to show. See
 /// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#texels-nothing-samples).
-pub const COARSE_BELOW: f32 = 4.0;
+pub const COARSE_BELOW: f32 = 1.5;
 
 /// And back to the fine path only above this.
 ///
@@ -203,7 +203,7 @@ pub const COARSE_BELOW: f32 = 4.0;
 /// resting on the boundary would swap every frame, and the two paths do not
 /// draw identically — one has sprites and outlines and the other has flat
 /// colour — so the swap is visible and must not happen twice a second.
-pub const FINE_ABOVE: f32 = 5.0;
+pub const FINE_ABOVE: f32 = 2.0;
 
 /// The fine path is already drawing the coarse answer by the time either of
 /// those is reached, so the swap has nothing left to show.
@@ -212,7 +212,7 @@ pub const FINE_ABOVE: f32 = 5.0;
 /// `FLAT_BY`, and `FLAT_BY` is under both thresholds above — which is what
 /// makes the handover look the same going down as coming back up. **Kept in
 /// step by hand**: lowering either of these under `FLAT_BY` puts the pop back.
-pub const FLAT_BY_IN_SHADER: f32 = 4.0;
+pub const FLAT_BY_IN_SHADER: f32 = 1.5;
 
 /// The world as one texel a cell: the cell without its art.
 ///
@@ -974,16 +974,24 @@ mod tests {
     /// world repeats for as far as anybody pans.
     #[test]
     fn a_torus_that_fits_is_the_coarse_window() {
-        let world = World::toroidal_empty(12, 12);
+        // Three chunks a side, which is small enough to be held whole at any
+        // chunk size worth having — written that way rather than as a number
+        // of cells, which is what went stale when a chunk grew.
+        let world = World::toroidal_empty(3, 3);
+        let side = 3 * CHUNK_N as i32;
         let (at, size) = CoarseTexture::window_for(&world, ((-500, -500), (500, 500)));
         assert_eq!(at, (0, 0), "a world held whole starts where the world does");
-        assert_eq!(size, (192, 192), "and is exactly the world");
+        assert_eq!(size, (side, side), "and is exactly the world");
 
         // Anything larger gets a window on the view instead, because it cannot
         // be held whole — 1024 cells is 64 chunks and that is the largest a
         // client may ask for, so this is the case that does not arise from the
         // menu and does from a command line.
-        let big = World::toroidal_empty(80, 80);
+        // Larger than the coarse texture can hold whole, which is what puts a
+        // window on the view instead. `SIDE / CHUNK_N` chunks is exactly the
+        // texture, so one more than that is the first world that cannot fit.
+        let too_wide = (CoarseTexture::SIDE as i32 / CHUNK_N as i32) + 1;
+        let big = World::toroidal_empty(too_wide, too_wide);
         let (at, size) = CoarseTexture::window_for(&big, ((0, 0), (99, 99)));
         assert_eq!(size, (CoarseTexture::SIDE as i32, CoarseTexture::SIDE as i32));
         assert_ne!(at, (0, 0), "a window is centred on what is being looked at");
@@ -1063,15 +1071,17 @@ mod tests {
             FLAT_BY_IN_SHADER <= COARSE_BELOW,
             "the swap happens while the fine path still has art on it"
         );
-        // Coming down: fine until below COARSE_BELOW.
+        // Coming down: fine until below COARSE_BELOW. Written against the two
+        // thresholds rather than as a list of numbers, which is what went
+        // stale when they moved with the chunk size.
         let mut coarse = false;
-        for zoom in [8.0, 5.0, 4.5, 4.0, 3.9] {
+        for zoom in [FINE_ABOVE * 4.0, FINE_ABOVE, COARSE_BELOW, COARSE_BELOW * 0.9] {
             coarse = if coarse { zoom < FINE_ABOVE } else { zoom < COARSE_BELOW };
         }
         assert!(coarse, "never became coarse on the way down");
         // And going back up: coarse until above FINE_ABOVE, so the band
         // between them holds whichever it already was.
-        for zoom in [4.5, 4.9] {
+        for zoom in [(COARSE_BELOW + FINE_ABOVE) / 2.0, FINE_ABOVE * 0.99] {
             coarse = if coarse { zoom < FINE_ABOVE } else { zoom < COARSE_BELOW };
             assert!(coarse, "swapped back inside the band");
         }
@@ -1143,14 +1153,29 @@ mod tests {
             chunks_on_screen(w, h, 16.0) < ChunkTexture::LAYER_BUDGET as usize,
             "the zoom the client opens at should fit"
         );
+        // **And there is a zoom that does not fit**, which is the whole reason
+        // the coarse path exists. Where that zoom *is* moved a long way when a
+        // chunk went from sixteen cells a side to sixty-four: a chunk now
+        // covers sixteen times the screen, so the budget lasts sixteen times
+        // longer and the fine path reaches down to about one and a half pixels
+        // a cell instead of five. `COARSE_BELOW` followed it down, which is
+        // most of what that change bought.
         assert!(
-            chunks_on_screen(w, h, 5.0) > ChunkTexture::LAYER_BUDGET as usize,
-            "and about zoom five should already not"
+            chunks_on_screen(w, h, COARSE_BELOW) <= ChunkTexture::LAYER_BUDGET as usize,
+            "the fine path is asked for more layers than there are at its own floor"
         );
         assert!(
-            chunks_on_screen(w, h, crate::client::views::game::camera::ZOOM_RANGE.0) > 8000,
-            "at the zoom floor a 1080p screen covers over eight thousand chunks, \
-             against {} layers and {MAX_INSTANCES} quads",
+            chunks_on_screen(w, h, COARSE_BELOW / 4.0) > ChunkTexture::LAYER_BUDGET as usize,
+            "nothing on this screen ever runs out of layers, so the coarse path is dead code"
+        );
+        // And at the very bottom of the range it is out of both, which is what
+        // the coarse path is a backstop for. Written against the budget rather
+        // than as a number of chunks: the number depends on `CHUNK_N`, and the
+        // fact does not.
+        let floor = crate::client::views::game::camera::ZOOM_RANGE.0;
+        assert!(
+            chunks_on_screen(w, h, floor) > ChunkTexture::LAYER_BUDGET as usize,
+            "at the zoom floor a 1080p screen fits in {} layers, so nothing needs the coarse path",
             ChunkTexture::LAYER_BUDGET,
         );
     }

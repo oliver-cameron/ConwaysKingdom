@@ -91,6 +91,18 @@ pub struct Stamp {
     pub on_bar: bool,
 }
 
+/// Whether a swept rectangle is small enough to be a stamp.
+///
+/// **One bound, used by the sweep and by the pad.** A stamp is at most
+/// [`SKETCH_N`] cells a side either way, because that is the pad it has to be
+/// editable on. The sweep had no bound at all, so a captured pattern could be
+/// any size and was then cropped to the pad the moment somebody opened it —
+/// two limits that disagree are one limit and a silent loss.
+pub fn fits(from: (i32, i32), to: (i32, i32)) -> bool {
+    let (rows, cols) = ((from.0 - to.0).abs() + 1, (from.1 - to.1).abs() + 1);
+    rows <= SKETCH_N && cols <= SKETCH_N
+}
+
 impl Stamp {
     /// Take the living cells this player owns inside a rectangle.
     ///
@@ -102,6 +114,13 @@ impl Stamp {
         from: (i32, i32),
         to: (i32, i32),
     ) -> Option<Self> {
+        // **The same bound as the pad**, which it did not have: a sweep took
+        // whatever rectangle it was given, so a captured pattern could be any
+        // size at all — and then opening it to edit quietly cropped it to the
+        // pad. Two limits that disagree are one limit and a silent loss.
+        if !fits(from, to) {
+            return None;
+        }
         let (r0, r1) = (from.0.min(to.0), from.0.max(to.0));
         let (c0, c1) = (from.1.min(to.1), from.1.max(to.1));
 
@@ -1168,6 +1187,32 @@ mod tests {
     }
 
     /// A stamp is the pattern, not the rectangle somebody swept round it.
+    /// **One bound, and the sweep is held to it as well as the pad.**
+    ///
+    /// A capture took whatever rectangle it was given, so a pattern could be
+    /// any size at all — and then opening it to edit cropped it to the pad
+    /// without saying so. Two limits that disagree are one limit and a silent
+    /// loss of whatever fell outside it.
+    #[test]
+    fn a_sweep_larger_than_the_pad_is_refused_rather_than_cropped() {
+        let me = PlayerId(1);
+        let wide: Vec<((i32, i32), Kind, PlayerId)> =
+            (0..SKETCH_N + 1).map(|c| (((0, c)), Kind::NORMAL, me)).collect();
+        let world = world_with(&wide);
+
+        assert!(fits((0, 0), (0, SKETCH_N - 1)), "a stamp exactly the pad's width does not fit");
+        assert!(!fits((0, 0), (0, SKETCH_N)), "one wider than the pad fits");
+        assert!(!fits((0, 0), (SKETCH_N, 0)), "one taller than the pad fits");
+
+        assert!(
+            Stamp::capture(&world, me, (0, 0), (0, SKETCH_N)).is_none(),
+            "a sweep wider than the pad was captured anyway"
+        );
+        let kept = Stamp::capture(&world, me, (0, 0), (0, SKETCH_N - 1))
+            .expect("a sweep the pad's own width was refused");
+        assert_eq!(kept.size.1, SKETCH_N, "the widest stamp is not the pad's width");
+    }
+
     #[test]
     fn capture_trims_to_what_it_caught() {
         let me = PlayerId(1);
@@ -1175,8 +1220,9 @@ mod tests {
         let glider = [(10, 11), (11, 12), (12, 10), (12, 11), (12, 12)];
         let world = world_with(&glider.map(|at| (at, Kind::NORMAL, me)));
 
-        // Swept sloppily, far wider than the pattern.
-        let stamp = Stamp::capture(&world, me, (5, 5), (20, 20)).unwrap();
+        // Swept sloppily, far wider than the pattern — but inside what a
+        // stamp may be, which is the other half of what `capture` checks.
+        let stamp = Stamp::capture(&world, me, (5, 5), (19, 19)).unwrap();
         assert_eq!(stamp.size, (3, 3), "trimmed to the glider, not the sweep");
         assert_eq!(stamp.cells.len(), 5);
         assert_eq!(stamp.name, "3x3");

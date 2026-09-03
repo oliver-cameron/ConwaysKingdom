@@ -519,6 +519,12 @@ pub mod hotbar {
 /// The library of captured patterns.
 pub mod stamps {
     pub const TITLE: &str = "Stamps";
+    /// A sweep larger than the pad it would be edited on. Said as the size
+    /// rather than as "too big", because the next thing somebody does is sweep
+    /// again and they need the number to aim at.
+    pub fn too_big(side: i32) -> String {
+        format!("a stamp is at most {side} by {side}")
+    }
     /// Turning is a thing you do to a pattern, so with none held the key
     /// changes nothing on the screen — which looks like a key that does not
     /// work rather than one that had nothing to act on.

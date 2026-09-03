@@ -9,7 +9,7 @@ use super::rule::{
 use super::seed::Roll;
 use std::ops::{Index, IndexMut};
 
-pub const CHUNK_N: usize = 16;
+pub const CHUNK_N: usize = 64;
 pub const CHUNK_CELLS: usize = CHUNK_N * CHUNK_N;
 
 /// One cell: two bytes, and the second of them is a sprite.

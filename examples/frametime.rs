@@ -5,12 +5,12 @@
 //! The step is the server's whole per-generation cost and the client pays it
 //! too, so it is the one number both sides share. `--span 250` is four a
 //! second, so the budget is 250 ms; a client drawing at 60 fps has 16.7.
-use conwayskingdom::sim::{PlayerId, World};
+use conwayskingdom::sim::{PlayerId, World, CHUNK_CELLS, CHUNK_N};
 use std::time::Instant;
 
 fn seeded(rows: i32, cols: i32, fill: u64) -> World {
     let mut w = World::toroidal(rows, cols);
-    let n = 16;
+    let n = CHUNK_N as i32;
     let mut state: u64 = 0x9E3779B97F4A7C15;
     for r in 0..rows * n {
         for c in 0..cols * n {
@@ -42,7 +42,7 @@ fn main() {
             "{:>10} {:>8} {:>10} {:>10.2} {:>8.1}%",
             format!("{rows}x{cols}"),
             chunks,
-            chunks * 256,
+            chunks * CHUNK_CELLS,
             ms,
             ms / 250.0 * 100.0
         );

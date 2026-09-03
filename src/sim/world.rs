@@ -64,12 +64,21 @@ pub enum WorldKind {
 /// not joined anything. The release profile is `panic = "abort"`, so it did
 /// not even unwind.
 ///
-/// The numbers are what a server can actually step four times a second rather
-/// than what it can hold: 16384 chunks is a little over four million cells,
-/// and the per-side cap stops a 1x16384 world that fits the budget and is a
-/// corridor nobody can play in.
-pub const MAX_TORUS_SIDE: i32 = 512;
-pub const MAX_TORUS_CHUNKS: i64 = 16_384;
+/// **The numbers are what a server can actually step four times a second**,
+/// rather than what it can hold — so they are a count of *cells* wearing a
+/// count of chunks, and they moved when a chunk did.
+///
+/// `examples/frametime` measures about 41 nanoseconds a cell, near enough flat
+/// across every size, so a quarter-second budget is a little over four million
+/// cells with nothing left for the sockets. At sixteen cells to a chunk edge
+/// that was 16384 chunks; at sixty-four it is **1024**, because a chunk holds
+/// sixteen times as many cells and the budget did not change.
+///
+/// The per-side cap is the same division, and it is doing a different job:
+/// stopping a 1x1024 world that fits the budget and is a corridor nobody can
+/// play in.
+pub const MAX_TORUS_SIDE: i32 = 128;
+pub const MAX_TORUS_CHUNKS: i64 = 1_024;
 
 impl WorldKind {
     /// A world of this shape with nothing in it, which is what both a server
@@ -2000,9 +2009,12 @@ mod tests {
     /// worth stating where somebody will find it.
     #[test]
     fn liveness_is_exactly_b3_s23() {
-        const N: usize = 64;
+        // One chunk a side, whatever a chunk is — the point of the test is the
+        // rule, and a size written out here is a size that goes stale the day
+        // `CHUNK_N` changes, which it has.
+        const N: usize = CHUNK_N;
         let mut soup = [[false; N]; N];
-        let mut w = World::toroidal_empty(4, 4);
+        let mut w = World::toroidal_empty(1, 1);
         assert_eq!(w.size_in_cells(), Some((N as i32, N as i32)));
 
         // A fixed soup, from the dice the simulation already uses, so this
@@ -2686,7 +2698,9 @@ mod tests {
             assert!(asked.checked().is_err(), "{rows}x{cols} was accepted");
         }
         // And the shapes the documentation tells people to run still build.
-        for (rows, cols) in [(1, 1), (18, 18), (40, 40), (MAX_TORUS_SIDE, 32)] {
+        // Shapes inside the cap, which is a count of cells wearing a count of
+        // chunks and so moved when a chunk grew — see `MAX_TORUS_SIDE`.
+        for (rows, cols) in [(1, 1), (8, 8), (MAX_TORUS_SIDE, 8)] {
             let asked = WorldKind::Toroidal { rows, cols };
             assert_eq!(asked.checked(), Ok(asked), "{rows}x{cols} was refused");
         }

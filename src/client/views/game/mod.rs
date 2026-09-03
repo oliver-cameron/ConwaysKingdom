@@ -545,6 +545,13 @@ impl GameApp {
                 Ok((drag.path.clone(), format!("{} cells of {name}{full}", drag.path.len())))
             }
             hotbar::Stroke::Rectangle => {
+                // **Refused here so the preview says so**, before the button
+                // comes up rather than after: this runs for the selection box
+                // as well as for the release, so a sweep too big to keep is
+                // marked as one while the hand is still moving.
+                if self.held.captures() && !stamp::fits(drag.from, to) {
+                    return Err(words::stamps::too_big(stamp::SKETCH_N));
+                }
                 let (rows, cols) = span(drag.from, to);
                 let area = rows * cols;
                 if area > MAX_DRAG_CELLS {

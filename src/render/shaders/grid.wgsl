@@ -101,8 +101,8 @@ fn level_for(zoom: f32) -> f32 {
 /// `COARSE_BELOW`, fully art again by a little over `FINE_ABOVE`, so the
 /// handover looks the same going down as coming back up and every level above
 /// it is drawn at full strength.
-const FLAT_FROM: f32 = 5.5;
-const FLAT_BY: f32 = 4.0;
+const FLAT_FROM: f32 = 3.0;
+const FLAT_BY: f32 = 1.5;
 
 /// How much of the cell's art to give up. One is the cell without it.
 fn flat_fade(zoom: f32) -> f32 {
