@@ -122,6 +122,41 @@ pub mod menu {
     /// What somebody who has just arrived cannot work out by clicking. Every
     /// entry is a rule people lose to before they learn it, in the order they
     /// bite, and the argument for each is in docs/game.md.
+    /// The practice patches on the how-to page.
+    ///
+    /// **Placeholder copy.** Everything below marked lorem is a stand-in for
+    /// words somebody will write; the patches themselves are real and run the
+    /// game's own rule. Replacing a string here changes what a patch says and
+    /// nothing about what it does.
+    pub mod tutorial {
+        pub const RUN: &str = "Run";
+        pub const STOP: &str = "Stop";
+        pub const STEP: &str = "Step";
+        /// Fills the outline in, for somebody who would rather watch than trace.
+        pub const SHOW_ME: &str = "Draw it for me";
+        pub const CLEAR: &str = "Clear";
+
+        pub fn purse(value: i32) -> String {
+            format!("${value}")
+        }
+        pub fn generation(n: u64) -> String {
+            format!("gen {n}")
+        }
+
+        /// The heading and body above each patch, in the order the page draws
+        /// them. Lorem for now — see the note on this module.
+        pub const LESSONS: &[(&str, &str)] = &[
+            (
+                "Lorem ipsum: a factory pays when it turns over",
+                "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Trace the outline to lay a blinker of factories, press Run, and watch the counter.",
+            ),
+            (
+                "Lorem ipsum: and a block of them pays nothing",
+                "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. The same four cells that never move are the same four cells that never earn.",
+            ),
+        ];
+    }
+
     pub mod howto {
         pub const TITLE: &str = "How to play";
         pub const NOTE: &str =

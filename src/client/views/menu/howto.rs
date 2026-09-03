@@ -132,6 +132,32 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
             });
         }
 
+        // **The patches, and they are optional by being here.** A scroll view
+        // is the right home for something somebody may want and may not: five
+        // rules and out is a complete visit, and so is stopping to find out
+        // what a factory actually does. See [`super::tutorial`].
+        ui.add_space(m.item_spacing);
+        for (i, (heading, body)) in words::tutorial::LESSONS.iter().enumerate() {
+            let Some(patch) = menu.patches.get_mut(i) else { break };
+            patch.tick(at.now);
+            card(ui, theme, false, |ui| {
+                column(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(*heading).size(m.text_body).color(p.text).strong(),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(*body).size(m.text_small).color(p.text_dim));
+                    ui.add_space(m.item_spacing);
+                });
+                ui.vertical_centered(|ui| super::tutorial::show(ui, theme, patch, at.sheet));
+            });
+            // A patch that is running wants the next frame, and nothing else on
+            // this page does.
+            if patch.running {
+                ui.ctx().request_repaint();
+            }
+        }
+
         // **Set apart**, because it is a tip rather than a rule — and it is the
         // one that opens the game up.
         ui.add_space(m.item_spacing);

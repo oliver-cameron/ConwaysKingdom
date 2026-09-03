@@ -42,6 +42,7 @@ mod howto;
 mod people;
 mod play;
 mod settings;
+pub mod tutorial;
 
 pub use draft::{Draft, Ends, Kind, Shape};
 
@@ -221,6 +222,10 @@ pub struct Menu {
     /// than a missing value — a face is derived from the key, so there is
     /// nothing to draw one from until a server has issued one.
     pub whoami: Option<crate::net::PersonId>,
+    /// The practice patches on the how-to page, made once and kept, because a
+    /// patch somebody has drawn on is state and a page that reset it every
+    /// frame would be one nobody could use.
+    pub patches: Vec<tutorial::Patch>,
 }
 
 /// Whether a world ends, and how. Three answers to one question rather than a
@@ -343,6 +348,7 @@ impl Menu {
             finding: String::new(),
             people: None,
             whoami: None,
+            patches: tutorial::lessons(),
         }
     }
 
