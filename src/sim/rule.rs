@@ -239,6 +239,24 @@ pub fn mine_chance(age: u8) -> Chance {
 /// One upkeep charge on a dead mine.
 pub const MINE_DRAIN: i32 = 2;
 
+/// What one square of blast costs the player who set it off.
+///
+/// **Charged on detonation and by area, which is the nerf.** Dynamite used to
+/// cost [`PAYLOAD_COST`] once, when it was laid, and nothing afterwards — so
+/// the cheapest thing in the game was to lay one and let a glider carry it,
+/// and a blob of them was the cheapest of all, because
+/// [`blast_reach`] gives a hundred of them ten times the reach and therefore a
+/// hundred times the ground for a hundred times the purchase price and no more.
+///
+/// Paying per square turned over makes the *effect* the thing bought rather
+/// than the fuse, so a blob costs exactly what a blob does. It also puts a real
+/// decision on a chain: each link is another disc and another bill, and a chain
+/// that runs away is one that empties a purse.
+///
+/// Small, because the areas are not: one payload's disc is a little over three
+/// hundred squares, so at this it is about the price of laying it again.
+pub const BLAST_DRAIN: i32 = 1;
+
 // --- the rules, in order -----------------------------------------------------
 //
 // Each takes the cell as the one before left it and says whether the rest run.

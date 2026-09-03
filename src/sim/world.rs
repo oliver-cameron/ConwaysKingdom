@@ -455,7 +455,11 @@ impl World {
         // would never be drawn full — and the whole of what makes a payload
         // answerable is that its last sprite is on screen for exactly one
         // generation, always. See [`Self::detonate`].
-        self.detonate();
+        // **What the blasts cost, folded into the tally the mines already use.**
+        // A detonation runs before the rule and so before `mined` exists, and
+        // it is the same kind of fact — squares that changed hands and are owed
+        // for — so it rides the same channel rather than a second one.
+        let blasts = self.detonate();
         self.compute_active();
         let active = std::mem::take(&mut self.active);
 
@@ -496,6 +500,7 @@ impl World {
         self.fire_turrets();
         self.dirty = true;
         self.prune();
+        mined.add(&blasts);
         mined
     }
 
@@ -574,10 +579,11 @@ impl World {
     /// That is the warning: a fuse reaches full during one generation's rule,
     /// is drawn full for that whole generation, and goes off at the start of
     /// the next.
-    fn detonate(&mut self) {
+    fn detonate(&mut self) -> Mined {
+        let mut owed = Mined::default();
         let ready = self.payloads_ready();
         if ready.is_empty() {
-            return;
+            return owed;
         }
         let generation = super::seed::generation_seed(self.seed, self.generation);
 
@@ -624,8 +630,18 @@ impl World {
         }
 
         for (centre, owner, seed, reach) in blasts {
+            // Every square the disc covers, charged by area — so a blob that
+            // reaches ten times as far pays for a hundred times the ground,
+            // which is exactly what it turned over.
+            let disc = (-reach..=reach)
+                .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+                .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+                .count();
+            let at = owner.0 as usize;
+            owed.blasted[at] = owed.blasted[at].saturating_add(disc as u32);
             self.scramble(centre, owner, seed, reach);
         }
+        owed
     }
 
     /// Turn a disc of ground into noise, and light every payload it reaches.

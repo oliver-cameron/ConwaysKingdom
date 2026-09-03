@@ -585,6 +585,15 @@ kinds! {
 pub struct Mined {
     pub born: [u32; PlayerId::COUNT],
     pub upkeep: [u32; PlayerId::COUNT],
+    /// Squares turned over by each player's own detonations.
+    ///
+    /// **A blast is charged for when it goes off, not when it is laid**, and it
+    /// is charged by *area* — see [`super::rule::BLAST_DRAIN`]. Laying one is
+    /// the decision and setting it off is the cost, which is what stops a fused
+    /// cell being a cheap way to buy a very large effect: a blob of dynamite
+    /// reaching ten times as far covers a hundred times the ground and pays for
+    /// a hundred times the ground.
+    pub blasted: [u32; PlayerId::COUNT],
 }
 
 impl Mined {
@@ -597,6 +606,9 @@ impl Mined {
             *t = t.saturating_add(*n);
         }
         for (t, n) in self.upkeep.iter_mut().zip(&other.upkeep) {
+            *t = t.saturating_add(*n);
+        }
+        for (t, n) in self.blasted.iter_mut().zip(&other.blasted) {
             *t = t.saturating_add(*n);
         }
     }
@@ -959,6 +971,32 @@ mod tests {
     /// owner rather than by the tile byte — see [`bits::NOBODY`] — so the one
     /// thing that has to stay true is that no real cell ever names it, or two
     /// different things would be drawn with one picture.
+    /// **Every cell a kind can be in has art**, which is a stronger question
+    /// than the one below it and catches a different fault: a cell whose age
+    /// its kind never advances, carrying an age anyway.
+    ///
+    /// `Kind::NORMAL` and `Kind::TURRET` are `Ages::Never`, so the sheet has
+    /// one row for each and blanks beneath — and anything that changes a cell's
+    /// kind without clearing its age points at one of those blanks and draws
+    /// nothing at all. `Placement::apply_to` did exactly that: a plain cell
+    /// drawn over a worn mine kept the mine's depletion and vanished.
+    #[test]
+    fn a_kind_that_never_ages_is_never_given_one() {
+        for kind in Kind::ALL {
+            if !matches!(kind.ages(), Ages::Never) {
+                continue;
+            }
+            for placement in
+                [Kind::NORMAL, Kind::MINE, Kind::TURRET, Kind::PAYLOAD].into_iter().map(|over| {
+                    Cell::DEAD.with_kind(over).with_age(bits::MAX_AGE).with_player(PlayerId(1))
+                })
+            {
+                let after = placement.with_kind(kind).with_age(0);
+                assert_eq!(after.age(), 0, "{kind:?} kept an age it can never advance");
+            }
+        }
+    }
+
     #[test]
     fn no_cell_draws_the_unowned_tile() {
         for kind in 0..=bits::KIND_MASK {

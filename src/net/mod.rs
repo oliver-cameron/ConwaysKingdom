@@ -30,6 +30,8 @@ pub use auth::{PersonId, Secret};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::sim::CHUNK_N;
 use crate::sim::{Cell, Coord, Kind, PlayerId, World, WorldKind};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
@@ -315,14 +317,25 @@ impl Placement {
     /// other.
     pub fn apply_to(self, existing: Cell, player: PlayerId) -> Cell {
         match self {
+            // **The age goes with the kind, both ways.**
+            //
+            // Placed life is ordinary life: without `with_kind`, drawing over a
+            // mine's corpse would hand you a free mine, since the kind is on
+            // the cell and outlives the life that carried it. And without
+            // `with_age` it hands you the *wear* instead — a mine's age is how
+            // depleted its square is, and a plain cell has no such thing, so it
+            // arrives as a number nothing will ever clear.
+            //
+            // It showed as an invisible cell. `Kind::NORMAL` is `Ages::Never`,
+            // so the sheet has art for it at age nought and blank rows beneath;
+            // drawing a cell over a worn mine put a live normal cell at age
+            // five, which points at one of those blanks.
             Self::Life => existing
                 .with_alive(true)
                 .with_player(player)
                 .with_level(crate::sim::bits::MAX_LEVEL)
-                // Placed life is ordinary life. Without this, drawing over a
-                // mine's corpse would hand you a free mine -- the kind is on
-                // the cell and outlives the life that carried it.
-                .with_kind(Kind::NORMAL),
+                .with_kind(Kind::NORMAL)
+                .with_age(0),
             // **From nought**, as a payload is. A mine's age only resets when
             // it decays, so laying a fresh one over a corpse that had been
             // rotting would buy a mine already part way through its own.
@@ -332,11 +345,13 @@ impl Placement {
                 .with_level(crate::sim::bits::MAX_LEVEL)
                 .with_kind(Kind::MINE)
                 .with_age(0),
+            // `Ages::Never` too, so the same reasoning and the same reset.
             Self::Turret => existing
                 .with_alive(true)
                 .with_player(player)
                 .with_level(crate::sim::bits::MAX_LEVEL)
-                .with_kind(Kind::TURRET),
+                .with_kind(Kind::TURRET)
+                .with_age(0),
             // The same, and here it is a fuse somebody else's cell had
             // already half burnt.
             Self::Payload => existing
@@ -1494,7 +1509,8 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, PAYLOAD_COST, RECLAIM, TURRET_COST,
+    BLAST_DRAIN, ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, PAYLOAD_COST, RECLAIM,
+    TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
@@ -1503,7 +1519,11 @@ pub use crate::sim::{
 /// know prices — it counts births and deaths and this says what they are worth.
 pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
     let at = player.0 as usize;
-    mined.born[at] as i32 * MINE_YIELD - mined.upkeep[at] as i32 * MINE_DRAIN
+    mined.born[at] as i32 * MINE_YIELD
+        - mined.upkeep[at] as i32 * MINE_DRAIN
+        // Charged when it goes off and by the ground it turned over, so what
+        // is bought is the effect rather than the fuse — see `BLAST_DRAIN`.
+        - mined.blasted[at] as i32 * BLAST_DRAIN
 }
 
 /// What an action is worth to the player who did it.
