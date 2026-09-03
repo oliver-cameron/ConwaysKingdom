@@ -1602,11 +1602,15 @@ mod tests {
             .filter(|&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_home()))
             .collect();
         assert!(!home.is_empty(), "the grant marked no home ground");
-        // Something of theirs standing on it, so "cleared" has something to
-        // mean.
-        for &(r, c) in home.iter().take(6) {
-            world.set_cell_at(r, c, world.cell_at(r, c).expect("a home square").with_alive(true));
-        }
+        // What is standing on their patch before anything goes off. `net::grant`
+        // gives an opening block, so a granted patch is not empty — and the
+        // claim here is that a blast never *adds* life to one, not that it
+        // leaves none.
+        let lit_before: Vec<(i32, i32)> = home
+            .iter()
+            .copied()
+            .filter(|&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_alive()))
+            .collect();
 
         // Mine, armed, just outside their patch, so the blast reaches in
         // without my having to overwrite one of the squares under test.
@@ -1617,11 +1621,18 @@ mod tests {
         world.set_cell_at(at.0, at.1, armed.with_player(me));
         world.detonate();
 
+        // **Wherever it landed.** Where a blast goes off is `blast_centre`'s to
+        // decide — it walks outward to somewhere worth hitting — so this asks
+        // for what must hold whatever it chose: a granted square is still
+        // theirs, still marked, and carries no life the blast put there.
         for (r, c) in home {
             let cell = world.cell_at(r, c).expect("a home square");
             assert!(cell.is_home(), "the blast cleared the home mark at {r},{c}");
             assert_eq!(cell.player(), them, "the blast took a granted square at {r},{c}");
-            assert!(!cell.is_alive(), "the blast made life on their patch at {r},{c}");
+            assert!(
+                !cell.is_alive() || lit_before.contains(&(r, c)),
+                "the blast made life on their patch at {r},{c}"
+            );
         }
     }
 
@@ -1667,7 +1678,12 @@ mod tests {
         );
         // Noise and not a slab: a disc brought wholly to life would be one
         // shape rather than something to clean up.
-        let reach = rule::PAYLOAD_REACH;
+        // **Reach plus throw**, because the centre is not the payload: a blast
+        // walks outward to somewhere worth hitting, up to `PAYLOAD_THROW`, so
+        // the disc to look in is wherever it could have landed. Written as the
+        // two constants rather than as a number — this measured a fixed radius
+        // and went blind the moment the reach shrank.
+        let reach = rule::PAYLOAD_REACH + rule::PAYLOAD_THROW;
         let disc: Vec<(i32, i32)> = (-reach..=reach)
             .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
             .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)

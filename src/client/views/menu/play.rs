@@ -4,7 +4,7 @@
 //! and share almost nothing: this one is about a machine somewhere and the
 //! worlds on it, and home is about the person in front of the screen.
 
-use super::draft::{Draft, Ends, Kind, Shape};
+use super::draft::{Access, Draft, Ends, Kind, Shape};
 use super::{describe, players, words, Chose, Menu, Page, Stage, Where, RETRY_EVERY, SETTLE};
 use crate::client::views::theme::Theme;
 use crate::net::{RoomId, RoomInfo};
@@ -453,7 +453,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // sides: there is one player. Hidden rather than disabled, because
             // a field that cannot be wrong is a field that should not be
             // asked about.
-            if reached && !draft.private {
+            if reached && draft.access == Access::Listed {
                 ui.label(egui::RichText::new(words::make::NAME).size(m.text_small));
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.name)
@@ -540,27 +540,34 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 }
             }
 
-            if reached {
-                ui.add_space(m.item_spacing);
-                ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
-                let mut private = draft.private;
-                toggles(
-                    ui,
-                    theme,
-                    &mut private,
-                    &[(false, words::make::LISTED), (true, words::make::UNLISTED)],
-                );
-                draft.private = private;
-                ui.colored_label(
-                    p.text_dim,
-                    egui::RichText::new(if draft.private {
-                        words::make::UNLISTED_NOTE
-                    } else {
-                        words::make::LISTED_NOTE
-                    })
-                    .size(m.text_small),
-                );
-            }
+            // **Three answers, and solo is one of them.** Playing alone was a
+            // page of its own, asking these same questions, reached from
+            // somewhere else — which made it a thing you had to already know
+            // about. It is not a different errand: it is this form with the
+            // last question answered "nobody".
+            //
+            // Shown whether or not a server has answered. With none, the only
+            // answer that can work is `Solo`, and the toggles say so by being
+            // the place the choice lives rather than by disappearing.
+            ui.add_space(m.item_spacing);
+            ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
+            let mut access = draft.access;
+            let listed = [
+                (Access::Listed, words::make::LISTED),
+                (Access::ByCode, words::make::UNLISTED),
+                (Access::Solo, words::make::SOLO_ACCESS),
+            ];
+            toggles(ui, theme, &mut access, if reached { &listed } else { &listed[2..] });
+            draft.access = if reached { access } else { Access::Solo };
+            ui.colored_label(
+                p.text_dim,
+                egui::RichText::new(match draft.access {
+                    Access::Listed => words::make::LISTED_NOTE,
+                    Access::ByCode => words::make::UNLISTED_NOTE,
+                    Access::Solo => words::make::SOLO_NOTE,
+                })
+                .size(m.text_small),
+            );
 
             if draft.kind == Kind::Match {
                 ui.add_space(m.item_spacing);
@@ -612,20 +619,27 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 );
             } else if crate::client::views::wide(
                 ui,
-                egui::RichText::new(if reached { words::make::MAKE } else { words::make::ALONE })
-                    .size(m.text_action)
-                    // The accent is for the thing you are meant to press next,
-                    // and until a server has answered that is not this one.
-                    .color(if reached { p.ground } else { p.text }),
+                // **The action follows the last answer on the form**, which is
+                // who can find it. Make it on the server, or play it here.
+                egui::RichText::new(if reached && draft.access != Access::Solo {
+                    words::make::MAKE
+                } else {
+                    words::make::ALONE
+                })
+                .size(m.text_action)
+                // The accent belongs on it either way now: the form always has
+                // an action that works, because solo is one of its answers
+                // rather than something that happens when nothing else can.
+                .color(p.ground),
                 m.action_height,
-                if reached { p.accent } else { p.surface },
+                p.accent,
             )
             .clicked()
             {
                 // Refused here or refused there, into the same line under the
                 // same form: a name that is too long and a name already taken
                 // are the same kind of answer to the player.
-                if reached {
+                if reached && draft.access != Access::Solo {
                     match draft.parse() {
                         Ok(made) => {
                             draft.note = None;

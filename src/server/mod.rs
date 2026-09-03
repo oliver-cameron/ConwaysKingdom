@@ -1360,6 +1360,13 @@ impl Server {
                 // And capped, which is a rule rather than a display: income
                 // runs away from a big player, so `Player::MAX_VALUE` is a
                 // ceiling on hoarding while there is nothing better.
+                // A blast's own drain arrives here too, and the floor is what
+                // answers "what if they cannot pay". **It must not be the
+                // detonation that is refused**: the simulation runs identically
+                // on every client and no client knows anybody else's purse, so
+                // a blast conditional on money would be a blast that happened
+                // on one machine and not another. It goes off; the bill is
+                // taken as far as it can be.
                 player.value = (player.value + earned).clamp(0, Player::MAX_VALUE);
             }
         }

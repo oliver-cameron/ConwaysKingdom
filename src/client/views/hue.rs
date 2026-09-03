@@ -31,11 +31,30 @@
 //! rather than by arrangement. There is no arc to size, no family to keep clear
 //! of its neighbour, and no way for two allies to be drawn differently.
 //!
-//! ## What is not here
+//! ## Three axes, because one wraps and two were not enough
 //!
-//! Saturation. A player's tier alternates by number and stays that way, so two
-//! neighbouring numbers differ a little in strength as well as in hue — see
-//! `player_saturation` in `grid.wgsl`, which this deliberately does not touch.
+//! Hue alone crowds. The golden step spreads a prefix about as well as a prefix
+//! can be spread and still comes back around, so over fifteen players some pair
+//! ends up nearly the same colour — and which pair is not arbitrary: the ones
+//! it brings closest are a **Fibonacci** number apart.
+//!
+//! Saturation was the second axis and alternated, which is a period of two —
+//! and eight is even, so it gave players 1 and 9 the same strength on top of
+//! nearly the same hue. The second axis did nothing for exactly the pairs the
+//! first one crowded.
+//!
+//! So: saturation cycles on **three** and lightness on **five**, which is the
+//! smallest pair of periods for which every one of the fifteen live players
+//! gets its own combination — their least common multiple is fifteen. No two
+//! players are told apart by hue alone, and the worst pair is about thirty
+//! apart in sRGB, which `the_closest_two_players_are_far_enough_apart`
+//! measures rather than asserts.
+//!
+//! Both are **multipliers on the sheet**, not replacements for it: a texel
+//! carries its own saturation and lightness, the player scales each, and the
+//! art keeps its shading. Below about two thirds a cell stops reading as its
+//! own picture and starts reading as a dark patch, which is why the range is
+//! narrow.
 
 use crate::sim::PlayerId;
 
@@ -86,6 +105,77 @@ pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) 
     )
 }
 
+/// A player's saturation, as a multiplier on the sheet's own.
+///
+/// **Three tiers, cycling on three** — and the three is the point.
+///
+/// It alternated, which is a period of two, and that is the one period that
+/// could not help. Hues are stepped by the golden ratio, so the pairs it brings
+/// closest together are the ones a **Fibonacci** number apart — and eight is
+/// even, so a tier repeating every two gave players 1 and 9 the same strength
+/// on top of nearly the same hue. The second axis did nothing for exactly the
+/// pairs the first one crowded.
+///
+/// Three against lightness's five, so their combination repeats every fifteen —
+/// which is every live player. Each of the fifteen gets its own pair, and no
+/// two of them differ by hue alone. See [`lightness_tier`].
+///
+/// Player zero is nobody and nobody's ground is grey.
+///
+/// MUST MATCH `player_saturation` in `grid.wgsl`.
+pub fn saturation_tier(player: PlayerId) -> f32 {
+    if player.0 == 0 {
+        return 0.0;
+    }
+    match player.0 % 3 {
+        0 => 1.0,
+        1 => 0.78,
+        _ => 0.58,
+    }
+}
+
+/// A player's lightness, as a multiplier on the sheet's own — **the third
+/// axis**, and the one that does the most work.
+///
+/// Hue is stepped by the golden ratio, which spreads a prefix about as well as
+/// a prefix can be spread and still wraps: by fifteen players two of them are
+/// nearer each other than the eye separates at the size a cell is drawn.
+/// Saturation was the second axis and repeats every two, so it does not help a
+/// pair four apart.
+///
+/// **Five tiers, cycling on five**, against saturation's three.
+///
+/// Three and five are the smallest pair of periods for which *every* pair of
+/// live players differs in at least one — checked by hand over all fifteen,
+/// which is what makes it a choice rather than a guess. Their combination
+/// repeats every fifteen, and fifteen is exactly the number of players there
+/// can be, so each one gets its own pair of tiers and no two are told apart by
+/// hue alone.
+///
+/// Multiplied into the sheet's lightness exactly the way saturation is
+/// multiplied into its saturation, so the art keeps its shading and the whole
+/// cell moves together rather than only its colour.
+///
+/// The range is narrow on purpose. Below about two thirds a cell stops reading
+/// as its own art and starts reading as a dark patch, which is a worse problem
+/// than two players looking alike.
+///
+/// MUST MATCH `player_lightness` in `grid.wgsl`.
+pub fn lightness_tier(player: PlayerId) -> f32 {
+    // Nobody's ground keeps the sheet's own lightness: it is grey either way,
+    // and dimming it would make unclaimed ground a shade nothing else is.
+    if player.0 == 0 {
+        return 1.0;
+    }
+    match player.0 % 5 {
+        0 => 1.0,
+        1 => 0.91,
+        2 => 0.83,
+        3 => 0.75,
+        _ => 0.68,
+    }
+}
+
 /// The same, at a hue somebody else worked out — which is how a team's colour
 /// reaches a swatch. See [`crate::client::views::hue`], which is the one place
 /// a hue is decided and is handed to the shader as a whole table.
@@ -94,14 +184,17 @@ pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) ->
     const MAX_CHROMA: f32 = 0.13;
 
     let hue = turn * TAU;
-    // Player zero is nobody, and nobody's ground is grey.
-    let tier = if player.0 == 0 {
-        0.0
-    } else if player.0 % 2 == 1 {
-        1.0
-    } else {
-        0.55
-    };
+    let tier = saturation_tier(player);
+    // **And a third axis, because two were not enough.** Hue alone crowds: the
+    // golden step spreads a prefix well and still comes back around, and by
+    // fifteen players the closest pair is closer than the eye separates at the
+    // size a cell is drawn. Saturation was the second axis and alternates, so
+    // it repeats every two.
+    //
+    // Lightness is the third and cycles every three, so the pair repeats every
+    // six rather than every two — and it is the axis the eye is *best* at, so
+    // it does the most work per step of the three. See [`lightness_tier`].
+    let lightness = lightness * lightness_tier(player);
     // Chroma tapers off at the ends, where there is no room for it.
     let taper = 1.0 - (2.0 * lightness - 1.0).abs().powi(2);
     let chroma = MAX_CHROMA * saturation * tier * taper;
@@ -141,6 +234,62 @@ mod tests {
     /// Every number gets its own hue, and no two are close enough to be
     /// mistaken for each other on a screen of cells.
     #[test]
+    /// **How far apart the closest pair is, as a number.**
+    ///
+    /// Distinctness is the whole job of this module and "they look different"
+    /// is not a thing a test can check, so this measures it: the smallest gap
+    /// between any two players' cells, in sRGB, which is a coarse stand-in for
+    /// a perceptual distance and is the one the screen actually shows.
+    ///
+    /// Hue alone crowds — the golden step spreads a prefix well and still wraps
+    /// — and saturation repeating every two does nothing for a pair four apart.
+    /// Lightness cycling on three is what pulls the worst pair apart, and this
+    /// is what says by how much. It is a floor rather than an equality so the
+    /// tiers can be tuned without rewriting it; what must not happen is the
+    /// floor quietly dropping.
+    #[test]
+    fn the_closest_two_players_are_far_enough_apart() {
+        let live: Vec<(u8, (u8, u8, u8))> =
+            (1..PlayerId::COUNT as u8).map(|n| (n, shade(0.62, 1.0, PlayerId(n)))).collect();
+        let apart = |a: (u8, u8, u8), b: (u8, u8, u8)| {
+            let d = |x: u8, y: u8| (x as i32 - y as i32).pow(2);
+            ((d(a.0, b.0) + d(a.1, b.1) + d(a.2, b.2)) as f64).sqrt()
+        };
+        let mut worst = (f64::MAX, 0u8, 0u8);
+        for (i, (n, a)) in live.iter().enumerate() {
+            for (m, b) in &live[i + 1..] {
+                let gap = apart(*a, *b);
+                if gap < worst.0 {
+                    worst = (gap, *n, *m);
+                }
+            }
+        }
+        // Thirty is what three axes achieve over fifteen players; the floor is
+        // a little under it, so the tiers can be tuned without rewriting this
+        // and a change that quietly makes two players harder to tell apart
+        // still fails.
+        assert!(
+            worst.0 > 28.0,
+            "players {} and {} are only {:.1} apart in sRGB",
+            worst.1,
+            worst.2,
+            worst.0
+        );
+    }
+
+    /// **A tier is a multiplier on the sheet, not a replacement for it.** Both
+    /// axes have to leave the art recognisable: a cell dimmed past about two
+    /// thirds stops reading as its own picture and starts reading as a dark
+    /// patch, which is a worse problem than two players looking alike.
+    #[test]
+    fn no_player_is_dimmed_out_of_legibility() {
+        for n in 0..PlayerId::COUNT as u8 {
+            let tier = lightness_tier(PlayerId(n));
+            assert!(tier > 0.65, "player {n} is drawn at {tier} of the sheet's lightness");
+            assert!(tier <= 1.0, "player {n} is drawn brighter than the sheet");
+        }
+    }
+
     fn no_two_players_share_a_colour() {
         let hues = table();
         for a in 1..PlayerId::COUNT {

@@ -54,6 +54,23 @@ pub enum Shape {
 /// target are held as text so that a field half-way through being corrected is
 /// a field with something wrong in it rather than one that snaps back to a
 /// number every keystroke. [`Self::parse`] is where typed becomes chosen.
+/// Who can reach a world once it exists.
+///
+/// **Three answers to one question**, where solo used to be a page. A world
+/// nobody else can find is not a different kind of thing from one behind a
+/// code; it is the same form with the last question answered differently, and
+/// putting it here is what stops "play alone" being a control somebody has to
+/// already know about to find.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Access {
+    /// In the room list, for whoever is on this server.
+    Listed,
+    /// Not listed. The server gives it a code to share.
+    ByCode,
+    /// Nobody, and no server: the world is built here and played here.
+    Solo,
+}
+
 pub struct Draft {
     pub name: String,
     /// A world, a match or an experiment. Everything below is read only where
@@ -93,7 +110,13 @@ pub struct Draft {
     /// The name field is ignored when this is set, and the form says so — a
     /// field that is being quietly discarded is worse than one that is not
     /// there.
-    pub private: bool,
+    /// **Who can find it — and "nobody" is one of the answers.**
+    ///
+    /// Playing alone used to be a page of its own, reached from somewhere else
+    /// entirely, and it asked the same questions this form asks because it is
+    /// the same form. It is not a different errand; it is this one with a
+    /// different answer to who else is in it.
+    pub access: Access,
 }
 
 impl Default for Draft {
@@ -111,7 +134,7 @@ impl Default for Draft {
             team_count: crate::net::MIN_TEAMS.to_string(),
             note: None,
             asking: false,
-            private: false,
+            access: Access::Listed,
         }
     }
 }
@@ -132,7 +155,11 @@ impl Draft {
     pub fn parse(&self) -> Result<super::Chose, String> {
         // A private room's name is the code the server generates, so there is
         // nothing here to check and nothing to refuse.
-        let name = if self.private { String::new() } else { crate::net::room_name(&self.name)? };
+        let name = if self.access == Access::ByCode {
+            String::new()
+        } else {
+            crate::net::room_name(&self.name)?
+        };
         let (shape, victory) = self.world()?;
         // Only when asked for; a world may have them as much as a match can.
         let teams = if self.teams { Some(self.sides()?) } else { None };
@@ -145,7 +172,7 @@ impl Draft {
             shape,
             victory,
             teams,
-            private: self.private,
+            private: self.access == Access::ByCode,
             laboratory: self.kind == Kind::Experiment,
         })
     }
@@ -315,7 +342,7 @@ mod tests {
     #[test]
     fn a_private_room_is_named_by_the_server() {
         let mut draft = Draft::default();
-        draft.private = true;
+        draft.access = Access::ByCode;
         assert_eq!(room!(draft, name), "", "the code the server generates becomes the name");
     }
 }

@@ -97,14 +97,23 @@ pub const PAYLOAD_FUSE: Chance = 16;
 /// One below [`bits::MAX_AGE`], so the last sprite is on screen for exactly
 /// one generation, always.
 pub const PAYLOAD_WARN: u8 = bits::MAX_AGE - 1;
-/// How far **one** payload's detonation reaches from its centre, in cells.
+/// How far **one** stick of dynamite reaches from its centre, in cells.
+///
+/// **Six, and it was ten.** Area goes as the square, so ten was a disc of about
+/// three hundred and seventeen squares and six is a hundred and thirteen —
+/// roughly a third of the ground for the same price, on top of now paying
+/// [`BLAST_DRAIN`] per square of it. Ten turned over more of somebody's country
+/// in one generation than they could rebuild in twenty, which is a weapon that
+/// ends a game rather than one that changes it.
+///
+/// [`PAYLOAD_MOST_REACH`] follows it, being a multiple.
 ///
 /// Ten rather than eight: a payload has to be built around and kept alive to
 /// go off at all, and eight was a blast you had to look for.
 ///
 /// A cluster that goes off together reaches further — see [`blast_reach`],
 /// where each payload is worth a constant *area* of blast.
-pub const PAYLOAD_REACH: i32 = 10;
+pub const PAYLOAD_REACH: i32 = 6;
 
 /// The furthest any blast may reach, however many payloads went into it.
 ///

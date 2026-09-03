@@ -123,7 +123,7 @@ fn flat_colour(owner: u32, tile: u32) -> vec3<f32> {
         light = light + COARSE_ICE;
     }
     let player = owner >> PLAYER_SHIFT;
-    return shade(light, player_saturation(player), player_hue(player));
+    return shade(light * player_lightness(player), player_saturation(player), player_hue(player));
 }
 
 /// **The tile for ground nobody holds.** MUST MATCH `sim::cell::bits::NOBODY`.
@@ -264,6 +264,40 @@ fn player_hue(player: u32) -> f32 {
 /// measured against is gone and the alternation is cheap insurance rather than
 /// a fix. Spreading saturation smoothly instead is worse than doing nothing,
 /// since lowering it shrinks the chroma radius and pulls colours together.
+/// A player's lightness, as a multiplier on the sheet's own — **the third
+/// axis**, and the one that does the most work.
+///
+/// Hue is stepped by the golden ratio, which spreads a prefix about as well as
+/// a prefix can be and still wraps: by fifteen players two of them are nearer
+/// each other than the eye separates at the size a cell is drawn. Saturation
+/// was the second axis and repeats every two, so it does nothing for a pair
+/// four apart.
+///
+/// Five tiers cycling on five, against saturation's three — the smallest pair
+/// of periods for which every one of the fifteen live players gets its own
+/// combination, since their least common multiple is fifteen. Multiplied into the sheet's lightness exactly the way
+/// saturation is multiplied into its saturation, so the art keeps its shading
+/// and the whole cell moves together rather than only its colour.
+///
+/// The range is narrow on purpose: below about two thirds a cell stops reading
+/// as its own art and starts reading as a dark patch, which is worse than two
+/// players looking alike.
+///
+/// MUST MATCH `client::views::hue::lightness_tier`.
+fn player_lightness(player: u32) -> f32 {
+    // Nobody's ground keeps the sheet's own lightness. It is grey either way,
+    // and dimming it would make unclaimed ground a shade nothing else is.
+    if player == 0u {
+        return 1.0;
+    }
+    let tier = player % 5u;
+    if tier == 0u { return 1.0; }
+    if tier == 1u { return 0.91; }
+    if tier == 2u { return 0.83; }
+    if tier == 3u { return 0.75; }
+    return 0.68;
+}
+
 fn player_saturation(player: u32) -> f32 {
     // Player zero is nobody. Unclaimed ground has no colour of its own, so it
     // is grey, and territory reads as colour against it -- which is the whole
@@ -272,10 +306,16 @@ fn player_saturation(player: u32) -> f32 {
     if player == 0u {
         return 0.0;
     }
-    if (player & 1u) == 1u {
-        return 1.0;
-    }
-    return 0.55;
+    // **Three, not two.** It alternated, which is the one period that could not
+    // help: hues step by the golden ratio, so the pairs it brings closest are a
+    // Fibonacci number apart, and eight is even — players 1 and 9 got the same
+    // strength on top of nearly the same hue. Three against lightness's five
+    // repeats every fifteen, which is every live player.
+    // MUST MATCH `client::views::hue::saturation_tier`.
+    let tier = player % 3u;
+    if tier == 0u { return 1.0; }
+    if tier == 1u { return 0.78; }
+    return 0.58;
 }
 
 struct VsOut {
@@ -374,7 +414,7 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
         light = light + COARSE_ICE;
     }
     let player = texel.r >> PLAYER_SHIFT;
-    return shade(light, player_saturation(player), player_hue(player));
+    return shade(light * player_lightness(player), player_saturation(player), player_hue(player));
 }
 
 /// The colour of one point, in texels across a chunk.
@@ -515,7 +555,11 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
 
     colour = mix(
         colour,
-        shade(sprite.g, sprite.r * player_saturation(player), player_hue(player)),
+        shade(
+            sprite.g * player_lightness(player),
+            sprite.r * player_saturation(player),
+            player_hue(player),
+        ),
         sprite.a,
     );
 

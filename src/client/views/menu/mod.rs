@@ -815,7 +815,8 @@ mod tests {
 
         // A private room takes the server's code for a name, so there is
         // nothing here to refuse.
-        let coded = Draft { name: String::new(), private: true, ..Draft::default() };
+        let coded =
+            Draft { name: String::new(), access: draft::Access::ByCode, ..Draft::default() };
         assert!(coded.parse().is_ok(), "a private room needs no typed name");
         let endless = Draft {
             name: "cup".into(),
@@ -1131,8 +1132,16 @@ mod tests {
         menu.stage = Stage::Choosing { rooms: Vec::new(), note: None };
         menu.draft = Some(Draft { name: "arena".into(), ..Draft::default() });
 
+        // **Either answer counts, and that is the change.** The sweep presses
+        // every control, and one of them is now who can find it — including
+        // "just me", which makes the same form build the world here instead of
+        // asking the server for it. A form whose action only worked for two of
+        // its three answers would be the old arrangement wearing a new label.
         assert!(
-            probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Create { .. })),
+            probe(&mut menu, at(1.0, false), |_, chose| matches!(
+                chose,
+                Chose::Create { .. } | Chose::Alone { .. }
+            )),
             "the world form could not be submitted"
         );
     }

@@ -421,6 +421,11 @@ pub mod menu {
         pub const PRIVATE: &str = "Who can find it";
         pub const LISTED: &str = "Anyone";
         pub const UNLISTED: &str = "By code";
+        /// The third answer to who can find it, and the one that used to be a
+        /// page of its own: nobody, and no server.
+        pub const SOLO_ACCESS: &str = "Just me";
+        pub const SOLO_NOTE: &str =
+            "No server and nobody else. The simulation is the same one a match runs.";
         pub const LISTED_NOTE: &str = "In the room list, for whoever is on this server.";
         /// The name field is ignored for a private room, and a field being
         /// quietly discarded is worse than one that is not there.
