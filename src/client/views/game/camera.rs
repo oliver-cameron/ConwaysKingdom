@@ -268,6 +268,8 @@ impl Camera {
             encode_srgb: if encode_srgb { 1.0 } else { 0.0 },
             coarse_wraps: if coarse_wraps { 1.0 } else { 0.0 },
             coarse: [col as f32, row as f32, cols as f32, rows as f32],
+            over,
+            pad: [0.0; 3],
             // Four to a row, which is what the shader indexes and what a
             // uniform array's stride costs if it is not.
             hues: std::array::from_fn(|row| std::array::from_fn(|col| hues[row * 4 + col])),

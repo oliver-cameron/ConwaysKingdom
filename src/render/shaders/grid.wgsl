@@ -72,6 +72,12 @@ fn level_at(level: f32) -> vec3<f32> {
 /// Level `L` holds `16 >> L` texels a cell and so is exact at `16 >> L` pixels
 /// a cell — one texel, one pixel. So the level is the log of the shortfall, and
 /// a zoom between two of them lands between two levels rather than on one.
+/// **This pass's own zoom, not the screen's** — which is the whole of what
+/// supersampling buys. Drawn at twice the size, a cell covers twice as many
+/// samples, so the level that is exact for it is one finer than the screen
+/// would ask for, and the extra detail survives into the average the resolve
+/// takes. Dividing by `over` here would throw that away and leave the larger
+/// target costing four times as much to draw the same picture.
 fn level_for(zoom: f32) -> f32 {
     return clamp(log2(f32(TILE_N) / max(zoom, 1e-4)), 0.0, LEVELS - 1.0);
 }
@@ -105,8 +111,15 @@ const FLAT_FROM: f32 = 3.0;
 const FLAT_BY: f32 = 1.5;
 
 /// How much of the cell's art to give up. One is the cell without it.
+///
+/// **In screen pixels a cell**, not this pass's. The thresholds it has to line
+/// up with — `COARSE_BELOW` and `FINE_ABOVE` — are decided on the CPU from what
+/// the screen is showing, and drawing the world larger than the screen moved
+/// this one and not those. The art was still fully there when the coarse path
+/// took over, which is the pop these numbers exist to remove.
 fn flat_fade(zoom: f32) -> f32 {
-    return clamp((FLAT_FROM - zoom) / (FLAT_FROM - FLAT_BY), 0.0, 1.0);
+    let on_screen = zoom / max(cam.over, 1.0);
+    return clamp((FLAT_FROM - on_screen) / (FLAT_FROM - FLAT_BY), 0.0, 1.0);
 }
 
 /// A cell without its art: what the coarse path draws, from a cell in hand.
@@ -157,6 +170,17 @@ struct Camera {
     // The world rect the coarse texture holds -- x, y, width, height, in
     // cells -- and `encode`'s neighbour says whether it wraps.
     coarse:   vec4<f32>,
+    // **Samples across one screen pixel.** `zoom` above is this pass's own,
+    // already multiplied by it; dividing gets back to what the screen shows.
+    // Which level of detail to read is a question about the sample rate and
+    // uses `zoom`; whether the art has given out is a question about the
+    // screen, because it has to meet `render::chunks::COARSE_BELOW`.
+    over:     f32,
+    // No pad field. WGSL rounds a uniform struct up to a multiple of sixteen
+    // on its own, so `over` at 112 makes it 128 — and a `vec3<f32>` written
+    // here would *align* to 16 and land at 128 itself, making the struct 144
+    // against Rust's 128. `the_camera_uniform_matches_the_shader` caught that,
+    // which is the whole reason it reads the struct rather than trusting it.
 };
 
 @group(0) @binding(0) var<uniform> cam: Camera;
@@ -671,7 +695,10 @@ fn shaded(in: VsOut, offset: vec2<f32>, n: f32) -> vec3<f32> {
     // is about them disagreeing by a shade at low zoom.
     //
     // [known-bugs]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/known-bugs.md
-    if in.kind == KIND_BACKDROP && cam.zoom < BACKDROP_FLAT {
+    // Screen pixels again: whether the backdrop's own detail is too small to
+    // see is a question about the screen, not about how many samples this pass
+    // is taking of it.
+    if in.kind == KIND_BACKDROP && cam.zoom / max(cam.over, 1.0) < BACKDROP_FLAT {
         return ground();
     }
     return point_colour(sample_local(in, offset, n), in.layer, n);

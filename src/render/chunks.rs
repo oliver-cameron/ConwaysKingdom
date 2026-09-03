@@ -504,12 +504,30 @@ pub struct CameraUniform {
     /// needs the size to wrap — which is what makes a torus held whole repeat
     /// for as far as anybody pans, out of one texture and one quad.
     pub coarse: [f32; 4],
+    /// **How many samples across one screen pixel the world is being drawn at.**
+    ///
+    /// The shader needs it because two different questions look like the same
+    /// question once the world is drawn larger than the screen. Which level of
+    /// detail to sample is about the *sample rate*, so it wants the zoom this
+    /// pass is actually running at — `zoom` above, already multiplied. Whether
+    /// the art has given out is about what the **screen** is showing, because
+    /// it has to meet `COARSE_BELOW`, which is decided in screen pixels on the
+    /// CPU. Dividing by this is how the shader gets back to that.
+    ///
+    /// Supersampling broke exactly that: every zoom-keyed threshold in the
+    /// shader silently moved by this factor while the ones in `chunks.rs` did
+    /// not, so the coarse path took over while the fine path still had full
+    /// art on it and the handover popped again.
+    pub over: f32,
+    /// The struct has to be a multiple of sixteen bytes and `over` is one
+    /// float. Nothing reads this.
+    pub pad: [f32; 3],
 }
 
 const _: () = {
     // Must match `Camera` and the instance attributes in shaders/grid.wgsl.
     // WGSL requires a uniform struct's size to be a multiple of 16.
-    assert!(size_of::<CameraUniform>() == 112);
+    assert!(size_of::<CameraUniform>() == 128);
     assert!(size_of::<Instance>() == 32);
 };
 
@@ -925,6 +943,11 @@ mod tests {
                 "f32" => (4, 4),
                 "vec2<f32>" => (8, 8),
                 "vec4<f32>" => (16, 16),
+                // Aligns to sixteen and occupies twelve, which is the one WGSL
+                // type whose size and alignment differ — and the reason the
+                // Rust side spells its padding out rather than trusting them
+                // to agree.
+                "vec3<f32>" => (16, 12),
                 k if k.starts_with("array<vec4<f32>,") => {
                     let n: usize = k
                         .trim_start_matches("array<vec4<f32>,")
@@ -952,6 +975,10 @@ mod tests {
             ("wraps", std::mem::offset_of!(CameraUniform, coarse_wraps)),
             ("hues", std::mem::offset_of!(CameraUniform, hues)),
             ("coarse", std::mem::offset_of!(CameraUniform, coarse)),
+            ("over", std::mem::offset_of!(CameraUniform, over)),
+            // `pad` is Rust's alone: WGSL rounds the struct up to a multiple of
+            // sixteen without being told, and a pad field written there would
+            // align to sixteen and make it larger rather than the same size.
         ];
 
         assert_eq!(
