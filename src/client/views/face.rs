@@ -161,22 +161,34 @@ pub fn show(painter: &egui::Painter, rect: egui::Rect, who: &PersonId) {
 /// same reason: a shape this small taken apart by gaps stops being a shape.
 fn draw(painter: &egui::Painter, rect: egui::Rect, cells: &[[bool; N]; N], ink: egui::Color32) {
     let side = rect.width().min(rect.height()) / N as f32;
-    let origin = rect.center() - egui::vec2(side * N as f32, side * N as f32) * 0.5;
+    let span = side * N as f32;
+    let origin = rect.center() - egui::vec2(span, span) * 0.5;
+    // **Round, and masked by cell rather than clipped.** egui clips to
+    // rectangles, so a circular crop has to be drawn rather than asked for —
+    // and at eight cells a side, keeping the whole squares whose middles fall
+    // inside the circle reads as deliberate where a smooth crop of blocks this
+    // large would read as a mistake. It is the same answer the sprite sheet
+    // gives: whole texels, no partial coverage.
+    let middle = rect.center();
+    let radius = span * 0.5;
     for (row, line) in cells.iter().enumerate() {
         for (col, &live) in line.iter().enumerate() {
             if !live {
                 continue;
             }
-            painter.rect_filled(
-                egui::Rect::from_min_size(
-                    origin + egui::vec2(col as f32 * side, row as f32 * side),
-                    egui::vec2(side, side),
-                ),
-                0.0,
-                ink,
+            let at = egui::Rect::from_min_size(
+                origin + egui::vec2(col as f32 * side, row as f32 * side),
+                egui::vec2(side, side),
             );
+            if (at.center() - middle).length() > radius {
+                continue;
+            }
+            painter.rect_filled(at, 0.0, ink);
         }
     }
+    // The edge said out loud, dimly, so a face with little in its outer ring
+    // still reads as round rather than as a shape that happens to be small.
+    painter.circle_stroke(middle, radius, egui::Stroke::new(1.0, ink.gamma_multiply(0.35)));
 }
 
 #[cfg(test)]

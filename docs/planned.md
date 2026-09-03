@@ -941,7 +941,7 @@ At the foot of the page, after the tips, briefly and without ceremony — becaus
 
 So the page should say what he would rather you looked up:
 
-- **The surreal numbers**, which he thought his best work: a single construction that yields the reals, the ordinals and a great deal besides, built out of nothing but games. Knuth wrote a novella about them.
+- **The surreal numbers**, which he thought his best work — and the way in is [Hackenbush](https://en.wikipedia.org/wiki/Hackenbush), which is where they came from and is the example the page should use. You rub out coloured edges and whatever is no longer joined to the ground falls off; a position is then *worth* a number. One blue edge is worth 1, a blue edge standing on a red one is worth a half, and carrying on that way reaches every dyadic fraction. Allow infinite drawings and the same construction reaches the reals, the ordinals, numbers smaller than every fraction and larger than every integer. A single construction, out of nothing but games. Knuth wrote a novella about them.
 - **The Conway groups**, three sporadic simple groups he pulled out of the Leech lattice — famously in one sitting, having set aside two long slots for it and needing only the first.
 - **Monstrous moonshine**, the conjecture he and Simon Norton made connecting the Monster group to modular functions, which Borcherds proved and won a Fields Medal for.
 - **Combinatorial game theory**, which he largely founded — *On Numbers and Games*, and *Winning Ways* with Berlekamp and Guy.
