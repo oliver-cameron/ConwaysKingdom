@@ -30,7 +30,7 @@ pub use auth::{PersonId, Secret};
 
 use serde::{Deserialize, Serialize};
 
-use crate::sim::{Cell, Coord, Kind, PlayerId, World, WorldKind, CHUNK_N};
+use crate::sim::{Cell, Coord, Kind, PlayerId, World, WorldKind};
 
 /// A chunk is identified by where it is. There is no separate id to allocate,
 /// keep unique, or reconcile after a reconnect — two peers naming the same
