@@ -670,6 +670,55 @@ Ed25519 in WebCrypto is recent enough to need a fallback; ECDSA P-256 has been t
 
 **What it costs is export**, and that is the trade rather than a detail. A key that cannot be read cannot be carried to another machine, and carrying it is how somebody is the same person on their phone and their laptop today. The answer is not to make it extractable.
 
+### What doing it actually costs, in order
+
+Sized against the code rather than guessed: `Secret` is named in **39 places
+across eight files**, and all but a handful are in `net::auth::person`,
+`server::people`, `net::keep` and `server::rooms`. The mechanical part is small.
+The parts that are not mechanical are these, and the first two are decisions
+rather than work.
+
+**1. It resets everybody.** A `PersonId` becomes a fingerprint of a public key,
+so it is a different string from the one a server issued — which means every
+existing rating, every settled match, every "most ground held" and every seat
+somebody could return to is attached to a name nobody can prove any more.
+`people.tsv` and the `.ckw` files are full of ids that no longer refer to
+anybody. There are two honest answers and they are not close: **wipe** and say
+so, or keep the old id beside the new one for a grace period and let a returning
+player claim it with their old secret, which is a migration path that must
+itself expire or it is the bearer credential all over again. Nothing here should
+be built until that is chosen.
+
+**2. It adds a cryptographic dependency**, and this crate is deliberate about
+those — see the arguments for `rustyline` over clap and `allsorts` over
+`subsetter` in `Cargo.toml`. `ed25519-dalek` is the obvious one: pure Rust,
+builds for wasm32, and is the scheme this used to use. Worth stating plainly
+that the last time this existed it was removed for costing "a signature scheme,
+an OpenSSH key parser, a round trip before every join, and a dependency" — three
+of those four come back, and the OpenSSH parser does not.
+
+**3. The handshake gains a round trip, and `Join` stops being first.** Today a
+connection's first word is `Join` and everything else is answered from the seat
+it made. A challenge means the *server* speaks first, so `server::rooms::handle`
+grows a state before "has a seat" — and `Rooms`, `Profile` and `People` are all
+answered without a seat today, which is right and must keep working for a
+connection that has not signed anything. That is the part most likely to go
+subtly wrong.
+
+**4. Then the mechanical part.** `Secret` becomes a signing key; `PersonId::new`
+becomes a fingerprint of the verifying key; `people.tsv` loses its secret column
+and becomes a table with nothing worth stealing in it, which is the whole point;
+`net::keep` stores a key rather than sixteen bytes; and `server::people::knows`
+becomes a verification rather than a lookup.
+
+**5. What this does not get you**, and it should not be claimed: property 2
+above — that the private half *cannot be read* — is not satisfied by an
+ed25519 key sitting in `localStorage`, which is what a pure-Rust
+implementation in a browser gives. That wants a non-extractable `CryptoKey` and
+is the sub-entry below. Doing the ed25519 work first is still right, because it
+gets property 1 and property 3 and is what parties and invites are waiting on;
+it just must not be described as more than it is.
+
 ### So an identity is a set of devices
 
 **One identity key, and a device key per machine.**
