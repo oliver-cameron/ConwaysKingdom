@@ -59,6 +59,7 @@ pub mod record;
 pub mod theme;
 pub mod words;
 
+use crate::client::views::words::w;
 use crate::render::context::GpuState;
 
 pub struct Views {
@@ -652,7 +653,7 @@ pub fn panel<T>(
                 ui.horizontal(|ui| {
                     ui.heading(what.title);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(words::CLOSE).clicked() {
+                        if ui.small_button(w().close).clicked() {
                             *open = false;
                         }
                     });

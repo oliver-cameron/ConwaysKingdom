@@ -15,7 +15,7 @@ use crate::client::views::game::stamp::{Library, Stamp};
 use crate::client::views::glyph;
 use crate::client::views::icons::{self, Icons};
 use crate::client::views::theme::Theme;
-use crate::client::views::words::hotbar as words;
+use crate::client::views::words::w;
 use crate::net::Placement;
 use crate::sim::{Cell, Kind, PlayerId};
 
@@ -36,6 +36,7 @@ pub enum Stroke {
 /// with a pencil and ice came with a rectangle, and there was no way to draw a
 /// line of ice or sweep a pane of mines. The two are chosen separately now and
 /// this is half of the choice.
+#[derive(Clone, Copy)]
 pub struct Tool {
     pub name: &'static str,
     /// The cell this puts down, so a button can show it rather than spell it.
@@ -70,49 +71,57 @@ const PAYLOADED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::PAYLOAD);
 /// tool that walls people off and because it came with a different stroke;
 /// with the stroke chosen separately there is nothing left to separate it by,
 /// and a fourth kind now appears here by existing.
-pub const KINDS: [Tool; 5] = [
-    Tool {
-        name: words::LIFE,
-        shows: LIVE,
-        placement: Placement::Life,
-        usually: Shape::Draw,
-        apart: false,
-    },
-    Tool {
-        name: words::MINE,
-        shows: MINED,
-        placement: Placement::Mine,
-        usually: Shape::Draw,
-        apart: false,
-    },
-    Tool {
-        name: words::TURRET,
-        shows: TURRETED,
-        placement: Placement::Turret,
-        usually: Shape::Draw,
-        apart: false,
-    },
-    // A pencil, not a pane. A payload is placed one at a time and kept alive
-    // by what is built round it, so a drag that laid twenty is a gesture
-    // nobody wants and could afford even less.
-    Tool {
-        name: words::PAYLOAD,
-        shows: PAYLOADED,
-        placement: Placement::Payload,
-        usually: Shape::Draw,
-        apart: false,
-    },
-    // **Last, and set apart.** Every square before it puts a cell on a square;
-    // ice puts a pane *over* one, and is the only thing here that is not a
-    // living thing you own. A rule before it says so without a word.
-    Tool {
-        name: words::ICE,
-        shows: ICED,
-        placement: Placement::Ice,
-        usually: Shape::Rect,
-        apart: true,
-    },
-];
+/// **A function, because a name is a word and words are chosen at run time.**
+///
+/// This was a `const`, which it could be while every string was a `const` too.
+/// A language is picked rather than compiled in now — see
+/// [`crate::client::views::words`] — so the table is built when it is asked
+/// for. It is five structs of pointers and it is asked for once a frame.
+pub fn kinds() -> [Tool; 5] {
+    [
+        Tool {
+            name: w().hotbar.life,
+            shows: LIVE,
+            placement: Placement::Life,
+            usually: Shape::Draw,
+            apart: false,
+        },
+        Tool {
+            name: w().hotbar.mine,
+            shows: MINED,
+            placement: Placement::Mine,
+            usually: Shape::Draw,
+            apart: false,
+        },
+        Tool {
+            name: w().hotbar.turret,
+            shows: TURRETED,
+            placement: Placement::Turret,
+            usually: Shape::Draw,
+            apart: false,
+        },
+        // A pencil, not a pane. A payload is placed one at a time and kept alive
+        // by what is built round it, so a drag that laid twenty is a gesture
+        // nobody wants and could afford even less.
+        Tool {
+            name: w().hotbar.payload,
+            shows: PAYLOADED,
+            placement: Placement::Payload,
+            usually: Shape::Draw,
+            apart: false,
+        },
+        // **Last, and set apart.** Every square before it puts a cell on a square;
+        // ice puts a pane *over* one, and is the only thing here that is not a
+        // living thing you own. A rule before it says so without a word.
+        Tool {
+            name: w().hotbar.ice,
+            shows: ICED,
+            placement: Placement::Ice,
+            usually: Shape::Rect,
+            apart: true,
+        },
+    ]
+}
 
 /// What a gesture makes: the shape axis.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -147,10 +156,10 @@ impl Shape {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Draw => words::DRAW,
-            Self::Rect => words::PANE,
-            Self::Capture => words::CAPTURE,
-            Self::Stamp(_) => words::PATTERN,
+            Self::Draw => w().hotbar.draw,
+            Self::Rect => w().hotbar.pane,
+            Self::Capture => w().hotbar.capture,
+            Self::Stamp(_) => w().hotbar.pattern,
         }
     }
 }
@@ -166,7 +175,7 @@ pub struct Held {
     /// and a stamp keeps this across a change of material — turning a glider
     /// and then deciding it should be ice is two decisions, not one undone.
     pub turn: crate::client::views::game::stamp::Turn,
-    /// Which of [`KINDS`]. An index rather than the `Placement`, so a square
+    /// Which of [`kinds`]. An index rather than the `Placement`, so a square
     /// on the bar and the thing it lays cannot come apart.
     pub kind: usize,
 }
@@ -178,8 +187,12 @@ impl Held {
     }
 
     /// The kind this is holding.
-    pub fn tool(self) -> Option<&'static Tool> {
-        KINDS.get(self.kind)
+    ///
+    /// By value rather than by reference, because the table is built when it is
+    /// asked for now — a `Tool` is five pointers and a bool, so copying one is
+    /// cheaper than the `static` it used to be borrowed from was to reach.
+    pub fn tool(self) -> Option<Tool> {
+        kinds().get(self.kind).copied()
     }
 
     pub fn placement(self) -> Option<Placement> {
@@ -278,7 +291,7 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
         out.push(Slot { key, group, press: Press::Shift(shift), rule });
     };
 
-    for (i, kind) in KINDS.iter().enumerate() {
+    for (i, kind) in kinds().iter().enumerate() {
         tool(&mut out, Key::Kind(i), Group::Kinds, kind.apart);
     }
     tool(&mut out, Key::Flip, Group::Shapes, false);
@@ -300,8 +313,8 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
 
     if clock {
         for (key, press, rule) in [
-            (Key::Run, Press::Named(words::RUN_KEY), false),
-            (Key::Step, Press::Named(words::STEP_KEY), false),
+            (Key::Run, Press::Named(w().hotbar.run_key), false),
+            (Key::Step, Press::Named(w().hotbar.step_key), false),
             (Key::Rules, Press::None, false),
             // Behind a rule, because it is the one square here that cannot be
             // undone: the other three change what the world is doing and this
@@ -314,7 +327,7 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
     out.push(Slot {
         key: Key::Help,
         group: Group::Help,
-        press: Press::Named(words::HELP),
+        press: Press::Named(w().hotbar.help),
         rule: false,
     });
     out
@@ -398,7 +411,7 @@ fn face_of<'a>(
     label: &'a mut String,
 ) -> (Face<'a>, &'a str, bool) {
     match key {
-        Key::Kind(i) => (Face::Sprite(KINDS[i].shows), KINDS[i].name, held.kind == i),
+        Key::Kind(i) => (Face::Sprite(kinds()[i].shows), kinds()[i].name, held.kind == i),
         // One square, not two: draw and pane are one choice with two answers,
         // so it shows which is current rather than offering both. Clicking it
         // is also the way back to drawing from a stamp.
@@ -413,7 +426,9 @@ fn face_of<'a>(
             let (icon, lit) = flip_face(held);
             (Face::Icon(icon), held.shape.name(), lit)
         }
-        Key::Shape(Shape::Capture) => (Face::Camera, words::CAPTURE, held.shape == Shape::Capture),
+        Key::Shape(Shape::Capture) => {
+            (Face::Camera, w().hotbar.capture, held.shape == Shape::Capture)
+        }
         Key::Shape(Shape::Stamp(i)) => {
             let stamp = library.get(i).expect("a slot names a stamp the library holds");
             // Shown as it would be laid, turn and all: a thumbnail that stayed
@@ -434,18 +449,18 @@ fn face_of<'a>(
         Key::More => {
             let over = library.len() - library.on_the_bar();
             *label = if over > 0 {
-                format!("{} (+{over})", words::LIBRARY)
+                format!("{} (+{over})", w().hotbar.library)
             } else {
-                words::LIBRARY.to_string()
+                w().hotbar.library.to_string()
             };
             (Face::Icon(glyph::STAMP), label, false)
         }
-        Key::Run if look.paused => (Face::Icon(glyph::PLAY), words::RUN_HINT, true),
-        Key::Run => (Face::Icon(glyph::PAUSE), words::STOP_HINT, false),
-        Key::Step => (Face::Icon(glyph::STEP), words::STEP_HINT, false),
-        Key::Rules => (Face::Icon(glyph::GEAR), words::RULES_HINT, look.showing_rules),
-        Key::Wipe => (Face::Icon(glyph::TRASH), words::WIPE_HINT, false),
-        Key::Help => (Face::Icon(glyph::HELP), words::HELP_HINT, false),
+        Key::Run if look.paused => (Face::Icon(glyph::PLAY), w().hotbar.run_hint, true),
+        Key::Run => (Face::Icon(glyph::PAUSE), w().hotbar.stop_hint, false),
+        Key::Step => (Face::Icon(glyph::STEP), w().hotbar.step_hint, false),
+        Key::Rules => (Face::Icon(glyph::GEAR), w().hotbar.rules_hint, look.showing_rules),
+        Key::Wipe => (Face::Icon(glyph::TRASH), w().hotbar.wipe_hint, false),
+        Key::Help => (Face::Icon(glyph::HELP), w().hotbar.help_hint, false),
     }
 }
 
@@ -461,7 +476,7 @@ fn flip_face(held: Held) -> (&'static str, bool) {
         // Neither, so the square is the way *out* rather than a claim to be
         // what is in your hand. It shows where flipping would put you.
         Shape::Capture | Shape::Stamp(_) => (
-            match KINDS[held.kind].usually {
+            match kinds()[held.kind].usually {
                 Shape::Rect => glyph::RECT,
                 _ => glyph::PENCIL,
             },
@@ -586,15 +601,15 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
 
         // Six figures, which is what `Player::MAX_VALUE` allows and therefore
         // what the column has to be wide enough for.
-        stat(ui, words::PURSE, status.value.max(0) as u64, 6, p.accent);
+        stat(ui, w().hotbar.purse, status.value.max(0) as u64, 6, p.accent);
         // **What you hold, not what you are scored on.** The two differ by
         // the patch everybody is granted, and the score leaves it out — so
         // this read nought for as long as somebody built only inside their own
         // ground, which a block does for ever.
         let ground: u32 =
             status.standing.iter().find(|h| h.who == status.player).map(|h| h.ground).unwrap_or(0);
-        stat(ui, words::GROUND, ground as u64, 6, p.text);
-        stat(ui, words::TICK, status.generation, 6, p.text);
+        stat(ui, w().hotbar.ground, ground as u64, 6, p.text);
+        stat(ui, w().hotbar.tick, status.generation, 6, p.text);
         // Silent when there is none: a client that has reached no server has
         // no rating rather than a starting figure, and a dash where a number
         // goes is one more thing to read.
@@ -609,7 +624,7 @@ fn standing(ui: &mut egui::Ui, theme: &Theme, status: &crate::client::views::gam
                 Some(c) if c < 0 => p.bad,
                 _ => p.text,
             };
-            stat(ui, words::RATING, r.number.max(0) as u64, 4, ink);
+            stat(ui, w().hotbar.rating, r.number.max(0) as u64, 4, ink);
         }
     });
 }
@@ -774,12 +789,12 @@ mod tests {
 
     /// **Every kind gets a square.** The payload existed, burned its fuse and
     /// detonated for a whole commit with no way to put one down, because
-    /// `KINDS` is the bar and it was not in it. A kind that cannot be placed
+    /// `kinds` is the bar and it was not in it. A kind that cannot be placed
     /// is a kind that is not in the game.
     #[test]
     fn every_kind_has_a_square_and_a_key() {
         let bar = slots(&Library::default(), true);
-        for (i, tool) in KINDS.iter().enumerate() {
+        for (i, tool) in kinds().iter().enumerate() {
             let slot = bar
                 .iter()
                 .find(|s| s.key == Key::Kind(i))
@@ -791,7 +806,7 @@ mod tests {
             );
         }
         assert!(
-            KINDS.iter().any(|t| t.placement == crate::net::Placement::Payload),
+            kinds().iter().any(|t| t.placement == crate::net::Placement::Payload),
             "the payload is not among the kinds the bar offers"
         );
     }
@@ -909,7 +924,7 @@ mod tests {
     fn the_kind_keys_never_move() {
         for n in [0, 1, ON_THE_BAR, ON_THE_BAR + 5] {
             let keys = shifted(&library(n));
-            let expected: Vec<Key> = (0..KINDS.len()).map(Key::Kind).collect();
+            let expected: Vec<Key> = (0..kinds().len()).map(Key::Kind).collect();
             assert_eq!(&keys[..expected.len()], &expected[..], "{n} stamps");
         }
     }
@@ -921,7 +936,7 @@ mod tests {
         // Every kind, in the order it sits on the bar. Ice is among them now:
         // it used to sit apart because it came with a different stroke, and
         // the stroke is the other axis.
-        for (i, tool) in KINDS.iter().enumerate() {
+        for (i, tool) in kinds().iter().enumerate() {
             assert_eq!(
                 shifted_for_digit(i as u32 + 1, &few),
                 Some(Key::Kind(i)),
@@ -934,7 +949,7 @@ mod tests {
         // with a key outside this row -- so the bar read left to right and the
         // keyboard skipped a square in the middle of it. Capture and more
         // shuffled along to make room.
-        let after = KINDS.len() as u32;
+        let after = kinds().len() as u32;
         assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Flip));
         assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::Shape(Shape::Capture)));
         assert_eq!(shifted_for_digit(after + 3, &few), Some(Key::More));
@@ -959,14 +974,14 @@ mod tests {
     /// unsayable, because a tool carried its stroke with it.
     #[test]
     fn a_shape_and_a_kind_are_chosen_separately() {
-        let ice = KINDS.iter().position(|k| k.placement == Placement::Ice).unwrap();
+        let ice = kinds().iter().position(|k| k.placement == Placement::Ice).unwrap();
         let drawn_ice = Held { shape: Shape::Draw, kind: ice, turn: Default::default() };
         assert_eq!(drawn_ice.stroke(), Stroke::Pencil, "a line of ice was unsayable");
         assert_eq!(drawn_ice.placement(), Some(Placement::Ice));
 
         let panes_of_mine = Held {
             shape: Shape::Rect,
-            kind: KINDS.iter().position(|k| k.placement == Placement::Mine).unwrap(),
+            kind: kinds().iter().position(|k| k.placement == Placement::Mine).unwrap(),
             turn: Default::default(),
         };
         assert_eq!(panes_of_mine.stroke(), Stroke::Rectangle, "a pane of mines was unsayable");
@@ -1015,7 +1030,7 @@ mod tests {
     /// usually wanted in.
     #[test]
     fn the_reset_key_goes_to_what_the_kind_is_usually_wanted_in() {
-        let kind = |what: Placement| KINDS.iter().position(|k| k.placement == what).unwrap();
+        let kind = |what: Placement| kinds().iter().position(|k| k.placement == what).unwrap();
 
         for (what, expected) in [
             (Placement::Life, Shape::Draw),

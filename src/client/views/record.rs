@@ -50,6 +50,7 @@
 use super::theme::Theme;
 use super::words::record as words;
 use crate::client::record::{Game, Outcome, Summary};
+use crate::client::views::words::w;
 
 /// How many games the chart shows.
 ///
@@ -71,7 +72,10 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, games: &[Game], summary: &Summary)
     if !summary.any() {
         // An empty screen is an invitation to act, not a mood. Five zeroes
         // would tell a new player only that the game keeps score.
-        ui.colored_label(p.text_dim, egui::RichText::new(words::NOTHING_YET).size(m.text_small));
+        ui.colored_label(
+            p.text_dim,
+            egui::RichText::new(w().record.nothing_yet).size(m.text_small),
+        );
         return;
     }
 
@@ -105,7 +109,7 @@ fn territory_chart(ui: &mut egui::Ui, theme: &Theme, games: &[Game]) {
     let peak = shown.iter().map(|g| g.best).max().unwrap_or(0);
 
     ui.horizontal(|ui| {
-        ui.colored_label(p.text_dim, egui::RichText::new(words::LARGEST).size(m.text_small));
+        ui.colored_label(p.text_dim, egui::RichText::new(w().record.largest).size(m.text_small));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // One direct label, on the figure the chart is scaled to. A number
             // on every bar is noise; none at all leaves the axis unreadable.
@@ -173,7 +177,7 @@ fn form_strip(ui: &mut egui::Ui, theme: &Theme, games: &[Game]) {
     }
 
     ui.horizontal(|ui| {
-        ui.colored_label(p.text_dim, egui::RichText::new(words::FORM).size(m.text_small));
+        ui.colored_label(p.text_dim, egui::RichText::new(w().record.form).size(m.text_small));
         for game in &played {
             let (rect, mark) = ui.allocate_exact_size(egui::vec2(MARK, MARK), egui::Sense::HOVER);
             let painter = ui.painter();
@@ -201,12 +205,12 @@ fn tiles(ui: &mut egui::Ui, theme: &Theme, summary: &Summary) {
     let p = theme.palette;
     let m = theme.metrics;
 
-    let mut cells: Vec<(String, &str)> = vec![(number(summary.games as u64), words::WORLDS)];
+    let mut cells: Vec<(String, &str)> = vec![(number(summary.games as u64), w().record.worlds)];
     if summary.matches > 0 {
-        cells.push((format!("{}/{}", summary.won, summary.matches), words::MATCHES_WON));
+        cells.push((format!("{}/{}", summary.won, summary.matches), w().record.matches_won));
     }
-    cells.push((number(summary.best as u64), words::LARGEST_EVER));
-    cells.push((number(summary.generations), words::GENERATIONS));
+    cells.push((number(summary.best as u64), w().record.largest_ever));
+    cells.push((number(summary.generations), w().record.generations));
 
     ui.horizontal_top(|ui| {
         ui.set_min_height(m.button_height * 1.4);
@@ -232,9 +236,9 @@ fn describe(game: &Game) -> String {
         game.best,
         game.generations,
         match game.outcome {
-            Outcome::Won => words::WON,
-            Outcome::Lost => words::LOST,
-            Outcome::Played => words::NO_RESULT,
+            Outcome::Won => w().record.won,
+            Outcome::Lost => w().record.lost,
+            Outcome::Played => w().record.no_result,
         },
     )
 }

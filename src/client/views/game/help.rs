@@ -21,6 +21,7 @@
 
 use crate::client::views::theme::Theme;
 use crate::client::views::words::help as words;
+use crate::client::views::words::w;
 
 /// One group of keys, and what they are for.
 struct Group {
@@ -67,49 +68,49 @@ pub struct Keys {
 fn groups(keys: &Keys) -> Vec<Group> {
     let pan = match &keys.pan {
         Some(cluster) => words::keys::pan(cluster),
-        None => words::keys::PAN_ARROWS.to_string(),
+        None => w().help.keys.pan_arrows.to_string(),
     };
-    let stamps = keys.stamps.clone().unwrap_or_else(|| words::keys::STAMPS.to_string());
+    let stamps = keys.stamps.clone().unwrap_or_else(|| w().help.keys.stamps.to_string());
     let tools = match &keys.tools {
         Some(row) => words::keys::with_shift(row),
-        None => words::keys::TOOLS.to_string(),
+        None => w().help.keys.tools.to_string(),
     };
 
     vec![
         Group {
-            heading: words::LOOKING,
+            heading: w().help.looking,
             keys: vec![
-                (pan, words::PAN),
-                (words::keys::PAN_FAST.into(), words::PAN_FASTER),
-                (words::keys::PAN_DRAG.into(), words::PAN_BY_HAND),
-                (words::keys::ZOOM.into(), words::ZOOM),
+                (pan, w().help.pan),
+                (w().help.keys.pan_fast.into(), w().help.pan_faster),
+                (w().help.keys.pan_drag.into(), w().help.pan_by_hand),
+                (w().help.keys.zoom.into(), w().help.zoom),
             ],
         },
         Group {
-            heading: words::BUILDING,
+            heading: w().help.building,
             keys: vec![
-                (tools, words::TOOLS),
-                (stamps, words::STAMPS),
-                (words::keys::TURN.into(), words::TURN),
-                (words::keys::MIRROR.into(), words::MIRROR),
-                (words::keys::DRAG.into(), words::DRAG),
+                (tools, w().help.tools),
+                (stamps, w().help.stamps),
+                (w().help.keys.turn.into(), w().help.turn),
+                (w().help.keys.mirror.into(), w().help.mirror),
+                (w().help.keys.drag.into(), w().help.drag),
             ],
         },
         Group {
-            heading: words::THE_CLOCK,
+            heading: w().help.the_clock,
             keys: vec![
-                (words::keys::PLAY.into(), words::PLAY),
-                (words::keys::STEP_ONE.into(), words::STEP_ONE),
+                (w().help.keys.play.into(), w().help.play),
+                (w().help.keys.step_one.into(), w().help.step_one),
             ],
         },
         Group {
-            heading: words::GETTING_ABOUT,
+            heading: w().help.getting_about,
             keys: vec![
-                (words::keys::WALK.into(), words::WALK),
-                (words::keys::CHOOSE.into(), words::CHOOSE),
-                (words::keys::MOVE_ON.into(), words::MOVE_ON),
-                (words::keys::BACK.into(), words::BACK),
-                (words::keys::HELP.into(), words::HELP),
+                (w().help.keys.walk.into(), w().help.walk),
+                (w().help.keys.choose.into(), w().help.choose),
+                (w().help.keys.move_on.into(), w().help.move_on),
+                (w().help.keys.back.into(), w().help.back),
+                (w().help.keys.help.into(), w().help.help),
             ],
         },
     ]
@@ -141,7 +142,7 @@ pub fn show(
     crate::client::views::panel(
         ctx,
         theme,
-        crate::client::views::Panel::middle("help", words::TITLE),
+        crate::client::views::Panel::middle("help", w().help.title),
         open,
         |ui| {
             for group in &groups {
@@ -161,7 +162,7 @@ pub fn show(
             }
 
             ui.add_space(m.item_spacing * 1.5);
-            ui.colored_label(p.text_dim, egui::RichText::new(words::DISMISS).size(m.text_small));
+            ui.colored_label(p.text_dim, egui::RichText::new(w().help.dismiss).size(m.text_small));
         },
     )
 }
@@ -269,6 +270,6 @@ mod tests {
         // And before anybody has pressed one, the row a US keyboard has is
         // still the honest guess rather than a blank.
         let caps: Vec<String> = cold().into_iter().flat_map(|g| g.keys).map(|(k, _)| k).collect();
-        assert!(caps.iter().any(|k| k == words::keys::STAMPS));
+        assert!(caps.iter().any(|k| k == w().help.keys.stamps));
     }
 }

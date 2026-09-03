@@ -4,8 +4,9 @@
 //! record, Play, and playing alone. What a server has is one press away and is
 //! [`super::play`]'s business.
 
-use super::{words, Chose, Menu, Page, Where};
+use super::{Chose, Menu, Page, Where};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 
 /// one colour, and no second thing competing to be it.
 pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
@@ -22,7 +23,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // answer is one of three presses.
     ui.vertical_centered(|ui| {
         ui.add_space(m.item_spacing * 4.0);
-        ui.heading(words::TITLE);
+        ui.heading(w().menu.title);
         ui.add_space(m.item_spacing * 5.0);
     });
 
@@ -31,7 +32,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     if at.waiting_in_a_match {
         if crate::client::views::wide(
             ui,
-            egui::RichText::new(words::BACK_TO_MATCH).size(m.text_action).color(p.ground),
+            egui::RichText::new(w().menu.back_to_match).size(m.text_action).color(p.ground),
             m.action_height,
             p.accent,
         )
@@ -39,7 +40,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         {
             chose = Chose::Resume;
         }
-        ui.small(words::BACK_TO_MATCH_NOTE);
+        ui.small(w().menu.back_to_match_note);
         ui.add_space(m.item_spacing * 2.0);
     }
 
@@ -48,7 +49,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     let lead = !at.waiting_in_a_match;
     if crate::client::views::wide(
         ui,
-        egui::RichText::new(words::home::PLAY).size(m.text_action).color(if lead {
+        egui::RichText::new(w().menu.home.play).size(m.text_action).color(if lead {
             p.ground
         } else {
             p.text
@@ -87,7 +88,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // Falls back to the category before anybody has typed a name.
     let typed = menu.name.trim();
     let account =
-        if typed.is_empty() { words::home::ACCOUNT.to_string() } else { typed.to_string() };
+        if typed.is_empty() { w().menu.home.account.to_string() } else { typed.to_string() };
     let button = crate::client::views::wide(
         ui,
         egui::RichText::new(format!("        {account}")).size(m.text_body).color(p.text),
@@ -114,7 +115,7 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     ui.add_space(m.item_spacing);
     if crate::client::views::wide(
         ui,
-        egui::RichText::new(words::home::HOWTO).size(m.text_body).color(p.text),
+        egui::RichText::new(w().menu.home.howto).size(m.text_body).color(p.text),
         m.action_height,
         p.surface,
     )

@@ -9,6 +9,7 @@ use super::words;
 use super::{Chose, Menu, Page};
 use crate::client::views::hue;
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 
 /// A row is a person, and **the fingerprint is part of it rather than a
 /// detail**. A name is self-chosen, so two people may both be alice and the
@@ -87,12 +88,12 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     let mut chose = Chose::Nothing;
 
     ui.horizontal(|ui| {
-        if ui.small_button(words::BACK).clicked() {
+        if ui.small_button(w().menu.back).clicked() {
             menu.page = Page::Home;
         }
-        ui.heading(words::people::TITLE);
+        ui.heading(w().menu.people.title);
     });
-    ui.colored_label(p.text_dim, words::people::NOTE);
+    ui.colored_label(p.text_dim, w().menu.people.note);
     ui.add_space(m.item_spacing);
 
     // **Asked on every change and not on a button.** A search you have to
@@ -101,7 +102,7 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     let field = ui.add_sized(
         [ui.available_width(), m.button_height],
         egui::TextEdit::singleline(&mut menu.finding)
-            .hint_text(words::people::HINT)
+            .hint_text(w().menu.people.hint)
             .margin(egui::Margin::symmetric(m.panel_padding as i8, 8)),
     );
     if field.changed() {
@@ -114,12 +115,12 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
         // Nothing has come back yet. Said rather than left blank, because an
         // empty panel and a slow server look the same.
         None => {
-            ui.colored_label(p.text_dim, words::people::ASKING);
+            ui.colored_label(p.text_dim, w().menu.people.asking);
         }
         Some((_, found)) if found.is_empty() => {
             ui.colored_label(
                 p.text_dim,
-                if looking { words::people::NOBODY } else { words::people::NOBODY_YET },
+                if looking { w().menu.people.nobody } else { w().menu.people.nobody_yet },
             );
         }
         Some((_, found)) => {

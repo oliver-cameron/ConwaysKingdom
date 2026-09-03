@@ -10,6 +10,7 @@
 //! `Victory` and never sees a string somebody typed.
 
 use super::words;
+use crate::client::views::words::w;
 use crate::net::Victory;
 use crate::sim::WorldKind;
 
@@ -195,8 +196,8 @@ impl Draft {
         let shape = match self.shape {
             Shape::Boundless => WorldKind::Infinite,
             Shape::Wrapping => WorldKind::Toroidal {
-                rows: chunks(&self.rows, words::make::ROWS)?,
-                cols: chunks(&self.cols, words::make::COLS)?,
+                rows: chunks(&self.rows, w().menu.make.rows)?,
+                cols: chunks(&self.cols, w().menu.make.cols)?,
             },
         };
         // A way to win is the whole of what makes a room a match, so nothing
@@ -218,7 +219,7 @@ impl Draft {
         match text.parse::<u8>() {
             Ok(n) if (crate::net::MIN_TEAMS..=crate::net::MAX_TEAMS).contains(&n) => Ok(n),
             Ok(_) => Err(words::make::sides_range(crate::net::MIN_TEAMS, crate::net::MAX_TEAMS)),
-            Err(_) => Err(words::make::not_a_number_for(words::make::SIDES, text)),
+            Err(_) => Err(words::make::not_a_number_for(w().menu.make.sides, text)),
         }
     }
 

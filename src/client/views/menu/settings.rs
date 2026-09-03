@@ -13,20 +13,21 @@
 
 use super::{words, Ask, Chose, Menu};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 
 pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     let p = theme.palette;
     let m = theme.metrics;
 
     ui.add_space(m.item_spacing * 2.0);
-    ui.label(egui::RichText::new(words::home::settings::KEY).size(m.text_small));
+    ui.label(egui::RichText::new(w().menu.home.settings.key).size(m.text_small));
     let Some(mine) = crate::net::keep::secret() else {
         // A key is made at startup, so reaching this means the store refused
         // it or there was no entropy to make one from — a browser with no
         // `crypto`, or one with storage switched off. Rare, and worth saying
         // rather than showing a blank panel: the consequence is that this
         // client is somebody new everywhere it goes.
-        ui.small(words::home::settings::KEY_NONE);
+        ui.small(w().menu.home.settings.key_none);
         return Chose::Nothing;
     };
 
@@ -43,7 +44,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
             ui.label(egui::RichText::new(id.to_string()).monospace().size(m.text_small));
         }
         None => {
-            ui.small(words::home::settings::KEY_UNSEEN);
+            ui.small(w().menu.home.settings.key_unseen);
         }
     }
 
@@ -64,7 +65,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
         menu.key = if menu.revealed { mine.written() } else { String::new() };
     }
     if menu.revealed {
-        ui.small(words::home::settings::KEY_NOTE);
+        ui.small(w().menu.home.settings.key_note);
         ui.add(
             egui::TextEdit::multiline(&mut menu.key)
                 .desired_width(f32::INFINITY)
@@ -78,7 +79,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
         let typed = crate::net::Secret::read(&menu.key).ok().map(|k| k.written());
         if let Some(typed) = typed.filter(|t| *t != mine.written()) {
             ui.add_space(m.item_spacing);
-            if ui.button(words::home::settings::KEY_TAKE).clicked() {
+            if ui.button(w().menu.home.settings.key_take).clicked() {
                 menu.asking = Some(Ask::UseKey(typed));
             }
         }
@@ -86,12 +87,12 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
 
     ui.add_space(m.item_spacing * 2.5);
     if ui
-        .add(egui::Button::new(egui::RichText::new(words::home::settings::FORGET).color(p.bad)))
+        .add(egui::Button::new(egui::RichText::new(w().menu.home.settings.forget).color(p.bad)))
         .clicked()
     {
         menu.asking = Some(Ask::Forget);
     }
-    ui.small(words::home::settings::FORGET_NOTE);
+    ui.small(w().menu.home.settings.forget_note);
 
     Chose::Nothing
 }
@@ -107,8 +108,8 @@ pub(super) fn confirm(ctx: &egui::Context, theme: &Theme, ask: &Ask) -> Option<b
     let p = theme.palette;
     let m = theme.metrics;
     let (title, note) = match ask {
-        Ask::Forget => (words::home::settings::FORGET_ASK, words::home::settings::FORGET_ASK_NOTE),
-        Ask::UseKey(_) => (words::home::settings::KEY_ASK, words::home::settings::KEY_ASK_NOTE),
+        Ask::Forget => (w().menu.home.settings.forget_ask, w().menu.home.settings.forget_ask_note),
+        Ask::UseKey(_) => (w().menu.home.settings.key_ask, w().menu.home.settings.key_ask_note),
     };
 
     let mut answer = None;
@@ -133,12 +134,12 @@ pub(super) fn confirm(ctx: &egui::Context, theme: &Theme, ask: &Ask) -> Option<b
                         // The safe answer first and the destructive one after
                         // it, so the button under the pointer on the way in is
                         // the one that changes nothing.
-                        if ui.button(words::home::settings::CANCEL).clicked() {
+                        if ui.button(w().menu.home.settings.cancel).clicked() {
                             answer = Some(false);
                         }
                         if ui
                             .add(egui::Button::new(
-                                egui::RichText::new(words::home::settings::CONFIRM).color(p.bad),
+                                egui::RichText::new(w().menu.home.settings.confirm).color(p.bad),
                             ))
                             .clicked()
                         {

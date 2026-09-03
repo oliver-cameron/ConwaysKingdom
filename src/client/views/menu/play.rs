@@ -7,6 +7,7 @@
 use super::draft::{Access, Draft, Ends, Kind, Shape};
 use super::{describe, players, words, Chose, Menu, Page, Stage, Where, RETRY_EVERY, SETTLE};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 use crate::net::{RoomId, RoomInfo};
 
 /// phone is two columns of nothing.
@@ -51,10 +52,10 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             // Every screen has a way out, by pointer as well as by escape.
-            if ui.small_button(words::BACK).clicked() {
+            if ui.small_button(w().menu.back).clicked() {
                 menu.page = Page::Home;
             }
-            ui.heading(words::home::PLAY);
+            ui.heading(w().menu.home.play);
             reach = server_field(ui, theme, menu, at, reached);
         },
     );
@@ -121,7 +122,7 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.add_space(m.item_spacing);
         if crate::client::views::wide(
             ui,
-            egui::RichText::new(words::ALONE).size(m.text_body).color(theme.palette.text),
+            egui::RichText::new(w().menu.alone_label).size(m.text_body).color(theme.palette.text),
             m.button_height,
             theme.palette.surface,
         )
@@ -130,7 +131,7 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
             menu.page = Page::Alone;
         }
         ui.label(
-            egui::RichText::new(words::alone::NOTE)
+            egui::RichText::new(w().menu.alone.note)
                 .size(m.text_small)
                 .color(theme.palette.text_dim),
         );
@@ -195,8 +196,11 @@ fn server_field(
             rect,
             if response.hovered() { p.text } else { p.text_dim },
         );
-        let go =
-            response.on_hover_text(if reached { words::REFRESH_AGAIN } else { words::REFRESH_ASK });
+        let go = response.on_hover_text(if reached {
+            w().menu.refresh_again
+        } else {
+            w().menu.refresh_ask
+        });
 
         let entered = if at.on_web {
             // Not a field. The socket is derived from the page's origin, so a
@@ -211,7 +215,7 @@ fn server_field(
             // suit. An address is a known length; this is enough for one.
             let field = ui.add_sized(
                 [200.0, m.button_height],
-                egui::TextEdit::singleline(&mut menu.address).hint_text(words::SERVER_HINT),
+                egui::TextEdit::singleline(&mut menu.address).hint_text(w().menu.server_hint),
             );
             if field.changed() {
                 typed = true;
@@ -242,10 +246,10 @@ fn server_field(
 
     match &menu.stage {
         Stage::Asking => {
-            ui.colored_label(p.text_dim, egui::RichText::new(words::ASKING).size(m.text_small));
+            ui.colored_label(p.text_dim, egui::RichText::new(w().menu.asking).size(m.text_small));
         }
         Stage::Choosing { .. } => {
-            ui.colored_label(p.good, egui::RichText::new(words::REACHED).size(m.text_small));
+            ui.colored_label(p.good, egui::RichText::new(w().menu.reached).size(m.text_small));
         }
         Stage::Failed(why) => {
             ui.colored_label(p.bad, egui::RichText::new(why).size(m.text_small));
@@ -303,17 +307,17 @@ fn rooms_column(
 
     // No refresh here. It is beside the address, which is the same act from
     // where the player stands and was two buttons for one thing.
-    ui.label(egui::RichText::new(words::ROOMS).size(m.text_small));
+    ui.label(egui::RichText::new(w().menu.rooms).size(m.text_small));
 
     if !reached {
         // No answer yet, which is a different thing from a server with nothing
         // on it and reads differently: one is waiting, the other is an
         // invitation.
-        ui.colored_label(p.text_dim, egui::RichText::new(words::NOT_ASKED).size(m.text_body));
+        ui.colored_label(p.text_dim, egui::RichText::new(w().menu.not_asked).size(m.text_body));
     } else if rooms.is_empty() {
         // An invitation rather than a complaint: there is a form in the next
         // column and this is the moment to point at it.
-        ui.colored_label(p.text_dim, egui::RichText::new(words::NO_ROOMS).size(m.text_body));
+        ui.colored_label(p.text_dim, egui::RichText::new(w().menu.no_rooms).size(m.text_body));
     } else {
         // Arrow keys walk the list, and enter takes the selection. A list you
         // can only reach with a pointer is a list a keyboard cannot use.
@@ -373,15 +377,15 @@ fn rooms_column(
     // find a public world and a code is how you reach somebody's private one.
     // Two ways into what already exists, which is what this column is.
     ui.add_space(m.item_spacing * 2.0);
-    ui.label(egui::RichText::new(words::code::LABEL).size(m.text_small));
+    ui.label(egui::RichText::new(w().menu.code.label).size(m.text_small));
     ui.horizontal(|ui| {
         let go = ui.add_sized(
             [m.action_height * 1.4, m.button_height],
-            egui::Button::new(egui::RichText::new(words::code::GO).size(m.text_small)),
+            egui::Button::new(egui::RichText::new(w().menu.code.go).size(m.text_small)),
         );
         let field = ui.add_sized(
             [ui.available_width(), m.button_height],
-            egui::TextEdit::singleline(&mut menu.code).hint_text(words::code::HINT),
+            egui::TextEdit::singleline(&mut menu.code).hint_text(w().menu.code.hint),
         );
         // Return submits, because a six-character field is one you type and
         // press enter on without looking for a button.
@@ -442,7 +446,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
         .inner_margin(m.panel_padding)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(words::make::TITLE).size(m.text_body));
+            ui.label(egui::RichText::new(w().menu.make.title).size(m.text_body));
             ui.add_space(m.item_spacing);
 
             // Not asked for on a private room, whose name is the code the
@@ -454,11 +458,11 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // a field that cannot be wrong is a field that should not be
             // asked about.
             if reached && draft.access == Access::Listed {
-                ui.label(egui::RichText::new(words::make::NAME).size(m.text_small));
+                ui.label(egui::RichText::new(w().menu.make.name).size(m.text_small));
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.name)
                         .desired_width(f32::INFINITY)
-                        .hint_text(words::make::NAME_HINT),
+                        .hint_text(w().menu.make.name_hint),
                 );
                 ui.add_space(m.item_spacing);
             }
@@ -468,7 +472,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // experiment is the only one whose rules are yours — so the rows
             // below it appear or do not according to this.
             ui.add_space(m.item_spacing);
-            ui.label(egui::RichText::new(words::make::KIND).size(m.text_small));
+            ui.label(egui::RichText::new(w().menu.make.kind).size(m.text_small));
             // **All three, with or without a server.** A solitary match is a
             // real thing and always was — the client is the authority offline,
             // so there is one world, one clock and one player, and `Victory`
@@ -479,24 +483,24 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 theme,
                 &mut draft.kind,
                 &[
-                    (Kind::World, words::make::WORLD),
-                    (Kind::Match, words::make::MATCH),
-                    (Kind::Experiment, words::make::EXPERIMENT),
+                    (Kind::World, w().menu.make.world),
+                    (Kind::Match, w().menu.make.r#match),
+                    (Kind::Experiment, w().menu.make.experiment),
                 ],
             );
             ui.colored_label(
                 p.text_dim,
                 egui::RichText::new(match draft.kind {
-                    Kind::World => words::make::WORLD_NOTE,
-                    Kind::Match => words::make::MATCH_NOTE,
-                    Kind::Experiment => words::make::EXPERIMENT_NOTE,
+                    Kind::World => w().menu.make.world_note,
+                    Kind::Match => w().menu.make.match_note,
+                    Kind::Experiment => w().menu.make.experiment_note,
                 })
                 .size(m.text_small),
             );
 
             {
                 ui.add_space(m.item_spacing);
-                ui.label(egui::RichText::new(words::make::SHAPE).size(m.text_small));
+                ui.label(egui::RichText::new(w().menu.make.shape).size(m.text_small));
                 // **The size lives inside the Wrapping button.** As its own row it
                 // pushed everything under it down the moment the shape changed, so
                 // choosing a shape moved the button you were about to press next —
@@ -512,12 +516,12 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // server, because it needs somebody to share with.
             if reached {
                 ui.add_space(m.item_spacing);
-                ui.label(egui::RichText::new(words::make::TOGETHER).size(m.text_small));
+                ui.label(egui::RichText::new(w().menu.make.together).size(m.text_small));
                 toggles(
                     ui,
                     theme,
                     &mut draft.teams,
-                    &[(false, words::make::SOLO), (true, words::make::TEAMS)],
+                    &[(false, w().menu.make.solo), (true, w().menu.make.teams)],
                 );
                 if draft.teams {
                     ui.add_space(m.item_spacing);
@@ -525,7 +529,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                         ui.set_min_height(m.button_height);
                         ui.colored_label(
                             p.text_dim,
-                            egui::RichText::new(words::make::SIDES).size(m.text_small),
+                            egui::RichText::new(w().menu.make.sides).size(m.text_small),
                         );
                         ui.add_sized(
                             [m.action_height * 1.6, m.button_height],
@@ -535,7 +539,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                     });
                     ui.colored_label(
                         p.text_dim,
-                        egui::RichText::new(words::make::SIDES_NOTE).size(m.text_small),
+                        egui::RichText::new(w().menu.make.sides_note).size(m.text_small),
                     );
                 }
             }
@@ -550,41 +554,44 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // answer that can work is `Solo`, and the toggles say so by being
             // the place the choice lives rather than by disappearing.
             ui.add_space(m.item_spacing);
-            ui.label(egui::RichText::new(words::make::PRIVATE).size(m.text_small));
+            ui.label(egui::RichText::new(w().menu.make.private).size(m.text_small));
             let mut access = draft.access;
             let listed = [
-                (Access::Listed, words::make::LISTED),
-                (Access::ByCode, words::make::UNLISTED),
-                (Access::Solo, words::make::SOLO_ACCESS),
+                (Access::Listed, w().menu.make.listed),
+                (Access::ByCode, w().menu.make.unlisted),
+                (Access::Solo, w().menu.make.solo_access),
             ];
             toggles(ui, theme, &mut access, if reached { &listed } else { &listed[2..] });
             draft.access = if reached { access } else { Access::Solo };
             ui.colored_label(
                 p.text_dim,
                 egui::RichText::new(match draft.access {
-                    Access::Listed => words::make::LISTED_NOTE,
-                    Access::ByCode => words::make::UNLISTED_NOTE,
-                    Access::Solo => words::make::SOLO_NOTE,
+                    Access::Listed => w().menu.make.listed_note,
+                    Access::ByCode => w().menu.make.unlisted_note,
+                    Access::Solo => w().menu.make.solo_note,
                 })
                 .size(m.text_small),
             );
 
             if draft.kind == Kind::Match {
                 ui.add_space(m.item_spacing);
-                ui.label(egui::RichText::new(words::make::ENDS).size(m.text_small));
+                ui.label(egui::RichText::new(w().menu.make.ends).size(m.text_small));
                 let mut ends = draft.ends;
                 toggles(
                     ui,
                     theme,
                     &mut ends,
-                    &[(Ends::Timer, words::make::TIMER), (Ends::Territory, words::make::TERRITORY)],
+                    &[
+                        (Ends::Timer, w().menu.make.timer),
+                        (Ends::Territory, w().menu.make.territory),
+                    ],
                 );
                 draft.retarget(ends);
                 ui.colored_label(
                     p.text_dim,
                     egui::RichText::new(match draft.ends {
-                        Ends::Timer => words::make::TIMER_NOTE,
-                        Ends::Territory => words::make::TERRITORY_NOTE,
+                        Ends::Timer => w().menu.make.timer_note,
+                        Ends::Territory => w().menu.make.territory_note,
                     })
                     .size(m.text_small),
                 );
@@ -594,15 +601,15 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                 ui.add_space(m.item_spacing);
                 ui.label(
                     egui::RichText::new(match draft.ends {
-                        Ends::Territory => words::make::SQUARES,
-                        _ => words::make::GENERATIONS,
+                        Ends::Territory => w().menu.make.squares,
+                        _ => w().menu.make.generations,
                     })
                     .size(m.text_small),
                 );
                 ui.add(egui::TextEdit::singleline(&mut draft.target).desired_width(f32::INFINITY));
                 ui.colored_label(
                     p.warn,
-                    egui::RichText::new(words::make::MATCH_WAITS).size(m.text_small),
+                    egui::RichText::new(w().menu.make.match_waits).size(m.text_small),
                 );
             }
 
@@ -615,16 +622,16 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             if draft.asking {
                 ui.colored_label(
                     p.text_dim,
-                    egui::RichText::new(words::make::MAKING).size(m.text_small),
+                    egui::RichText::new(w().menu.make.making).size(m.text_small),
                 );
             } else if crate::client::views::wide(
                 ui,
                 // **The action follows the last answer on the form**, which is
                 // who can find it. Make it on the server, or play it here.
                 egui::RichText::new(if reached && draft.access != Access::Solo {
-                    words::make::MAKE
+                    w().menu.make.make
                 } else {
-                    words::make::ALONE
+                    w().menu.make.alone
                 })
                 .size(m.text_action)
                 // The accent belongs on it either way now: the form always has
@@ -674,7 +681,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             ui.add_space(m.item_spacing);
             if crate::client::views::wide(
                 ui,
-                egui::RichText::new(words::make::CLEAR).size(m.text_small),
+                egui::RichText::new(w().menu.make.clear).size(m.text_small),
                 m.button_height,
                 p.surface,
             )
@@ -706,7 +713,7 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
 
     ui.horizontal(|ui| {
         let each = (ui.available_width() - m.item_spacing) / 2.0;
-        if cell(ui, theme, each, !wrapping, words::make::BOUNDLESS, |_, _| {}) {
+        if cell(ui, theme, each, !wrapping, w().menu.make.boundless, |_, _| {}) {
             draft.shape = Shape::Boundless;
         }
         // **Shown either way**, greyed when the world does not wrap. Appearing
@@ -717,7 +724,7 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
         // `12x12`, which is how a size is written and how `--torus` takes one.
         // The unit is on hover: worth knowing once and worth no space after.
         let (rows, cols) = (&mut draft.rows, &mut draft.cols);
-        let pressed = cell(ui, theme, each, wrapping, words::make::WRAPPING, |ui, ink| {
+        let pressed = cell(ui, theme, each, wrapping, w().menu.make.wrapping, |ui, ink| {
             ui.add_enabled_ui(wrapping, |ui| {
                 let box_ = |ui: &mut egui::Ui, field: &mut String| {
                     ui.add(
@@ -726,10 +733,10 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
                             .margin(egui::Margin::symmetric(2, 0))
                             .horizontal_align(egui::Align::Center),
                     )
-                    .on_hover_text(words::make::SIZE_NOTE);
+                    .on_hover_text(w().menu.make.size_note);
                 };
                 box_(ui, rows);
-                ui.colored_label(ink, egui::RichText::new(words::make::BY).size(m.text_small));
+                ui.colored_label(ink, egui::RichText::new(w().menu.make.by).size(m.text_small));
                 box_(ui, cols);
             });
         });
@@ -856,20 +863,22 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
             // this list is the one place the difference has to show — clicking
             // into a match that has already started only to be refused is a
             // worse way to find out.
-            use crate::client::views::words as said;
             let mut under = describe(room.world);
             let kind = crate::net::RoomKind::of(room.victory, &room.rules);
-            if let Some(name) = said::room_kind(kind) {
+            if let Some(name) = crate::client::views::words::room_kind(kind) {
                 under = format!("{under} · {name}");
             }
             if let Some(victory) = room.victory {
-                under =
-                    format!("{under} · {} · {}", said::phase(&room.phase), said::describe(victory));
+                under = format!(
+                    "{under} · {} · {}",
+                    crate::client::views::words::phase(&room.phase),
+                    crate::client::views::words::describe(victory)
+                );
             }
             // The one thing about a laboratory worth knowing before going in:
             // a stopped world looks exactly like a broken one from outside.
             if room.rules.laboratory && room.rules.paused {
-                under = format!("{under} · {}", said::STOPPED);
+                under = format!("{under} · {}", w().stopped);
             }
             ui.colored_label(
                 if matches!(room.phase, crate::net::MatchPhase::Gathering) {
@@ -904,7 +913,7 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                         .add_sized(
                             [each, m.button_height],
                             egui::Button::new(
-                                egui::RichText::new(words::watch::JOIN)
+                                egui::RichText::new(w().menu.watch.join)
                                     .size(m.text_small)
                                     .color(p.ground),
                             )
@@ -918,7 +927,7 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                         .add_sized(
                             [each, m.button_height],
                             egui::Button::new(
-                                egui::RichText::new(words::watch::WATCH).size(m.text_small),
+                                egui::RichText::new(w().menu.watch.watch).size(m.text_small),
                             ),
                         )
                         .clicked()

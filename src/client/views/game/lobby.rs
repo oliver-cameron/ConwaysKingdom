@@ -14,6 +14,7 @@ use crate::client::views::hue::team_colour;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
+use crate::client::views::words::w;
 use crate::net::{MatchPhase, Team, Victory};
 use crate::sim::PlayerId;
 
@@ -113,8 +114,8 @@ pub fn show(
     // An open room is not a match, and a running one is a game — neither wants
     // a panel in the middle of it. Only the two ends have anything to say.
     let heading = match look.phase {
-        MatchPhase::Gathering => words::WAITING,
-        MatchPhase::Over { .. } => words::FINISHED,
+        MatchPhase::Gathering => w().lobby.waiting,
+        MatchPhase::Over { .. } => w().lobby.finished,
         _ => return crate::client::views::Shown::nowhere(),
     };
     let p = theme.palette;
@@ -145,7 +146,7 @@ pub fn show(
                         ui.add_space(m.item_spacing);
                         ui.colored_label(
                             p.text_dim,
-                            egui::RichText::new(words::CODE).size(m.text_small),
+                            egui::RichText::new(w().lobby.code).size(m.text_small),
                         );
                         // Monospace and larger than the prose around it: this
                         // is a thing to be copied character by character, and
@@ -166,7 +167,7 @@ pub fn show(
                                 let who = look.name_of(*id);
                                 swatch(ui, drawn_as(*id, look.teams), look.hues);
                                 ui.heading(if *id == look.me {
-                                    words::YOU_WON.to_string()
+                                    w().lobby.you_won.to_string()
                                 } else {
                                     who
                                 });
@@ -184,7 +185,7 @@ pub fn show(
                                 }
                             }
                             None => {
-                                ui.label(words::NOBODY);
+                                ui.label(w().lobby.nobody);
                             }
                         },
                         _ => {
@@ -215,7 +216,7 @@ pub fn show(
                             if mine {
                                 if crate::client::views::wide(
                                     ui,
-                                    egui::RichText::new(whistle::START)
+                                    egui::RichText::new(w().menu.watch.start)
                                         .size(m.text_action)
                                         .color(p.ground),
                                     m.action_height,
@@ -233,7 +234,7 @@ pub fn show(
                                         );
                                     }
                                     None => {
-                                        ui.small(whistle::START_NOTE);
+                                        ui.small(w().menu.watch.start_note);
                                     }
                                 }
                             } else {
@@ -241,8 +242,8 @@ pub fn show(
                                 // does nothing and explains nothing is
                                 // indistinguishable from one that is broken.
                                 ui.small(match look.owner {
-                                    Some(_) => whistle::NOT_YOURS,
-                                    None => whistle::AT_CONSOLE,
+                                    Some(_) => w().menu.watch.not_yours,
+                                    None => w().menu.watch.at_console,
                                 });
                             }
                         }
@@ -253,7 +254,7 @@ pub fn show(
                     // until somebody else decides otherwise.
                     if crate::client::views::wide(
                         ui,
-                        egui::RichText::new(crate::client::views::words::hud::BACK_HINT),
+                        egui::RichText::new(w().hud.back_hint),
                         30.0,
                         p.surface,
                     )
@@ -312,7 +313,7 @@ fn team_picker(
                             );
                             let done =
                                 field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            if done || ui.small_button(words::KEEP_NAME).clicked() {
+                            if done || ui.small_button(w().lobby.keep_name).clicked() {
                                 did = Some(Did::NameTeam(team.id, text.clone()));
                                 *naming = None;
                             }
@@ -322,7 +323,7 @@ fn team_picker(
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui.small_button(words::RENAME).clicked() {
+                                    if ui.small_button(w().lobby.rename).clicked() {
                                         *naming = Some((team.id, team.name.clone()));
                                     }
                                 },
@@ -334,7 +335,7 @@ fn team_picker(
                 if team.players.is_empty() {
                     ui.colored_label(
                         p.text_dim,
-                        egui::RichText::new(words::NOBODY_ON_IT).size(m.text_small),
+                        egui::RichText::new(w().lobby.nobody_on_it).size(m.text_small),
                     );
                 }
                 for &id in &team.players {
@@ -362,7 +363,7 @@ fn team_picker(
 
                 // Taking the side you are already on steps off it, so there is
                 // a way back to undecided without a second control.
-                let label = if ours { words::LEAVE_SIDE } else { words::TAKE_SIDE };
+                let label = if ours { w().lobby.leave_side } else { w().lobby.take_side };
                 if crate::client::views::wide(
                     ui,
                     egui::RichText::new(label).size(m.text_small),
@@ -405,7 +406,7 @@ fn team_picker(
 /// this screen already makes.
 fn who_row(ui: &mut egui::Ui, seat: &crate::net::Seat, me: PlayerId) -> Option<Did> {
     let label =
-        if seat.id == me { format!("{}  ({})", seat.label(), words::YOU) } else { seat.label() };
+        if seat.id == me { format!("{}  ({})", seat.label(), w().lobby.you) } else { seat.label() };
     // **Their face beside their name**, which is what makes a roster somewhere
     // you recognise people rather than a list of strings. Derived from the key
     // and so already theirs everywhere else it is drawn — see

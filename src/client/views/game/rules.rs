@@ -15,7 +15,7 @@
 //! see [`crate::net::Rules`].
 
 use crate::client::views::theme::Theme;
-use crate::client::views::words::hotbar as words;
+use crate::client::views::words::w;
 use crate::client::views::Shown;
 
 /// Which switch was thrown, if either was.
@@ -47,22 +47,25 @@ pub fn show(
     // look for after pressing something.
     let where_ = crate::client::views::Panel {
         id: "rules",
-        title: words::RULES,
+        title: w().hotbar.rules,
         at: egui::Align2::RIGHT_BOTTOM,
         offset: [-m.margin, -(m.slot + m.margin * 4.0)],
     };
     crate::client::views::panel(ctx, theme, where_, open, |ui| {
         let mut did = Did::Nothing;
-        if ui.checkbox(&mut anywhere, words::ANYWHERE).changed() {
+        if ui.checkbox(&mut anywhere, w().hotbar.anywhere).changed() {
             did = Did::Anywhere(anywhere);
         }
-        ui.colored_label(p.text_dim, egui::RichText::new(words::ANYWHERE_NOTE).size(m.text_small));
+        ui.colored_label(
+            p.text_dim,
+            egui::RichText::new(w().hotbar.anywhere_note).size(m.text_small),
+        );
 
         ui.add_space(m.item_spacing);
-        if ui.checkbox(&mut free, words::FREE).changed() {
+        if ui.checkbox(&mut free, w().hotbar.free).changed() {
             did = Did::Free(free);
         }
-        ui.colored_label(p.text_dim, egui::RichText::new(words::FREE_NOTE).size(m.text_small));
+        ui.colored_label(p.text_dim, egui::RichText::new(w().hotbar.free_note).size(m.text_small));
         did
     })
 }

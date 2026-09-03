@@ -19,6 +19,7 @@
 
 use crate::client::views::theme::Theme;
 use crate::client::views::words::profile as words;
+use crate::client::views::words::w;
 use crate::client::views::Shown;
 
 /// What to draw, which is either an answer or the wait for one.
@@ -63,22 +64,22 @@ pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) ->
     crate::client::views::panel(
         ctx,
         theme,
-        crate::client::views::Panel::middle("profile", words::TITLE),
+        crate::client::views::Panel::middle("profile", w().profile.title),
         open,
         |ui| match look {
             Look::Asking => {
-                ui.colored_label(p.text_dim, words::ASKING);
+                ui.colored_label(p.text_dim, w().profile.asking);
             }
             Look::Unknown => {
-                ui.colored_label(p.text_dim, words::UNKNOWN);
+                ui.colored_label(p.text_dim, w().profile.unknown);
             }
             Look::Found { it, hue, yours } => body(ui, theme, it, *hue, *yours),
             Look::Unrated { who, yours } => {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(crate::net::keep::name().unwrap_or_else(|| {
-                            crate::client::views::words::profile::NOBODY.into()
-                        }))
+                        egui::RichText::new(
+                            crate::net::keep::name().unwrap_or_else(|| w().profile.nobody.into()),
+                        )
                         .size(theme.metrics.text_action)
                         .color(p.text),
                     );
@@ -90,11 +91,11 @@ pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) ->
                     }
                     ui.colored_label(
                         p.text_dim,
-                        egui::RichText::new(words::YOU).size(theme.metrics.text_small),
+                        egui::RichText::new(w().profile.you).size(theme.metrics.text_small),
                     );
                 });
                 ui.add_space(theme.metrics.item_spacing);
-                ui.colored_label(p.text_dim, words::UNRATED);
+                ui.colored_label(p.text_dim, w().profile.unrated);
                 ui.add_space(theme.metrics.item_spacing);
                 mine(ui, theme, yours);
             }
@@ -128,7 +129,7 @@ fn body(
         // which of two of them it is.
         ui.colored_label(p.text_dim, egui::RichText::new(it.who.short()).size(m.text_small));
         if yours.is_some() {
-            ui.colored_label(p.text_dim, egui::RichText::new(words::YOU).size(m.text_small));
+            ui.colored_label(p.text_dim, egui::RichText::new(w().profile.you).size(m.text_small));
         }
     });
     ui.add_space(m.item_spacing);
@@ -137,7 +138,7 @@ fn body(
     // server is not a profile: a server can only speak for what happened on
     // it, and a screen that did not say that would read as a record of a
     // person rather than of a visit.
-    ui.colored_label(p.text_dim, egui::RichText::new(words::HERE).size(m.text_small));
+    ui.colored_label(p.text_dim, egui::RichText::new(w().profile.here).size(m.text_small));
     ui.add_space(m.item_spacing);
 
     ui.label(
@@ -172,13 +173,13 @@ fn body(
 /// something to say about and one it does not, because it is the same diary.
 fn mine(ui: &mut egui::Ui, theme: &Theme, diary: &crate::client::record::Summary) {
     let (p, m) = (theme.palette, theme.metrics);
-    ui.colored_label(p.text_dim, egui::RichText::new(words::EVERYWHERE).size(m.text_small));
+    ui.colored_label(p.text_dim, egui::RichText::new(w().profile.everywhere).size(m.text_small));
     ui.add_space(m.item_spacing);
     if diary.any() {
         ui.label(words::played(diary.games, diary.won));
         ui.label(words::best(diary.best as usize));
     } else {
-        ui.colored_label(p.text_dim, crate::client::views::words::record::NOTHING_YET);
+        ui.colored_label(p.text_dim, w().record.nothing_yet);
     }
 }
 

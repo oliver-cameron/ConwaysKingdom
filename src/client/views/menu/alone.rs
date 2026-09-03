@@ -13,9 +13,9 @@
 //! server screen and finding it under a room list nobody had asked for.
 
 use super::play;
-use super::words;
 use super::{Chose, Menu, Page};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 
 pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     let m = theme.metrics;
@@ -24,12 +24,12 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     // Every screen has a way out, by pointer as well as by escape — the same
     // control the server screen uses, in the same place.
     ui.horizontal(|ui| {
-        if ui.small_button(words::BACK).clicked() {
+        if ui.small_button(w().menu.back).clicked() {
             menu.page = Page::Home;
         }
-        ui.heading(words::alone::TITLE);
+        ui.heading(w().menu.alone.title);
     });
-    ui.colored_label(theme.palette.text_dim, words::alone::NOTE);
+    ui.colored_label(theme.palette.text_dim, w().menu.alone.note);
     ui.add_space(m.item_spacing);
 
     // `reached: false` is what makes it the solitary form: no name, no

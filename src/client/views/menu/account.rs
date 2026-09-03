@@ -9,6 +9,7 @@
 
 use super::{words, Chose, Menu, Page, Where};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 
 pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let (m, p) = (theme.metrics, theme.palette);
@@ -18,7 +19,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     let mine = menu.whoami.clone();
 
     ui.horizontal(|ui| {
-        if ui.small_button(words::BACK).clicked() {
+        if ui.small_button(w().menu.back).clicked() {
             menu.page = Page::Home;
         }
     });
@@ -49,7 +50,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.add_space(m.item_spacing);
         ui.vertical(|ui| {
             let shown = menu.name.trim();
-            ui.heading(if shown.is_empty() { words::account::TITLE } else { shown });
+            ui.heading(if shown.is_empty() { w().menu.account.title } else { shown });
             match mine.as_ref() {
                 Some(who) => {
                     ui.label(
@@ -61,7 +62,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
                 }
                 None => {
                     ui.label(
-                        egui::RichText::new(words::account::UNNAMED)
+                        egui::RichText::new(w().menu.account.unnamed)
                             .size(m.text_small)
                             .color(p.text_dim),
                     );
@@ -73,11 +74,11 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
 
     // Here rather than on the way in: it is who you are, and it is the same
     // answer whichever world you end up in.
-    ui.label(egui::RichText::new(words::home::WHO).size(m.text_small));
+    ui.label(egui::RichText::new(w().menu.home.who).size(m.text_small));
     ui.add(
         egui::TextEdit::singleline(&mut menu.name)
             .desired_width(f32::INFINITY)
-            .hint_text(words::NAME_HINT),
+            .hint_text(w().menu.name_hint),
     );
     ui.add_space(m.item_spacing * 2.0);
 
@@ -88,7 +89,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // into the first would suggest the client had worked it out, which it must
     // never look like it can.
     if let Some(r) = menu.rating {
-        ui.label(egui::RichText::new(words::account::RATED).size(m.text_small));
+        ui.label(egui::RichText::new(w().menu.account.rated).size(m.text_small));
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(crate::client::views::words::rating(r.number))
@@ -128,12 +129,12 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         .clicked()
     };
 
-    if flat(ui, words::home::PROFILE) {
+    if flat(ui, w().menu.home.profile) {
         chose = Chose::Profile;
     }
     // Only where a server has been reached — there is nobody to ask otherwise,
     // and a button that cannot work is worse than no button.
-    if at.reached && flat(ui, words::home::PEOPLE) {
+    if at.reached && flat(ui, w().menu.home.people) {
         menu.page = Page::People;
         // Asked on the way in, so the board is up before anybody types. An
         // empty query is the leaderboard.
@@ -141,11 +142,12 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     }
     ui.add_space(m.item_spacing);
 
-    ui.label(egui::RichText::new(words::home::RECORD).size(m.text_small));
+    ui.label(egui::RichText::new(w().menu.home.record).size(m.text_small));
     crate::client::views::record::show(ui, theme, &menu.games, &menu.record);
 
     ui.add_space(m.item_spacing * 2.0);
-    let label = if menu.advanced { words::home::SETTINGS_HIDE } else { words::home::SETTINGS };
+    let label =
+        if menu.advanced { w().menu.home.settings_hide } else { w().menu.home.settings_label };
     if ui.small_button(label).clicked() {
         menu.advanced = !menu.advanced;
     }

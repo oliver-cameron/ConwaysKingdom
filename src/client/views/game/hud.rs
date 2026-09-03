@@ -7,6 +7,7 @@
 use crate::client::desync::{Geiger, Level};
 use crate::client::views::hue::player_colour;
 use crate::client::views::words::hud as words;
+use crate::client::views::words::w;
 use crate::sim::{PlayerId, WorldKind};
 
 /// What the HUD shows. Assembled by the client each frame.
@@ -149,7 +150,7 @@ pub fn show(
                     egui::StrokeKind::Inside,
                 );
                 crate::client::views::icons::back(ui.painter(), rect.shrink(5.0), ink);
-                if response.on_hover_text(words::BACK_HINT).clicked() {
+                if response.on_hover_text(w().hud.back_hint).clicked() {
                     did = Did::Back;
                 }
                 // The same colour the shader gives this player's cells, so the
@@ -188,28 +189,21 @@ pub fn show(
                     // nobody asked for is one more thing to read every frame.
                     let p = theme.palette;
                     let (word, colour) = match status.geiger.level() {
-                        Level::Quiet if !status.geiger.ever() => (words::CONNECTED, p.good),
-                        Level::Quiet => (crate::client::views::words::desync::SETTLED, p.good),
-                        Level::Background => {
-                            (crate::client::views::words::desync::BACKGROUND, p.good)
-                        }
-                        Level::Noticeable => {
-                            (crate::client::views::words::desync::NOTICEABLE, p.warn)
-                        }
-                        Level::Alarming => (crate::client::views::words::desync::ALARMING, p.bad),
+                        Level::Quiet if !status.geiger.ever() => (w().hud.connected, p.good),
+                        Level::Quiet => (w().desync.settled, p.good),
+                        Level::Background => (w().desync.background, p.good),
+                        Level::Noticeable => (w().desync.noticeable, p.warn),
+                        Level::Alarming => (w().desync.alarming, p.bad),
                     };
                     ui.colored_label(colour, word);
                 } else {
-                    ui.colored_label(theme.palette.warn, words::OFFLINE);
+                    ui.colored_label(theme.palette.warn, w().hud.offline);
                 }
                 if let Some(room) = status.room {
                     ui.label(format!("· room {room}"));
                 }
                 if status.watching {
-                    ui.colored_label(
-                        theme.palette.accent,
-                        crate::client::views::words::menu::watch::WATCHING,
-                    );
+                    ui.colored_label(theme.palette.accent, w().menu.watch.watching);
                 }
             });
             // What the last match did to the rating. The rating itself is on
@@ -220,7 +214,7 @@ pub fn show(
                 ui.colored_label(colour, words::rating_change(change));
             }
             ui.small(match status.world {
-                WorldKind::Infinite => words::BOUNDLESS.to_string(),
+                WorldKind::Infinite => w().hud.boundless.to_string(),
                 WorldKind::Toroidal { rows, cols } => {
                     format!("{rows}x{cols} chunks, wrapping")
                 }
@@ -237,18 +231,18 @@ pub fn show(
                 ui.separator();
                 ui.horizontal(|ui| {
                     if status.forfeited {
-                        ui.colored_label(theme.palette.text_dim, words::GAVE_UP);
+                        ui.colored_label(theme.palette.text_dim, w().hud.gave_up);
                     } else if ui
-                        .small_button(words::FORFEIT)
-                        .on_hover_text(words::FORFEIT_HINT)
+                        .small_button(w().hud.forfeit)
+                        .on_hover_text(w().hud.forfeit_hint)
                         .clicked()
                     {
                         did = Did::Forfeit;
                     }
                     if status.started_it
                         && ui
-                            .small_button(words::END_MATCH)
-                            .on_hover_text(words::END_MATCH_HINT)
+                            .small_button(w().hud.end_match)
+                            .on_hover_text(w().hud.end_match_hint)
                             .clicked()
                     {
                         did = Did::EndMatch;
@@ -266,13 +260,13 @@ pub fn show(
                     "cursor  ({}, {})   {}",
                     status.cursor_cell.0,
                     status.cursor_cell.1,
-                    if status.pointer_on_ui { words::OVER_PANEL } else { words::ON_WORLD }
+                    if status.pointer_on_ui { w().hud.over_panel } else { w().hud.on_world }
                 ));
-                ui.small(format!("last  {}", status.last_action.unwrap_or(words::NOTHING_YET)));
+                ui.small(format!("last  {}", status.last_action.unwrap_or(w().hud.nothing_yet)));
 
                 ui.separator();
                 ui.small(format!("holding  {}", status.holding));
-                for hint in words::HINTS {
+                for hint in w().hud.hints {
                     ui.small(*hint);
                 }
             }
@@ -304,7 +298,7 @@ fn standings(
     }
     let mut look = None;
     ui.separator();
-    ui.small(words::HOLDING);
+    ui.small(w().hud.holding);
 
     let most = status.standing.iter().map(|h| h.score).max().unwrap_or(1).max(1) as f32;
     let width = ui.available_width().max(80.0);

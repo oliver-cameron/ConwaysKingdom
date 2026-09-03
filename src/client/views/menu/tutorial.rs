@@ -19,6 +19,7 @@
 use super::words;
 use crate::client::views::icons::Icons;
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 use crate::net::Placement;
 use crate::sim::{next_cell, Cell, Kind, PlayerId};
 
@@ -224,18 +225,18 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, patch: &mut Patch, sheet: Option<e
 
     ui.add_space(m.item_spacing * 0.5);
     ui.horizontal(|ui| {
-        let label = if patch.running { words::tutorial::STOP } else { words::tutorial::RUN };
+        let label = if patch.running { w().menu.tutorial.stop } else { w().menu.tutorial.run };
         if ui.small_button(label).clicked() {
             patch.running = !patch.running;
         }
-        if ui.small_button(words::tutorial::STEP).clicked() {
+        if ui.small_button(w().menu.tutorial.step).clicked() {
             patch.running = false;
             patch.step();
         }
-        if ui.small_button(words::tutorial::SHOW_ME).clicked() {
+        if ui.small_button(w().menu.tutorial.show_me).clicked() {
             patch.fill_in_the_target();
         }
-        if ui.small_button(words::tutorial::CLEAR).clicked() {
+        if ui.small_button(w().menu.tutorial.clear).clicked() {
             patch.clear();
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -318,7 +319,7 @@ mod tests {
 }
 
 /// The patches the how-to page shows, in order, one per entry in
-/// [`words::tutorial::LESSONS`].
+/// [`w().menu.tutorial.lessons`].
 ///
 /// **Nine cells a side.** Five is too small for a glider to be a glider — it
 /// meets itself before it has travelled — and anything much larger stops being

@@ -15,13 +15,14 @@
 //!
 //! [game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 
-use super::{words, Chose, Menu, Page, Where};
+use super::{Chose, Menu, Page, Where};
 use crate::client::views::icons::Icons;
 use crate::client::views::theme::Theme;
+use crate::client::views::words::w;
 use crate::net::Placement;
 use crate::sim::{Cell, PlayerId};
 
-/// The cell each rule is about, in the order [`words::howto::RULES`] gives
+/// The cell each rule is about, in the order [`w().menu.howto.rules`] gives
 /// them. Two lists that have to agree, which `a_face_for_every_rule` is what
 /// makes checkable — the alternative is a placement in the string table, and
 /// `words` holds strings.
@@ -98,19 +99,19 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     let me = PlayerId(1);
 
     ui.horizontal(|ui| {
-        if ui.small_button(words::BACK).clicked() {
+        if ui.small_button(w().menu.back).clicked() {
             menu.page = Page::Home;
         }
-        ui.heading(words::howto::TITLE);
+        ui.heading(w().menu.howto.title);
     });
     ui.add_space(4.0);
     column(ui, |ui| {
-        ui.label(egui::RichText::new(words::howto::NOTE).size(m.text_small).color(p.text_dim));
+        ui.label(egui::RichText::new(w().menu.howto.note).size(m.text_small).color(p.text_dim));
     });
     ui.add_space(m.item_spacing);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        for (i, (heading, body)) in words::howto::RULES.iter().enumerate() {
+        for (i, (heading, body)) in w().menu.howto.rules.iter().enumerate() {
             // **A card each**, because these are five separate things somebody
             // has to hold on to rather than five paragraphs of one argument.
             // Run together they read as a wall and get skipped, which is the
@@ -137,7 +138,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         // rules and out is a complete visit, and so is stopping to find out
         // what a factory actually does. See [`super::tutorial`].
         ui.add_space(m.item_spacing);
-        for (i, (heading, body)) in words::tutorial::LESSONS.iter().enumerate() {
+        for (i, (heading, body)) in w().menu.tutorial.lessons.iter().enumerate() {
             let Some(patch) = menu.patches.get_mut(i) else { break };
             patch.tick(at.now);
             card(ui, theme, false, |ui| {
@@ -163,13 +164,13 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.add_space(m.item_spacing);
         card(ui, theme, true, |ui| {
             ui.label(
-                egui::RichText::new(words::howto::TIP_TITLE)
+                egui::RichText::new(w().menu.howto.tip_title)
                     .size(m.text_body)
                     .color(p.accent)
                     .strong(),
             );
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(words::howto::TIP).size(m.text_small).color(p.text_dim));
+            ui.label(egui::RichText::new(w().menu.howto.tip).size(m.text_small).color(p.text_dim));
         });
 
         // **And a word about Conway, at the end.** The rule underneath all of
@@ -182,11 +183,13 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.separator();
         ui.add_space(m.item_spacing);
         column(ui, |ui| {
-            ui.label(egui::RichText::new(words::conway::TITLE).size(m.text_body).color(p.text));
+            ui.label(egui::RichText::new(w().menu.conway.title).size(m.text_body).color(p.text));
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(words::conway::BODY).size(m.text_small).color(p.text_dim));
+            ui.label(
+                egui::RichText::new(w().menu.conway.body).size(m.text_small).color(p.text_dim),
+            );
             ui.add_space(m.item_spacing);
-            for (name, what, url) in words::conway::WORK {
+            for (name, what, url) in w().menu.conway.work {
                 ui.hyperlink_to(
                     egui::RichText::new(*name).size(m.text_small).color(p.accent),
                     *url,
@@ -207,6 +210,6 @@ mod tests {
     /// Two lists in step: a cell for every rule and no cell without one.
     #[test]
     fn a_face_for_every_rule() {
-        assert_eq!(FACES.len(), words::howto::RULES.len());
+        assert_eq!(FACES.len(), w().menu.howto.rules.len());
     }
 }

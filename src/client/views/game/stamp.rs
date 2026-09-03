@@ -16,7 +16,7 @@
 
 use crate::client::views::icons::Icons;
 use crate::client::views::theme::Theme;
-use crate::client::views::words::stamps as words;
+use crate::client::views::words::w;
 use crate::net::Placement;
 use crate::sim::{Cell, PlayerId, World};
 
@@ -350,20 +350,20 @@ fn pad(
         // Nothing drawn is nothing to keep, and a button that does nothing
         // says less than one that is plainly not available.
         ui.add_enabled_ui(!sketch.is_empty(), |ui| {
-            if ui.small_button(words::KEEP).clicked() {
+            if ui.small_button(w().stamps.keep).clicked() {
                 if let Some(stamp) = sketch.to_stamp() {
                     sketch.clear();
                     asked = Some(Picked::Keep(stamp));
                 }
             }
-            if ui.small_button(words::CLEAR).clicked() {
+            if ui.small_button(w().stamps.clear).clicked() {
                 sketch.clear();
             }
         });
         // Which of the two this is. Keeping while editing replaces the stamp
         // that was opened, and that is worth saying before the press rather
         // than being noticed afterwards.
-        ui.small(if editing.is_some() { words::EDITING } else { words::DRAW_HOW });
+        ui.small(if editing.is_some() { w().stamps.editing } else { w().stamps.draw_how });
     });
 
     asked
@@ -745,11 +745,11 @@ pub fn show(
                 .show(ui, |ui| {
                     ui.set_width(280.0);
                     ui.spacing_mut().item_spacing.y = m.item_spacing;
-                    ui.heading(words::TITLE);
+                    ui.heading(w().stamps.title);
                     ui.separator();
 
                     if library.is_empty() {
-                        ui.colored_label(p.text_dim, words::NONE_YET);
+                        ui.colored_label(p.text_dim, w().stamps.none_yet);
                     }
                     egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                         for (i, stamp) in library.iter().enumerate() {
@@ -783,7 +783,7 @@ pub fn show(
                                         );
                                         let done = field.lost_focus()
                                             && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                        if done || ui.small_button(words::KEEP_NAME).clicked() {
+                                        if done || ui.small_button(w().stamps.keep_name).clicked() {
                                             picked = Picked::Rename(i, text.clone());
                                         }
                                     }
@@ -797,7 +797,7 @@ pub fn show(
                                                     stamp.cells.len()
                                                 ),
                                             )
-                                            .on_hover_text(words::RENAME_HINT)
+                                            .on_hover_text(w().stamps.rename_hint)
                                             .clicked()
                                         {
                                             *naming = Some((i, stamp.name.clone()));
@@ -807,12 +807,12 @@ pub fn show(
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if ui.small_button(words::FORGET).clicked() {
+                                        if ui.small_button(w().stamps.forget).clicked() {
                                             picked = Picked::Forget(i);
                                         }
                                         if ui
-                                            .small_button(words::EDIT)
-                                            .on_hover_text(words::EDIT_HINT)
+                                            .small_button(w().stamps.edit)
+                                            .on_hover_text(w().stamps.edit_hint)
                                             .clicked()
                                         {
                                             picked = Picked::Edit(i);
@@ -822,8 +822,8 @@ pub fn show(
                                         // silently doing nothing.
                                         let mut on = stamp.on_bar;
                                         if ui
-                                            .checkbox(&mut on, words::ON_BAR)
-                                            .on_hover_text(words::ON_BAR_HINT)
+                                            .checkbox(&mut on, w().stamps.on_bar)
+                                            .on_hover_text(w().stamps.on_bar_hint)
                                             .changed()
                                         {
                                             picked = Picked::Pin(i, on);
@@ -835,16 +835,16 @@ pub fn show(
                     });
 
                     ui.separator();
-                    ui.label(words::DRAW);
+                    ui.label(w().stamps.draw);
                     if let Some(drawn) = pad(editing, ui, theme, sketch, player, sheet) {
                         picked = drawn;
                     }
 
                     ui.separator();
-                    ui.small(words::HOW);
+                    ui.small(w().stamps.how);
                     if crate::client::views::wide(
                         ui,
-                        egui::RichText::new(crate::client::views::words::CLOSE),
+                        egui::RichText::new(w().close),
                         26.0,
                         theme.palette.surface,
                     )

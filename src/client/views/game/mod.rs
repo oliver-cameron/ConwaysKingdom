@@ -49,6 +49,7 @@ use hotbar::{Held, Key};
 use lobby as lobby_view;
 
 use crate::client::session::{Effect, Session};
+use crate::client::views::words::w;
 use crate::net::{ClientMessage, Placement, Stamped};
 use crate::sim::PlayerId;
 
@@ -506,7 +507,7 @@ impl GameApp {
     fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
         if !self.session.may_act() {
             self.notice = Some(if self.session.watching {
-                words::menu::watch::NO_SEAT.into()
+                w().menu.watch.no_seat.into()
             } else {
                 words::refused::not_started().to_string()
             });
@@ -764,7 +765,7 @@ impl GameApp {
 
         if !self.session.may_act() {
             self.notice = Some(if self.session.watching {
-                words::menu::watch::NO_SEAT.into()
+                w().menu.watch.no_seat.into()
             } else {
                 words::refused::not_started().to_string()
             });
@@ -827,7 +828,7 @@ impl GameApp {
     /// because it is the same one that makes prediction work.
     fn toggle_running(&mut self) {
         if !self.session.own_clock() {
-            self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
+            self.notice = Some(w().help.server_keeps_time.into());
             return;
         }
         self.session.set_rules(crate::net::Rules {
@@ -836,9 +837,9 @@ impl GameApp {
         });
         self.notice = None;
         self.last_action = Some(if self.session.rules.paused {
-            words::help::PAUSED.into()
+            w().help.paused.into()
         } else {
-            words::help::RUNNING.into()
+            w().help.running.into()
         });
     }
 
@@ -849,7 +850,7 @@ impl GameApp {
     /// at.
     fn step_one(&mut self) {
         if !self.session.own_clock() {
-            self.notice = Some(words::help::SERVER_KEEPS_TIME.into());
+            self.notice = Some(w().help.server_keeps_time.into());
             return;
         }
         self.session.ask_for_one_step();
@@ -892,7 +893,7 @@ impl GameApp {
             Key::Kind(kind) => {
                 self.held.kind = kind;
                 if matches!(self.held.shape, hotbar::Shape::Draw | hotbar::Shape::Rect) {
-                    self.held.shape = hotbar::KINDS[kind].usually;
+                    self.held.shape = hotbar::kinds()[kind].usually;
                 }
             }
             Key::More => self.ui.picking_stamp = !self.ui.picking_stamp,
@@ -911,7 +912,7 @@ impl GameApp {
                 if self.session.own_clock() {
                     self.session.wipe(&mut self.world);
                     self.notice = None;
-                    self.last_action = Some(words::help::WIPED.into());
+                    self.last_action = Some(w().help.wiped.into());
                 }
             }
             // The one place flipping happens, so the key and the square
@@ -935,14 +936,14 @@ impl GameApp {
     fn stamp_at(&mut self, index: usize, at: (i32, i32)) {
         if !self.session.may_act() {
             self.notice = Some(if self.session.watching {
-                words::menu::watch::NO_SEAT.into()
+                w().menu.watch.no_seat.into()
             } else {
                 words::refused::not_started().to_string()
             });
             return;
         }
         let Some(stamp) = self.stamps.get(index).map(|s| s.turned(self.held.turn)) else {
-            self.notice = Some(words::stamps::GONE.into());
+            self.notice = Some(w().stamps.gone.into());
             return;
         };
         let corner = stamp.centred_on(at);
@@ -989,7 +990,7 @@ impl GameApp {
                 self.last_action = Some(words::stamps::captured(&name, cells));
             }
             None => {
-                self.notice = Some(words::stamps::NOTHING_TO_CAPTURE.into());
+                self.notice = Some(w().stamps.nothing_to_capture.into());
             }
         }
     }
@@ -1083,7 +1084,7 @@ impl GameApp {
                 place_anywhere: true,
                 place_free: true,
             });
-            self.last_action = Some(words::help::PAUSED.into());
+            self.last_action = Some(w().help.paused.into());
         }
         let (world, home) = start::solo_world_of(shape);
         self.world = world;
@@ -1324,7 +1325,7 @@ impl GameApp {
                 // they were in is every other player in it.
                 Screen::Playing => {
                     log::warn!("link closed; continuing offline");
-                    self.notice = Some(words::menu::LOST_CONNECTION.into());
+                    self.notice = Some(w().menu.lost_connection.into());
                 }
             },
         }
@@ -1415,7 +1416,7 @@ impl GameApp {
                     laboratory,
                 });
                 if !asked {
-                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
+                    self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
                 }
             }
             // Watching takes no name and keeps no token: there is no player
@@ -1446,12 +1447,12 @@ impl GameApp {
             menu::Chose::Watch(room) => {
                 log::info!("watching room \"{room}\"");
                 if !self.session.watch(room) {
-                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
+                    self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
                 }
             }
             menu::Chose::Join(room) => {
                 if !self.session.connected() {
-                    self.show_menu(menu::Stage::Failed(words::menu::LOST_CONNECTION.into()));
+                    self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
                     return;
                 }
                 let name = self.my_name();
@@ -2136,7 +2137,7 @@ impl App for GameApp {
                 if self.stamps.pin(i, on) {
                     self.stamps.remember();
                 } else {
-                    self.notice = Some(words::stamps::BAR_FULL.into());
+                    self.notice = Some(w().stamps.bar_full.into());
                 }
             }
             stamp::Picked::Rename(i, name) => {
@@ -2363,7 +2364,7 @@ impl App for GameApp {
                     // Said out loud, because a rotation with nothing held
                     // changes nothing on screen and looks like a dead key.
                     if !matches!(self.held.shape, hotbar::Shape::Stamp(_)) {
-                        self.notice = Some(words::stamps::NOTHING_TO_TURN.into());
+                        self.notice = Some(w().stamps.nothing_to_turn.into());
                     }
                 }
             }

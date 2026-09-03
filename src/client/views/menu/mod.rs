@@ -51,6 +51,7 @@ use play::play;
 
 use crate::client::views::theme::Theme;
 use crate::client::views::words::menu as words;
+use crate::client::views::words::w;
 use crate::net::{RoomId, RoomInfo, RoomName, Victory};
 use crate::sim::WorldKind;
 
@@ -588,7 +589,7 @@ pub fn describe(world: WorldKind) -> String {
 /// is the first thing anybody reads.
 pub(super) fn players(n: u32) -> String {
     match n {
-        0 => words::EMPTY_ROOM.to_string(),
+        0 => w().menu.empty_room.to_string(),
         1 => words::one_player(),
         n => words::players(n),
     }
@@ -800,8 +801,8 @@ mod tests {
             ..Draft::default()
         };
         let Err(why) = sizeless.parse() else { panic!("a size that will not parse was taken") };
-        assert!(why.contains(words::make::ROWS), "the error says which field: {why}");
-        assert!(!why.contains(words::make::COLS), "and not the one that is fine: {why}");
+        assert!(why.contains(w().menu.make.rows), "the error says which field: {why}");
+        assert!(!why.contains(w().menu.make.cols), "and not the one that is fine: {why}");
 
         // A torus is allocated whole, so an enormous side is a client that
         // asks its own machine for gigabytes and stops.
