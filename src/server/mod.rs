@@ -1102,93 +1102,13 @@ impl Server {
                     );
                     return Vec::new();
                 }
-                // **Before anything walks the list.** Pricing and applying are
-                // both linear in it, the whole action is cloned into an
-                // `Acted` and broadcast, and every client in the room applies
-                // it too -- so an unbounded list is unbounded work on the one
-                // task that owns every world, amplified to the room. Cost is
-                // no bound: an `Erase` over ground nobody holds prices at
-                // nothing however long it is.
-                if stamped.action.cells().len() > crate::net::MOST_CELLS_AT_ONCE {
-                    log::warn!(
-                        "dropped an action from {:?} naming {} cells, over the {} allowed",
-                        from,
-                        stamped.action.cells().len(),
-                        crate::net::MOST_CELLS_AT_ONCE
-                    );
-                    return Vec::new();
-                }
-                // And nothing from somebody who has given up: a forfeit is a
-                // seat leaving the match, so it must not go on placing.
-                if from.is_some_and(|seat| self.players.get(&seat).is_some_and(|p| p.forfeited)) {
-                    log::debug!("dropped an action from {from:?}, who gave up");
-                    return Vec::new();
-                }
-                // Nothing happens before the whistle, and nothing after it.
-                // Dropped rather than answered, which is what an action the
-                // server will not take already does -- the client predicted it
-                // locally and the next `Checkpoint` puts the world and the
-                // purse back. It will do that until a match's phase reaches
-                // the client and it can refuse for itself; see planned.md.
-                if !self.phase.accepts_actions() {
-                    log::debug!(
-                        "dropped an action from {:?}: \"{}\" is {}",
-                        stamped.player,
-                        self.room,
-                        self.phase.name()
-                    );
-                    return Vec::new();
-                }
-                // Judged here as well as refused in the client, because a
-                // client that sends whatever it likes is the case this exists
-                // for. Ice is not liftable, so an erase naming it is not an
-                // action, whoever asks.
-                if let crate::net::Action::Erase { placement, .. } = &stamped.action {
-                    if !placement.can_be_taken() {
-                        log::info!("refused {:?}: {placement:?} cannot be taken", stamped.player);
-                        return Vec::new();
-                    }
-                }
-                // Placing is confined to ground the player's own influence
-                // reaches. Judged here as well as refused in the client,
-                // because a client that sends whatever it likes is the case
-                // this exists for -- and all or nothing, matching how the
-                // client prices and previews it: a paint half applied is a
-                // shape nobody drew.
-                if let crate::net::Action::Paint { cells, .. } = &stamped.action {
-                    if let Some(&(row, col)) = cells.iter().find(|&&(r, c)| {
-                        !crate::net::may_place_under(&self.world, stamped.player, r, c, &self.rules)
-                    }) {
-                        log::info!(
-                            "refused {:?}: nothing of theirs reaches ({row}, {col})",
-                            stamped.player
-                        );
-                        return Vec::new();
-                    }
-                }
-                // Cost is charged now, against the world as it stands, rather
-                // than when the action is applied at the tick boundary -- the
-                // client priced it against the same state, so pricing it later
-                // would let the two disagree.
-                if let Some(player) = self.players.get(&stamped.player) {
-                    let delta = crate::net::price_under(&self.world, &stamped, &self.rules);
-                    if player.value + delta < 0 {
-                        log::info!(
-                            "refused {:?}: costs {} with {} in hand",
-                            stamped.player,
-                            -delta,
-                            player.value
-                        );
-                        return Vec::new();
-                    }
-                    self.credit(stamped.player, delta);
-                    // Out at once, so everybody else applies it on the tick it
-                    // names rather than when that tick is announced. It rides
-                    // in the `Step` as well, because a broadcast can be
-                    // dropped and this is a shortcut rather than a promise.
-                    self.announce.push(ServerMessage::Acted(stamped.clone()));
-                    self.pending.push(stamped);
-                }
+                // Dropped rather than answered when refused, which is what an
+                // action the server will not take already does -- the client
+                // predicted it locally and the next `Checkpoint` puts the
+                // world and the purse back. It will do that until a match's
+                // phase reaches the client and it can refuse for itself; see
+                // planned.md.
+                let _ = self.act(stamped);
                 Vec::new()
             }
             // **A fetch, whatever it is called.** Chunk contents only ever
@@ -1336,6 +1256,99 @@ impl Server {
                 out
             }
         }
+    }
+
+    /// Take an action, or say why not.
+    ///
+    /// **Everything an action is judged on, in one place**, whoever it came
+    /// from: the wire arm above keeps only the identity check, because that
+    /// is a question about the connection and a bot has none. So a bot goes
+    /// through here too, and can do nothing a client could not.
+    ///
+    /// A refusal is a sentence, so the API can hand it back; the wire drops
+    /// it and lets the next `Checkpoint` put the client right.
+    pub(crate) fn act(&mut self, stamped: Stamped) -> Result<(), &'static str> {
+        // **Before anything walks the list.** Pricing and applying are both
+        // linear in it, the whole action is cloned into an `Acted` and
+        // broadcast, and every client in the room applies it too -- so an
+        // unbounded list is unbounded work on the one task that owns every
+        // world, amplified to the room. Cost is no bound: an `Erase` over
+        // ground nobody holds prices at nothing however long it is.
+        if stamped.action.cells().len() > crate::net::MOST_CELLS_AT_ONCE {
+            log::warn!(
+                "dropped an action from {:?} naming {} cells, over the {} allowed",
+                stamped.seat,
+                stamped.action.cells().len(),
+                crate::net::MOST_CELLS_AT_ONCE
+            );
+            return Err("that names more cells than one action may");
+        }
+        // And nothing from somebody who has given up: a forfeit is a seat
+        // leaving the match, so it must not go on placing.
+        if self.players.get(&stamped.seat).is_some_and(|p| p.forfeited) {
+            log::debug!("dropped an action from {:?}, who gave up", stamped.seat);
+            return Err("you have given up");
+        }
+        // Nothing happens before the whistle, and nothing after it.
+        if !self.phase.accepts_actions() {
+            log::debug!(
+                "dropped an action from {:?}: \"{}\" is {}",
+                stamped.player,
+                self.room,
+                self.phase.name()
+            );
+            return Err("this match is not running");
+        }
+        // Judged here as well as refused in the client, because a client that
+        // sends whatever it likes is the case this exists for. Ice is not
+        // liftable, so an erase naming it is not an action, whoever asks.
+        if let crate::net::Action::Erase { placement, .. } = &stamped.action {
+            if !placement.can_be_taken() {
+                log::info!("refused {:?}: {placement:?} cannot be taken", stamped.player);
+                return Err("ice cannot be taken back");
+            }
+        }
+        // Placing is confined to ground the player's own influence reaches.
+        // Judged here as well as refused in the client, because a client that
+        // sends whatever it likes is the case this exists for -- and all or
+        // nothing, matching how the client prices and previews it: a paint
+        // half applied is a shape nobody drew.
+        if let crate::net::Action::Paint { cells, .. } = &stamped.action {
+            if let Some(&(row, col)) = cells.iter().find(|&&(r, c)| {
+                !crate::net::may_place_under(&self.world, stamped.player, r, c, &self.rules)
+            }) {
+                log::info!(
+                    "refused {:?}: nothing of theirs reaches ({row}, {col})",
+                    stamped.player
+                );
+                return Err("nothing of yours reaches there");
+            }
+        }
+        // Cost is charged now, against the world as it stands, rather than
+        // when the action is applied at the tick boundary -- the client priced
+        // it against the same state, so pricing it later would let the two
+        // disagree.
+        let Some(player) = self.players.get(&stamped.player) else {
+            return Err("nobody plays that number here");
+        };
+        let delta = crate::net::price_under(&self.world, &stamped, &self.rules);
+        if player.value + delta < 0 {
+            log::info!(
+                "refused {:?}: costs {} with {} in hand",
+                stamped.player,
+                -delta,
+                player.value
+            );
+            return Err("you cannot afford that");
+        }
+        self.credit(stamped.player, delta);
+        // Out at once, so everybody else applies it on the tick it names
+        // rather than when that tick is announced. It rides in the `Step` as
+        // well, because a broadcast can be dropped and this is a shortcut
+        // rather than a promise.
+        self.announce.push(ServerMessage::Acted(stamped.clone()));
+        self.pending.push(stamped);
+        Ok(())
     }
 
     fn chunk_message(&self, chunk: ChunkId) -> Option<ServerMessage> {
