@@ -500,8 +500,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
                         );
                         ui.add_sized(
                             [m.action_height * 1.6, m.button_height],
-                            egui::TextEdit::singleline(&mut draft.team_count)
-                                .horizontal_align(egui::Align::Center),
+                            egui::TextEdit::singleline(&mut draft.team_count),
                         );
                     });
                     ui.colored_label(
@@ -704,8 +703,7 @@ fn shape_row(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft) {
                     ui.add(
                         egui::TextEdit::singleline(field)
                             .desired_width(m.button_height * 0.9)
-                            .margin(egui::Margin::symmetric(2, 0))
-                            .horizontal_align(egui::Align::Center),
+                            .margin(egui::Margin::symmetric(2, 0)),
                     )
                     .on_hover_text(w().menu.make.size_note);
                 };

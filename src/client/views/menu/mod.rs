@@ -537,13 +537,22 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                     .max_height(screen.height())
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.vertical_centered(|ui| {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             // A column inside the window rather than the window
                             // itself. A room list stretched across two thousand
                             // points is a list nobody can follow from a name to
                             // the count beside it, and prose that wide is
                             // unreadable — the screen is not cramped, so the
                             // content need not sprawl to prove it.
+                            //
+                            // **Against the left edge, not the middle.** The
+                            // column is still a column; what moved is where it
+                            // sits. A menu read down its left edge has every
+                            // heading, field and button starting at one x, and
+                            // the margin is the same on a phone and a monitor
+                            // instead of growing into a gap the eye has to
+                            // cross — which is the argument `views::wide`
+                            // already makes about a single button's label.
                             ui.add_space(m.margin * 2.0);
                             ui.allocate_ui(egui::vec2(width, screen.height()), |ui| {
                                 ui.set_width(width);
@@ -1098,12 +1107,17 @@ mod tests {
         let (_, rect) = tick(menu, Vec::new());
         assert!(rect.width() > 1.0, "the menu drew nothing to press: {rect:?}");
 
-        // Four columns of probe rather than the centre line. The centre line
-        // was enough while every control ran the full width of a card; on a
+        // Columns of probe rather than the centre line. The centre line was
+        // enough while every control ran the full width of a card; on a
         // two-column screen it runs down the **gap between them** and finds
         // nothing, which is a fault in the probe that reads as a dead button.
+        //
+        // Eight rather than four, since the content moved to the **left** of
+        // the window: a sweep spaced across the whole rect put six of its eight
+        // lanes in the empty half, and the two that landed on the column were
+        // not enough to find a button and the row beneath it both.
         let lanes: Vec<f32> =
-            (1..=4).map(|n| rect.left() + rect.width() * n as f32 / 5.0).collect();
+            (1..=8).map(|n| rect.left() + rect.width() * n as f32 / 9.0).collect();
         let mut y = rect.top();
         while y < rect.bottom() {
             for &x in &lanes {

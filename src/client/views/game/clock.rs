@@ -79,9 +79,7 @@ pub fn show(
                 .inner_margin(m.panel_padding)
                 .show(ui, |ui| {
                     ui.set_width(240.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(left);
-                    });
+                    ui.label(left);
 
                     // How much of it has gone, which is the part a number does
                     // badly: "1240 left" means nothing without "of what".
@@ -116,7 +114,7 @@ fn pill(ctx: &egui::Context, theme: &Theme, text: String) -> crate::client::view
                 .corner_radius(m.rounding)
                 .inner_margin(m.panel_padding)
                 .show(ui, |ui| {
-                    ui.vertical_centered(|ui| ui.colored_label(p.warn, text));
+                    ui.colored_label(p.warn, text);
                 });
         });
     crate::client::views::Shown::new(area.response.rect, ())

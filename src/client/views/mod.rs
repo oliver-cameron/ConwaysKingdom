@@ -67,9 +67,7 @@ pub fn hover_centred(response: egui::Response, text: &str) -> egui::Response {
         .align(egui::RectAlign::TOP)
         .align_alternatives(&[egui::RectAlign::TOP, egui::RectAlign::BOTTOM])
         .show(|ui| {
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.label(text);
-            });
+            ui.label(text);
         });
     response
 }

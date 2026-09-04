@@ -21,11 +21,9 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     // *is* now lives on [`super::account`], which is a page you visit
     // occasionally and read carefully; this one asks a single question and the
     // answer is one of three presses.
-    ui.vertical_centered(|ui| {
-        ui.add_space(m.item_spacing * 4.0);
-        ui.heading(w().menu.title);
-        ui.add_space(m.item_spacing * 5.0);
-    });
+    ui.add_space(m.item_spacing * 4.0);
+    ui.heading(w().menu.title);
+    ui.add_space(m.item_spacing * 5.0);
 
     // Above the three, and only when there is one: a match you have already
     // joined is not a fourth way in, it is the way back to where you were.

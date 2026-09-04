@@ -559,7 +559,10 @@ pub fn show(
         .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -m.margin])
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = m.item_spacing * 0.5;
-            ui.vertical_centered(|ui| {
+            // Left, like everything else: when the bar wraps to two rows the
+            // second starts under the first rather than being centred against
+            // it, so a square keeps its x when the window narrows.
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 for (row, line) in slots.chunks(per_row).enumerate() {
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = m.item_spacing * 1.5;

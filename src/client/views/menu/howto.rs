@@ -150,7 +150,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
                     ui.label(egui::RichText::new(*body).size(m.text_small).color(p.text_dim));
                     ui.add_space(m.item_spacing);
                 });
-                ui.vertical_centered(|ui| super::tutorial::show(ui, theme, patch, at.sheet));
+                super::tutorial::show(ui, theme, patch, at.sheet);
             });
             // A patch that is running wants the next frame, and nothing else on
             // this page does.
