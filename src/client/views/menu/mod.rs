@@ -34,7 +34,8 @@ pub(crate) fn person_hue(who: &crate::net::PersonId) -> u8 {
     1 + (h % (crate::sim::PlayerId::COUNT as u64 - 1)) as u8
 }
 
-pub mod draft;
+pub mod attract;
+mod draft;
 mod home;
 mod howto;
 mod play;

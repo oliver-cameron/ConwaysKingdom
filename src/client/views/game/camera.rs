@@ -77,6 +77,17 @@ pub struct Camera {
 }
 
 impl Camera {
+    /// A still one, looking at the middle, for drawing something nobody is
+    /// steering — see `menu::attract`.
+    ///
+    /// Takes the viewport and the scale off an existing camera because those
+    /// are facts about the *window* rather than about what is being looked at,
+    /// and a second copy of them is a second thing to keep in step with a
+    /// resize.
+    pub fn still(like: &Self, centre: (f32, f32), zoom: f32) -> Self {
+        Self { viewport: like.viewport, scale: like.scale, dirty: false, ..Self::new(centre, zoom) }
+    }
+
     pub fn new(centre: (f32, f32), zoom: f32) -> Self {
         Self {
             centre,

@@ -295,6 +295,13 @@ pub struct GameApp {
     /// once and refreshed when a game is filed, rather than off disk every
     /// frame a profile is open.
     record: crate::client::record::Summary,
+    /// Life running behind the menu — see [`menu::attract`]. Its own world,
+    /// because the one the menu sits on is the world "play alone" gives you
+    /// and a room opens empty.
+    attract: menu::attract::Attract,
+    /// Which of the two the chunk store currently holds. A change is a full
+    /// resync: chunks uploaded for one world mean nothing in the other.
+    drawing_backdrop: bool,
     /// **What this client is to a server** — the link, the seat, the purse,
     /// and the machinery that keeps this world in step with another.
     ///
@@ -312,18 +319,33 @@ impl GameApp {
     /// Read from the negotiated format every frame rather than cached: it is
     /// one field access, and a cached copy is one more thing to forget when
     /// the surface is reconfigured.
+    /// The camera the backdrop is seen through.
+    ///
+    /// **Built here rather than kept**, because it is a pure function of the
+    /// window: it never pans, never zooms, and is always looking at the middle
+    /// of the soup. A field would be a second thing to keep in step with the
+    /// window size for no gain — see `menu::attract`, where not moving is the
+    /// point.
+    fn backdrop_camera(&self) -> camera::Camera {
+        camera::Camera::still(&self.camera, (0.0, 0.0), menu::attract::ZOOM)
+    }
+
     fn write_camera(&self, gpu: &GpuState) {
+        self.write_camera_of(gpu, &self.camera, &self.world);
+    }
+
+    fn write_camera_of(&self, gpu: &GpuState, camera: &camera::Camera, world: &World) {
         // Recomputed here rather than cached, because `write_camera` runs
         // only when the camera has moved -- not every frame -- and a pass over
         // sixteen players is nothing beside the buffer write it rides on.
-        let uniform = self.camera.uniform(
+        let uniform = camera.uniform(
             !gpu.config.format.is_srgb(),
             &crate::client::views::hue::table(),
             // Where the coarse texture is looking, so the shader can turn a
             // world position into one of its texels. A window of nothing when
             // the fine path is drawing, which the shader never reads.
             self.chunks.coarse_window().unwrap_or(((0, 0), (0, 0))),
-            self.chunks.coarse_wraps(&self.world),
+            self.chunks.coarse_wraps(world),
             gpu.offscreen.over(),
         );
         gpu.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
@@ -1024,8 +1046,11 @@ impl GameApp {
     /// match is the other way round — the board is the result, and covering it
     /// to say who won would hide the thing that says why.
     fn showing_world(&self) -> bool {
+        // The menu draws a world too, and it is not this one: a soup of its
+        // own, still and slow — see `menu::attract`, which answers the
+        // objection this used to be.
         if matches!(self.ui.screen, Screen::Menu(_)) {
-            return false;
+            return true;
         }
         !matches!(
             self.session.lobby.as_ref().map(|l| &l.phase),
@@ -1704,6 +1729,10 @@ impl App for GameApp {
             icons: icons::Icons::default(),
             said_where: None,
             record: crate::client::record::Summary::of(&crate::client::record::games()),
+            attract: menu::attract::Attract::new(),
+            // The first frame is a menu, and the transition below is what
+            // uploads the soup — so this starts on the *other* answer.
+            drawing_backdrop: false,
             session,
         };
         app.world.dirty = false;
@@ -1797,7 +1826,29 @@ impl App for GameApp {
         // world advances when the server says a generation happened and never
         // on this client's own clock.
         self.session.advance_alone(&mut self.world, dt, GENERATION_SPAN);
-        if self.world.dirty {
+
+        // **Which world is on screen**, which the menu and the board answer
+        // differently -- see `menu::attract`. One store and one camera buffer
+        // serve both, so a change of answer is a full resync: the chunks
+        // uploaded for one world mean nothing in the other.
+        let backdrop = matches!(self.ui.screen, Screen::Menu(_));
+        if backdrop != self.drawing_backdrop {
+            self.drawing_backdrop = backdrop;
+            self.attract.world.dirty = true;
+            self.world.dirty = true;
+        }
+        if backdrop {
+            if self.attract.advance(dt) {
+                self.attract.world.dirty = true;
+            }
+            if self.attract.world.dirty {
+                let camera = self.backdrop_camera();
+                let visible = camera.visible_cells(VIEW_MARGIN);
+                self.chunks.sync(&gpu.queue, &self.attract.world, visible, camera.zoom);
+                self.write_camera_of(gpu, &camera, &self.attract.world);
+                self.attract.world.dirty = false;
+            }
+        } else if self.world.dirty {
             let visible = self.camera.visible_cells(VIEW_MARGIN);
             self.chunks.sync(&gpu.queue, &self.world, visible, self.camera.zoom);
             self.write_camera(gpu);
@@ -2338,11 +2389,19 @@ impl App for GameApp {
     /// It used to be drawn behind the menu, on the reasoning that a menu over
     /// a dead grey rectangle says the game has not started where a menu over a
     /// world says it is waiting for you. That was true when the menu was a
-    /// small panel. It stopped being true once the menu had the screen to
+    /// small panel, and stopped being true once the menu had the screen to
     /// itself: a world sliding about behind a full-height panel is motion
-    /// nobody asked for beside the thing they are reading, and a match that
-    /// has not started has nothing behind it anyway — its world is empty until
-    /// the whistle.
+    /// nobody asked for beside the thing they are reading.
+    ///
+    /// **The menu draws one again, and it is a different world.** The argument
+    /// above is about a *game* world — a camera you were panning, at full
+    /// size, doing whatever it was doing when you left. `menu::attract` is a
+    /// soup with a camera that cannot move, three pixels to a cell, stepping
+    /// once a second. See that module, which says why those three are the
+    /// answer rather than a reversal.
+    ///
+    /// A match that has not started still has nothing behind it: its world is
+    /// empty until the whistle.
     fn draw_calls(&self) -> Vec<DrawCall<'_>> {
         if !self.showing_world() {
             return Vec::new();
