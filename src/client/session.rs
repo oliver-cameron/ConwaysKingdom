@@ -1472,15 +1472,6 @@ mod tests {
         assert_eq!(advance(400, 0), Advance::Lost);
     }
 
-    /// **A session with no link is testable, and none of this was.**
-    ///
-    /// It lived on a struct that also held the GPU pipeline and the sprite
-    /// atlas, so reaching any of it meant a window.
-    ///
-    /// The clock is a **laboratory's**, not an offline client's: a world runs
-    /// and a solitary world is still a world, so a plain solo game has nothing
-    /// to press.
-    #[test]
     /// **A client that never forgets is a client that gets slower forever.**
     ///
     /// It steps every chunk it holds, and it held every chunk it had ever been
@@ -1545,6 +1536,15 @@ mod tests {
         assert_eq!(torus.stored_count(), whole, "a torus is allocated whole");
     }
 
+    /// **A session with no link is testable, and none of this was.**
+    ///
+    /// It lived on a struct that also held the GPU pipeline and the sprite
+    /// atlas, so reaching any of it meant a window.
+    ///
+    /// The clock is a **laboratory's**, not an offline client's: a world runs
+    /// and a solitary world is still a world, so a plain solo game has nothing
+    /// to press.
+    #[test]
     fn a_solitary_session_is_the_authority_and_keeps_its_own_time() {
         let mut world = World::infinite();
         crate::net::grant(&mut world, PlayerId(1));

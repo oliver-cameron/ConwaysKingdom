@@ -231,9 +231,6 @@ pub fn team_colour(player: PlayerId, hues: &[f32; PlayerId::COUNT]) -> (u8, u8, 
 mod tests {
     use super::*;
 
-    /// Every number gets its own hue, and no two are close enough to be
-    /// mistaken for each other on a screen of cells.
-    #[test]
     /// **How far apart the closest pair is, as a number.**
     ///
     /// Distinctness is the whole job of this module and "they look different"
@@ -290,6 +287,9 @@ mod tests {
         }
     }
 
+    /// Every number gets its own hue, and no two are close enough to be
+    /// mistaken for each other on a screen of cells.
+    #[test]
     fn no_two_players_share_a_colour() {
         let hues = table();
         for a in 1..PlayerId::COUNT {

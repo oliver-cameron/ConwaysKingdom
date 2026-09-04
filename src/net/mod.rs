@@ -2447,19 +2447,19 @@ mod tests {
         // The converse, so this is a test about the owner field rather than
         // about any ground at all: the player's *own* territory does not
         // crowd them out of their own seat.
-        let mut factory = World::infinite_empty();
-        let seat = spawn_for(me, &world);
+        let mut ours = World::infinite_empty();
+        let seat = spawn_for(me, &ours);
         for r in seat.0..seat.0 + SPAWN_N {
             for c in seat.1..seat.1 + SPAWN_N {
-                factory.set_cell_at(
+                ours.set_cell_at(
                     r,
                     c,
                     Cell::DEAD.with_player(me).with_level(crate::sim::bits::MAX_LEVEL),
                 );
             }
         }
-        assert_eq!(crowding(&world, seat, me), 0, "your own ground is not a crowd");
-        assert_eq!(spawn_for(me, &world), seat);
+        assert_eq!(crowding(&ours, seat, me), 0, "your own ground is not a crowd");
+        assert_eq!(spawn_for(me, &ours), seat);
     }
 
     /// The other half of giving a crowded seat up: the cure must not be worse.
