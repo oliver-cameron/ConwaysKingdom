@@ -33,24 +33,31 @@ pub struct Marks {
     pub blasts: Vec<Fireball>,
 }
 
-/// A detonation, part way through going off.
+/// A detonation, part way through burning out.
+///
+/// **Cells, not a shape.** Everything on this board is a square on a grid, and
+/// a smooth circle drawn over it belongs to a different game — so a blast burns
+/// as the tiles it turned over, each its own colour, aligned to the same grid
+/// the cells are on.
 pub struct Fireball {
-    /// Where it went off and how far it reaches, both already in screen
-    /// points: the camera arithmetic belongs to whoever owns the camera.
-    pub at: egui::Pos2,
-    pub reach: f32,
-    /// How far through its life, nought to one.
-    pub age: f32,
+    /// One rectangle per burning cell, already in screen points, with the heat
+    /// of that particular tile. The camera arithmetic belongs to whoever owns
+    /// the camera — same arrangement as the hover box.
+    pub tiles: Vec<(egui::Rect, egui::Color32)>,
 }
 
-/// How long a fireball lasts, in seconds.
+/// How many **generations** a blast burns for.
 ///
-/// **Longer than the generation it belongs to**, and that is the point. At the
-/// default rate a generation is a quarter of a second, so an effect that lived
-/// exactly as long as the event would be under the threshold at which anybody
-/// notices *what* happened as against that something did. Short enough that
-/// two blasts in a row are two things.
-pub const FIREBALL: f32 = 0.75;
+/// Generations rather than seconds, so the fire keeps time with the board
+/// underneath it: a world running at half speed burns for twice as long in
+/// wall clock and exactly as long in the only clock the game has. A blast is
+/// a thing the simulation did, and an effect on a timer of its own would drift
+/// away from it every time somebody moved the slider.
+///
+/// Six is long enough to be a fire rather than a flash — at the default rate
+/// that is a second and a half — and short enough that two blasts in a row are
+/// two things.
+pub const BURNS_FOR: u64 = 6;
 
 pub struct Selection {
     /// What would be laid: one rectangle for a pane, one per cell for a
@@ -90,7 +97,9 @@ pub fn show(ctx: &egui::Context, theme: &Theme, marks: &Marks) {
     // Under the pointer's marks, because what you are about to do matters more
     // than what just happened.
     for blast in &marks.blasts {
-        fireball(&painter, blast);
+        for (tile, heat) in &blast.tiles {
+            painter.rect_filled(*tile, 0.0, *heat);
+        }
     }
 
     if let Some(rect) = marks.hover {
@@ -185,78 +194,59 @@ fn chip(painter: &egui::Painter, theme: &Theme, selection: &Selection) {
     painter.galley(rect.min + padding, galley, colour);
 }
 
-/// **A fireball**, drawn as a mesh rather than as circles.
+/// **How hot one tile is**, at this age, this far from the middle.
 ///
-/// A fire is a *gradient* — white at the core, orange at the middle, red and
-/// then nothing at the edge — and egui has no radial fill. A fan does it
-/// exactly: one bright vertex at the centre and a ring of transparent ones
-/// around it, with the colour interpolated between. Concentric circles were
-/// the other way and they band, which at this size reads as a target rather
-/// than as a flame.
+/// `None` for a tile that has gone out, so a fire eats itself from the edge in
+/// rather than fading evenly: the outside of a blast cools first, which is
+/// what a fire does and what stops the whole disc winking out in one frame.
 ///
-/// Three things move over its life and they move at different rates, which is
-/// most of what makes it read as fire rather than as a shape being animated:
+/// Sustained rather than swept. The heat holds for the first half and then
+/// falls away, because a fire that starts dying immediately reads as a flash
+/// and this one is meant to last a few generations.
 ///
-/// - **It expands fast and then stops.** `sqrt` of the age, so most of the
-///   growth is in the first third. Something that grew steadily would read as
-///   a circle being resized.
-/// - **It cools.** White through yellow and orange to a deep red, which is
-///   what a fire does and what an eye already knows how to read as "this is
-///   ending".
-/// - **It thins.** The fade is late and sharp — `(1 - age)` squared — so it
-///   burns at full strength and then goes, rather than being half transparent
-///   for half its life.
-fn fireball(painter: &egui::Painter, blast: &Fireball) {
-    let age = blast.age.clamp(0.0, 1.0);
-    // Fast then settling, so the first frames are the explosion and the rest
-    // is it burning out at roughly the size it reached.
-    let radius = blast.reach * (0.35 + 0.65 * age.sqrt());
-    if radius < 1.0 {
-        return;
+/// `noise` is the cell's own number — see `crate::sim::Roll` — so a tile keeps
+/// its character from generation to generation rather than shimmering, and two
+/// clients drawing the same blast draw the same fire.
+pub fn heat(age: f32, out: f32, noise: u64) -> Option<egui::Color32> {
+    // Ragged, so the disc has no drawn edge: a tile a little further out than
+    // its neighbour may still be burning and one nearer may not.
+    let jitter = (noise % 32) as f32 / 32.0 * 0.28;
+    let gone = (out + jitter - 0.15).clamp(0.0, 1.0);
+    if age >= 1.0 - gone * 0.75 {
+        return None;
     }
 
-    // White-hot, cooling. Held in the middle a while rather than swept evenly,
-    // because a fire is orange for most of its life and only briefly white.
-    let core = match age {
-        a if a < 0.15 => lerp(WHITE_HOT, YELLOW, a / 0.15),
-        a if a < 0.5 => lerp(YELLOW, ORANGE, (a - 0.15) / 0.35),
-        a => lerp(ORANGE, EMBER, (a - 0.5) / 0.5),
+    // Held, then falling. The centre stays hot longer than the rim.
+    let left = ((1.0 - age) - gone * 0.55).clamp(0.0, 1.0);
+    let hot = (left * 1.4).clamp(0.0, 1.0);
+
+    // Red at the edges and through the cooling, orange and pale in the middle
+    // while it is young. Two colours and a blend, because a fire drawn in more
+    // than that at this size is a rainbow.
+    let (r, g, b) = if hot > 0.55 {
+        blend(ORANGE, PALE, (hot - 0.55) / 0.45)
+    } else {
+        blend(RED, ORANGE, hot / 0.55)
     };
-    // Late and sharp: it burns and then goes.
-    let strength = (1.0 - age).powi(2);
 
-    let mut mesh = egui::Mesh::default();
-    let middle =
-        egui::Color32::from_rgba_unmultiplied(core.0, core.1, core.2, (235.0 * strength) as u8);
-    // The rim is the same colour with nothing left of it, so the falloff is a
-    // fade rather than an edge.
-    let rim = egui::Color32::from_rgba_unmultiplied(core.0, core.1, core.2, 0);
-    mesh.colored_vertex(blast.at, middle);
-    // Enough sides that the rim is a circle at the size a blast is drawn --
-    // reach is six cells, so this is tens of pixels rather than hundreds.
-    const SIDES: usize = 28;
-    for n in 0..=SIDES {
-        let turn = n as f32 / SIDES as f32 * std::f32::consts::TAU;
-        mesh.colored_vertex(blast.at + egui::vec2(turn.cos(), turn.sin()) * radius, rim);
-    }
-    for n in 1..=SIDES {
-        mesh.add_triangle(0, n as u32, n as u32 + 1);
-    }
-    painter.add(egui::Shape::mesh(mesh));
+    // Translucent throughout, so the ground it turned over reads through it —
+    // the disc is *why* the fire is there and covering it would hide the thing
+    // being announced.
+    let alpha = (40.0 + 150.0 * left) * (0.75 + (noise % 8) as f32 / 32.0);
+    Some(egui::Color32::from_rgba_unmultiplied(r, g, b, alpha.min(200.0) as u8))
 }
 
-/// The four temperatures a fireball passes through, as plain sRGB.
+/// The three temperatures a tile passes through, as plain sRGB.
 ///
-/// Not from the theme: a fire is not a piece of interface and does not take
-/// the palette's accent. These are what a flame is, and the player's own
-/// colour is already what the *ground* it turned over will be drawn in.
+/// Not from the theme: a fire is not a piece of interface and does not take the
+/// palette's accent. The player's own colour is already what the ground it
+/// turned over is drawn in.
 type Heat = (u8, u8, u8);
-const WHITE_HOT: Heat = (255, 250, 224);
-const YELLOW: Heat = (255, 214, 102);
-const ORANGE: Heat = (240, 130, 44);
-const EMBER: Heat = (150, 44, 30);
+const PALE: Heat = (255, 226, 150);
+const ORANGE: Heat = (233, 126, 38);
+const RED: Heat = (168, 38, 24);
 
-fn lerp(from: Heat, to: Heat, t: f32) -> Heat {
+fn blend(from: Heat, to: Heat, t: f32) -> Heat {
     let t = t.clamp(0.0, 1.0);
     let one = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
     (one(from.0, to.0), one(from.1, to.1), one(from.2, to.2))
@@ -266,63 +256,61 @@ fn lerp(from: Heat, to: Heat, t: f32) -> Heat {
 mod tests {
     use super::*;
 
-    fn at(age: f32) -> Fireball {
-        Fireball { at: egui::pos2(100.0, 100.0), reach: 40.0, age }
+    /// **It is sustained**, not a flash: still burning in the middle most of
+    /// the way through, which is the difference between a fire and a frame of
+    /// noise.
+    #[test]
+    fn the_middle_burns_for_most_of_it() {
+        assert!(heat(0.0, 0.0, 0).is_some());
+        assert!(heat(0.5, 0.0, 0).is_some(), "out by halfway");
+        assert!(heat(0.8, 0.0, 0).is_some(), "out at four fifths");
+        assert!(heat(1.0, 0.0, 0).is_none(), "still burning when it should be over");
     }
 
-    /// **It expands fast and then settles**, so the first frames are the
-    /// explosion and the rest is it burning out at roughly the size it
-    /// reached. Something that grew steadily would read as a circle being
-    /// resized.
+    /// **It eats itself from the edge in.** The outside cools first, so the
+    /// disc shrinks rather than the whole of it winking out together.
     #[test]
-    fn a_fireball_does_most_of_its_growing_early() {
-        let radius = |age: f32| 40.0 * (0.35 + 0.65 * age.sqrt());
-        let (start, third, end) = (radius(0.0), radius(0.33), radius(1.0));
-        assert!(third > start + (end - start) * 0.5, "it grew evenly: {start} {third} {end}");
-        assert!(end <= 40.0, "it grew past the ground it turned over");
+    fn the_edge_goes_out_before_the_middle() {
+        let half_way = 0.5;
+        assert!(heat(half_way, 0.0, 0).is_some(), "the middle went first");
+        assert!(heat(half_way, 1.0, 0).is_none(), "the rim was still burning at halfway");
     }
 
-    /// **It cools**, white through yellow and orange to a deep red, which is
-    /// what an eye already reads as something ending.
+    /// **It cools towards red**, which is what an eye already reads as
+    /// something ending, and it never brightens.
     #[test]
-    fn a_fireball_cools_as_it_goes() {
-        let heat = |age: f32| match age {
-            a if a < 0.15 => lerp(WHITE_HOT, YELLOW, a / 0.15),
-            a if a < 0.5 => lerp(YELLOW, ORANGE, (a - 0.15) / 0.35),
-            a => lerp(ORANGE, EMBER, (a - 0.5) / 0.5),
+    fn a_tile_only_ever_cools() {
+        let redness = |age: f32| {
+            let c = heat(age, 0.0, 0).expect("out too early");
+            (c.g() as i32, c.b() as i32)
         };
-        let (new, old) = (heat(0.0), heat(1.0));
-        assert_eq!(new, WHITE_HOT);
-        assert_eq!(old, EMBER);
-        // Redder and darker all the way, which is what cooling is.
-        let mut last = heat(0.0);
-        for n in 1..=20 {
-            let now = heat(n as f32 / 20.0);
-            assert!(now.1 <= last.1, "green went up at {n}: {last:?} then {now:?}");
-            assert!(now.2 <= last.2, "blue went up at {n}");
+        let mut last = redness(0.0);
+        for n in 1..=10 {
+            let now = redness(n as f32 / 12.0);
+            assert!(now.0 <= last.0, "green rose at {n}: {last:?} then {now:?}");
+            assert!(now.1 <= last.1, "blue rose at {n}");
             last = now;
         }
     }
 
-    /// **It burns and then goes**, rather than being half transparent for half
-    /// its life.
+    /// **Translucent throughout**, because the ground it turned over is the
+    /// thing being announced and covering it would hide it.
     #[test]
-    fn a_fireball_fades_late() {
-        let strength = |age: f32| (1.0f32 - age).powi(2);
-        assert!(strength(0.5) < 0.5, "it was still half there at halfway");
-        assert!(strength(0.25) > 0.5, "it faded before it had burnt");
-        assert_eq!(strength(1.0), 0.0);
+    fn a_tile_never_hides_the_ground_under_it() {
+        for age in [0.0, 0.25, 0.5, 0.75] {
+            for out in [0.0, 0.5, 1.0] {
+                if let Some(c) = heat(age, out, 3) {
+                    assert!(c.a() <= 200, "a tile at {age}/{out} was nearly solid");
+                }
+            }
+        }
     }
 
-    /// A fireball smaller than a point is not drawn, which is what a blast far
-    /// enough away to be one pixel is.
+    /// The same cell burns the same on every client, because the character
+    /// comes from the cell's own number rather than from a frame.
     #[test]
-    fn a_fireball_too_small_to_see_is_not_drawn() {
-        let ctx = egui::Context::default();
-        let painter =
-            ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("test")));
-        // No panic and nothing added: the guard is a `return`, and what this
-        // holds is that it is taken before any arithmetic on a zero radius.
-        fireball(&painter, &Fireball { at: egui::pos2(0.0, 0.0), reach: 0.5, age: 0.0 });
+    fn one_cell_burns_the_same_way_twice() {
+        assert_eq!(heat(0.3, 0.4, 12345), heat(0.3, 0.4, 12345));
+        assert_ne!(heat(0.3, 0.4, 1), heat(0.3, 0.4, 20), "every tile is the same fire");
     }
 }

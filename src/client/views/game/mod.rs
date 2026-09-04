@@ -1294,36 +1294,54 @@ impl GameApp {
         });
     }
 
-    /// **What is still burning**, in screen points, and dropping what is not.
+    /// **What is still burning**, as tiles in screen points.
     ///
     /// The camera arithmetic is here because the camera is here — a view doing
     /// its own would be a second place for it to be wrong, which is the same
     /// arrangement the hover box and the drag preview already use.
     ///
-    /// Old ones are dropped as they are read rather than on a timer of their
-    /// own: this runs every frame, and a list nothing is looking at is a list
-    /// nothing needs to prune.
+    /// **A tile a cell**, aligned to the grid the board is drawn on: everything
+    /// on this screen is a square, and a smooth disc over it belongs to a
+    /// different game. Each carries its own heat, from its distance out and
+    /// its own number — see `overlay::heat`.
+    ///
+    /// Skipped entirely when a cell is under a couple of points: at that zoom a
+    /// disc of them is a smear, and the hundred-odd rectangles cost more than
+    /// they say.
     fn fireballs(&self) -> Vec<overlay::Fireball> {
-        let now = self.elapsed;
-        let life = overlay::FIREBALL as f64;
+        /// Below this a tile is not a tile and the fire is a stain.
+        const SMALLEST: f32 = 2.0;
+        if self.camera.zoom < SMALLEST {
+            return Vec::new();
+        }
+        let now = self.world.generation;
         self.session
             .blasts
             .iter()
-            .map(|(blast, at)| {
-                // The disc it turned over, which is the thing the fire is
-                // standing in for -- so the fireball is the size of the
-                // damage rather than a size somebody picked.
+            .map(|(blast, went_off)| {
+                let age = now.saturating_sub(*went_off) as f32 / overlay::BURNS_FOR as f32;
                 let reach = blast.reach;
-                let rect = self.camera.cell_rect(
-                    (blast.at.0 - reach, blast.at.1 - reach),
-                    (blast.at.0 + reach, blast.at.1 + reach),
-                );
-                overlay::Fireball {
-                    at: rect.center(),
-                    reach: rect.width() * 0.5,
-                    age: ((now - at) / life) as f32,
+                let mut tiles = Vec::new();
+                for dr in -reach..=reach {
+                    for dc in -reach..=reach {
+                        let far = ((dr * dr + dc * dc) as f32).sqrt();
+                        if far > reach as f32 {
+                            continue;
+                        }
+                        let (row, col) = (blast.at.0 + dr, blast.at.1 + dc);
+                        // The cell's own number, so a tile keeps its character
+                        // between generations rather than shimmering, and two
+                        // clients draw one blast the same way.
+                        let noise = crate::sim::mix(row as u64, col as u64);
+                        let Some(heat) = overlay::heat(age, far / reach as f32, noise) else {
+                            continue;
+                        };
+                        tiles.push((self.camera.cell_rect((row, col), (row, col)), heat));
+                    }
                 }
+                overlay::Fireball { tiles }
             })
+            .filter(|f| !f.tiles.is_empty())
             .collect()
     }
 
@@ -1829,9 +1847,10 @@ impl App for GameApp {
         // than while they are being read: a frame builds its marks out of a
         // borrow of the whole app, and dropping from the same list it is
         // reading is what that borrow exists to stop.
-        let life = overlay::FIREBALL as f64;
-        let now = self.elapsed;
-        self.session.blasts.retain(|(_, at)| now - at < life);
+        let now = self.world.generation;
+        self.session
+            .blasts
+            .retain(|(_, went_off)| now.saturating_sub(*went_off) < overlay::BURNS_FOR);
         // A game that went into the diary is a locker out of date. Asked here
         // rather than raised as an effect, because `file_game` is called from
         // inside the session as well as from the way back to the menu, and
@@ -1886,7 +1905,7 @@ impl App for GameApp {
         // stepping at four a second regardless, and correcting on every
         // checkpoint. See `net::Rules::bpm`.
         let span = self.session.rules.generation_span();
-        self.session.advance_alone(&mut self.world, dt, span, self.elapsed);
+        self.session.advance_alone(&mut self.world, dt, span);
 
         // **Which world is on screen**, which the menu and the board answer
         // differently -- see `menu::attract`. One store and one camera buffer

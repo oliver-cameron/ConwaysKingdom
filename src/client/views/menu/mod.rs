@@ -476,7 +476,17 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
     // The window, in points, which is what `Views` handed egui — not physical
     // pixels, so this reads the same on a hidpi display as on any other.
     let screen = ctx.content_rect();
-    let width = theme.panel_width(screen.width());
+    // **Less the margin it now sits behind.** Left-aligning took the gap away
+    // with the centring — a centred column had half the leftover width either
+    // side of it and this had none, so every heading sat against the glass —
+    // and a column sized against the *whole* width with a margin beside it
+    // asks for more room than is left, which egui answers with a negative
+    // child rather than a smaller one.
+    let inset = theme.metrics.margin * 2.0;
+    // Floored, because a screen with no size is a real frame: egui hands one
+    // out before the window has been measured, and a negative width is a panic
+    // rather than a small panel — see `the_menu_survives_a_screen_with_no_size`.
+    let width = theme.panel_width((screen.width() - inset * 2.0).max(0.0));
 
     // **The menu is the screen, so it is drawn as the screen.** It was a card
     // floating in the middle of a much larger dark field, which reads as
@@ -558,21 +568,43 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                             // cross — which is the argument `views::wide`
                             // already makes about a single button's label.
                             ui.add_space(m.margin * 2.0);
-                            ui.allocate_ui(egui::vec2(width, screen.height()), |ui| {
-                                ui.set_width(width);
-                                ui.spacing_mut().item_spacing.y = m.item_spacing;
-                                match menu.page {
-                                    Page::Home => chose = home(ui, theme, menu, at),
-                                    Page::Play => chose = play(ui, theme, menu, at),
-                                    Page::People => {
-                                        chose = super::social::people::show(ui, theme, menu)
-                                    }
-                                    Page::Account => {
-                                        chose = super::social::account::show(ui, theme, menu, at)
-                                    }
-                                    Page::HowToPlay => chose = howto::show(ui, theme, menu, at),
-                                }
-                            });
+                            // **A margin, not an edge**, and the column was
+                            // sized to leave room for it — see `width`.
+                            // **A frame's inner margin, not a spacer.** A
+                            // space beside a column is a sibling competing for
+                            // the same row, and the column was sized against
+                            // the window — so it asks for more than remains and
+                            // egui answers with a negative child rather than a
+                            // smaller one. A margin reduces what everything
+                            // inside sees, which is what a margin is.
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin {
+                                    left: inset as i8,
+                                    right: inset as i8,
+                                    top: 0,
+                                    bottom: 0,
+                                })
+                                .show(ui, |ui| {
+                                    ui.allocate_ui(egui::vec2(width, screen.height()), |ui| {
+                                        ui.set_width(width);
+                                        ui.spacing_mut().item_spacing.y = m.item_spacing;
+                                        match menu.page {
+                                            Page::Home => chose = home(ui, theme, menu, at),
+                                            Page::Play => chose = play(ui, theme, menu, at),
+                                            Page::People => {
+                                                chose = super::social::people::show(ui, theme, menu)
+                                            }
+                                            Page::Account => {
+                                                chose = super::social::account::show(
+                                                    ui, theme, menu, at,
+                                                )
+                                            }
+                                            Page::HowToPlay => {
+                                                chose = howto::show(ui, theme, menu, at)
+                                            }
+                                        }
+                                    });
+                                });
                             ui.add_space(m.margin * 2.0);
                         });
                     });
@@ -1130,17 +1162,22 @@ mod tests {
         let (_, rect) = tick(menu, Vec::new());
         assert!(rect.width() > 1.0, "the menu drew nothing to press: {rect:?}");
 
-        // Columns of probe rather than the centre line. The centre line was
-        // enough while every control ran the full width of a card; on a
-        // two-column screen it runs down the **gap between them** and finds
-        // nothing, which is a fault in the probe that reads as a dead button.
+        // **A fixed pitch, not a fixed count.** Columns of probe rather than
+        // the centre line, because the centre line runs down the gap between
+        // two columns and finds nothing — but a *count* spread across the rect
+        // has now been wrong three times, once when the screen went to two
+        // columns, once when the content moved to the left of the window, and
+        // once when it gained a margin. Each time some fraction of the lanes
+        // landed on nothing and the failure read as a dead button.
         //
-        // Eight rather than four, since the content moved to the **left** of
-        // the window: a sweep spaced across the whole rect put six of its eight
-        // lanes in the empty half, and the two that landed on the column were
-        // not enough to find a button and the row beneath it both.
-        let lanes: Vec<f32> =
-            (1..=8).map(|n| rect.left() + rect.width() * n as f32 / 9.0).collect();
+        // A lane every `PITCH` points finds a control wherever it sits, which
+        // is what this is actually for. Narrow enough that a `small_button` in
+        // a row cannot fall between two.
+        const PITCH: f32 = 24.0;
+        let lanes: Vec<f32> = std::iter::successors(Some(rect.left() + PITCH * 0.5), |x| {
+            Some(x + PITCH).filter(|x| *x < rect.right())
+        })
+        .collect();
         let mut y = rect.top();
         while y < rect.bottom() {
             for &x in &lanes {

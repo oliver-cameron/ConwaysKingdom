@@ -265,13 +265,16 @@ pub struct Session {
     /// **A challenge waiting to be answered**, and the room it is in. Taken by
     /// whatever puts it on screen, so one that has been shown is not shown
     /// twice — see [`Effect::Challenged`].
-    /// **What has gone off lately**, and when each arrived.
+    /// **What has gone off lately**, and the generation each went off on.
     ///
     /// Held here rather than drawn on arrival because a frame is not a
-    /// generation: a blast lands in one message and is drawn over the next
-    /// half-second of frames. Old ones are dropped by whoever draws them —
-    /// see `views::game::overlay`, which owns how long a fireball lasts.
-    pub blasts: Vec<(crate::sim::Blast, f64)>,
+    /// generation: a blast lands in one message and burns over the next
+    /// several. Counted in **generations** rather than seconds so the fire
+    /// keeps time with the board underneath it — a world at half speed burns
+    /// for twice as long in wall clock and exactly as long in the only clock
+    /// the game has. Old ones are dropped by whoever draws them; see
+    /// `views::game::overlay`, which owns how many generations one lasts.
+    pub blasts: Vec<(crate::sim::Blast, u64)>,
     pub challenge: Option<(crate::net::Profile, RoomId)>,
     /// What somebody said to one of ours. `None` in the second half is a
     /// decline.
@@ -593,7 +596,7 @@ impl Session {
     /// Offline only, and guarded on it: connected, the world advances when the
     /// server says a generation happened and never on this client's own clock
     /// — see [`Self::advance_to`].
-    pub fn advance_alone(&mut self, world: &mut World, dt: f32, span: f32, now: f64) {
+    pub fn advance_alone(&mut self, world: &mut World, dt: f32, span: f32) {
         if self.link.is_some() {
             return;
         }
@@ -614,7 +617,7 @@ impl Session {
         // Both paths end in the same list, so the fireball is drawn by one
         // piece of code either way -- see `views::game::overlay`.
         for blast in world.take_blasts() {
-            self.blasts.push((blast, now));
+            self.blasts.push((blast, world.generation));
         }
         // **And its own standings**, which nothing else produces: they arrive
         // in a `ServerMessage::Standing` and offline there is no server, so
@@ -902,7 +905,7 @@ impl Session {
                 // `views::game::overlay`.
                 ServerMessage::Blasts(blasts) => {
                     for blast in blasts {
-                        self.blasts.push((blast, now));
+                        self.blasts.push((blast, world.generation));
                     }
                 }
                 ServerMessage::Spawned { player, at } => {
@@ -1683,11 +1686,11 @@ mod tests {
 
         let at = world.generation;
         s.set_rules(Rules { paused: true, ..s.rules });
-        s.advance_alone(&mut world, 10.0, 0.25, 0.0);
+        s.advance_alone(&mut world, 10.0, 0.25);
         assert_eq!(world.generation, at, "stopped means stopped");
 
         s.ask_for_one_step();
-        s.advance_alone(&mut world, 0.0, 0.25, 0.0);
+        s.advance_alone(&mut world, 0.0, 0.25);
         assert_eq!(world.generation, at + 1, "and one means one");
         assert!(s.rules.paused, "and it stays stopped");
     }

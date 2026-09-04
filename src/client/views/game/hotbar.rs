@@ -542,20 +542,43 @@ fn flip_face(held: Held) -> Flip {
 
 /// How big a square can be, and how many rows the bar needs.
 ///
-/// Shrinks before it wraps: a shorter row of smaller squares reads better than
-/// two rows of large ones, and a row costs height, which is scarcer on a phone
-/// held sideways.
+/// **Wraps before it shrinks**, which is the opposite of what it did. Shrinking
+/// first was argued as "a shorter row of smaller squares reads better than two
+/// rows of large ones, and a row costs height" — and the height is real, but
+/// the arithmetic went straight past it: `available / squares` clamped at
+/// [`SMALLEST`] meant a narrow window got **twenty-two point squares in one
+/// row** rather than forty-four point ones in two. Twenty-two points is not a
+/// touch target and the sprite in it is not a picture of anything.
+///
+/// So: the fewest rows that fit at full size, up to [`MOST_ROWS`]. Only past
+/// that does anything shrink, and then it shrinks to fill those rows rather
+/// than to fit one.
 fn fit(squares: usize, available: f32, theme: &Theme) -> (f32, usize) {
-    /// Below this a sprite is not a picture of anything.
+    /// Below this a sprite is not a picture of anything, and a finger is not
+    /// hitting one square rather than its neighbour.
     const SMALLEST: f32 = 22.0;
+    /// **Three, because a bar four rows deep is a wall.** Past this the height
+    /// costs more than the size does, and shrinking is the better trade — the
+    /// thing that was wrong was reaching for it first.
+    const MOST_ROWS: usize = 3;
+
     let m = theme.metrics;
     let step = |size: f32| size + m.item_spacing * 1.5;
-    if squares as f32 * step(m.slot) <= available {
-        return (m.slot, 1);
+    let fits = |size: f32, rows: usize| {
+        let across = squares.div_ceil(rows.max(1)) as f32;
+        across * step(size) <= available
+    };
+
+    for rows in 1..=MOST_ROWS {
+        if fits(m.slot, rows) {
+            return (m.slot, rows);
+        }
     }
-    let size = (available / squares as f32 - m.item_spacing * 1.5).clamp(SMALLEST, m.slot);
-    let across = (available / step(size)).floor().max(1.0);
-    (size, (squares as f32 / across).ceil() as usize)
+    // Still too wide at full size in three rows, so fill three and shrink to
+    // whatever those hold.
+    let across = squares.div_ceil(MOST_ROWS) as f32;
+    let size = (available / across - m.item_spacing * 1.5).clamp(SMALLEST, m.slot);
+    (size, MOST_ROWS)
 }
 
 pub fn show(
@@ -928,6 +951,50 @@ mod tests {
         );
     }
 
+    /// **A square you can hit beats a bar that is one line.**
+    ///
+    /// It shrank before it wrapped, and the arithmetic went straight past the
+    /// middle: `available / squares` clamped at the floor gave twenty-two
+    /// point squares in *one* row where two rows of full-size ones fit fine.
+    /// Twenty-two points is not a touch target.
+    #[test]
+    fn the_bar_wraps_before_it_shrinks() {
+        let theme = Theme::default();
+        let full = theme.metrics.slot;
+        let squares = slots(&library(3), true).len();
+        let step = full + theme.metrics.item_spacing * 1.5;
+
+        // Everything on one line, when there is room for it.
+        assert_eq!(fit(squares, squares as f32 * step, &theme), (full, 1));
+
+        // Exactly the room a given number of rows needs, computed rather than
+        // guessed at as a fraction: the last row is short, so two rows need
+        // `ceil(n/2)` across and not half of `n`.
+        let room_for = |rows: usize| squares.div_ceil(rows) as f32 * step;
+        for rows in [2, 3] {
+            let (size, got) = fit(squares, room_for(rows), &theme);
+            assert_eq!(size, full, "it shrank at {rows} rows when it could have wrapped");
+            assert_eq!(got, rows, "wrong number of rows for exactly {rows} rows of room");
+        }
+
+        // One point short of what two rows need is three rows, still full
+        // size — the next thing tried is another row, never a smaller square.
+        let (size, rows) = fit(squares, room_for(2) - 1.0, &theme);
+        assert_eq!((size, rows), (full, 3));
+    }
+
+    /// **And it does shrink eventually**, because a bar four rows deep is a
+    /// wall. Past three the height costs more than the size does.
+    #[test]
+    fn a_window_too_narrow_for_three_rows_gets_smaller_squares() {
+        let theme = Theme::default();
+        let squares = slots(&library(3), true).len();
+        let (size, rows) = fit(squares, 200.0, &theme);
+        assert!(size < theme.metrics.slot, "it never shrank");
+        assert!(size >= 22.0, "it shrank past what a sprite can be drawn in");
+        assert_eq!(rows, 3, "it grew a fourth row instead of shrinking");
+    }
+
     /// **Every material carries its price and nothing else does.**
     ///
     /// A shape is free, the clock is free, and a stamp's price is its cells
@@ -1042,26 +1109,6 @@ mod tests {
         for key in [Key::Run, Key::Step, Key::Rules, Key::Wipe] {
             assert!(ours.iter().any(|s| s.key == key), "{key:?} is missing");
         }
-    }
-
-    /// **The bar fits the screen it is on.** One row at full size where there
-    /// is room; smaller squares before a second row, because a row costs
-    /// height and height is what a phone held sideways has least of.
-    #[test]
-    fn the_bar_fits_the_screen() {
-        let theme = Theme::default();
-        let squares = 20;
-
-        let (size, rows) = fit(squares, 1600.0, &theme);
-        assert_eq!((size, rows), (theme.metrics.slot, 1), "a wide screen changes nothing");
-
-        let (size, rows) = fit(squares, 700.0, &theme);
-        assert!(size < theme.metrics.slot, "a narrow screen should shrink the squares");
-        assert_eq!(rows, 1, "and shrink before it wraps");
-
-        let (small, rows) = fit(squares, 320.0, &theme);
-        assert!(rows > 1, "a phone held upright needs more than one row");
-        assert!(small >= 22.0, "and never smaller than a sprite can be seen at");
     }
 
     use crate::client::views::game::stamp::{Stamp, ON_THE_BAR};
