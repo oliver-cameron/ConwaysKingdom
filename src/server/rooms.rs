@@ -189,6 +189,10 @@ pub struct Rooms {
     /// opposite questions: one is what this server will vouch for, and this is
     /// what it merely holds. See [`crate::server::lockers`].
     lockers: crate::server::lockers::Lockers,
+    /// What this server asks a client not to offer — see [`crate::net::Hidden`].
+    /// A field rather than a `Config` this map borrows, because it is the only
+    /// thing here a room list has to carry and `Rooms` is what answers one.
+    pub hidden: crate::net::Hidden,
     /// The code that reaches each private room.
     ///
     /// A credential, not an identity: it is separate from the id so that a
@@ -313,6 +317,7 @@ impl Rooms {
             people,
             profiles,
             lockers,
+            hidden: crate::net::Hidden::default(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -333,6 +338,7 @@ impl Rooms {
             people: crate::server::people::People::new(),
             profiles: crate::server::profiles::Profiles::new(),
             lockers: crate::server::lockers::Lockers::new(),
+            hidden: crate::net::Hidden::default(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -450,7 +456,7 @@ impl Rooms {
         // and a room *is* a world, so asking from inside one is asking too
         // late.
         if let ClientMessage::Rooms = msg {
-            return vec![ServerMessage::Rooms { rooms: self.listing() }];
+            return vec![ServerMessage::Rooms { rooms: self.listing(), hidden: self.hidden }];
         }
         // Answered without a seat for a sharper version of the same reason: it
         // names a room that does not exist, so there is nowhere to have been
@@ -1578,7 +1584,7 @@ mod tests {
         rooms.get_mut(&RoomId::from("arena")).unwrap().join("alice").unwrap();
 
         let replies = rooms.handle(&Caller::nobody(), ClientMessage::Rooms);
-        let [ServerMessage::Rooms { rooms: listed }] = &replies[..] else {
+        let [ServerMessage::Rooms { rooms: listed, .. }] = &replies[..] else {
             panic!("expected a listing, got {replies:?}");
         };
         assert_eq!(
@@ -1592,7 +1598,7 @@ mod tests {
 
         // A player who left is not a player who is there.
         rooms.get_mut(&RoomId::from("arena")).unwrap().leave(PlayerId(1));
-        let [ServerMessage::Rooms { rooms: listed }] =
+        let [ServerMessage::Rooms { rooms: listed, .. }] =
             &rooms.handle(&Caller::nobody(), ClientMessage::Rooms)[..]
         else {
             panic!("expected a listing");
@@ -1718,7 +1724,8 @@ mod tests {
             )
             .unwrap();
 
-        let [ServerMessage::Rooms { rooms: listed }] = &rooms.handle(&me, ClientMessage::Rooms)[..]
+        let [ServerMessage::Rooms { rooms: listed, .. }] =
+            &rooms.handle(&me, ClientMessage::Rooms)[..]
         else {
             panic!("expected a listing");
         };
@@ -2038,6 +2045,37 @@ mod tests {
         let [.., ServerMessage::Yours(kept)] = &out[..] else { panic!("{out:?}") };
         assert_eq!(kept.stamps.len(), 1, "the library did not come back");
         assert_eq!(kept.stamps[0].name, "corner");
+    }
+
+    /// **What a server asks a client not to offer travels with the room list**,
+    /// because that is the first thing a menu asks any server — so the answer
+    /// is known before the menu draws anything.
+    ///
+    /// A request rather than a rule, and it cannot be anything else: the
+    /// client is somebody else's and every screen it hides is still compiled
+    /// into it. What it is for is copy nobody has written yet.
+    #[test]
+    fn a_room_list_says_what_this_server_would_rather_not_be_offered() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+
+        let out = rooms.handle(&Caller::nobody(), ClientMessage::Rooms);
+        let [ServerMessage::Rooms { hidden, .. }] = &out[..] else { panic!("{out:?}") };
+        assert_eq!(*hidden, crate::net::Hidden::default(), "a fresh server hides nothing");
+
+        rooms.hidden.hide("howto").expect("howto is a name");
+        let out = rooms.handle(&Caller::nobody(), ClientMessage::Rooms);
+        let [ServerMessage::Rooms { hidden, .. }] = &out[..] else { panic!("{out:?}") };
+        assert!(hidden.howto, "the server's answer did not reach the list");
+    }
+
+    /// A name this build does not know is refused rather than quietly hiding
+    /// nothing, or `--hide howtoo` starts a server that ignores the flag.
+    #[test]
+    fn a_screen_this_build_has_no_name_for_is_refused() {
+        let mut hidden = crate::net::Hidden::default();
+        let why = hidden.hide("howtoo").expect_err("a typo was accepted");
+        assert!(why.contains("howto"), "the refusal does not say what the names are: {why}");
+        assert_eq!(hidden, crate::net::Hidden::default(), "a refused name changed something");
     }
 
     /// **A locker is nobody's to offer without a name.** `Keep` writes a

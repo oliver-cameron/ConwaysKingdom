@@ -1360,6 +1360,16 @@ impl GameApp {
                         _ => None,
                     };
                     m.stage = menu::Stage::Choosing { rooms, note };
+                    // What this server would rather not be offered, which
+                    // arrives with the list because that is the first thing a
+                    // menu asks any server.
+                    m.hidden = self.session.hidden;
+                    // And if the page it names is the one open, leave it: a
+                    // screen a server has just asked us not to offer should
+                    // not stay up because it happened to be up already.
+                    if m.hidden.howto && m.page == menu::Page::HowToPlay {
+                        m.page = menu::Page::Home;
+                    }
                 }
             }
             Effect::Closed => match &self.ui.screen {

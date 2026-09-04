@@ -212,6 +212,11 @@ pub struct Menu {
     /// than a missing value — a face is derived from the key, so there is
     /// nothing to draw one from until a server has issued one.
     pub whoami: Option<crate::net::PersonId>,
+    /// What the server last reached asks this menu not to offer — see
+    /// [`crate::net::Hidden`]. Default until one has answered: a client with no
+    /// server has nobody's opinion to honour, and playing alone shows
+    /// everything.
+    pub hidden: crate::net::Hidden,
     /// The practice patches on the how-to page, made once and kept, because a
     /// patch somebody has drawn on is state and a page that reset it every
     /// frame would be one nobody could use.
@@ -339,6 +344,7 @@ impl Menu {
             finding: String::new(),
             people: None,
             whoami: None,
+            hidden: crate::net::Hidden::default(),
             patches: tutorial::lessons(),
         }
     }

@@ -10,6 +10,8 @@
 //!     --span  MS     milliseconds per generation (default 250)
 //!     --fresh        ignore every existing save and start new worlds
 //!     --max-rooms N  how many rooms players may make (default 32)
+//!     --hide NAME    a screen this server asks clients not to offer;
+//!                    repeatable. Today: howto
 //!
 //! With `--serve .` the browser client and the socket come from one origin, so
 //! no separate static-file server is needed.
@@ -53,6 +55,7 @@ fn main() -> std::io::Result<()> {
     let mut fresh = false;
     let mut shape = conwayskingdom::sim::WorldKind::Infinite;
     let mut max_rooms = conwayskingdom::server::rooms::MAX_MADE_ROOMS;
+    let mut hidden = conwayskingdom::net::Hidden::default();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -67,6 +70,14 @@ fn main() -> std::io::Result<()> {
                 let ms: u64 =
                     args.next().expect("--span needs milliseconds").parse().expect("bad span");
                 span = Duration::from_millis(ms);
+            }
+            // **A request to the client, not a rule.** Nothing is enforced
+            // and nothing could be: the client is somebody else's and every
+            // screen it hides is still compiled into it. What this is for is
+            // copy nobody has written yet -- see `net::Hidden`.
+            "--hide" => {
+                let what = args.next().expect("--hide needs a name");
+                hidden.hide(&what).unwrap_or_else(|e| panic!("--hide: {e}"));
             }
             "--fresh" => fresh = true,
             // Rooms made by clients only. A `--room` on this line, or a name
@@ -130,6 +141,10 @@ fn main() -> std::io::Result<()> {
     };
 
     rooms.cap_made(max_rooms);
+    rooms.hidden = hidden;
+    if hidden.howto {
+        log::info!("--hide howto: clients are asked not to offer the how-to page");
+    }
 
     log::info!(
         "{} room(s) in {}: {} -- a client naming none gets \"{}\"",

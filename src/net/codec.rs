@@ -229,7 +229,7 @@ mod tests {
             ServerMessage::ChunkData { tick: 3, chunk: (-2, 7), cells: vec![1, 2, 3, 4] },
             ServerMessage::Resync { tick: 9, chunks: vec![(0, 0)] },
             ServerMessage::Purse { value: -3 },
-            ServerMessage::Rooms { rooms: vec![] },
+            ServerMessage::Rooms { rooms: vec![], hidden: crate::net::Hidden::default() },
             // Both arms of the answer to `Create`, since a refusal is the
             // common one and carries the only text a player will read.
             ServerMessage::Made(Ok(crate::net::Made {
@@ -318,6 +318,7 @@ mod tests {
                         },
                     },
                 ],
+                hidden: crate::net::Hidden { howto: true },
             },
         ];
         for msg in cases {

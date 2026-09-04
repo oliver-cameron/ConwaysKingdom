@@ -1144,6 +1144,11 @@ pub enum ServerMessage {
     /// looking at one menu see one list.
     Rooms {
         rooms: Vec<RoomInfo>,
+        /// And what this server would rather a client did not offer — see
+        /// [`Hidden`]. It rides here because this is the first thing a menu
+        /// asks any server, so the answer is known before anything is drawn.
+        #[serde(default)]
+        hidden: Hidden,
     },
     /// **What this server holds for you**, sent on joining — see [`kept`].
     ///
@@ -1159,6 +1164,44 @@ pub enum ServerMessage {
     /// because "empty" and "emptied" look the same from here. A tombstone would
     /// tell them apart and is more machinery than the mistake is worth.
     Yours(kept::Kept),
+}
+
+/// Screens this server asks a client not to offer.
+///
+/// **A request, not a permission.** Nothing here is enforced and none of it
+/// could be: the client is somebody else's, every screen it hides is still
+/// compiled into it, and a page it draws anyway costs this server nothing. It
+/// is a server saying "my players should not be sent to that", which is a
+/// different thing from a rule.
+///
+/// What it is *for* is copy that is not finished. The how-to page is
+/// placeholder prose — `words::MenuTutorial` says so itself — and a public
+/// server should be able to stop handing that to newcomers without waiting for
+/// somebody to write it. Offline and playing alone it is always shown: there
+/// is no server to have an opinion, and a page nobody else sees is nobody
+/// else's problem.
+///
+/// A struct rather than a `bool` because the next screen with unfinished words
+/// on it should be a field here rather than a second message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hidden {
+    /// The how-to page, and the practice patches on it.
+    pub howto: bool,
+}
+
+impl Hidden {
+    /// Read a name off a command line, or say what the names are.
+    ///
+    /// Named rather than numbered so `--hide howto` reads as what it does, and
+    /// so a server started with a name this build does not know is told rather
+    /// than quietly hiding nothing.
+    pub fn hide(&mut self, what: &str) -> Result<(), String> {
+        match what {
+            "howto" => self.howto = true,
+            _ => return Err(format!("nothing here is called {what:?}; there is: howto")),
+        }
+        Ok(())
+    }
 }
 
 /// How many people one [`ClientMessage::People`] may answer with.

@@ -252,6 +252,11 @@ pub struct Session {
     /// [`Effect::LockerArrived`], and `None` the rest of the time so a stale
     /// one cannot be applied twice.
     pub locker: Option<crate::net::kept::Kept>,
+    /// What the server last reached asks this client not to offer — see
+    /// [`crate::net::Hidden`]. Default until one has answered, which is the
+    /// right way round: a client with no server has nobody's opinion to
+    /// honour and shows everything.
+    pub hidden: crate::net::Hidden,
     /// Whether a game has gone into the diary since the app last looked.
     ///
     /// A flag rather than an effect, because `file_game` is called from four
@@ -343,6 +348,7 @@ impl Session {
             rating_change: None,
             looked_up: None,
             locker: None,
+            hidden: crate::net::Hidden::default(),
             filed_a_game: false,
             people: None,
             room: None,
@@ -940,10 +946,11 @@ impl Session {
                         effects.push(Effect::NotMade(why));
                     }
                 },
-                ServerMessage::Rooms { rooms } => {
+                ServerMessage::Rooms { rooms, hidden } => {
                     log::debug!("the server has {} room(s)", rooms.len());
                     self.asked_at = None;
                     self.listed_at = now;
+                    self.hidden = hidden;
                     effects.push(Effect::Rooms(rooms));
                 }
                 ServerMessage::ChunkData { tick, chunk, cells } => {

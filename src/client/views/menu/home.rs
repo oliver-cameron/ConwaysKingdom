@@ -115,16 +115,22 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     if button.clicked() {
         menu.page = Page::Account;
     }
-    ui.add_space(m.item_spacing);
-    if crate::client::views::wide(
-        ui,
-        egui::RichText::new(w().menu.home.howto).size(m.text_body).color(p.text),
-        m.action_height,
-        p.surface,
-    )
-    .clicked()
-    {
-        menu.page = Page::HowToPlay;
+    // Offered unless the server we reached asked us not to — see
+    // `net::Hidden`. Its copy is a placeholder, and a public server should be
+    // able to stop handing that to newcomers without waiting for somebody to
+    // write it.
+    if !menu.hidden.howto {
+        ui.add_space(m.item_spacing);
+        if crate::client::views::wide(
+            ui,
+            egui::RichText::new(w().menu.home.howto).size(m.text_body).color(p.text),
+            m.action_height,
+            p.surface,
+        )
+        .clicked()
+        {
+            menu.page = Page::HowToPlay;
+        }
     }
 
     chose

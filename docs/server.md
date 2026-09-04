@@ -251,6 +251,14 @@ A missing file starts fresh. A corrupt or mismatched one is an **error** naming 
 
 The shutdown save is **waited for**, not aborted. The simulation task saves after its loop; `sim.abort()` cancelled it at its next await point, which is inside the loop, so the save never ran and a clean exit quietly lost up to thirty seconds of every room. The wait is bounded at ten seconds, because a shutdown that does not shut down is worse than one that loses a save it warned about.
 
+### Screens a server would rather not be offered
+
+`--hide NAME` puts a name in `net::Hidden`, which rides on the room list — the first thing a menu asks any server, so the answer is known before the menu draws anything. Today the only name is `howto`, and `--hide howtoo` is refused with the list of names rather than starting a server that quietly ignores the flag.
+
+**It is a request, not a permission**, and it could not be anything else: the client is somebody else's, every screen it hides is still compiled into it, and a page it draws anyway costs the server nothing. What it is *for* is copy nobody has written — the how-to page is placeholder prose and `words::MenuTutorial` says so itself, so a public server can stop handing that to newcomers without waiting for somebody to finish it. Offline and playing alone every screen is shown, because there is no server to have an opinion.
+
+A struct rather than a `bool` on the wire, so the next screen with unfinished words on it is a field rather than a second message.
+
 ### The four tables beside the rooms
 
 Not everything a server keeps is a world. Four files sit in the rooms directory alongside the `.ckw` files, and none is per room, because none is about a room:
