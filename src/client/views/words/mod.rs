@@ -300,17 +300,6 @@ pub struct MenuMake {
     pub match_waits: &'static str,
 }
 
-/// Every word the client puts on screen.
-/// One file, for the same reason `sim::rule` holds every number: a string a
-/// player reads is a decision, and decisions are easier to get right when they
-/// are next to each other than when they are scattered through the code that
-/// happens to draw them. Changing what the game *says* should not mean reading
-/// what it *does*.
-/// It is also where a translation would start, and where anybody can see the
-/// whole voice of the thing at once — which is the only way to notice that one
-/// screen says "server" and another says "host".
-/// Not log lines. Those are for whoever is running it and are written where
-/// the thing they describe happens.
 /// The screen before the game.
 pub struct Menu {
     pub title: &'static str,

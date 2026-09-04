@@ -744,9 +744,6 @@ impl Rooms {
         }
     }
 
-    /// Save every room. One failure does not stop the others: a room that
-    /// cannot be written is one world lost, and giving up would lose the rest
-    /// as well.
     /// Write the people table, and say so if it will not go.
     ///
     /// Not fatal, deliberately: a server that cannot write its table is a
@@ -816,6 +813,9 @@ impl Rooms {
         self.profiles.rating_of(who)
     }
 
+    /// Save every room. One failure does not stop the others: a room that
+    /// cannot be written is one world lost, and giving up would lose the rest
+    /// as well.
     pub fn save(&self) -> std::io::Result<()> {
         if self.dir.as_os_str().is_empty() {
             return Ok(());

@@ -648,8 +648,6 @@ fn segment(ui: &mut egui::Ui, theme: &Theme, size: f32, contents: impl FnOnce(&m
         });
 }
 
-/// One square. Returns whether it was clicked. `digit` is the key that picks
-/// it, and is only shown while there is a key left to show it with.
 /// What fills the middle of a square.
 enum Face<'a> {
     /// A cell, drawn from the sheet as the world would draw it.
@@ -667,6 +665,8 @@ enum Face<'a> {
 /// One square: a picture of what it does, the key that picks it, and its name
 /// on hover. A picture rather than a word, because what you are choosing is
 /// what will be on the board.
+/// One square. Returns whether it was clicked. `digit` is the key that picks
+/// it, and is only shown while there is a key left to show it with.
 fn square(
     ui: &mut egui::Ui,
     look: &Look<'_>,

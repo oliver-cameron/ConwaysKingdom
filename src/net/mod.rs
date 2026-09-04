@@ -1129,12 +1129,6 @@ pub enum ServerMessage {
     },
 }
 
-/// How wide a patch of ground a player is granted when they join, in cells.
-///
-/// A player may only place where their own influence reaches, so somebody who
-/// owned nothing could do nothing at all. The grant is what makes that wall
-/// safe: a patch that never decays, with a live gradient around it, so there
-/// is always somewhere to build. It is also the seed the rest spreads from.
 /// How many people one [`ClientMessage::People`] may answer with.
 ///
 /// A cap and not a page: what this is for is finding somebody and seeing who
@@ -1142,6 +1136,12 @@ pub enum ServerMessage {
 /// the message from being a way to read out everybody a server has ever met.
 pub const PEOPLE_MOST: usize = 25;
 
+/// How wide a patch of ground a player is granted when they join, in cells.
+///
+/// A player may only place where their own influence reaches, so somebody who
+/// owned nothing could do nothing at all. The grant is what makes that wall
+/// safe: a patch that never decays, with a live gradient around it, so there
+/// is always somewhere to build. It is also the seed the rest spreads from.
 pub const SPAWN_N: i32 = 12;
 
 /// How much of `player`'s influence reaches this square, nought to

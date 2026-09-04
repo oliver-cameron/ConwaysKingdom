@@ -502,10 +502,6 @@ impl Frame {
         FrameAcquire::Ready(Self { output, view, encoder })
     }
 
-    /// Records every draw call into a single render pass, then submits
-    /// the command buffer and presents. `clear_color` of `None` loads
-    /// the existing contents of the target instead of clearing it
-    /// (useful if you're compositing multiple passes elsewhere).
     /// Records every draw call into a single render pass, then submits and
     /// presents.
     ///
