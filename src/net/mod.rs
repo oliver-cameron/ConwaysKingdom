@@ -150,10 +150,24 @@ pub fn room_name(raw: &str) -> Result<RoomName, String> {
 
 /// The most sides a match may have.
 ///
-/// **A side is a player, so it costs a number** — see [`PlayerId::MAX`] — and
-/// every side needs a seat to sit on it, so half the numbers is the ceiling.
-/// Seven sides of one is a free-for-all with extra words.
-pub const MAX_TEAMS: u8 = PlayerId::MAX / 2;
+/// **Every number there is**, which is what a side costs: a side *is* a
+/// player, so making one takes a `PlayerId` out of the same pool the seats
+/// come from — see [`PlayerId::MAX`].
+///
+/// This was `MAX / 2`, on the reasoning that every side also needs somebody
+/// sitting on it, so half the numbers is the real ceiling. That arithmetic is
+/// right and it was the wrong place to spend it. A form that refuses eight
+/// teams is answering a question about *this* match — how many people are
+/// coming — that it cannot know when the match is being described, and the
+/// server already asks it at the moment it can be answered: `teams_are_fair`
+/// will not blow the whistle on a side nobody is on.
+///
+/// So the cap here is the only thing that is true at this point, which is that
+/// there are fifteen numbers. What you get for asking for more sides than you
+/// have players is a match that will not start, and a refusal naming the empty
+/// side — which is a better answer than a form saying "between 2 and 7" to
+/// somebody who has eight friends.
+pub const MAX_TEAMS: u8 = PlayerId::MAX;
 
 /// The fewest. One side is a solo match with extra words.
 pub const MIN_TEAMS: u8 = 2;

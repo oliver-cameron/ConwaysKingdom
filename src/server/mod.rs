@@ -832,8 +832,22 @@ impl Server {
     pub fn join(&mut self, name: impl Into<String>) -> Result<PlayerId, String> {
         let Some(id) = self.next_player_id() else {
             let name = name.into();
-            log::warn!("refused \"{name}\": server full at {} players", PlayerId::MAX);
-            return Err(format!("server full ({} players)", PlayerId::MAX));
+            // **Say which kind of full.** A side takes a number out of the
+            // same pool a seat does, so a match with fifteen of them has none
+            // left -- and "server full (15 players)" told somebody who had
+            // just made that match, and was the only person in it, that it was
+            // full of people. The sides are the thing they can change.
+            let sides = self.sides.len();
+            let why = if sides > 0 {
+                format!(
+                    "no room: {sides} of the {} numbers are sides, and a side costs one",
+                    PlayerId::MAX
+                )
+            } else {
+                format!("server full ({} players)", PlayerId::MAX)
+            };
+            log::warn!("refused \"{name}\": {why}");
+            return Err(why);
         };
         let mut player = Player::new(id, name);
         player.last_seen = self.tick();
@@ -2027,6 +2041,44 @@ mod tests {
     /// Allies build on each other's ground and cannot hurt each other, so
     /// seating them separately hands one team two opening positions where a
     /// solo player gets one -- twice the frontage, and a border between them
+    /// **Fifteen sides is allowed and will not start**, which is the point.
+    ///
+    /// The cap used to be seven, on the arithmetic that every side needs
+    /// somebody on it and a side and a seat both cost a number. That is true,
+    /// and the form was the wrong place to spend it: how many people are
+    /// coming is not something the person describing a match knows yet.
+    /// `teams_are_fair` asks at the whistle, which is when it can be answered.
+    ///
+    /// What is left is the only thing true when a match is being made: there
+    /// are fifteen numbers. Ask for all of them and there are none for people,
+    /// and the refusal to join says so rather than saying the server is full —
+    /// the sides are the thing whoever just made this can change.
+    #[test]
+    fn fifteen_sides_is_allowed_and_leaves_nowhere_to_sit() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 1000 });
+        s.make_teams(crate::net::MAX_TEAMS).expect("fifteen sides was refused");
+        assert_eq!(s.team_count(), crate::net::MAX_TEAMS);
+
+        let why = s.join_with("me", None).expect_err("a number was left after fifteen sides");
+        assert!(why.contains("sides"), "the refusal blamed the wrong thing: {why}");
+    }
+
+    /// One under, so somebody can sit down — and then the **whistle** is what
+    /// refuses, by naming a side nobody is on. That is the check the form used
+    /// to be standing in for, asked at the moment it can be answered.
+    #[test]
+    fn a_match_with_more_sides_than_players_is_refused_at_the_whistle() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(matches::Victory::Timer { generations: 1000 });
+        s.make_teams(3).expect("three sides");
+        let me = s.join_with("me", None).expect("a seat");
+        s.join_team(me, PlayerId(1)).expect("a side to be on");
+
+        let why = s.start_match(None).expect_err("a match with two empty sides started");
+        assert!(why.contains("nobody is on"), "{why}");
+    }
+
     /// no rule will ever contest. The size of a side is meant to be the
     /// advantage, not where it starts.
     #[test]
