@@ -104,39 +104,6 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         }
     }
 
-    // **Solo is a full-width way out at the bottom, not a link in the header.**
-    //
-    // It is the same errand as everything above — the form describes a world
-    // either way and answers "make it here" or "make it on that server"
-    // depending on whether one replied — so it belongs on this screen. What it
-    // is not is a small word beside a heading, which is where it was and which
-    // is a control nobody finds. Under the two columns, because it is the
-    // answer to "none of this, I want to play now".
-    //
-    // Only where a server *has* answered: with none, `make_column` is already
-    // the solo form and its own action says so, and two ways to the same place
-    // on one screen is one too many.
-    if reached {
-        ui.add_space(m.item_spacing * 2.0);
-        ui.separator();
-        ui.add_space(m.item_spacing);
-        if crate::client::views::wide(
-            ui,
-            egui::RichText::new(w().menu.alone_label).size(m.text_body).color(theme.palette.text),
-            m.button_height,
-            theme.palette.surface,
-        )
-        .clicked()
-        {
-            menu.page = Page::Alone;
-        }
-        ui.label(
-            egui::RichText::new(w().menu.alone.note)
-                .size(m.text_small)
-                .color(theme.palette.text_dim),
-        );
-    }
-
     chose
 }
 

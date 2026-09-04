@@ -35,7 +35,6 @@ pub static WORDS: super::Words = super::Words {
         rooms: "Worlds here",
         no_rooms: "None yet. Make the first one.",
         not_asked: "No answer from that server yet.",
-        alone_label: "Play Solo",
         back: "‹ back",
         back_to_match: "Back to your match",
         back_to_match_note: "It has not started. Nothing moves until it does.",
@@ -188,10 +187,6 @@ pub static WORDS: super::Words = super::Words {
             at_console: "Waiting for the server to start it.",
             watching: "watching",
             no_seat: "You are watching this world, not playing in it.",
-        },
-        alone: super::MenuAlone {
-            title: "Play alone",
-            note: "No server, no other players. The simulation is the same one a match runs.",
         },
         make: super::MenuMake {
             alone: "Play alone",

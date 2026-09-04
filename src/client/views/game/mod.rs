@@ -1117,8 +1117,10 @@ impl GameApp {
     fn here(&self) -> crate::client::route::Route {
         use crate::client::route::Route;
         match (&self.ui.screen, &self.session.room) {
+            // `/alone` is an entry point rather than a screen, the way
+            // `/experiments` is: it opens this form with one answer given, and
+            // nothing writes it back — the form is the play screen either way.
             (Screen::Menu(m), _) if m.page == menu::Page::Play => Route::Play,
-            (Screen::Menu(m), _) if m.page == menu::Page::Alone => Route::Alone,
             (Screen::Menu(_), _) => Route::Home,
             (Screen::Playing, Some(room)) if self.session.watching => Route::Watch(room.clone()),
             // A lobby is a screen of its own, so it says so. Following either
@@ -1169,7 +1171,12 @@ impl GameApp {
             Route::Play => self.show_menu_page(menu::Page::Play),
             // Both, because a solitary world names no shape and so cannot be
             // rebuilt from an address. The form is where you say what it was.
-            Route::Alone | Route::Solo => self.show_menu_page(menu::Page::Alone),
+            Route::Alone | Route::Solo => {
+                self.show_menu_page(menu::Page::Play);
+                if let Screen::Menu(m) = &mut self.ui.screen {
+                    m.describe_access(menu::Access::Solo);
+                }
+            }
             // **A laboratory is a kind on the form**, so the link opens the
             // form on it rather than a page of its own. An entry point and
             // not a screen — nothing writes this address back.
@@ -1550,7 +1557,7 @@ impl App for GameApp {
                     ))
                 }
             }
-            Start::Menu { address, page, describing } => {
+            Start::Menu { address, page, describing, access } => {
                 #[allow(clippy::let_and_return)]
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
                 // **The page the address named, whichever it is.** This
@@ -1565,6 +1572,9 @@ impl App for GameApp {
                 }
                 if let Some(kind) = describing {
                     m.describe(kind);
+                }
+                if let Some(access) = access {
+                    m.describe_access(access);
                 }
                 Screen::Menu(m)
             }

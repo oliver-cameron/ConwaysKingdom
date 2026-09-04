@@ -39,6 +39,12 @@ pub enum Route {
     /// A server and what is on it.
     Play,
     /// Describing a world to play in on your own.
+    ///
+    /// **An entry point rather than a screen**, the way [`Self::Lab`] is.
+    /// Playing alone is the last answer on the make-a-world form — who can
+    /// reach this, and "just me" — rather than a page asking the same
+    /// questions again, so this opens that form on that answer. Nothing writes
+    /// it back: the screen you are on is the play screen either way.
     Alone,
     /// A laboratory.
     ///

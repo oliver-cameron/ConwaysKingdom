@@ -216,13 +216,6 @@ pub struct MenuWatch {
 /// Making a room. One label per decision, and a label appears only when
 /// the decision it belongs to is live — see [inspiration.md].
 /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
-pub struct MenuAlone {
-    pub title: &'static str,
-    /// Said once, at the top, rather than beside every field: the whole
-    /// page is about a world nobody else is in.
-    pub note: &'static str,
-}
-
 pub struct MenuMake {
     /// The action, when there is no server to ask. The same form, so the
     /// same questions; a different place for the answer to go.
@@ -333,7 +326,6 @@ pub struct Menu {
     /// Waiting is a different thing from a server with nothing on it, and
     /// reads differently: one is a pause, the other is an invitation.
     pub not_asked: &'static str,
-    pub alone_label: &'static str,
     /// Out of a screen, by pointer. Escape does the same, and both exist
     /// because a phone has no escape key and a keyboard user should not have
     /// to reach for the mouse.
@@ -383,7 +375,6 @@ pub struct Menu {
     /// the decision it belongs to is live — see [inspiration.md].
     ///
     /// [inspiration.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/inspiration.md#the-menu
-    pub alone: MenuAlone,
     pub make: MenuMake,
 }
 

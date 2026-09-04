@@ -81,6 +81,9 @@ pub(crate) enum Start {
         /// `/experiments` is this: a laboratory is a room now, so asking for
         /// one is asking for the form with an answer already given.
         describing: Option<menu::Kind>,
+        /// And who should already be able to reach it, for a link that named
+        /// **playing alone** — which is the last answer on that same form.
+        access: Option<menu::Access>,
     },
 }
 
@@ -120,18 +123,26 @@ pub(crate) fn startup() -> Start {
         Some(route) if route.to_join().is_some() => {
             Start::Join { url, name, room: route.to_join().map(|r| r.0.clone()), watch: false }
         }
-        Some(Route::Play) => Start::Menu { address: url, page: menu::Page::Play, describing: None },
-        // A solitary world names none, so `/solo` opens the form rather than
-        // building something nobody described — see `Route::Solo`.
-        Some(Route::Alone | Route::Solo) => {
-            Start::Menu { address: url, page: menu::Page::Alone, describing: None }
+        Some(Route::Play) => {
+            Start::Menu { address: url, page: menu::Page::Play, describing: None, access: None }
         }
+        // A solitary world names none, so `/solo` opens the form rather than
+        // building something nobody described — see `Route::Solo`. Playing
+        // alone is the last answer on that form rather than a page, so this is
+        // the same shape as `/experiments` below: the form, one answer given.
+        Some(Route::Alone | Route::Solo) => Start::Menu {
+            address: url,
+            page: menu::Page::Play,
+            describing: None,
+            access: Some(menu::Access::Solo),
+        },
         Some(Route::Lab) => Start::Menu {
             address: url,
             page: menu::Page::Play,
             describing: Some(menu::Kind::Experiment),
+            access: None,
         },
-        _ => Start::Menu { address: url, page: menu::Page::Home, describing: None },
+        _ => Start::Menu { address: url, page: menu::Page::Home, describing: None, access: None },
     }
 }
 
@@ -157,6 +168,7 @@ pub(crate) fn startup() -> Start {
             address: DEFAULT_ADDRESS.into(),
             page: menu::Page::Home,
             describing: None,
+            access: None,
         };
     };
     crate::net::keep::remember_name(&name);
@@ -168,6 +180,7 @@ pub(crate) fn startup() -> Start {
             address: DEFAULT_ADDRESS.into(),
             page: menu::Page::Home,
             describing: None,
+            access: None,
         },
     }
 }

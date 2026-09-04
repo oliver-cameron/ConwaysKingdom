@@ -35,7 +35,6 @@ pub(crate) fn person_hue(who: &crate::net::PersonId) -> u8 {
 }
 
 mod account;
-mod alone;
 pub mod draft;
 mod home;
 mod howto;
@@ -44,7 +43,7 @@ mod play;
 mod settings;
 pub mod tutorial;
 
-pub use draft::{Draft, Ends, Kind, Shape};
+pub use draft::{Access, Draft, Ends, Kind, Shape};
 
 use home::home;
 use play::play;
@@ -108,14 +107,6 @@ pub enum Page {
     /// a match or a laboratory, which is [`Kind`] on that form rather than a
     /// page of its own.
     Play,
-    /// Describing a world to play in on your own.
-    ///
-    /// **A page rather than a button.** "Play alone" went straight into a
-    /// world built from whatever the command line had said, so a solitary game
-    /// could not be a small torus or have a way to win, and the form that asks
-    /// those questions was only reachable by going to the server screen and
-    /// finding it under a room list nobody had asked for.
-    Alone,
     /// Who else plays here, and the leaderboard, which is one screen because
     /// the server answers both from one question.
     People,
@@ -364,6 +355,20 @@ impl Menu {
         self.draft.get_or_insert_with(Default::default).kind = kind;
     }
 
+    /// The same, for **who can reach it** — which is where playing alone lives.
+    ///
+    /// `/alone` and `/solo` are this. Solo had a page of its own asking the
+    /// same questions the make-a-world form asks, with the last one answered
+    /// for it, so the two screens had to be kept in step and the bottom of the
+    /// play screen carried a second way to the same place. It is the third
+    /// answer to "who can reach this" and nothing else, so a link that asks
+    /// for it asks for the form with that answer given — exactly what
+    /// [`Self::describe`] does with the kind.
+    pub fn describe_access(&mut self, access: draft::Access) {
+        self.page = Page::Play;
+        self.draft.get_or_insert_with(Default::default).access = access;
+    }
+
     /// The menu, opened on a sentence saying why the client is looking at it.
     ///
     /// For the client that was told where to go and could not get there: a
@@ -541,7 +546,6 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                 match menu.page {
                                     Page::Home => chose = home(ui, theme, menu, at),
                                     Page::Play => chose = play(ui, theme, menu, at),
-                                    Page::Alone => chose = alone::show(ui, theme, menu),
                                     Page::People => chose = people::show(ui, theme, menu),
                                     Page::Account => chose = account::show(ui, theme, menu, at),
                                     Page::HowToPlay => chose = howto::show(ui, theme, menu, at),
@@ -709,22 +713,26 @@ mod tests {
                 "the home screen does not reach one of its three"
             );
         }
-        // And solo, from Play — but only once a server has answered. With
-        // none, `make_column` *is* the solo form and its own action says so,
-        // which is why the way out is not offered twice.
+    }
+
+    /// **Playing alone is an answer, not a page.** It had a page of its own
+    /// asking the same questions the make-a-world form asks with the last one
+    /// answered for it, so two screens had to be kept in step and the play
+    /// screen carried a second way to the same place. A link that asks for it
+    /// asks for the form with that answer given — the same shape
+    /// `/experiments` already used for the kind.
+    #[test]
+    fn playing_alone_is_the_last_answer_on_the_form() {
         let mut menu = Menu::new("ws://host:8080/ws".into(), false);
-        menu.page = Page::Play;
-        menu.stage = Stage::Choosing { rooms: Vec::new(), note: None };
-        assert!(
-            probe(&mut menu, at(1.0, false), |m, _| m.page == Page::Alone),
-            "the play screen does not reach playing alone"
-        );
+        menu.describe_access(Access::Solo);
+        assert!(menu.page == Page::Play, "it went somewhere other than the form");
+        assert_eq!(menu.draft.as_ref().map(|d| d.access), Some(Access::Solo));
     }
 
     #[test]
     fn the_form_with_no_server_plays_the_world_here() {
         let mut menu = Menu::new("ws://host:8080/ws".into(), false);
-        menu.page = Page::Alone;
+        menu.page = Page::Play;
         assert!(
             probe(&mut menu, at(1.0, false), |_, chose| matches!(chose, Chose::Alone { .. })),
             "the solitary form asked a server instead of playing"
