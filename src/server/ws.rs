@@ -651,15 +651,24 @@ async fn connection(socket: WebSocket, state: AppState) {
     // `Watching` and cleared by a `Welcome`, because joining a room you were
     // watching makes you a player in it rather than both at once.
     let mut watching: Option<RoomId> = None;
+    // **Who this connection is**, learned from the `Welcome`'s profile and
+    // never cleared: a person outlives a seat, so going back to the menu and
+    // editing a library is still that person doing it. A client that joined
+    // without a key has no profile and so is nobody here, which is right --
+    // there is nowhere to file anything against.
+    let mut who: Option<crate::net::PersonId> = None;
 
     loop {
         tokio::select! {
             // Replies addressed to this connection.
             Some(msg) = reply_rx.recv() => {
                 match &msg {
-                    ServerMessage::Welcome { you, room, .. } => {
+                    ServerMessage::Welcome { you, room, profile, .. } => {
                         me = Some((room.clone(), *you));
                         watching = None;
+                        if let Some(profile) = profile {
+                            who = Some(profile.who.clone());
+                        }
                     }
                     // A watcher hears the room's broadcast and holds no seat,
                     // so leaving is a socket closing and nothing more -- there
@@ -716,6 +725,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                                 connection: id,
                                 seat: me.clone(),
                                 watching: watching.clone(),
+                                person: who.clone(),
                             };
                             // And *then* forgotten here, or this task would go
                             // on routing a room's broadcasts to a seat the

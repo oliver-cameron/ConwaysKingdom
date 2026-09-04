@@ -31,7 +31,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::net::{ClientMessage, Made, RoomId, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM};
+use crate::net::{
+    ClientMessage, Made, PersonId, RoomId, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM,
+};
 use crate::server::matches::{Phase, Victory};
 use crate::server::Server;
 use crate::sim::{PlayerId, WorldKind};
@@ -68,12 +70,20 @@ pub struct Caller {
     /// judges an action asks the first and the code that routes a read asks
     /// either, and one field would make those the same question.
     pub watching: Option<RoomId>,
+    /// **Who this connection is**, once a `Welcome` has said so.
+    ///
+    /// Beside `seat` for the reason `watching` is: a person outlives a seat,
+    /// so leaving a room clears the seat and not this. What it unlocks is the
+    /// messages that are about a *person* rather than a world —
+    /// [`ClientMessage::Keep`] is the one that writes, and a connection that
+    /// has never joined has nowhere to put what it offers.
+    pub person: Option<PersonId>,
 }
 
 impl Caller {
     /// A connection that has not joined anything.
     pub fn new(connection: ConnectionId) -> Self {
-        Self { connection, seat: None, watching: None }
+        Self { connection, seat: None, watching: None, person: None }
     }
 
     /// For tests, and for the console, which is nobody's socket.
@@ -82,7 +92,12 @@ impl Caller {
     }
 
     pub fn sitting(connection: ConnectionId, seat: Seat) -> Self {
-        Self { connection, seat: Some(seat), watching: None }
+        Self { connection, seat: Some(seat), watching: None, person: None }
+    }
+
+    /// The same, for somebody this server knows the name of.
+    pub fn known(connection: ConnectionId, who: PersonId) -> Self {
+        Self { connection, seat: None, watching: None, person: Some(who) }
     }
 
     /// Which room's messages this connection may be routed to, seated or not.
@@ -168,6 +183,12 @@ pub struct Rooms {
     /// reason: a person outlives every world on this server, and so does their
     /// number.
     profiles: crate::server::profiles::Profiles,
+    /// What each of them has saved that **nobody else is shown** — their
+    /// patterns and their diary. Beside `profiles` because it is filed the same
+    /// way and for the same reason, and apart from it because the two answer
+    /// opposite questions: one is what this server will vouch for, and this is
+    /// what it merely holds. See [`crate::server::lockers`].
+    lockers: crate::server::lockers::Lockers,
     /// The code that reaches each private room.
     ///
     /// A credential, not an identity: it is separate from the id so that a
@@ -276,8 +297,12 @@ impl Rooms {
 
         let people = crate::server::people::People::load(&people_path(&dir))?;
         let profiles = crate::server::profiles::Profiles::load(&profiles_path(&dir))?;
+        let lockers = crate::server::lockers::Lockers::load(&stamps_path(&dir), &games_path(&dir))?;
         if !people.is_empty() {
             log::info!("{} player key(s) known", people.len());
+        }
+        if !lockers.is_empty() {
+            log::info!("{} locker(s) of patterns and diaries held", lockers.len());
         }
 
         Ok(Self {
@@ -287,6 +312,7 @@ impl Rooms {
             names,
             people,
             profiles,
+            lockers,
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -306,6 +332,7 @@ impl Rooms {
             names: BTreeMap::from([(id, name)]),
             people: crate::server::people::People::new(),
             profiles: crate::server::profiles::Profiles::new(),
+            lockers: crate::server::lockers::Lockers::new(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -453,6 +480,21 @@ impl Rooms {
                 like: like.clone(),
                 found: self.people_like(like),
             }];
+        }
+        // Answered without a seat for the same reason again, and one of its
+        // own: a library is edited *between* games, on a screen that is not
+        // inside a room. What it does need is a person, because a locker is
+        // filed against one -- a connection that has never joined has nowhere
+        // to put what it is offering, and cannot say whose it is.
+        if let ClientMessage::Keep(offered) = msg {
+            match &caller.person {
+                Some(who) => {
+                    self.lockers.keep(who, offered);
+                    self.save_lockers();
+                }
+                None => log::info!("a locker was offered by nobody, so there is nowhere for it"),
+            }
+            return Vec::new();
         }
         // Admitted at any generation, and that is the point rather than an
         // oversight: **no late joining is a rule about players.** Somebody
@@ -628,6 +670,22 @@ impl Rooms {
                         }
                         stamp(reply, owner, code.clone());
                     }
+                    // **And what this server merely holds for them**, which is
+                    // the other half of a profile and goes only to its owner.
+                    // Sent even when it is empty, because an empty one is what
+                    // tells a client to offer what it is carrying -- see
+                    // `ServerMessage::Yours`.
+                    //
+                    // Only on a join that was *allowed*: this room resolved,
+                    // and the room itself can still refuse -- a match already
+                    // under way, or a person already sitting here in another
+                    // tab. Handing a locker to a connection that was turned
+                    // away would have that tab replace the library of the one
+                    // holding the seat.
+                    let welcomed = out.iter().any(|m| matches!(m, ServerMessage::Welcome { .. }));
+                    if let (Some(who), true) = (&who, welcomed) {
+                        out.push(ServerMessage::Yours(self.lockers.of(who)));
+                    }
                     out
                 }
                 Err(reason) => {
@@ -744,6 +802,21 @@ impl Rooms {
         }
     }
 
+    /// Write the lockers, and say so if they will not go.
+    ///
+    /// Not fatal, for the reason [`Self::save_people`] gives: a server that
+    /// cannot write is a bad day rather than a reason to refuse everybody
+    /// entry. Loud, because the symptom otherwise is somebody's library
+    /// quietly not being there next time.
+    fn save_lockers(&self) {
+        if self.dir.as_os_str().is_empty() {
+            return;
+        }
+        if let Err(e) = self.lockers.save(&stamps_path(&self.dir), &games_path(&self.dir)) {
+            log::error!("could not write the lockers: {e}");
+        }
+    }
+
     /// Write the people table, and say so if it will not go.
     ///
     /// Not fatal, deliberately: a server that cannot write its table is a
@@ -822,6 +895,7 @@ impl Rooms {
         }
         self.save_people();
         self.save_profiles();
+        self.save_lockers();
         let mut first_error = None;
         for (id, server) in &self.rooms {
             // A match is an event rather than a world to keep: it has an end,
@@ -1280,6 +1354,18 @@ fn people_path(dir: &Path) -> PathBuf {
 
 fn profiles_path(dir: &Path) -> PathBuf {
     dir.join("profiles.jsonl")
+}
+
+/// The patterns each person has saved. Beside the profiles and not inside
+/// them, because nobody else is ever shown one — see
+/// [`crate::server::lockers`].
+fn stamps_path(dir: &Path) -> PathBuf {
+    dir.join("stamps.jsonl")
+}
+
+/// And what each of them has played, which is theirs in the same way.
+fn games_path(dir: &Path) -> PathBuf {
+    dir.join("games.jsonl")
 }
 
 fn save_path(dir: &Path, room: &RoomId) -> PathBuf {
@@ -1914,6 +2000,82 @@ mod tests {
         assert!(reason.contains("console"), "{reason}");
     }
 
+    /// **A join hands back the locker this server holds**, and an empty one is
+    /// how a client knows to offer what it is carrying — which is what makes a
+    /// library follow somebody to a server they have never played on, with no
+    /// two servers ever talking to each other.
+    #[test]
+    fn a_join_hands_back_the_locker_and_an_empty_one_asks_for_it() {
+        use crate::net::kept::{Kept, Stamp};
+
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let me = Secret::new().unwrap();
+        let join = || ClientMessage::Join {
+            name: "alice".into(),
+            room: Some(RoomId::from("hall")),
+            person: Some(me.clone()),
+        };
+
+        // Nothing held yet, so the answer is empty and the client seeds it.
+        let out = rooms.handle(&Caller::new(1), join());
+        let [.., ServerMessage::Yours(kept)] = &out[..] else { panic!("{out:?}") };
+        assert!(kept.is_empty(), "a locker appeared from nowhere");
+
+        let [ServerMessage::Welcome { profile, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let who = profile.clone().expect("no profile was issued").who;
+
+        let mut library =
+            Kept { stamps: vec![Stamp::trimmed(vec![(0, 0), (1, 1)])], games: vec![] };
+        library.stamps[0].name = "corner".into();
+        let caller = Caller::known(1, who.clone());
+        assert!(rooms.handle(&caller, ClientMessage::Keep(library.clone())).is_empty());
+
+        // And the next join gets it back. Seat given up first, or the second
+        // connection is the same person arriving twice and is refused.
+        let seat = (RoomId::from("hall"), crate::sim::PlayerId(1));
+        rooms.handle(&Caller::sitting(1, seat), ClientMessage::Leave);
+        let out = rooms.handle(&Caller::new(2), join());
+        let [.., ServerMessage::Yours(kept)] = &out[..] else { panic!("{out:?}") };
+        assert_eq!(kept.stamps.len(), 1, "the library did not come back");
+        assert_eq!(kept.stamps[0].name, "corner");
+    }
+
+    /// **A locker is nobody's to offer without a name.** `Keep` writes a
+    /// client's own words to this server's disk, so a connection that has
+    /// never joined has nowhere to put them and cannot say whose they are.
+    #[test]
+    fn a_locker_offered_by_nobody_is_dropped() {
+        use crate::net::kept::{Kept, Stamp};
+
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let offered = Kept { stamps: vec![Stamp::trimmed(vec![(0, 0)])], games: Vec::new() };
+        assert!(rooms.handle(&Caller::new(9), ClientMessage::Keep(offered)).is_empty());
+        assert!(rooms.lockers.is_empty(), "a nameless client filled a locker");
+    }
+
+    /// **A join that was refused is handed nothing.** The room can still turn
+    /// somebody away after this map has resolved it — a match under way, or a
+    /// person already sitting here in another tab — and a second tab that was
+    /// given a locker would go on to replace the library of the one holding
+    /// the seat.
+    #[test]
+    fn a_refused_join_is_handed_no_locker() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let me = Secret::new().unwrap();
+        let join = || ClientMessage::Join {
+            name: "alice".into(),
+            room: Some(RoomId::from("hall")),
+            person: Some(me.clone()),
+        };
+        assert!(rooms
+            .handle(&Caller::new(1), join())
+            .iter()
+            .any(|m| { matches!(m, ServerMessage::Yours(_)) }));
+
+        let out = rooms.handle(&Caller::new(2), join());
+        let [ServerMessage::Rejected { .. }] = &out[..] else { panic!("{out:?}") };
+    }
+
     /// **The same secret is the same person**, on a second connection and
     /// after a restart. That is the whole of what an identity has to do: the
     /// server issues an id the first time it sees a secret and gives the same
@@ -1933,7 +2095,7 @@ mod tests {
         };
 
         let out = rooms.handle(&Caller::new(1), join(Some(me.clone())));
-        let [ServerMessage::Welcome { you, profile, .. }] = &out[..] else { panic!("{out:?}") };
+        let [ServerMessage::Welcome { you, profile, .. }, ..] = &out[..] else { panic!("{out:?}") };
         let ours = profile.clone().expect("no profile was issued");
         let first = ours.who.clone();
         assert_eq!(ours.name, "alice", "the name a join was made under");
@@ -1944,13 +2106,13 @@ mod tests {
         // name. Nothing was presented and nothing was reissued.
         rooms.handle(&Caller::sitting(1, (hall.clone(), *you)), ClientMessage::Leave);
         let out = rooms.handle(&Caller::new(2), join(Some(me)));
-        let [ServerMessage::Welcome { you, profile, .. }] = &out[..] else { panic!("{out:?}") };
+        let [ServerMessage::Welcome { you, profile, .. }, ..] = &out[..] else { panic!("{out:?}") };
         assert_eq!(profile.as_ref().map(|p| &p.who), Some(&first), "one secret was two people");
         assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
         // And somebody else's secret is somebody else.
         let out = rooms.handle(&Caller::new(3), join(Some(Secret::new().unwrap())));
-        let [ServerMessage::Welcome { profile, .. }] = &out[..] else { panic!("{out:?}") };
+        let [ServerMessage::Welcome { profile, .. }, ..] = &out[..] else { panic!("{out:?}") };
         assert_ne!(profile.as_ref().map(|p| &p.who), Some(&first), "two secrets were one person");
 
         // And so is who else plays here, for the same reason and one more:
@@ -1998,7 +2160,7 @@ mod tests {
                 person: None,
             },
         );
-        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
         let seat =
             rooms.get(&RoomId::from("hall")).unwrap().players().find(|p| p.id == *you).unwrap();
         assert_eq!(seat.person, None);
@@ -2024,7 +2186,7 @@ mod tests {
         };
 
         let out = rooms.handle(&me, join());
-        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
         let first = *you;
         assert_eq!(rooms.get(&hall).unwrap().players().filter(|p| p.online).count(), 1);
 
@@ -2039,7 +2201,7 @@ mod tests {
         // And back in: the same player, not a new one. Nothing was presented —
         // the secret this client already had is the whole of the way back.
         let out = rooms.handle(&me, join());
-        let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
         assert_eq!(*you, first, "coming back made a second player");
         assert_eq!(
             rooms.get(&hall).unwrap().players().filter(|p| p.online).count(),
@@ -2073,7 +2235,7 @@ mod tests {
             person: Some(secret.clone()),
         };
         let out = rooms.handle(&Caller::new(1), join());
-        assert!(matches!(&out[..], [ServerMessage::Welcome { .. }]), "{out:?}");
+        assert!(matches!(&out[..], [ServerMessage::Welcome { .. }, ..]), "{out:?}");
 
         let out = rooms.handle(&Caller::new(2), join());
         let [ServerMessage::Rejected { reason }] = &out[..] else { panic!("{out:?}") };
@@ -2170,7 +2332,12 @@ mod tests {
     fn a_watcher_is_sent_chunks_and_changes_nothing() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
         let seated = rooms.get_mut(&RoomId::from("hall")).unwrap().join("alice").unwrap();
-        let watcher = Caller { connection: 4, seat: None, watching: Some(RoomId::from("hall")) };
+        let watcher = Caller {
+            connection: 4,
+            seat: None,
+            watching: Some(RoomId::from("hall")),
+            person: None,
+        };
 
         let before = rooms.get(&RoomId::from("hall")).unwrap().world().digest();
 

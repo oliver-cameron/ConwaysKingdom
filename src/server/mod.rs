@@ -13,6 +13,7 @@
 //! [`ws`] is what carries them today.
 
 pub mod console;
+pub mod lockers;
 pub mod matches;
 pub mod people;
 pub mod persist;
@@ -1159,9 +1160,12 @@ impl Server {
             }
             // Answered by `Rooms::handle`, which owns the seat this gives up.
             ClientMessage::Leave => Vec::new(),
-            // And by `Rooms`, which holds the table. A room is one world on a
-            // server and a person outlives every one of them.
-            ClientMessage::Profile { .. } | ClientMessage::People { .. } => Vec::new(),
+            // And by `Rooms`, which holds the tables. A room is one world on a
+            // server and a person outlives every one of them -- their rating,
+            // and the patterns and diary the server merely keeps for them.
+            ClientMessage::Profile { .. }
+            | ClientMessage::People { .. }
+            | ClientMessage::Keep(_) => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::JoinTeam { team } => {

@@ -102,6 +102,10 @@ pub enum Effect {
     Rated,
     /// Somebody's profile arrived, into whatever asked for it.
     LookedUp,
+    /// **The locker this server holds for us arrived**, into
+    /// [`Session::locker`]. What is done with it is the app's, because the
+    /// library it replaces is the app's — see [`crate::net::kept`].
+    LockerArrived,
     /// A list of who else plays here arrived, into whatever asked for it.
     FoundPeople,
     /// The server would not have us, and this is why. The link is kept and its
@@ -243,6 +247,17 @@ pub struct Session {
     /// Somebody else's profile, once it has been asked for. Whose is on it, so
     /// a slow answer cannot be shown against the wrong name.
     pub looked_up: Option<crate::net::Profile>,
+    /// **What this server holds for us that nobody else is shown**: the
+    /// patterns and the diary. Taken by whatever handles
+    /// [`Effect::LockerArrived`], and `None` the rest of the time so a stale
+    /// one cannot be applied twice.
+    pub locker: Option<crate::net::kept::Kept>,
+    /// Whether a game has gone into the diary since the app last looked.
+    ///
+    /// A flag rather than an effect, because `file_game` is called from four
+    /// places here and from the app, and only one of those is inside the loop
+    /// that drains effects.
+    filed_a_game: bool,
     /// Who else plays here, once it has been asked, with the query that
     /// produced it — so a reply to a prefix the box no longer holds is
     /// dropped rather than shown. `None` until the first ask.
@@ -327,6 +342,8 @@ impl Session {
             profile: None,
             rating_change: None,
             looked_up: None,
+            locker: None,
+            filed_a_game: false,
             people: None,
             room: None,
             room_name: None,
@@ -810,6 +827,20 @@ impl Session {
                     log::debug!("{} people like {like:?}", found.len());
                     self.people = Some((like, found));
                     effects.push(Effect::FoundPeople);
+                }
+                // **Ours, and only ever ours.** The server is the authority
+                // and the client is the cache, so this replaces rather than
+                // merges — and an empty one is the signal to offer what we are
+                // carrying, which is how a library reaches a server we have
+                // not played on before. See `net::kept`.
+                ServerMessage::Yours(kept) => {
+                    log::debug!(
+                        "{} pattern(s) and {} game(s) held here",
+                        kept.stamps.len(),
+                        kept.games.len()
+                    );
+                    self.locker = Some(kept);
+                    effects.push(Effect::LockerArrived);
                 }
                 ServerMessage::Spawned { player, at } => {
                     if Some(player) == self.plays_as {
@@ -1331,6 +1362,20 @@ impl Session {
         true
     }
 
+    /// **Here is my locker; keep it.**
+    ///
+    /// Sent when the library or the diary changes, and when a server holding
+    /// nothing for us hands back an empty one. Whole rather than a change,
+    /// because both are small and replacing is one meaning with no merge
+    /// behind it — see [`crate::net::kept`].
+    ///
+    /// A client with no link keeps its own copy and nothing else: playing
+    /// alone is a whole game, and this is one of the things that goes on
+    /// working with nobody to talk to.
+    pub fn keep(&mut self, kept: crate::net::kept::Kept) {
+        self.tell(ClientMessage::Keep(kept));
+    }
+
     /// **Give the seat up**, without closing the connection.
     ///
     /// Going back used to keep it, on the reasoning that another `Join` would
@@ -1431,6 +1476,13 @@ impl Session {
             game.best
         );
         crate::client::record::remember(&game);
+        self.filed_a_game = true;
+    }
+
+    /// Whether a game has been filed since this was last asked, so the app
+    /// knows to offer the locker again. Cleared by the asking.
+    pub fn take_filed_a_game(&mut self) -> bool {
+        std::mem::take(&mut self.filed_a_game)
     }
 }
 

@@ -983,6 +983,11 @@ impl GameApp {
             Some(taken) => {
                 let (name, cells) = (taken.name.clone(), taken.cells.len());
                 self.stamps.keep(taken);
+                // **Written down, which it was not.** A pattern swept off the
+                // board went into the library in memory and nowhere else, so
+                // it was held, placed, and gone on the next reload -- where
+                // one drawn on the pad survived, because that path saved.
+                self.keep_stamps();
                 // Held straight away: you swept it out because you want to put
                 // it somewhere, and it is the newest so it is at index zero.
                 self.held.shape = hotbar::Shape::Stamp(0);
@@ -1230,6 +1235,30 @@ impl GameApp {
         crate::net::keep::server().unwrap_or_else(|| start::DEFAULT_ADDRESS.into())
     }
 
+    /// Write the library down and offer it to the server, which is what every
+    /// change to it does.
+    ///
+    /// One call rather than two at four sites, because the two have to happen
+    /// together: a library saved here and not sent up comes back as the old
+    /// one on the next join, which reads as the change not having taken.
+    fn keep_stamps(&mut self) {
+        self.stamps.remember();
+        self.send_locker();
+    }
+
+    /// Offer this client's whole locker.
+    ///
+    /// Both halves whenever either changes. They are one message because they
+    /// are one replacement — see [`crate::net::kept::Kept`] — and sending only
+    /// the half that moved would need the server to merge, which is the thing
+    /// this design does not do.
+    fn send_locker(&mut self) {
+        self.session.keep(crate::net::kept::Kept {
+            stamps: self.stamps.stamps().to_vec(),
+            games: crate::client::record::games(),
+        });
+    }
+
     /// **Act on what the session could not.**
     ///
     /// The other half of [`Effect`]: everything here needs a screen, a camera
@@ -1256,6 +1285,27 @@ impl GameApp {
             // Both land on `session`, which is what the frame reads them
             // from, so there is nothing for the client to carry across.
             Effect::LookedUp | Effect::FoundPeople => {}
+            // **The server's copy is the copy, except when there isn't one.**
+            // A locker with anything in it replaces what this client was
+            // carrying; an empty one from a server that has met us is the
+            // signal to offer what we have, which is what makes a library
+            // follow somebody to a server they have never played on without
+            // any two servers talking to each other. See `net::kept`.
+            Effect::LockerArrived => {
+                let Some(kept) = self.session.locker.take() else { return };
+                if kept.is_empty() {
+                    self.send_locker();
+                    return;
+                }
+                self.stamps = stamp::Library::replace_with(kept.stamps);
+                self.stamps.remember();
+                crate::client::record::replace_with(&kept.games);
+                // The bar is indices into the library, and the library it was
+                // indexing has just been replaced.
+                self.held.shape = hotbar::Shape::default();
+                self.ui.editing_stamp = None;
+                self.ui.naming_stamp = None;
+            }
             Effect::Rated => {
                 let now = self.session.rating();
                 if let Screen::Menu(m) = &mut self.ui.screen {
@@ -1673,6 +1723,13 @@ impl App for GameApp {
         let effects = self.session.pump(&mut self.world, self.elapsed);
         for effect in effects {
             self.act_on(effect);
+        }
+        // A game that went into the diary is a locker out of date. Asked here
+        // rather than raised as an effect, because `file_game` is called from
+        // inside the session as well as from the way back to the menu, and
+        // only some of those are on this loop.
+        if self.session.take_filed_a_game() {
+            self.send_locker();
         }
         // Only while the screen that shows them is up: a client sitting in a
         // world has no list to keep fresh.
@@ -2129,21 +2186,21 @@ impl App for GameApp {
             // pattern than the one that was on screen a moment ago.
             stamp::Picked::Forget(i) => {
                 self.stamps.forget(i);
-                self.stamps.remember();
+                self.keep_stamps();
                 self.ui.naming_stamp = None;
                 self.ui.editing_stamp = None;
                 self.held.shape = hotbar::Shape::default();
             }
             stamp::Picked::Pin(i, on) => {
                 if self.stamps.pin(i, on) {
-                    self.stamps.remember();
+                    self.keep_stamps();
                 } else {
                     self.notice = Some(w().stamps.bar_full.into());
                 }
             }
             stamp::Picked::Rename(i, name) => {
                 self.stamps.rename(i, &name);
-                self.stamps.remember();
+                self.keep_stamps();
                 self.ui.naming_stamp = None;
             }
             // Onto the pad, and remembered as the one being edited so that
@@ -2168,7 +2225,7 @@ impl App for GameApp {
                         0
                     }
                 };
-                self.stamps.remember();
+                self.keep_stamps();
                 self.held.shape = hotbar::Shape::Stamp(held);
                 self.notice = Some(words::stamps::captured(&name, cells));
             }

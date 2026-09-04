@@ -876,6 +876,17 @@ pub enum ClientMessage {
     /// It must not become a way to enumerate everybody a server has met, so
     /// the answer is capped at [`PEOPLE_MOST`] either way.
     People { like: String },
+    /// **Here is my locker; keep it.** The patterns and the diary this client
+    /// now holds, replacing whatever the server had — see [`kept`].
+    ///
+    /// Whole rather than a change, because both are small and replacing is one
+    /// meaning with no merge behind it. Clamped by the server before it is
+    /// stored: this is the one message a client uses to write its own words to
+    /// somebody else's disk.
+    ///
+    /// Answerable **without a seat**. A library is edited between games and the
+    /// screen that edits it is not inside a room.
+    Keep(kept::Kept),
     /// Watch a room without taking a seat in it.
     ///
     /// A spectator is a connection with a room and no `PlayerId`, not a player
@@ -1134,6 +1145,20 @@ pub enum ServerMessage {
     Rooms {
         rooms: Vec<RoomInfo>,
     },
+    /// **What this server holds for you**, sent on joining — see [`kept`].
+    ///
+    /// Only ever to the person it belongs to. It is the one thing on a profile
+    /// nobody else is shown, which is what lets the server hold it without
+    /// vouching for it.
+    ///
+    /// An **empty** one from a server that has met you is how a client knows to
+    /// offer what it is carrying: that is what makes a library follow somebody
+    /// to a server they have never played on, with no two servers ever talking
+    /// to each other. The cost is one honest edge — somebody who threw their
+    /// last pattern away and then joins from a second machine gets it back,
+    /// because "empty" and "emptied" look the same from here. A tombstone would
+    /// tell them apart and is more machinery than the mistake is worth.
+    Yours(kept::Kept),
 }
 
 /// How many people one [`ClientMessage::People`] may answer with.

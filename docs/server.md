@@ -251,14 +251,24 @@ A missing file starts fresh. A corrupt or mismatched one is an **error** naming 
 
 The shutdown save is **waited for**, not aborted. The simulation task saves after its loop; `sim.abort()` cancelled it at its next await point, which is inside the loop, so the save never ran and a clean exit quietly lost up to thirty seconds of every room. The wait is bounded at ten seconds, because a shutdown that does not shut down is worse than one that loses a save it warned about.
 
-### The two tables beside the rooms
+### The four tables beside the rooms
 
-Not everything a server keeps is a world. Two files sit in the rooms directory alongside the `.ckw` files, and neither is per room, because neither is about a room:
+Not everything a server keeps is a world. Four files sit in the rooms directory alongside the `.ckw` files, and none is per room, because none is about a room:
 
 | file | what is in it | written when |
 |---|---|---|
-| `people.jsonl` | a secret and the `PersonId` this server issued for it, one line each | a person is met for the first time |
+| `people.jsonl` | a secret and the `PersonId` this server issued for it | a person is met for the first time |
 | `profiles.jsonl` | a person's name, rating, the ratings behind it, matches settled and most ground ever held | a match settles, and on the ordinary save |
+| `stamps.jsonl` | the patterns that person has saved | they change, and on the ordinary save |
+| `games.jsonl` | the games that person has finished | the same |
+
+The first two are what the server **vouches for** and the last two are what it merely **holds**. That line is the whole design of a profile: anything another player is shown has to be the server's, because client state is self-asserted — but a library and a diary are shown to nobody, so the server is a locker rather than a witness. It stores a pattern; it does not read one, and it will not show one to anybody else. See `server::lockers`.
+
+They moved off the client because a library kept by a browser is a fact about a browser: somebody playing on a phone and a laptop had two libraries and two diaries, which was on the known-bugs list. A locker is **replaced whole** rather than merged — the server is the authority and the client is the cache — so there is no rule about whose edit wins. A `Welcome` hands back what the server holds, and an **empty** locker is what tells a client to offer what it is carrying, which is how a library reaches a server nobody has played on without any two servers talking to each other. The honest cost is one edge: somebody who throws their last pattern away and then joins from a second machine gets it back, because "empty" and "emptied" look the same from here.
+
+Everything in a locker is **bounded before it is stored** — `net::kept::Kept::clamped` — because this is the one message a client uses to write its own words to a server's disk: how many patterns, how many games, a pattern larger than the pad it has to be editable on, and a name of any length. The same function runs when the client reads its own copy, so a name is never accepted in one place and shortened in the other.
+
+`cargo run --example locker -- ws://…` drives the whole round trip over a real socket: join with a fresh key, get an empty locker, offer one, disconnect, rejoin and get it back. Worth having because `server::ws` is the one module no test reaches.
 
 Both are **one JSON object per person per line**, with a version on the row, and both skip a row they cannot read rather than refusing to start: losing one person's row is a nuisance and not starting is worse. A `cat` is meant to be enough to see what a server thinks it knows.
 
