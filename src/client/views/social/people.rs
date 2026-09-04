@@ -5,10 +5,9 @@
 //! list into a search. They are one question asked two ways, which is why
 //! there is one screen and one message rather than a board and a finder.
 
-use super::words;
-use super::{Chose, Menu, Page};
-use crate::client::views::hue;
+use crate::client::views::menu::{Chose, Menu, Page};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::menu as words;
 use crate::client::views::words::w;
 
 /// A row is a person, and **the fingerprint is part of it rather than a
@@ -47,8 +46,9 @@ fn row(
                 // another. `PersonId` is what a person is, so it is what the
                 // colour comes off — the same reasoning as the identicon in
                 // planned.md#a-face, which this is the cheap version of.
-                let (r, g, b) =
-                    hue::player_colour(crate::sim::PlayerId(super::person_hue(&who.who)));
+                let (r, g, b) = crate::client::views::hue::player_colour(crate::sim::PlayerId(
+                    crate::client::views::menu::person_hue(&who.who),
+                ));
                 let (swatch, _) =
                     ui.allocate_exact_size(egui::vec2(6.0, m.text_body), egui::Sense::hover());
                 ui.painter().rect_filled(swatch, 1.0, egui::Color32::from_rgb(r, g, b));

@@ -7,11 +7,12 @@
 //! What a player is, is a place they visit occasionally and read carefully,
 //! which is the opposite kind of screen.
 
-use super::{words, Chose, Menu, Page, Where};
+use crate::client::views::menu::{Chose, Menu, Page, Where};
 use crate::client::views::theme::Theme;
+use crate::client::views::words::menu as words;
 use crate::client::views::words::w;
 
-pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
+pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Chose {
     let (m, p) = (theme.metrics, theme.palette);
     let mut chose = Chose::Nothing;
     // Whoever this server has said you are. `None` offline, and before a first
@@ -33,19 +34,14 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
         match ours.as_ref() {
             // Derived from the key, so it is yours and nobody chose it — see
-            // [`crate::client::views::face`].
-            Some(who) => crate::client::views::face::show(ui.painter(), rect, who),
+            // [`super::face`].
+            Some(who) => super::face::show(ui.painter(), rect, who),
             // No server has named you yet, so there is no key to draw one
             // from — but an empty box is worse than a stand-in. Derived from
             // the name instead and drawn dim, so it is visibly provisional
             // rather than silently becoming somebody else's on your first
             // join.
-            None => crate::client::views::face::show_placeholder(
-                ui.painter(),
-                rect,
-                &menu.name,
-                p.text_dim,
-            ),
+            None => super::face::show_placeholder(ui.painter(), rect, &menu.name, p.text_dim),
         }
         ui.add_space(m.item_spacing);
         ui.vertical(|ui| {
@@ -152,7 +148,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         menu.advanced = !menu.advanced;
     }
     if menu.advanced {
-        let what = super::settings::show(ui, theme, menu);
+        let what = crate::client::views::menu::settings::show(ui, theme, menu);
         if !matches!(what, Chose::Nothing) {
             chose = what;
         }

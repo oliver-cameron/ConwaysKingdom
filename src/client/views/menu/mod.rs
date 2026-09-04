@@ -34,13 +34,11 @@ pub(crate) fn person_hue(who: &crate::net::PersonId) -> u8 {
     1 + (h % (crate::sim::PlayerId::COUNT as u64 - 1)) as u8
 }
 
-mod account;
 pub mod draft;
 mod home;
 mod howto;
-mod people;
 mod play;
-mod settings;
+pub mod settings;
 pub mod tutorial;
 
 pub use draft::{Access, Draft, Ends, Kind, Shape};
@@ -546,8 +544,12 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                 match menu.page {
                                     Page::Home => chose = home(ui, theme, menu, at),
                                     Page::Play => chose = play(ui, theme, menu, at),
-                                    Page::People => chose = people::show(ui, theme, menu),
-                                    Page::Account => chose = account::show(ui, theme, menu, at),
+                                    Page::People => {
+                                        chose = super::social::people::show(ui, theme, menu)
+                                    }
+                                    Page::Account => {
+                                        chose = super::social::account::show(ui, theme, menu, at)
+                                    }
                                     Page::HowToPlay => chose = howto::show(ui, theme, menu, at),
                                 }
                             });

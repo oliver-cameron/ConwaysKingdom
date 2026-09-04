@@ -410,13 +410,13 @@ fn who_row(ui: &mut egui::Ui, seat: &crate::net::Seat, me: PlayerId) -> Option<D
     // **Their face beside their name**, which is what makes a roster somewhere
     // you recognise people rather than a list of strings. Derived from the key
     // and so already theirs everywhere else it is drawn — see
-    // [`crate::client::views::face`]. A seat with no key has nothing behind it
+    // [`crate::client::views::social::face`]. A seat with no key has nothing behind it
     // to draw, and gets the space rather than a stand-in, so the names below it
     // still line up.
     let side = ui.text_style_height(&egui::TextStyle::Body);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
     if let Some(who) = &seat.who {
-        crate::client::views::face::show(ui.painter(), rect, who);
+        crate::client::views::social::face::show(ui.painter(), rect, who);
     }
     let pressed = ui.add(egui::Button::new(label).frame(false)).clicked();
     // Nobody to look up: a client with no key is somebody this server will not

@@ -153,7 +153,9 @@ pub fn show_placeholder(painter: &egui::Painter, rect: egui::Rect, name: &str, d
 /// Draw one, in the colour that person's cells are.
 ///
 pub fn show(painter: &egui::Painter, rect: egui::Rect, who: &PersonId) {
-    let (r, g, b) = super::hue::player_colour(crate::sim::PlayerId(super::menu::person_hue(who)));
+    let (r, g, b) = crate::client::views::hue::player_colour(crate::sim::PlayerId(
+        crate::client::views::menu::person_hue(who),
+    ));
     draw(painter, rect, &face(who), egui::Color32::from_rgb(r, g, b));
 }
 

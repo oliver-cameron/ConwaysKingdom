@@ -104,10 +104,13 @@ pub(super) fn home(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         egui::vec2(side, side),
     );
     match &menu.whoami {
-        Some(who) => crate::client::views::face::show(ui.painter(), at, who),
-        None => {
-            crate::client::views::face::show_placeholder(ui.painter(), at, &menu.name, p.text_dim)
-        }
+        Some(who) => crate::client::views::social::face::show(ui.painter(), at, who),
+        None => crate::client::views::social::face::show_placeholder(
+            ui.painter(),
+            at,
+            &menu.name,
+            p.text_dim,
+        ),
     }
     if button.clicked() {
         menu.page = Page::Account;

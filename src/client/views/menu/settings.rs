@@ -15,7 +15,7 @@ use super::{words, Ask, Chose, Menu};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::w;
 
-pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
+pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     let p = theme.palette;
     let m = theme.metrics;
 

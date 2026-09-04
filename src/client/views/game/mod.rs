@@ -20,8 +20,7 @@ pub mod hud;
 pub mod input;
 pub mod lobby;
 pub mod overlay;
-pub mod profile;
-mod rules;
+pub mod rules;
 pub mod stamp;
 pub mod start;
 
@@ -35,6 +34,7 @@ pub use start::{default_address, set_connection, set_world, Connection};
 
 use std::cell::RefCell;
 
+use super::social::profile;
 use super::words;
 use super::{icons, menu, Views};
 use crate::render::app::App;

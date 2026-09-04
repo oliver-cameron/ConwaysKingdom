@@ -228,7 +228,7 @@ And what is not next. [The simulation on the GPU](#the-simulation-on-the-gpu) is
 
 The mark is shown on the home screen and on a profile and **not on the bar**: it exists so a rating read as a *claim* is not taken for one it is not, and the bar is your own readout of your own number rather than a comparison. It says the count as well as the word, because "provisional" on its own is a label somebody has to already know.
 
-**A name is a way in.** `net::Seat` carries the number, the name and the person, so a lobby row and a standings bar both open `views::game::profile` — a panel over the world rather than a page, because a profile answers a question about the screen underneath it. It has three states and not two: asking, never-met, and an answer, because a slow server and a stranger otherwise look the same.
+**A name is a way in.** `net::Seat` carries the number, the name and the person, so a lobby row and a standings bar both open `views::social::profile` — a panel over the world rather than a page, because a profile answers a question about the screen underneath it. It has three states and not two: asking, never-met, and an answer, because a slow server and a stranger otherwise look the same.
 
 What is **left**: the name is not editable anywhere but the menu's join field, and devices — the control that authorises a second machine — waits on [identity being a keypair](#identity-is-a-keypair-and-today-it-is-not), which is item 1 on this list. `first_seen` is not kept: it needs a clock threaded through `Rooms::handle`, which nothing else there wants, and it is the least useful of the three facts the table holds.
 

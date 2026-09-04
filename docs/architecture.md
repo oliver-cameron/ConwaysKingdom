@@ -11,6 +11,7 @@ src/
   render/   GPU and windowing         client only
   client/   what a player sees        client only
     views/  screens, and the egui they are drawn with
+      social/  the screens about people rather than about a world
 ```
 
 ## The dependency rule
@@ -63,9 +64,11 @@ Transport (tokio, tokio-tungstenite, futures-util) is declared under `cfg(not(ta
 
 ## Views
 
-**Two screens, and what they share.** `views::game` is the world and everything drawn over it — the HUD, the hotbar, the lobby, the clock, the key list, the overlay, the stamp library, the camera. `views::menu` is what comes before it. A module lives under the screen that uses it and comes back up the moment two do.
+**Two screens, a subject, and what they share.** `views::game` is the world and everything drawn over it — the HUD, the hotbar, the lobby, the clock, the key list, the overlay, the stamp library, the camera. `views::menu` is what comes before it. A module lives under the screen that uses it and comes back up the moment two do.
 
-What is left at the top is what both need: `views::theme` is every colour and measurement, `views::hue` a player's colour and its conversion to sRGB, `views::icons` the sprite sheet tinted on the CPU the way the shader tints it on the GPU so a button can show the cell it places, `views::record` the games this client has played, and `views::Views` the egui plumbing.
+`views::social` is the exception, and it is grouped by **subject** rather than by screen: who you are, who else plays here, what a server will say about any of them, and the face that tells two players with one name apart. Those were spread across the other two — `account` and `people` were menu pages, `profile` is a panel over a running board — and they are one subject, filed against a `net::PersonId` rather than against a seat, because a person outlives every world on a server. Anything drawn there that another player sees has to be the server's; the exception is what a server merely *holds* and shows nobody, which is `net::kept`.
+
+What is left at the top is what all three need: `views::theme` is every colour and measurement, `views::hue` a player's colour and its conversion to sRGB, `views::icons` the sprite sheet tinted on the CPU the way the shader tints it on the GPU so a button can show the cell it places, `views::record` the games this client has played, and `views::Views` the egui plumbing.
 
 `views::words` holds **every string the client puts on screen**, for the same reason `sim::rule` holds every number: what the game says is a decision, and decisions are easier to get right side by side than scattered through the code that draws them. Log lines are not there — those are for whoever is running it, and belong where the thing they describe happens.
 

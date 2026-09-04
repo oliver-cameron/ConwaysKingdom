@@ -74,13 +74,13 @@ pub fn hover_centred(response: egui::Response, text: &str) -> egui::Response {
     response
 }
 
-pub mod face;
 pub mod game;
 pub mod glyph;
 pub mod hue;
 pub mod icons;
 pub mod menu;
 pub mod record;
+pub mod social;
 pub mod theme;
 pub mod words;
 
