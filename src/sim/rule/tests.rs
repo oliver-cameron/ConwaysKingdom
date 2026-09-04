@@ -214,9 +214,12 @@ fn a_kind_spreads_through_a_mixed_neighbourhood() {
     n[3] = Cell::alive(PlayerId(1));
     n[6] = Cell::alive(PlayerId(1));
 
-    let mines =
+    let factories =
         (0..300).filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::FACTORY).count();
-    assert!((60..140).contains(&mines), "one parent in three should carry it, got {mines} in 300");
+    assert!(
+        (60..140).contains(&factories),
+        "one parent in three should carry it, got {factories} in 300"
+    );
 }
 
 // --- territory, which is a level now rather than a flag ---------------------

@@ -1240,8 +1240,8 @@ mod tests {
         alive(&mut world, &[(0, 0)], 1);
         alive(&mut world, &[(0, 1)], 2);
         world.set_cell_at(1, 0, Cell::alive(PlayerId(1)).with_kind(crate::sim::Kind::FACTORY));
-        let factory = world.cell_at(0, 0).unwrap();
-        assert_eq!(neighbours(&world, factory, (0, 0)), 0, "an edge was missed");
+        let ours = world.cell_at(0, 0).unwrap();
+        assert_eq!(neighbours(&world, ours, (0, 0)), 0, "an edge was missed");
     }
 
     /// A torus has no edge, so a cell against the seam is joined to whatever

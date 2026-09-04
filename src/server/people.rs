@@ -196,10 +196,10 @@ mod tests {
     #[test]
     fn an_id_does_not_contain_its_secret() {
         let mut people = People::new();
-        let factory = secret("dead");
-        let id = people.meet(&factory).0;
-        assert!(!id.as_str().contains(&factory.written()));
-        assert!(!factory.written().contains(id.as_str()));
+        let ours = secret("dead");
+        let id = people.meet(&ours).0;
+        assert!(!id.as_str().contains(&ours.written()));
+        assert!(!ours.written().contains(id.as_str()));
     }
 
     /// Written down and read back, and the same bytes each time so one save is

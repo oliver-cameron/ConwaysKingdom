@@ -57,20 +57,19 @@ pub struct Tool {
 /// What each tool leaves on a square, which is what its button shows. Built
 /// here rather than named, so a button cannot show one thing and lay another.
 const LIVE: Cell = Cell::DEAD.with_alive(true);
-const MINED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::FACTORY);
+const FACTORIED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::FACTORY);
 const TURRETED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::TURRET);
 const ICED: Cell = Cell::DEAD.with_ice(true);
 /// Age nought, which is a fuse that has not started. The bar shows what a
 /// square puts down, and what it puts down is unlit.
-const PAYLOADED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::DYNAMITE);
+const DYNAMITED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::DYNAMITE);
 
 /// The left segment: what you draw with.
-/// The four kinds, in the order they sit on the bar.
+/// The kinds, in the order they sit on the bar.
 ///
-/// **One list, and ice is in it.** Ice used to live apart because it was the
-/// tool that walls people off and because it came with a different stroke;
-/// with the stroke chosen separately there is nothing left to separate it by,
-/// and a fourth kind now appears here by existing.
+/// **One list, and ice is in it.** Ice lived apart while it came with a stroke
+/// of its own; with the stroke chosen separately there is nothing left to
+/// separate it by, and a new kind appears here by existing.
 /// **A function, because a name is a word and words are chosen at run time.**
 ///
 /// This was a `const`, which it could be while every string was a `const` too.
@@ -88,7 +87,7 @@ pub fn kinds() -> [Tool; 5] {
         },
         Tool {
             name: w().hotbar.factory,
-            shows: MINED,
+            shows: FACTORIED,
             placement: Placement::Factory,
             usually: Shape::Draw,
             apart: false,
@@ -105,7 +104,7 @@ pub fn kinds() -> [Tool; 5] {
         // nobody wants and could afford even less.
         Tool {
             name: w().hotbar.dynamite,
-            shows: PAYLOADED,
+            shows: DYNAMITED,
             placement: Placement::Dynamite,
             usually: Shape::Draw,
             apart: false,
@@ -815,9 +814,9 @@ mod tests {
     /// stopped board in a world the server is stepping would be a lie.
     #[test]
     fn the_clock_squares_are_there_when_the_clock_is_ours() {
-        let factory = slots(&Library::default(), true);
+        let ours = slots(&Library::default(), true);
         for key in [Key::Run, Key::Step, Key::Rules] {
-            assert!(factory.iter().any(|s| s.key == key), "{key:?} is missing when time is ours");
+            assert!(ours.iter().any(|s| s.key == key), "{key:?} is missing when time is ours");
         }
         let theirs = slots(&Library::default(), false);
         for key in [Key::Run, Key::Step, Key::Rules] {
@@ -979,13 +978,17 @@ mod tests {
         assert_eq!(drawn_ice.stroke(), Stroke::Pencil, "a line of ice was unsayable");
         assert_eq!(drawn_ice.placement(), Some(Placement::Ice));
 
-        let panes_of_mine = Held {
+        let panes_of_factory = Held {
             shape: Shape::Rect,
             kind: kinds().iter().position(|k| k.placement == Placement::Factory).unwrap(),
             turn: Default::default(),
         };
-        assert_eq!(panes_of_mine.stroke(), Stroke::Rectangle, "a pane of mines was unsayable");
-        assert_eq!(panes_of_mine.placement(), Some(Placement::Factory));
+        assert_eq!(
+            panes_of_factory.stroke(),
+            Stroke::Rectangle,
+            "a pane of factories was unsayable"
+        );
+        assert_eq!(panes_of_factory.placement(), Some(Placement::Factory));
 
         // A stamp is a shape, so it keeps whatever it is being made of --
         // which is what "remove the stamps know what they are made of" means

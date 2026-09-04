@@ -1317,8 +1317,8 @@ pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
             // put it last time -- a granted patch keeps its `HOME` marks, and
             // a spawn that moved would hand a returning player a second patch.
             let seats = || (0..SPAWN_SEARCH).map(|k| patch_at(seat(n - 1 + k)));
-            if let Some(factory) = seats().find(|&at| already_granted(world, at, player)) {
-                return factory;
+            if let Some(ours) = seats().find(|&at| already_granted(world, at, player)) {
+                return ours;
             }
 
             // Otherwise the nearest seat that is nobody's, and failing that
@@ -1792,7 +1792,7 @@ mod tests {
     /// is what `is_on` answers and what `remove_from` could not, since both
     /// are taken away by clearing the same bit.
     #[test]
-    fn a_mine_held_over_life_is_not_already_there() {
+    fn a_factory_held_over_life_is_not_already_there() {
         let me = PlayerId(1);
         let life = Placement::Life.apply_to(Cell::DEAD, me);
         let factory = Placement::Factory.apply_to(Cell::DEAD, me);
