@@ -176,6 +176,28 @@ pub fn refresh(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32)
 ///
 /// Painted from primitives instead of added to the sheet: a tile there is a
 /// *kind*, and the rule would then have to say what a camera cell does.
+/// A space bar, as the mark on a keycap: a rule with a tick down at each end.
+///
+/// **Drawn rather than written**, because neither bundled face has a glyph for
+/// one — `␣`, `⎵` and `⌴` are all absent from IBM Plex, so a label using any of
+/// them falls through to whatever egui has and most likely to a missing-glyph
+/// box. It is three lines, and `views::icons` is already where a shape the
+/// fonts cannot say gets drawn.
+pub fn space_bar(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) {
+    let stroke = egui::Stroke::new((rect.height() * 0.14).max(1.0), colour);
+    // Squat: a space bar is wide and shallow, and a tall one reads as a
+    // bracket. The ticks are a third of the height, which is what makes it a
+    // staple rather than a table.
+    let bar = egui::Rect::from_center_size(
+        rect.center(),
+        egui::vec2(rect.width() * 0.86, rect.height() * 0.42),
+    );
+    let drop = bar.height();
+    painter.line_segment([bar.left_bottom(), bar.right_bottom()], stroke);
+    painter.line_segment([bar.left_bottom(), bar.left_bottom() - egui::vec2(0.0, drop)], stroke);
+    painter.line_segment([bar.right_bottom(), bar.right_bottom() - egui::vec2(0.0, drop)], stroke);
+}
+
 pub fn camera(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) {
     let body = egui::Rect::from_center_size(
         rect.center() + egui::vec2(0.0, rect.height() * 0.04),

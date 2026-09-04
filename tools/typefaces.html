@@ -1,0 +1,515 @@
+<!-- The type bench: the hotbar and the HUD at the sizes `views::theme` gives
+     them, so a face can be judged where it will be read rather than in a
+     specimen sheet.
+
+     Open it in a browser; it needs nothing built and talks to nothing. The
+     five pairings load from Google Fonts, so it wants a network the first
+     time. The numbers in it — 44px slots, 4px radius, 10px panel padding,
+     14/12px text, 13px key hints, and the fifteen player colours — are copied
+     from the tree and go stale if the tree moves. -->
+<title>Kingdom Type Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&family=Space+Mono:wght@400;700&family=Archivo:wght@400;500;600&family=Roboto+Mono:wght@400;500&family=Chivo:wght@400;500;600&family=Chivo+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ---- Page chrome. Deliberately a system stack: every loaded face on this
+     page is a candidate, and chrome in one of them would put a thumb on the
+     scale. ---- */
+  :root {
+    --ink:        #171a21;
+    --ink-soft:   #5b6472;
+    --ink-faint:  #8d95a3;
+    --page:       #f6f7f9;
+    --panel:      #ffffff;
+    --rule:       #dfe3ea;
+    --rule-soft:  #ebeef3;
+    --pick:       #1a6ea8;
+    --pick-soft:  #e7f1f9;
+
+    /* The game's own palette, from views::theme. Fixed in both page themes:
+       it is a picture of a dark screen, not a surface that follows the host. */
+    --g-ground:   #090a0d;
+    --g-surface:  #14161c;
+    --g-lift:     #1f222a;
+    --g-line:     #30343f;
+    --g-text:     #e2e5ec;
+    --g-dim:      #818898;
+    --g-accent:   #7ac4ff;
+    --g-good:     #7ed194;
+    --g-warn:     #e2b060;
+    --g-bad:      #e87a70;
+
+    /* Swapped by the picker. */
+    --face-sans: "IBM Plex Sans";
+    --face-mono: "IBM Plex Mono";
+
+    --sys: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --sys-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink:       #e6e9ef;
+      --ink-soft:  #99a2b1;
+      --ink-faint: #6d7686;
+      --page:      #0f1116;
+      --panel:     #171a21;
+      --rule:      #2a2f39;
+      --rule-soft: #21252d;
+      --pick:      #7ac4ff;
+      --pick-soft: #17293a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink:       #e6e9ef;
+    --ink-soft:  #99a2b1;
+    --ink-faint: #6d7686;
+    --page:      #0f1116;
+    --panel:     #171a21;
+    --rule:      #2a2f39;
+    --rule-soft: #21252d;
+    --pick:      #7ac4ff;
+    --pick-soft: #17293a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font-family: var(--sys);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  header { display: flex; flex-direction: column; gap: 10px; margin-bottom: 34px; }
+  h1 {
+    font-size: 27px; line-height: 1.2; margin: 0; font-weight: 600;
+    letter-spacing: -0.015em; text-wrap: balance;
+  }
+  .lede { margin: 0; max-width: 62ch; color: var(--ink-soft); }
+  .lede code { font-family: var(--sys-mono); font-size: 0.88em; }
+
+  section { margin-top: 46px; }
+  h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 0 0 4px;
+  }
+  .sub { margin: 0 0 18px; max-width: 66ch; color: var(--ink-soft); font-size: 14px; }
+
+  /* ---- The picker. Each chip is set in the face it names, so the row is a
+     specimen sheet as well as a control. ---- */
+  .picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .chip {
+    display: flex; flex-direction: column; gap: 1px; align-items: flex-start;
+    padding: 9px 14px 10px; border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--panel); color: var(--ink); cursor: pointer;
+    font-family: inherit; text-align: left; transition: border-color .12s, background .12s;
+  }
+  .chip:hover { border-color: var(--ink-faint); }
+  .chip[aria-pressed="true"] { border-color: var(--pick); background: var(--pick-soft); }
+  .chip:focus-visible { outline: 2px solid var(--pick); outline-offset: 2px; }
+  .chip .name { font-size: 15px; font-weight: 600; line-height: 1.25; }
+  .chip .pair { font-size: 11px; color: var(--ink-faint); letter-spacing: .02em; }
+  .chip .pair b { font-weight: 500; color: var(--ink-soft); }
+  .chip.is-current .name::after {
+    content: "in the tree"; font-family: var(--sys); font-size: 9px; font-weight: 600;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--pick);
+    border: 1px solid currentColor; border-radius: 2px; padding: 1px 4px;
+    margin-left: 7px; vertical-align: 2px;
+  }
+
+  .knobs { display: flex; align-items: center; gap: 16px; margin: 14px 0 16px; flex-wrap: wrap; }
+  .knob { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-soft); }
+  .knob input { accent-color: var(--pick); }
+
+  /* ---- The screen. This is the app, rebuilt from views::theme's real numbers:
+     44px slots, 4px radius, 10px panel padding, 6px item spacing, 14/12px text,
+     13px key hints. ---- */
+  .screen {
+    position: relative; background: var(--g-ground); border: 1px solid var(--g-line);
+    border-radius: 4px; overflow: hidden;
+    min-height: 430px; display: flex; flex-direction: column; justify-content: space-between;
+    font-family: var(--face-sans), var(--sys);
+    container-type: inline-size;
+  }
+  .board {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--g-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--g-line) 1px, transparent 1px);
+    background-size: 22px 22px; opacity: .30;
+  }
+  .cells { position: absolute; inset: 0; }
+  .cells i { position: absolute; width: 22px; height: 22px; border-radius: 1px; }
+
+  .screen > * { position: relative; }
+  .scale-wrap { transform-origin: top left; }
+
+  /* HUD, top left */
+  .hud {
+    margin: 14px; align-self: flex-start;
+    background: var(--g-surface); border: 1px solid var(--g-line); border-radius: 4px;
+    padding: 10px; display: flex; flex-direction: column; gap: 6px;
+    min-width: 208px; color: var(--g-text);
+  }
+  .hud-top { display: flex; align-items: center; gap: 8px; }
+  .back {
+    width: 26px; height: 26px; border: 1px solid var(--g-line); border-radius: 4px;
+    display: grid; place-items: center; color: var(--g-dim); font-size: 14px; flex: none;
+  }
+  .who { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .swatch { width: 13px; height: 13px; border-radius: 2px; flex: none; }
+  .who-name { font-size: 14px; font-weight: 500; }
+  .who-tag {
+    font-family: var(--face-mono), var(--sys-mono); font-size: 12px; color: var(--g-dim);
+  }
+  .hud-line { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--g-dim); }
+  .hud-line .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--g-good); }
+  .hud-figs { display: flex; gap: 14px; margin-top: 2px; }
+  .fig { display: flex; flex-direction: column; gap: 0; }
+  .fig .n {
+    font-family: var(--face-mono), var(--sys-mono);
+    font-size: 17px; font-weight: 500; color: var(--g-text);
+    font-variant-numeric: tabular-nums; line-height: 1.15;
+  }
+  .fig .k {
+    font-size: 12px; color: var(--g-dim); letter-spacing: .01em;
+  }
+
+  /* Hotbar, bottom */
+  .bar { margin: 14px; display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+  .seg {
+    background: var(--g-surface); border: 1px solid var(--g-line); border-radius: 4px;
+    padding: 6px; display: flex; gap: 6px; align-items: center;
+  }
+  .slot {
+    width: 44px; height: 44px; border: 1px solid var(--g-line); border-radius: 4px;
+    background: var(--g-surface); position: relative; display: grid; place-items: center;
+    color: var(--g-dim); flex: none;
+  }
+  .slot.on { border-color: var(--g-accent); border-width: 1.5px; background: rgba(122,196,255,.13); color: var(--g-text); }
+  .slot .key {
+    position: absolute; left: 4px; top: 2px; font-size: 13px; line-height: 1;
+    color: var(--g-text); font-family: var(--face-mono), var(--sys-mono);
+  }
+  .slot.on .key { color: var(--g-accent); }
+  .slot .cell { width: 26px; height: 26px; border-radius: 2px; }
+  .slot svg { width: 24px; height: 24px; }
+  .rule-v { width: 1px; align-self: stretch; background: var(--g-line); margin: 0 1px; }
+  .figs { display: flex; gap: 14px; padding: 6px 10px; align-items: center; }
+
+  /* the tooltip, centred — which is the fix that went in today */
+  .tip { position: relative; }
+  .tip::after {
+    content: attr(data-tip);
+    position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    background: var(--g-lift); color: var(--g-text); border: 1px solid var(--g-line);
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity .1s;
+  }
+  .tip:hover::after { opacity: 1; }
+
+  /* ---- Reference blocks ---- */
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 1px;
+          background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .col { background: var(--panel); padding: 16px 18px; }
+  .col h3 { margin: 0 0 3px; font-size: 14px; font-weight: 600; }
+  .col p { margin: 0; font-size: 13px; color: var(--ink-soft); }
+  .col .verdict {
+    display: inline-block; margin-top: 10px; font-size: 11px; font-weight: 600;
+    letter-spacing: .05em; text-transform: uppercase;
+  }
+  .v-keep { color: var(--pick); }
+  .v-try  { color: #b07d12; }
+  .v-no   { color: var(--ink-faint); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--panel); }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule-soft); white-space: nowrap; }
+  th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--sys-mono); font-variant-numeric: tabular-nums; }
+
+  /* Player colours */
+  .hues { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+  .hue { width: 58px; }
+  .hue .sw { height: 40px; border-radius: 3px; border: 1px solid rgba(255,255,255,.09); }
+  .hue .lb {
+    font-family: var(--sys-mono); font-size: 10px; color: var(--ink-faint);
+    text-align: center; margin-top: 3px; font-variant-numeric: tabular-nums;
+  }
+  .hue.flag .sw { box-shadow: 0 0 0 2px var(--g-bad); }
+  .hue.flag .lb { color: var(--g-bad); }
+
+  .pairs { display: flex; flex-direction: column; gap: 7px; }
+  .pair-row { display: flex; align-items: center; gap: 11px; font-size: 13px; }
+  .pair-sw { display: flex; border-radius: 3px; overflow: hidden; border: 1px solid var(--rule); flex: none; }
+  .pair-sw span { width: 42px; height: 26px; display: block; }
+  .pair-n { font-family: var(--sys-mono); font-variant-numeric: tabular-nums; color: var(--ink); width: 44px; }
+  .pair-note { color: var(--ink-soft); }
+
+  .note {
+    border-left: 2px solid var(--pick); padding: 2px 0 2px 14px; margin: 18px 0 0;
+    color: var(--ink-soft); font-size: 14px; max-width: 66ch;
+  }
+  .note strong { color: var(--ink); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Kingdom Type Bench</h1>
+    <p class="lede">
+      The hotbar and the HUD, rebuilt from the real numbers in <code>views::theme</code> —
+      44&nbsp;px slots, 4&nbsp;px radius, 10&nbsp;px panel padding, 14 and 12&nbsp;px text,
+      13&nbsp;px key hints — so a typeface can be judged at the size it will actually be read at.
+      Pick a pairing and the whole screen changes.
+    </p>
+  </header>
+
+  <section style="margin-top:26px">
+    <h2>The pairings</h2>
+    <p class="sub">
+      Two faces, because the figures need a monospace: a purse that changes every generation is a
+      number whose width changes with it, and the label under it slides about while the eye re-finds it.
+    </p>
+
+    <div class="picker" id="picker"></div>
+
+    <div class="knobs">
+      <label class="knob"><input type="checkbox" id="zoom"> Show at 1.5× (the bar is 44&nbsp;px for real)</label>
+      <label class="knob"><input type="checkbox" id="grid" checked> Board behind it</label>
+    </div>
+
+    <div class="screen" id="screen">
+      <div class="board" id="board"></div>
+      <div class="cells" id="cells"></div>
+
+      <div class="scale-wrap" id="scaler">
+        <div class="hud">
+          <div class="hud-top">
+            <div class="back">←</div>
+            <div class="who">
+              <div class="swatch" style="background:#1582a0"></div>
+              <div class="who-name">hugh</div>
+              <div class="who-tag">·4bf0</div>
+            </div>
+          </div>
+          <div class="hud-line"><span class="dot"></span> connected · boundless world</div>
+          <div class="hud-figs">
+            <div class="fig"><div class="n">1 284</div><div class="k">purse</div></div>
+            <div class="fig"><div class="n">3 612</div><div class="k">ground held</div></div>
+            <div class="fig"><div class="n">14 907</div><div class="k">tick</div></div>
+          </div>
+        </div>
+
+        <div class="bar">
+          <div class="seg">
+            <div class="slot tip" data-tip="Draw">
+              <span class="key">⇧1</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M15 6l3 3"/></svg>
+            </div>
+            <div class="slot tip" data-tip="Grab">
+              <span class="key">⇧2</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7l1.6-3h4.8L16 7"/><circle cx="12" cy="13.5" r="3.4"/></svg>
+            </div>
+            <div class="rule-v"></div>
+            <div class="slot on tip" data-tip="Life"><span class="key">⇧3</span><div class="cell" style="background:#1582a0"></div></div>
+            <div class="slot tip" data-tip="Factory"><span class="key">⇧4</span><div class="cell" style="background:#1582a0;box-shadow:inset 0 0 0 3px #090a0d"></div></div>
+            <div class="slot tip" data-tip="Turret"><span class="key">⇧5</span><div class="cell" style="background:#1582a0;clip-path:polygon(50% 0,100% 100%,0 100%)"></div></div>
+            <div class="slot tip" data-tip="Ice"><span class="key">⇧6</span><div class="cell" style="background:#8fd4e8;opacity:.55"></div></div>
+            <div class="slot tip" data-tip="Dynamite"><span class="key">⇧7</span><div class="cell" style="background:#e87a70"></div></div>
+          </div>
+
+          <div class="seg">
+            <div class="slot tip" data-tip="glider"><span class="key">1</span><div class="cell" style="background:#1582a0;clip-path:polygon(33% 0,66% 0,66% 33%,100% 33%,100% 100%,0 100%,0 66%,33% 66%)"></div></div>
+            <div class="slot tip" data-tip="gun · 36 cells"><span class="key">2</span><div class="cell" style="background:#1582a0;clip-path:polygon(0 0,40% 0,40% 40%,100% 40%,100% 100%,60% 100%,60% 60%,0 60%)"></div></div>
+            <div class="slot tip" data-tip="Stamps (+9)">
+              <span class="key">3</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="8.5" width="17" height="11.5" rx="1.5"/><path d="M8 8.5V6.2a4 4 0 118 0v2.3"/></svg>
+            </div>
+          </div>
+
+          <div class="seg">
+            <div class="slot tip" data-tip="Hold the world still">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="3.6" height="14" rx="1"/><rect x="13.4" y="5" width="3.6" height="14" rx="1"/></svg>
+            </div>
+            <div class="slot tip" data-tip="One generation, and stay stopped">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5l9 7-9 7z"/><rect x="17" y="5" width="2.6" height="14" rx="1"/></svg>
+            </div>
+            <div class="slot tip" data-tip="Every key, on one screen"><span style="font-size:19px">?</span></div>
+            <div class="figs">
+              <div class="fig"><div class="n">1 412</div><div class="k">elo</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What each buys</h2>
+    <p class="sub">
+      Two constraints that are not about taste. The faces are <strong>bundled, not asked of the
+      system</strong> — a browser has no font to lend, and a client that looked different on every
+      machine makes every screenshot of a bug a screenshot of a different client. And the wasm module
+      is already 7.5&nbsp;MB shipped, so a face with many weights is real payload.
+      Two weights each is the budget.
+    </p>
+    <div class="cols">
+      <div class="col">
+        <h3>IBM Plex Sans / Mono</h3>
+        <p>What is in the tree. Slightly humanist, wide apertures, holds up at 12&nbsp;px. The mono has
+          the tallest x-height of these, which is why the figures read cleanly small. Nothing is wrong
+          with it.</p>
+        <span class="verdict v-keep">the baseline</span>
+      </div>
+      <div class="col">
+        <h3>Inter / JetBrains Mono</h3>
+        <p>The most legible small, and the least characterful — Inter is the face every tool ships,
+          so the client would stop looking like itself. JetBrains Mono is a genuine upgrade on the
+          figures: taller digits, clearer 0/O.</p>
+        <span class="verdict v-try">worth the mono alone</span>
+      </div>
+      <div class="col">
+        <h3>Space Grotesk / Space Mono</h3>
+        <p>The one with a point of view: narrow, slightly mechanical, odd <em>g</em> and <em>a</em>.
+          Suits a game about machines made of squares. Space Mono is loud in a figure that changes
+          four times a second — pair the Grotesk with a quieter mono.</p>
+        <span class="verdict v-try">strongest character</span>
+      </div>
+      <div class="col">
+        <h3>Archivo / Roboto Mono</h3>
+        <p>Grotesque with tight apertures and a condensed sibling, which matters on a hotbar where
+          labels sit under 44&nbsp;px squares. Roboto Mono is the safe, invisible choice for figures.</p>
+        <span class="verdict v-try">best in tight labels</span>
+      </div>
+      <div class="col">
+        <h3>Chivo / Chivo Mono</h3>
+        <p>One superfamily, so the sans and the mono share skeletons and the HUD reads as one voice
+          rather than two. Chivo is a touch heavy at 12&nbsp;px on a dark ground — check the dim grey
+          labels before committing.</p>
+        <span class="verdict v-try">one family, two roles</span>
+      </div>
+    </div>
+    <p class="note">
+      <strong>My pick: Space Grotesk with JetBrains Mono.</strong> The client already has a look —
+      dark, square, mechanical — and Plex is the one part of it that could belong to any tool.
+      Grotesk commits; JetBrains keeps the figures boring, which is what a number that changes every
+      generation should be. If that reads as too much, Archivo with JetBrains is the same trade at
+      half the volume.
+    </p>
+  </section>
+
+  <section>
+    <h2>Overlapping colours</h2>
+    <p class="sub">
+      Where the fifteen player hues stand as of today. Hue steps by the golden ratio, saturation
+      cycles on three and lightness on five — their least common multiple is fifteen, which is
+      exactly the number of live players, so every player gets its own pair of tiers and no two are
+      told apart by hue alone.
+    </p>
+    <div class="hues" id="hues"></div>
+    <div class="pairs" id="pairs"></div>
+    <p class="note">
+      <strong>Closest pair is 30.5 in sRGB, against a floor of 28 the test holds.</strong>
+      The measurement is straight-line distance in sRGB, which is a coarse stand-in for what an eye
+      does — it is the one the screen actually shows, and it is what
+      <code>the_closest_two_players_are_far_enough_apart</code> asserts. The two worst pairs are both
+      dark and desaturated, which is where sRGB distance flatters itself most: 9 and 14 are two
+      teals, and they will read closer than 30.5 suggests at a zoom where a cell is three pixels.
+      If this is to move, the honest next step is measuring in OKLab rather than adding a fourth axis.
+    </p>
+  </section>
+</div>
+
+<script>
+  const PAIRINGS = [
+    { id: "plex",    name: "IBM Plex",      sans: "IBM Plex Sans",  mono: "IBM Plex Mono",  current: true },
+    { id: "inter",   name: "Inter",         sans: "Inter",          mono: "JetBrains Mono" },
+    { id: "grotesk", name: "Space Grotesk", sans: "Space Grotesk",  mono: "Space Mono" },
+    { id: "archivo", name: "Archivo",       sans: "Archivo",        mono: "Roboto Mono" },
+    { id: "chivo",   name: "Chivo",         sans: "Chivo",          mono: "Chivo Mono" },
+  ];
+
+  const picker = document.getElementById("picker");
+  PAIRINGS.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.className = "chip" + (p.current ? " is-current" : "");
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(i === 0));
+    b.style.fontFamily = `"${p.sans}", sans-serif`;
+    b.innerHTML = `<span class="name">${p.name}</span>
+      <span class="pair" style="font-family:'${p.mono}', monospace">${p.sans} · <b>${p.mono}</b></span>`;
+    b.addEventListener("click", () => {
+      document.documentElement.style.setProperty("--face-sans", `"${p.sans}"`);
+      document.documentElement.style.setProperty("--face-mono", `"${p.mono}"`);
+      [...picker.children].forEach(c => c.setAttribute("aria-pressed", String(c === b)));
+    });
+    picker.appendChild(b);
+  });
+
+  const scaler = document.getElementById("scaler");
+  const screen = document.getElementById("screen");
+  document.getElementById("zoom").addEventListener("change", e => {
+    scaler.style.transform = e.target.checked ? "scale(1.5)" : "";
+    screen.style.minHeight = e.target.checked ? "640px" : "430px";
+  });
+  document.getElementById("grid").addEventListener("change", e => {
+    document.getElementById("board").style.display = e.target.checked ? "" : "none";
+    document.getElementById("cells").style.display = e.target.checked ? "" : "none";
+  });
+
+  /* A scatter of life behind the panels, so the chrome is judged over something
+     rather than over flat black. Two owners, on the 22px grid the board uses. */
+  const cells = document.getElementById("cells");
+  const OWNERS = ["#1582a0", "#7b6431"];
+  const seeded = (n => () => (n = (n * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)(7);
+  for (let i = 0; i < 130; i++) {
+    const el = document.createElement("i");
+    el.style.left = Math.floor(seeded() * 48) * 22 + "px";
+    el.style.top = Math.floor(seeded() * 22) * 22 + "px";
+    el.style.background = OWNERS[seeded() < 0.62 ? 0 : 1];
+    el.style.opacity = 0.10 + seeded() * 0.30;
+    cells.appendChild(el);
+  }
+
+  /* The fifteen, straight out of client::views::hue::player_colour. */
+  const HUES = ["#1582a0","#7b6431","#6d4291","#005e45","#ad766b","#3c77bf","#636f21",
+                "#754867","#005f6b","#ae7a44","#736f9f","#1b7b3c","#883f4a","#1c5470","#9b8615"];
+  const FLAGGED = new Set([9, 14, 2, 7]);
+  const hues = document.getElementById("hues");
+  HUES.forEach((hex, i) => {
+    const n = i + 1;
+    const d = document.createElement("div");
+    d.className = "hue" + (FLAGGED.has(n) ? " flag" : "");
+    d.innerHTML = `<div class="sw" style="background:${hex}"></div><div class="lb">${n}</div>`;
+    hues.appendChild(d);
+  });
+
+  const PAIRS = [
+    [9, 14, 30.5, "two dark teals — the closest anything gets"],
+    [2, 7, 30.9, "olive against olive, both mid-lightness"],
+    [8, 13, 35.8, "mauve against a dull red"],
+    [4, 9, 38.0, "deep green against deep teal"],
+    [5, 10, 39.2, "the two warm mid tones"],
+  ];
+  const pairs = document.getElementById("pairs");
+  PAIRS.forEach(([a, b, d, note]) => {
+    const row = document.createElement("div");
+    row.className = "pair-row";
+    row.innerHTML = `<span class="pair-sw"><span style="background:${HUES[a-1]}"></span><span style="background:${HUES[b-1]}"></span></span>
+      <span class="pair-n">${d.toFixed(1)}</span>
+      <span class="pair-note">player ${a} and ${b} — ${note}</span>`;
+    pairs.appendChild(row);
+  });
+</script>

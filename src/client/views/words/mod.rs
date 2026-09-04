@@ -391,10 +391,17 @@ pub struct Menu {
 
 /// The bar along the bottom.
 pub struct Hotbar {
-    /// The keys these two squares teach, which live with the rest of the key
-    /// labels — `help::keys` is where a key's name is decided, and a second
-    /// spelling here would be a square and a key list disagreeing.
-    pub run_key: &'static str,
+    /// The key the step square teaches, in the corner where every other square
+    /// carries one or two characters.
+    ///
+    /// **A keycap, not a description.** Both of these were the *sentence* the
+    /// help screen puts in its second column — "one generation, and stay
+    /// stopped", set at 13px into the corner of a 44px square. The help
+    /// screen's first column had the right thing all along, which is what
+    /// `help::keys` is for; this had picked up the wrong one of the pair.
+    ///
+    /// Run has no field because a space bar has no spelling in either bundled
+    /// face and is drawn — see `views::icons::space_bar`.
     pub step_key: &'static str,
     /// The four figures on the bar. One word each, lower case: they label a
     /// number rather than heading a section, and a capital would make each of

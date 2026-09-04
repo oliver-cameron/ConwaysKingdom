@@ -86,6 +86,10 @@ wasm-pack build --target web               # shipping
 
 The `--profiling` profile is release codegen with the second optimiser switched off, in `[package.metadata.wasm-pack.profile.profiling]`.
 
+## Looking at it
+
+`tools/typefaces.html` is the type bench: the hotbar and the HUD rebuilt at the sizes `views::theme` gives them, with a switcher for five typeface pairings and the fifteen player colours with their closest pairs measured. Open it in a browser — it builds nothing and talks to nothing. The numbers in it are copied out of the tree, so it goes stale if the tree moves.
+
 ## Formatting
 
 `rustfmt.toml` exists because the tree was written to a style rustfmt's defaults disagreed with in about four hundred places, so anybody running `cargo fmt` — or an editor set to format on save — silently rewrote half the crate. Three settings recover what was actually being written by hand:

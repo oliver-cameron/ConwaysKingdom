@@ -262,8 +262,16 @@ pub enum Press {
     /// A bare digit: the stamps. `1` to `9` then `0`, which is ten and is why
     /// [`ON_THE_BAR`](crate::client::views::game::stamp::ON_THE_BAR) is ten.
     Digit(u32),
-    /// A key of its own.
+    /// A key of its own, spelled the way a keycap is.
     Named(&'static str),
+    /// **The space bar**, which has no spelling.
+    ///
+    /// Its own variant because neither bundled face has a glyph for one — see
+    /// [`crate::client::views::icons::space_bar`], which draws it. It was
+    /// `Named("run, or stop running (alone, or in a laboratory)")`: the
+    /// *description* of the key, printed at 13px into the corner of a 44px
+    /// square, where every other square has one or two characters.
+    Space,
     None,
 }
 
@@ -321,7 +329,7 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
 
     if clock {
         for (key, press, rule) in [
-            (Key::Run, Press::Named(w().hotbar.run_key), false),
+            (Key::Run, Press::Space, false),
             (Key::Step, Press::Named(w().hotbar.step_key), false),
             (Key::Rules, Press::None, false),
             // Behind a rule, because it is the one square here that cannot be
@@ -376,7 +384,8 @@ fn hint(press: Press, look: &Look<'_>) -> Option<String> {
         Press::Shift(d) => Some((look.typed)(d).unwrap_or_else(|| format!("S{d}"))),
         Press::Digit(d) => Some((look.plain)(d).unwrap_or_else(|| d.to_string())),
         Press::Named(key) => Some(key.to_string()),
-        Press::None => None,
+        // Drawn by `square`, so there is nothing to spell.
+        Press::Space | Press::None => None,
     }
 }
 
@@ -576,7 +585,8 @@ pub fn show(
                                         &mut label,
                                     );
                                     let key = hint(slot.press, look);
-                                    if square(ui, look, size, face, name, key, on) {
+                                    let drawn = slot.press == Press::Space;
+                                    if square(ui, look, size, face, name, key, drawn, on) {
                                         picked = Some(slot.key);
                                     }
                                 }
@@ -697,6 +707,9 @@ fn square(
     face: Face<'_>,
     name: &str,
     key: Option<String>,
+    // Whether the key in the corner is a space bar, which has no spelling and
+    // is drawn -- see `views::icons::space_bar`.
+    space: bool,
     selected: bool,
 ) -> bool {
     let p = look.theme.palette;
@@ -745,17 +758,23 @@ fn square(
         ),
     }
 
-    if let Some(key) = key {
-        // Brighter as well as bigger: a key hint at `text_dim` over a sprite
-        // was the least legible thing on the screen, and it is the one piece
-        // of writing here somebody is looking for rather than reading.
+    // Brighter as well as bigger: a key hint at `text_dim` over a sprite was
+    // the least legible thing on the screen, and it is the one piece of
+    // writing here somebody is looking for rather than reading.
+    let ink = if selected { p.accent } else { p.text };
+    if space {
+        // Sized to the writing it stands in for, and sat where its baseline
+        // would be, so a bar and a `.` in the next square line up.
+        let at = rect.left_top() + egui::vec2(4.0, 3.0);
+        icons::space_bar(painter, egui::Rect::from_min_size(at, egui::vec2(15.0, 10.0)), ink);
+    } else if let Some(key) = key {
         shadowed(
             painter,
             rect.left_top() + egui::vec2(4.0, 2.0),
             egui::Align2::LEFT_TOP,
             &key,
             13.0,
-            if selected { p.accent } else { p.text },
+            ink,
         );
     }
 

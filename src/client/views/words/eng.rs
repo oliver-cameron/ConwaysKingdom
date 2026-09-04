@@ -9,11 +9,15 @@
 //! living behind a trait: with one language a trait is fifty-three methods and
 //! one implementor.
 
-/// **Named once and used twice.** `hotbar` re-exported these two from
-/// `help::keys` — a key's name is decided in one place, and a second spelling
-/// on the bar would be a square and a key list disagreeing. A static cannot
-/// read its own fields while it is being built, so the shared thing is a
-/// `const` and both fields take it.
+/// **What the clock's two keys do**, for the help screen's second column.
+///
+/// These used to be shared with the bar, on the reasoning that a key's name is
+/// decided in one place — but a key's *name* is `help::keys` ("space", ".")
+/// and these are what it does, and the bar had taken the wrong one of the
+/// pair: the corner of a 44px square, where every other square carries one or
+/// two characters, was printing "run, or stop running (alone, or in a
+/// laboratory)" at 13px. The bar names its keys from `help::keys` now, and
+/// draws the space bar because neither bundled face has a glyph for one.
 const RUN_KEY: &str = "run, or stop running (alone, or in a laboratory)";
 const STEP_KEY: &str = "one generation, and stay stopped";
 
@@ -239,8 +243,7 @@ pub static WORDS: super::Words = super::Words {
         },
     },
     hotbar: super::Hotbar {
-            run_key: RUN_KEY,
-            step_key: STEP_KEY,
+            step_key: ".",
         purse: "purse",
         ground: "ground",
         tick: "tick",
