@@ -1220,8 +1220,19 @@ impl Server {
                 // Answer with the chunks that disagree, and with any the client
                 // claims to hold that the server no longer does -- an emptied
                 // chunk is dropped here but may still be on the client.
+                //
+                // **Capped for the reason `Subscribe` is**, and it is the
+                // sharper case of the two: a coordinate the server does not
+                // hold has no digest, so it *always* mismatches and always
+                // comes back. A client naming a million chunks it never had
+                // therefore costs a few kilobytes to send and gets a million
+                // back, having also walked the map a million times to find out.
+                // A client holds a viewport and its margin, which is far
+                // inside this.
+                let chunks = &chunks[..chunks.len().min(MOST_CHUNKS_AT_ONCE)];
                 let wrong: Vec<_> = chunks
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .filter(|&(coord, digest)| self.world.chunk_digest(coord) != Some(digest))
                     .map(|(coord, _)| coord)
                     .collect();
@@ -1231,7 +1242,7 @@ impl Server {
                 // anywhere in the world, and a client holds a viewport. It
                 // would drift down for as long as it played, and never
                 // correct. The machinery for "your copy is wrong, here is
-                // factory" already exists and runs every few seconds, so value
+                // ours" already exists and runs every few seconds, so value
                 // uses it rather than growing a second one.
                 let mut out = Vec::new();
                 if let Some(value) = from.and_then(|id| self.value_of(id)) {
@@ -2816,6 +2827,35 @@ mod tests {
     /// **Cost is no bound on length.** An `Erase` over ground nobody holds
     /// prices at nothing however many cells it names, so affordability would
     /// let a single message spend the room's whole tick — and then the room's
+    /// **A checkpoint naming chunks nobody holds is capped like a subscribe**,
+    /// and it is the sharper of the two: a coordinate the server does not hold
+    /// has no digest, so it always mismatches and always comes back. Uncapped,
+    /// a few kilobytes of made-up coordinates bought a walk of the map per
+    /// coordinate and a reply naming every one of them.
+    #[test]
+    fn a_checkpoint_cannot_ask_about_more_chunks_than_a_client_holds() {
+        let mut s = Server::new(World::infinite_empty());
+        let me = s.join("me").unwrap();
+        let over = MOST_CHUNKS_AT_ONCE + 500;
+
+        let out = s.handle(
+            Some(me),
+            None,
+            // Every one of them invented, so every one of them mismatches --
+            // which is what makes the reply as long as the request.
+            ClientMessage::Checkpoint {
+                tick: s.tick(),
+                chunks: (0..over as i32).map(|c| ((9_000, c), 1u64)).collect(),
+            },
+        );
+        let resync = out.iter().find_map(|m| match m {
+            ServerMessage::Resync { chunks, .. } => Some(chunks),
+            _ => None,
+        });
+        let named = resync.expect("a checkpoint of nothing the server holds answered nothing");
+        assert_eq!(named.len(), MOST_CHUNKS_AT_ONCE, "the reply was not capped");
+    }
+
     /// whole broadcast, since every client applies it too. Refused on the
     /// length before anything walks the list.
     #[test]

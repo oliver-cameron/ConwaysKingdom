@@ -877,8 +877,12 @@ impl GameApp {
             // **One axis each, which is the whole of what two axes buys.**
             // Picking a material does not put your pencil down, and picking a
             // shape does not change what it is made of.
-            Key::Shape(shape) => {
-                self.held.shape = shape;
+            Key::Capture => {
+                self.held.shape = hotbar::Shape::Capture;
+                self.ui.picking_stamp = false;
+            }
+            Key::Stamp(i) => {
+                self.held.shape = hotbar::Shape::Stamp(i);
                 self.ui.picking_stamp = false;
             }
             // **And the shape it is usually wanted in.** Two axes does not
@@ -2479,7 +2483,7 @@ impl App for GameApp {
                     // the stamp standing in it is whatever is pinned there.
                     hotbar::stamp_for_digit(d)
                         .and_then(|slot| self.stamps.bar().get(slot).copied())
-                        .map(|i| Key::Shape(hotbar::Shape::Stamp(i)))
+                        .map(Key::Stamp)
                 };
                 if let Some(key) = key {
                     self.pick(key);

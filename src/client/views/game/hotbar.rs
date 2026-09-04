@@ -223,8 +223,17 @@ pub enum Key {
     /// Open the list of every key. A square as well as a key, because `?` was
     /// discoverable only by pressing `?`.
     Help,
-    /// Pick a shape, leaving what it is made of alone.
-    Shape(Shape),
+    /// Take a pattern off the board, rather than laying one.
+    ///
+    /// **Its own variant rather than a `Shape`**, and so is [`Self::Stamp`].
+    /// This was `Shape(Shape)`, which admitted `Draw` and `Rect` — two shapes
+    /// that have no square of their own, because the flip square is where both
+    /// live. Nothing ever built one, and the arm that would have drawn it gave
+    /// a blank square with an empty tooltip. Two variants for the two things
+    /// that *are* squares leaves nothing to draw blank.
+    Capture,
+    /// A saved pattern, by its place in the library.
+    Stamp(usize),
     /// Pick a kind, leaving the shape alone: choosing a material does not put
     /// your pencil down.
     Kind(usize),
@@ -294,7 +303,7 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
         tool(&mut out, Key::Kind(i), Group::Kinds, kind.apart);
     }
     tool(&mut out, Key::Flip, Group::Shapes, false);
-    tool(&mut out, Key::Shape(Shape::Capture), Group::Shapes, true);
+    tool(&mut out, Key::Capture, Group::Shapes, true);
 
     // A slot on the bar is a place; the stamp standing in it is looked up.
     // They were one number while the bar was the first ten of the library and
@@ -302,7 +311,7 @@ pub fn slots(library: &Library, clock: bool) -> Vec<Slot> {
     // index, so re-pinning does not change what is in your hand.
     for (slot, i) in library.bar().into_iter().enumerate() {
         out.push(Slot {
-            key: Key::Shape(Shape::Stamp(i)),
+            key: Key::Stamp(i),
             group: Group::Shapes,
             press: Press::Digit(if slot == 9 { 0 } else { slot as u32 + 1 }),
             rule: slot == 0,
@@ -425,10 +434,8 @@ fn face_of<'a>(
             let flip = flip_face(held);
             (Face::Icon(flip.icon), flip.name, flip.lit)
         }
-        Key::Shape(Shape::Capture) => {
-            (Face::Camera, w().hotbar.capture, held.shape == Shape::Capture)
-        }
-        Key::Shape(Shape::Stamp(i)) => {
+        Key::Capture => (Face::Camera, w().hotbar.capture, held.shape == Shape::Capture),
+        Key::Stamp(i) => {
             let stamp = library.get(i).expect("a slot names a stamp the library holds");
             // Shown as it would be laid, turn and all: a thumbnail that stayed
             // upright while the preview rotated would be two answers to what
@@ -439,7 +446,6 @@ fn face_of<'a>(
             let shown = turned.as_ref().unwrap_or(stamp);
             (Face::Pattern(shown), &shown.name, held.shape == Shape::Stamp(i))
         }
-        Key::Shape(_) => (Face::Text(""), "", false),
         // **A stamp, because that is what is behind the square.** It was an
         // ellipsis, in a row where everything else is a picture of what it
         // does; three dots say "there is more" without saying more of what.
@@ -674,7 +680,6 @@ enum Face<'a> {
     /// A camera, for the square that takes one.
     Camera,
     /// Words, for the square that has no picture.
-    Text(&'a str),
     /// An icon, from the face that has icons — see [`glyph`].
     Icon(&'a str),
 }
@@ -727,7 +732,6 @@ fn square(
         },
         Face::Pattern(stamp) => stamp.draw(painter, inner, look.player, look.sheet),
         Face::Camera => icons::camera(painter, inner, ink),
-        Face::Text(text) => draw_text(painter, inner, text, ink),
         // Larger than a word, because a glyph drawn at a word's size in a
         // square meant for a sprite reads as a speck.
         Face::Icon(icon) => shadowed_in(
@@ -1009,7 +1013,7 @@ mod tests {
         // shuffled along to make room.
         let after = kinds().len() as u32;
         assert_eq!(shifted_for_digit(after + 1, &few), Some(Key::Flip));
-        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::Shape(Shape::Capture)));
+        assert_eq!(shifted_for_digit(after + 2, &few), Some(Key::Capture));
         assert_eq!(shifted_for_digit(after + 3, &few), Some(Key::More));
         assert_eq!(shifted_for_digit(after + 4, &few), None);
 
@@ -1069,7 +1073,7 @@ mod tests {
         );
         assert!(!Held { shape: Shape::Draw, kind: 0, turn: Default::default() }.captures());
         assert!(!Held { shape: Shape::Rect, kind: 0, turn: Default::default() }.captures());
-        assert!(shifted(&library(0)).contains(&Key::Shape(Shape::Capture)));
+        assert!(shifted(&library(0)).contains(&Key::Capture));
     }
 
     /// One square for two shapes, and it says which is current rather than
