@@ -79,11 +79,20 @@ pub fn remember_server(address: &str) {
 
 /// What the key is filed under.
 ///
-/// A name OpenSSH would use, because natively this **is** a file and the
-/// point of the format is that it is recognisable: somebody who finds
-/// `id_ed25519` in a data directory knows what they have found, and somebody
-/// who finds `key` does not.
-const KEY_FIELD: &str = "id_ed25519";
+/// It was `id_ed25519`, on the argument that natively this **is** a file and
+/// an OpenSSH name is one somebody recognises. That argument stopped holding
+/// when the keypair went: what is in there now is thirty-two hex characters,
+/// so anybody who found it and reached for `ssh-keygen` was told it is not a
+/// key — by a name this client chose to mislead them with.
+const KEY_FIELD: &str = "player-key";
+
+/// The name it used to have, read when the current one is empty.
+///
+/// **Read, never written.** Losing a key is losing the person, and there is no
+/// account behind it to ask — so a client that already had one under the old
+/// name keeps it, and writes it back under the new one the first time it is
+/// asked for. See [`secret`].
+const KEY_FIELD_WAS: &str = "id_ed25519";
 
 /// Where the key file is, for a client that can say so.
 ///
@@ -108,7 +117,15 @@ pub fn secret_path() -> Option<std::path::PathBuf> {
 /// it. One format rather than a store format and a transfer format that have
 /// to agree.
 pub fn secret() -> Option<Secret> {
-    Secret::read(imp::get(KEY_FIELD)?.trim()).ok()
+    if let Some(key) = imp::get(KEY_FIELD).and_then(|k| Secret::read(k.trim()).ok()) {
+        return Some(key);
+    }
+    // Under the name it used to have. Moved across on the way past rather than
+    // read from there for ever: one write, and the old name stops mattering.
+    let key = Secret::read(imp::get(KEY_FIELD_WAS)?.trim()).ok()?;
+    remember_secret(&key);
+    set(KEY_FIELD_WAS, "");
+    Some(key)
 }
 
 /// The key this client will use, making one if it has none.
@@ -166,7 +183,9 @@ pub fn forget_key() {
 /// directory somebody may have pointed elsewhere with [`keep_in`]. Removing
 /// what is ours is the only thing that is ours to do.
 pub fn forget_everything() {
-    for field in [KEY_FIELD, "name", "server", "games", "stamps", "person", "last-room"] {
+    for field in
+        [KEY_FIELD, KEY_FIELD_WAS, "name", "server", "games", "stamps", "person", "last-room"]
+    {
         set(field, "");
     }
 }

@@ -493,6 +493,14 @@ pub struct Profile {
     /// it, and a screen that did not say so would read as a record of a person
     /// rather than of a visit.
     pub here: &'static str,
+    /// What each figure is. Left of its value, so a column of them reads down
+    /// and the same row under two headings can be compared.
+    pub rating_is: &'static str,
+    pub matches_is: &'static str,
+    pub won_is: &'static str,
+    pub best_is: &'static str,
+    pub games_is: &'static str,
+    pub lived_is: &'static str,
 }
 
 /// The screen before a match starts.

@@ -151,10 +151,11 @@ pub static WORDS: super::Words = super::Words {
             nothing_yet: "Nothing played yet. That is what Play is for.",
             settings: super::MenuHomeSettings {
                 key: "Your player key",
-                key_note: "An OpenSSH private key -- ssh-keygen reads it. Save it somewhere \
-                 to play as yourself in another browser, or paste one in to \
-                 become somebody else. Whoever has it is you, on every server, \
-                 and nobody can give it back.",
+                key_note: "Thirty-two characters, and they are the whole of who you are. \
+                 Save them somewhere to play as yourself in another browser, or \
+                 paste somebody else's in to become them. Whoever has this is \
+                 you, on every server that has met it, and nobody can give it \
+                 back.",
                 key_take: "Use this key",
                 key_unseen: "No server has met this client yet, so none has named it.",
                 key_none: "No key could be made or kept here, so this client is somebody new \
@@ -299,6 +300,12 @@ pub static WORDS: super::Words = super::Words {
         unrated: "No server has met you yet, so nobody has a number for you.",
         nobody: "Nobody in particular",
         here: "On this server:",
+        rating_is: "Rating",
+        matches_is: "Matches",
+        won_is: "Won",
+        best_is: "Most ground held",
+        games_is: "Games",
+        lived_is: "Generations lived",
     },
     lobby: super::Lobby {
         take_side: "Join this team",
@@ -611,28 +618,37 @@ pub mod clock {
     }
 }
 pub mod profile {
-    pub fn played(games: usize, won: usize) -> String {
-        let g = if games == 1 { "game" } else { "games" };
-        match won {
-            0 => format!("{games} {g}"),
-            1 => format!("{games} {g}, 1 match won"),
-            n => format!("{games} {g}, {n} matches won"),
+    /// **A figure, not a sentence.** These read "4 of 7 matches won" and sat in
+    /// a stack, so the server's counts and this client's own were two
+    /// paragraphs in two shapes and could not be compared by looking. They are
+    /// rows under a heading now — the heading says what it is, so the value
+    /// only has to say how much. A dash for nothing, because "0" and "none yet"
+    /// are the same fact and one of them draws quieter.
+    pub fn count(n: u64) -> String {
+        if n == 0 {
+            "—".to_string()
+        } else {
+            n.to_string()
         }
     }
-    pub fn matches(n: u32) -> String {
-        match n {
-            0 => "No matches finished yet".to_string(),
-            1 => "1 match finished".to_string(),
-            n => format!("{n} matches finished"),
+
+    /// Matches won out of matches finished, which is one figure and not two:
+    /// either number alone says nothing anybody wants.
+    pub fn won_of(won: usize, played: usize) -> String {
+        if played == 0 {
+            "—".to_string()
+        } else {
+            format!("{won} of {played}")
         }
     }
+
     /// The **most** ever held, not the last: a profile says what somebody has
     /// managed, so a bad match after a good one does not erase the good one.
-    pub fn best(squares: usize) -> String {
-        match squares {
-            0 => "No ground held yet".to_string(),
-            1 => "1 square at their largest".to_string(),
-            n => format!("{n} squares at their largest"),
+    pub fn squares(n: u64) -> String {
+        if n == 0 {
+            "—".to_string()
+        } else {
+            format!("{n}")
         }
     }
 }

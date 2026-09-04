@@ -5,7 +5,8 @@
 //! standings — and every one of those places is inside a world. A page would
 //! answer "who is that" by taking you out of the game you were asking from,
 //! and you would have to find your way back to the thing you were looking at.
-//! So it sits over the board the way [`super::help`] and [`super::rules`] do.
+//! So it sits over the board the way the key list and the rules panel do —
+//! see [`crate::client::views::game`], which is where both of those live.
 //!
 //! **Everything on it is the server's.** That is the line
 //! [player profiles] draws: client state is self-asserted, so a rating you
@@ -24,10 +25,11 @@ use crate::client::views::Shown;
 
 /// What to draw, which is either an answer or the wait for one.
 ///
-/// **Three states, not two.** A profile that has not arrived and one the
-/// server has never heard of look the same as an empty panel and are not the
-/// same thing, and the difference is exactly what somebody who clicked a name
-/// wants to know: "asking" is a reason to wait and "not here" is not.
+/// **Four states, and the count is the point.** A profile that has not arrived,
+/// one the server has never heard of, and your own before anybody has rated
+/// you all look the same as an empty panel and are three different sentences.
+/// The difference is exactly what somebody who clicked a name wants to know:
+/// "asking" is a reason to wait and "not here" is not.
 pub enum Look<'a> {
     /// Asked for, and the server has not answered yet.
     Asking,
@@ -75,25 +77,8 @@ pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) ->
             }
             Look::Found { it, hue, yours } => body(ui, theme, it, *hue, *yours),
             Look::Unrated { who, yours } => {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            crate::net::keep::name().unwrap_or_else(|| w().profile.nobody.into()),
-                        )
-                        .size(theme.metrics.text_action)
-                        .color(p.text),
-                    );
-                    if let Some(who) = who {
-                        ui.colored_label(
-                            p.text_dim,
-                            egui::RichText::new(who.short()).size(theme.metrics.text_small),
-                        );
-                    }
-                    ui.colored_label(
-                        p.text_dim,
-                        egui::RichText::new(w().profile.you).size(theme.metrics.text_small),
-                    );
-                });
+                let name = crate::net::keep::name().unwrap_or_else(|| w().profile.nobody.into());
+                who_is_it(ui, theme, &name, *who, None, true);
                 ui.add_space(theme.metrics.item_spacing);
                 ui.colored_label(p.text_dim, w().profile.unrated);
                 ui.add_space(theme.metrics.item_spacing);
@@ -112,26 +97,7 @@ fn body(
 ) {
     let (p, m) = (theme.palette, theme.metrics);
 
-    // The name, the swatch and the fingerprint on one line, because they are
-    // one answer to "who is that". The swatch first: it is what the eye came
-    // from, since the row that opened this was a colour before it was a name.
-    ui.horizontal(|ui| {
-        if let Some(hue) = hue {
-            let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(m.text_action, m.text_action),
-                egui::Sense::hover(),
-            );
-            ui.painter().rect_filled(rect, m.rounding * 0.5, hue);
-        }
-        ui.label(egui::RichText::new(&it.name).size(m.text_action).color(p.text));
-        // **Dim, and never absent.** It is not decoration and it is not the
-        // headline: the name is what somebody reads and this is what settles
-        // which of two of them it is.
-        ui.colored_label(p.text_dim, egui::RichText::new(it.who.short()).size(m.text_small));
-        if yours.is_some() {
-            ui.colored_label(p.text_dim, egui::RichText::new(w().profile.you).size(m.text_small));
-        }
-    });
+    who_is_it(ui, theme, &it.name, Some(&it.who), hue, yours.is_some());
     ui.add_space(m.item_spacing);
 
     // **What this server can vouch for, and it says so.** A profile from one
@@ -141,6 +107,9 @@ fn body(
     ui.colored_label(p.text_dim, egui::RichText::new(w().profile.here).size(m.text_small));
     ui.add_space(m.item_spacing);
 
+    // **The rating is the headline and everything else is a row.** It was one
+    // label among five, all the same size, so the number a profile exists to
+    // show read as no more important than the ground held.
     ui.label(
         egui::RichText::new(crate::client::views::words::rating(it.rating))
             .size(m.text_action)
@@ -156,8 +125,8 @@ fn body(
     curve(ui, theme, &it.history);
     ui.add_space(m.item_spacing);
 
-    ui.label(words::matches(it.games));
-    ui.label(words::best(it.best));
+    figure(ui, theme, w().profile.matches_is, words::count(it.games as u64));
+    figure(ui, theme, w().profile.best_is, words::squares(it.best as u64));
 
     // **And your own diary under it, when it is yours.** Two counts that sound
     // like the same thing and are not: above is what this server has seen you
@@ -169,6 +138,94 @@ fn body(
     mine(ui, theme, diary);
 }
 
+/// **Who this is**, which is the question the panel exists to answer, so it is
+/// the same block whatever the server had to say.
+///
+/// It was written twice — once for somebody the server knows and once for
+/// yourself before anybody has rated you — and the two had drifted: one showed
+/// a swatch and the other did not, one read the name off the profile and the
+/// other off the store. Two drawings of one answer.
+///
+/// **The face is the half that was missing.** It is derived from the
+/// fingerprint by stepping a soup with the game's own rule — see
+/// [`super::face`] — so nobody chooses their picture and there is nothing to
+/// moderate. Every other screen that names a person already drew one: the
+/// lobby, the home screen, the account page. The panel whose whole subject is
+/// "who is that" was the one that did not.
+///
+/// The fingerprint is **dim and never absent**. It is not decoration and it is
+/// not the headline: the name is what somebody reads, and this is what settles
+/// which of two people called alice it is.
+fn who_is_it(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    name: &str,
+    who: Option<&crate::net::PersonId>,
+    hue: Option<egui::Color32>,
+    is_you: bool,
+) {
+    let (p, m) = (theme.palette, theme.metrics);
+    let side = m.text_action * 2.0;
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+        ui.painter().rect_filled(rect, m.rounding, p.surface_lift);
+        let inside = rect.shrink(side * 0.14);
+        match who {
+            Some(who) => super::face::show(ui.painter(), inside, who),
+            // A client no server has named has no fingerprint to draw from, so
+            // the name stands in — which is what the home screen already does
+            // while waiting for a first join.
+            None => super::face::show_placeholder(ui.painter(), inside, name, p.text_dim),
+        }
+        ui.add_space(m.item_spacing);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                // The swatch first, because it is what the eye came from: the
+                // row that opened this was a colour before it was a name.
+                if let Some(hue) = hue {
+                    let (sw, _) = ui.allocate_exact_size(
+                        egui::vec2(m.text_small, m.text_small),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(sw, m.rounding * 0.5, hue);
+                }
+                ui.label(egui::RichText::new(name).size(m.text_action).color(p.text));
+            });
+            ui.horizontal(|ui| {
+                if let Some(who) = who {
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(who.short()).size(m.text_small),
+                    );
+                }
+                if is_you {
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(w().profile.you).size(m.text_small),
+                    );
+                }
+            });
+        });
+    });
+}
+
+/// One figure and what it is, on a line, so a column of them lines up.
+///
+/// **Rows rather than sentences.** These were `ui.label(words::matches(n))` —
+/// "4 of 7 matches won" — stacked, so the server's count and this client's own
+/// were two paragraphs in different shapes and the one comparison worth making
+/// could not be made by looking. A figure on the right of its own name reads
+/// down a column, which is what a profile is.
+fn figure(ui: &mut egui::Ui, theme: &Theme, what: &str, value: String) {
+    let (p, m) = (theme.palette, theme.metrics);
+    ui.horizontal(|ui| {
+        ui.colored_label(p.text_dim, egui::RichText::new(what).size(m.text_small));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(value).size(m.text_body).color(p.text));
+        });
+    });
+}
+
 /// What this client has played, anywhere. Shared by a profile a server has
 /// something to say about and one it does not, because it is the same diary.
 fn mine(ui: &mut egui::Ui, theme: &Theme, diary: &crate::client::record::Summary) {
@@ -176,8 +233,13 @@ fn mine(ui: &mut egui::Ui, theme: &Theme, diary: &crate::client::record::Summary
     ui.colored_label(p.text_dim, egui::RichText::new(w().profile.everywhere).size(m.text_small));
     ui.add_space(m.item_spacing);
     if diary.any() {
-        ui.label(words::played(diary.games, diary.won));
-        ui.label(words::best(diary.best as usize));
+        // The same rows in the same order as the server's, which is what makes
+        // the two readable side by side: they are two answers to one question
+        // — what you have played *here*, and what you have played anywhere.
+        figure(ui, theme, w().profile.games_is, words::count(diary.games as u64));
+        figure(ui, theme, w().profile.won_is, words::won_of(diary.won, diary.matches));
+        figure(ui, theme, w().profile.best_is, words::squares(diary.best as u64));
+        figure(ui, theme, w().profile.lived_is, words::count(diary.generations));
     } else {
         ui.colored_label(p.text_dim, w().record.nothing_yet);
     }
