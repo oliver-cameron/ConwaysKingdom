@@ -416,6 +416,10 @@ pub struct Look<'a> {
     pub paused: bool,
     /// Whether the rules panel is open, so its square reads as pressed.
     pub showing_rules: bool,
+    /// Whether this room charges for placing — see `net::Rules::place_free`. A
+    /// price on a square that will not charge you is a number to plan around
+    /// that is not true.
+    pub free: bool,
 }
 
 /// What a square shows, what it is called, and whether it is the current one.
@@ -475,6 +479,26 @@ fn face_of<'a>(
         Key::Rules => (Face::Icon(glyph::GEAR), w().hotbar.rules_hint, look.showing_rules),
         Key::Wipe => (Face::Icon(glyph::TRASH), w().hotbar.wipe_hint, false),
         Key::Help => (Face::Icon(glyph::HELP), w().hotbar.help_hint, false),
+    }
+}
+
+/// **What a square costs to lay one of**, or `None` for one that costs nothing.
+///
+/// Only the materials. A shape is free, the clock is free, and a stamp's price
+/// is its cells times whatever it is being made of — a number that changes with
+/// the *other* axis, so putting it on a stamp's square would be a figure that
+/// moved when you pressed something else.
+///
+/// **Nothing at all where placing is free**, which a laboratory's rules panel
+/// can turn on: a price tag on a square that will not charge you is worse than
+/// no price tag, because it is a number somebody could plan around.
+fn price_of(key: Key, look: &Look<'_>) -> Option<i32> {
+    if look.free {
+        return None;
+    }
+    match key {
+        Key::Kind(i) => Some(kinds().get(i)?.placement.cost()),
+        _ => None,
     }
 }
 
@@ -589,7 +613,8 @@ pub fn show(
                                     );
                                     let key = hint(slot.press, look);
                                     let drawn = slot.press == Press::Space;
-                                    if square(ui, look, size, face, name, key, drawn, on) {
+                                    let price = price_of(slot.key, look);
+                                    if square(ui, look, size, face, name, key, drawn, price, on) {
                                         picked = Some(slot.key);
                                     }
                                 }
@@ -713,6 +738,8 @@ fn square(
     // Whether the key in the corner is a space bar, which has no spelling and
     // is drawn -- see `views::icons::space_bar`.
     space: bool,
+    // What it costs to lay one, if it costs anything -- see `price_of`.
+    price: Option<i32>,
     selected: bool,
 ) -> bool {
     let p = look.theme.palette;
@@ -778,6 +805,22 @@ fn square(
             &key,
             13.0,
             ink,
+        );
+    }
+
+    // **The price, in the far corner from the key.** Two numbers on one square
+    // want telling apart at a glance, and opposite corners does that with no
+    // label on either: the one you press is top left and the one it costs is
+    // bottom right. Dim, because it is a fact to check rather than a thing to
+    // hunt for -- the key is what somebody is looking for.
+    if let Some(price) = price {
+        shadowed(
+            painter,
+            rect.right_bottom() + egui::vec2(-4.0, -2.0),
+            egui::Align2::RIGHT_BOTTOM,
+            &price.to_string(),
+            11.0,
+            p.text_dim,
         );
     }
 
@@ -885,6 +928,43 @@ mod tests {
         );
     }
 
+    /// **Every material carries its price and nothing else does.**
+    ///
+    /// A shape is free, the clock is free, and a stamp's price is its cells
+    /// times whatever it is being made of — a figure that moves when you press
+    /// the *other* axis, which is the one thing a number on a button must not
+    /// do.
+    #[test]
+    fn a_price_is_on_the_materials_and_on_nothing_else() {
+        let theme = Theme::default();
+        let library = library(3);
+        let look = look(&theme, &library, false);
+
+        for slot in slots(&library, true) {
+            let price = price_of(slot.key, &look);
+            match slot.key {
+                Key::Kind(i) => {
+                    assert_eq!(price, Some(kinds()[i].placement.cost()), "{:?}", slot.key);
+                    assert!(price.unwrap() > 0, "a material that costs nothing: {:?}", slot.key);
+                }
+                other => assert_eq!(price, None, "{other:?} carries a price"),
+            }
+        }
+    }
+
+    /// **Nothing where placing is free**, which a laboratory can turn on: a
+    /// price on a square that will not charge you is a number somebody could
+    /// plan around that is not true.
+    #[test]
+    fn a_free_hand_shows_no_prices() {
+        let theme = Theme::default();
+        let library = library(0);
+        let look = look(&theme, &library, true);
+        for slot in slots(&library, true) {
+            assert_eq!(price_of(slot.key, &look), None, "{:?} priced in a free room", slot.key);
+        }
+    }
+
     /// **The square never names one thing while drawing another.** It drew a
     /// pencil with a stamp in hand — correctly, since pressing it goes back to
     /// drawing — and called itself "pattern", which is what was in your hand
@@ -985,6 +1065,23 @@ mod tests {
     }
 
     use crate::client::views::game::stamp::{Stamp, ON_THE_BAR};
+
+    /// A `Look` with nothing in it that these tests read but the two flags
+    /// they are about — the rest is a theme and a pair of keyboard callbacks.
+    fn look<'a>(theme: &'a Theme, _library: &Library, free: bool) -> Look<'a> {
+        Look {
+            theme,
+            what: crate::net::Placement::Life,
+            sheet: None,
+            player: PlayerId(1),
+            typed: &|d| Some(d.to_string()),
+            plain: &|d| Some(d.to_string()),
+            own_clock: true,
+            paused: false,
+            showing_rules: false,
+            free,
+        }
+    }
 
     fn library(n: usize) -> Library {
         let mut library = Library::default();

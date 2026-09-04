@@ -2170,6 +2170,7 @@ impl App for GameApp {
                         });
                         let what = held.placement().unwrap_or(crate::net::Placement::Life);
                         let look = hotbar::Look {
+                            free: rules.place_free,
                             own_clock,
                             paused,
                             showing_rules,
