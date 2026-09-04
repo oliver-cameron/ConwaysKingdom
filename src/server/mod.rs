@@ -247,6 +247,36 @@ impl Server {
         Ok(())
     }
 
+    /// **Which side somebody arriving should be put on**, or `None` where the
+    /// question does not arise — a room with no sides, or a match already
+    /// running, where sides are settled.
+    ///
+    /// **The lobby's decision and not the form's.** A match is described
+    /// before anybody is in it, so the person making one cannot say who goes
+    /// where; the lobby is where that is known, and it is where somebody can
+    /// disagree with the answer by pressing a different side.
+    ///
+    /// Empty sides first, in the order they were made, because a side nobody
+    /// is on is the one thing that stops a whistle — see [`Self::teams_are_fair`].
+    /// After that the smallest, which keeps a room that fills up roughly even
+    /// without ever refusing the uneven match people meant to arrange.
+    fn side_for_somebody_new(&self) -> Option<PlayerId> {
+        if self.sides.is_empty() || !self.phase.open_to_newcomers() {
+            return None;
+        }
+        // **People on it, and a side is not a person.** A side is a `Player`
+        // row like anybody else and `Player::new` sets `plays_as` to its own
+        // id, so counting naively has every side counting itself: none is ever
+        // empty, and "empty first" is a clause that never fires.
+        let on = |side: PlayerId| {
+            self.players
+                .values()
+                .filter(|p| !self.sides.contains(&p.id) && p.plays_as == side)
+                .count()
+        };
+        self.sides.iter().copied().min_by_key(|&side| (on(side) > 0, on(side), side.0))
+    }
+
     /// Call a side something.
     pub fn name_team(&mut self, team: PlayerId, name: &str) -> Result<(), String> {
         if !self.sides.contains(&team) {
@@ -866,6 +896,19 @@ impl Server {
             self.players.len() + 1
         );
         self.players.insert(id, player);
+        // **Put on a side by the lobby**, rather than left on nobody's.
+        //
+        // Everybody has to be on one before the whistle -- see
+        // `teams_are_fair` -- and nothing was putting them there, so the
+        // person who described the match, made it, and was alone in it could
+        // not start it until they had gone and clicked a side out of a list.
+        // A default is not a decision taken away: the lobby is where it is
+        // shown and one press is where it is changed.
+        if let Some(side) = self.side_for_somebody_new() {
+            if let Some(player) = self.players.get_mut(&id) {
+                player.plays_as = side;
+            }
+        }
         // A match lays out nothing until the whistle -- `start_match` does
         // every player at once -- where an ordinary room grants on arrival, as
         // it always has.
@@ -2728,6 +2771,58 @@ mod tests {
         assert!(s.name_team(PlayerId(1), "Blues").is_err(), "renamed a side mid-match");
     }
 
+    /// **Arriving puts you on a side, and the lobby decides which.**
+    ///
+    /// Nothing did, so the person who described a match, made it, and was
+    /// alone in it could not start it: the whistle refuses anybody on nobody's
+    /// side, and there was no way onto one but finding the list and pressing.
+    ///
+    /// Empty sides first and in order, because an empty side is the other
+    /// thing that stops a whistle; then the smallest, so a room that fills up
+    /// stays roughly even without the server ever refusing the uneven match
+    /// people meant to arrange.
+    #[test]
+    fn arriving_at_a_match_puts_you_on_a_side() {
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        s.make_teams(3).unwrap();
+
+        // The empty ones, in order, before anybody is doubled up.
+        let first = s.join("a").unwrap();
+        let second = s.join("b").unwrap();
+        let third = s.join("c").unwrap();
+        let plays = |s: &Server, id| s.players[&id].plays_as;
+        assert_eq!(plays(&s, first), s.sides[0]);
+        assert_eq!(plays(&s, second), s.sides[1]);
+        assert_eq!(plays(&s, third), s.sides[2]);
+        // Which is a match that can start, with nobody having pressed anything.
+        s.start_match(Some(first)).expect("a full lobby would not start");
+
+        // And then the smallest.
+        let mut s = Server::new(World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        s.make_teams(2).unwrap();
+        for who in ["a", "b", "c", "d"] {
+            s.join(who).unwrap();
+        }
+        // Counting people rather than sides: a side is a `Player` row whose
+        // `plays_as` is its own id, so a naive count counts it as one of its
+        // own members and every answer here is one too many.
+        let on = |s: &Server, side| {
+            s.players.values().filter(|p| !s.sides.contains(&p.id) && p.plays_as == side).count()
+        };
+        assert_eq!((on(&s, s.sides[0]), on(&s, s.sides[1])), (2, 2), "four went in unevenly");
+    }
+
+    /// A room with no sides puts nobody anywhere, and a match already running
+    /// takes nobody at all — so neither has a side to be put on.
+    #[test]
+    fn a_room_without_sides_seats_nobody_on_one() {
+        let mut s = Server::new(World::infinite_empty());
+        let alone = s.join("a").unwrap();
+        assert_eq!(s.players[&alone].plays_as, alone, "a plain world put somebody on a side");
+    }
+
     /// A match nobody would want to play is refused at the whistle rather than
     /// in the lobby: a lobby that stops you joining your friend makes people
     /// argue about the order they clicked in.
@@ -2739,8 +2834,12 @@ mod tests {
         let a = s.join("a").unwrap();
         let b = s.join("b").unwrap();
 
-        // Nobody has picked.
-        let why = s.start_match(Some(a)).unwrap_err();
+        // **Somebody who stepped off.** Joining puts you on a side now — see
+        // `side_for_somebody_new` — so this is reached by leaving one rather
+        // than by never having picked, which is the only way left to be on
+        // nobody's and is still a match that cannot be scored.
+        s.join_team(a, a).unwrap();
+        let why = s.start_match(Some(b)).unwrap_err();
         assert!(why.contains("picked"), "{why}");
 
         // Everybody on one side, so the other is empty.
