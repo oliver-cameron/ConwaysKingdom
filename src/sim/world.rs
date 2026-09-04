@@ -480,11 +480,11 @@ impl World {
         // would never be drawn full — and the whole of what makes a dynamite
         // answerable is that its last sprite is on screen for exactly one
         // generation, always. See [`Self::detonate`].
-        // **What the blasts cost, folded into the tally the factories already use.**
-        // A detonation runs before the rule and so before `earned` exists, and
-        // it is the same kind of fact — squares that changed hands and are owed
-        // for — so it rides the same channel rather than a second one.
-        let blasts = self.detonate();
+        // **Nothing is owed for it.** A blast used to be billed by area here
+        // and fold into the tally the factories use; the whole price is paid
+        // when the stick is laid now, because a bill that falls due later is a
+        // bill somebody can be broke for — see `rule::DYNAMITE_COST`.
+        self.detonate();
         self.compute_active();
         let active = std::mem::take(&mut self.active);
 
@@ -525,7 +525,6 @@ impl World {
         self.fire_turrets();
         self.dirty = true;
         self.prune();
-        earned.add(&blasts);
         earned
     }
 
@@ -604,11 +603,10 @@ impl World {
     /// That is the warning: a fuse reaches full during one generation's rule,
     /// is drawn full for that whole generation, and goes off at the start of
     /// the next.
-    fn detonate(&mut self) -> Takings {
-        let mut owed = Takings::default();
+    fn detonate(&mut self) {
         let ready = self.dynamite_ready();
         if ready.is_empty() {
-            return owed;
+            return;
         }
         let generation = super::seed::generation_seed(self.seed, self.generation);
 
@@ -655,18 +653,8 @@ impl World {
         }
 
         for (centre, owner, seed, reach) in blasts {
-            // Every square the disc covers, charged by area — so a blob that
-            // reaches ten times as far pays for a hundred times the ground,
-            // which is exactly what it turned over.
-            let disc = (-reach..=reach)
-                .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
-                .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
-                .count();
-            let at = owner.0 as usize;
-            owed.blasted[at] = owed.blasted[at].saturating_add(disc as u32);
             self.scramble(centre, owner, seed, reach);
         }
-        owed
     }
 
     /// Turn a disc of ground into noise, and light every dynamite it reaches.

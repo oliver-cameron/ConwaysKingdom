@@ -585,15 +585,6 @@ kinds! {
 pub struct Takings {
     pub born: [u32; PlayerId::COUNT],
     pub upkeep: [u32; PlayerId::COUNT],
-    /// Squares turned over by each player's own detonations.
-    ///
-    /// **A blast is charged for when it goes off, not when it is laid**, and it
-    /// is charged by *area* — see [`super::rule::BLAST_DRAIN`]. Laying one is
-    /// the decision and setting it off is the cost, which is what stops a fused
-    /// cell being a cheap way to buy a very large effect: a blob of dynamite
-    /// reaching ten times as far covers a hundred times the ground and pays for
-    /// a hundred times the ground.
-    pub blasted: [u32; PlayerId::COUNT],
 }
 
 impl Takings {
@@ -606,9 +597,6 @@ impl Takings {
             *t = t.saturating_add(*n);
         }
         for (t, n) in self.upkeep.iter_mut().zip(&other.upkeep) {
-            *t = t.saturating_add(*n);
-        }
-        for (t, n) in self.blasted.iter_mut().zip(&other.blasted) {
             *t = t.saturating_add(*n);
         }
     }

@@ -101,10 +101,13 @@ pub const DYNAMITE_WARN: u8 = bits::MAX_AGE - 1;
 ///
 /// **Six, and it was ten.** Area goes as the square, so ten was a disc of about
 /// three hundred and seventeen squares and six is a hundred and thirteen —
-/// roughly a third of the ground for the same price, on top of now paying
-/// [`BLAST_DRAIN`] per square of it. Ten turned over more of somebody's country
-/// in one generation than they could rebuild in twenty, which is a weapon that
-/// ends a game rather than one that changes it.
+/// roughly a third of the ground for the same price. Ten turned over more of
+/// somebody's country in one generation than they could rebuild in twenty,
+/// which is a weapon that ends a game rather than one that changes it.
+///
+/// It is also what sets [`DYNAMITE_COST`]: a stick is priced at the ground it
+/// turns over, so moving this moves that, and `examples/blast` is what
+/// measures the disc rather than assuming it.
 ///
 /// [`DYNAMITE_MOST_REACH`] follows it, being a multiple.
 ///
@@ -189,9 +192,37 @@ pub const LIFE_COST: i32 = 1;
 pub const FACTORY_COST: i32 = 10;
 /// One turret. Read per emplacement: the smallest that works is four.
 pub const TURRET_COST: i32 = 15;
-/// What a dynamite costs. Dearer than a turret: a turret takes one square a
-/// generation and this rearranges a disc.
-pub const DYNAMITE_COST: i32 = 40;
+/// What a dynamite costs, and it is **the whole of what it costs**.
+///
+/// A blast used to be billed twice: forty when the stick was laid, and one a
+/// square when it went off. Paying by area was the right *shape* — what is
+/// bought should be the effect and not the fuse — and it was in the wrong
+/// place, because a bill that falls due later is a bill somebody can be broke
+/// for. The purse floors at nought, so spending down between laying a stick
+/// and the fuse burning made the blast free, and a blob laid on the last of a
+/// purse was the cheapest large effect in the game. The alternative was debt,
+/// and a player who cannot act and cannot stop owing is worse than a cheap
+/// blast.
+///
+/// It could not simply be refused at detonation either: the rule runs
+/// identically on every peer and no client knows anybody else's purse, so a
+/// blast conditional on money is a blast that happens on one machine and not
+/// another. Placement is the one moment affordability is already asked about
+/// — see [`crate::net::price`] — so that is where the whole price goes.
+///
+/// **The number is the old sum, measured rather than guessed.**
+/// `examples/blast` lays a stick and counts what it turns over: 113 squares,
+/// near enough constant per stick from one to a hundred, because
+/// [`blast_reach`] grows as the square root and area as its square. So forty
+/// plus one a square is a hundred and fifty-three, and dynamite costs what it
+/// always did — it just cannot be dodged.
+///
+/// Dearer than a turret by ten times, which is what it should have read as all
+/// along: a turret takes one square a generation and this rearranges a disc of
+/// a hundred and thirteen. It is also more than [`crate::sim::Player`] starts
+/// with, so a first blast is something to earn rather than something to open
+/// with.
+pub const DYNAMITE_COST: i32 = 153;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
@@ -247,24 +278,6 @@ pub fn factory_chance(age: u8) -> Chance {
 }
 /// One upkeep charge on a dead factory.
 pub const FACTORY_DRAIN: i32 = 2;
-
-/// What one square of blast costs the player who set it off.
-///
-/// **Charged on detonation and by area, which is the nerf.** Dynamite used to
-/// cost [`DYNAMITE_COST`] once, when it was laid, and nothing afterwards — so
-/// the cheapest thing in the game was to lay one and let a glider carry it,
-/// and a blob of them was the cheapest of all, because
-/// [`blast_reach`] gives a hundred of them ten times the reach and therefore a
-/// hundred times the ground for a hundred times the purchase price and no more.
-///
-/// Paying per square turned over makes the *effect* the thing bought rather
-/// than the fuse, so a blob costs exactly what a blob does. It also puts a real
-/// decision on a chain: each link is another disc and another bill, and a chain
-/// that runs away is one that empties a purse.
-///
-/// Small, because the areas are not: one dynamite's disc is a little over three
-/// hundred squares, so at this it is about the price of laying it again.
-pub const BLAST_DRAIN: i32 = 1;
 
 // --- the rules, in order -----------------------------------------------------
 //

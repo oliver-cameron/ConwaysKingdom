@@ -31,7 +31,7 @@ pub use dir::Dir;
 pub use player::{Player, PlayerId};
 pub use rule::YIELD_STREAM;
 pub use rule::{
-    blast_reach, factory_chance, next_cell, Chance, Neighbours, RuleFn, Then, BLAST_DRAIN, BORN_ON,
+    blast_reach, factory_chance, next_cell, Chance, Neighbours, RuleFn, Then, BORN_ON,
     DEFAULT_TORUS, DYNAMITE_COST, DYNAMITE_DENSITY, DYNAMITE_FOREIGN, DYNAMITE_FUSE,
     DYNAMITE_REACH, DYNAMITE_THROW, DYNAMITE_WARN, FACTORY_COST, FACTORY_DRAIN, FACTORY_UPKEEP,
     FACTORY_YIELD, ICE_COST, LEVEL_ADJUST, LEVEL_EBB, LEVEL_FALL, LEVEL_SPREAD, LIFE_COST, RECLAIM,
