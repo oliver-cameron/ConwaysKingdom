@@ -422,8 +422,8 @@ fn face_of<'a>(
         // shape you are actually in, not the one this kind is usually wanted
         // in, so a pane held as a pencil says pencil.
         Key::Flip => {
-            let (icon, lit) = flip_face(held);
-            (Face::Icon(icon), held.shape.name(), lit)
+            let flip = flip_face(held);
+            (Face::Icon(flip.icon), flip.name, flip.lit)
         }
         Key::Shape(Shape::Capture) => {
             (Face::Camera, w().hotbar.capture, held.shape == Shape::Capture)
@@ -463,24 +463,41 @@ fn face_of<'a>(
     }
 }
 
-/// What the shape square shows, and whether it is lit.
+/// What the shape square shows, says, and whether it is lit.
 ///
+/// **One struct because it is one decision.** The picture and the word were
+/// chosen apart and came to disagree: with a stamp in hand the square drew a
+/// *pencil* — correctly, because pressing it goes back to drawing — and
+/// labelled itself "pattern", which is what you are holding rather than what
+/// the square does. Two fields set in one place cannot drift like that.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Flip {
+    icon: &'static str,
+    name: &'static str,
+    /// Whether this is the shape in hand, rather than the one pressing it
+    /// would put you in.
+    lit: bool,
+}
+
 /// A free function because it is the whole of the decision and needs none of
 /// the frame around it — which is what lets a test say that holding a stamp
-/// does not also light the pencil.
-fn flip_face(held: Held) -> (&'static str, bool) {
+/// does not also light the pencil, and that the square never names one thing
+/// while drawing another.
+fn flip_face(held: Held) -> Flip {
+    // Never `Capture` or `Stamp`: those two have squares of their own, drawn
+    // as a camera and as the pattern itself, and neither is a glyph. What
+    // reaches here is the shape a *kind* is usually wanted in, which is one of
+    // these two -- `a_tool_is_usually_drawn_or_panned` holds that.
+    let of = |shape: Shape| match shape {
+        Shape::Rect => Flip { icon: glyph::RECT, name: shape.name(), lit: false },
+        _ => Flip { icon: glyph::PENCIL, name: Shape::Draw.name(), lit: false },
+    };
     match held.shape {
-        Shape::Draw => (glyph::PENCIL, true),
-        Shape::Rect => (glyph::RECT, true),
+        Shape::Draw | Shape::Rect => Flip { lit: true, ..of(held.shape) },
         // Neither, so the square is the way *out* rather than a claim to be
-        // what is in your hand. It shows where flipping would put you.
-        Shape::Capture | Shape::Stamp(_) => (
-            match kinds()[held.kind].usually {
-                Shape::Rect => glyph::RECT,
-                _ => glyph::PENCIL,
-            },
-            false,
-        ),
+        // what is in your hand. It shows where flipping would put you, and
+        // now says the same thing.
+        Shape::Capture | Shape::Stamp(_) => of(kinds()[held.kind].usually),
     }
 }
 
@@ -665,8 +682,9 @@ enum Face<'a> {
 /// One square: a picture of what it does, the key that picks it, and its name
 /// on hover. A picture rather than a word, because what you are choosing is
 /// what will be on the board.
-/// One square. Returns whether it was clicked. `digit` is the key that picks
-/// it, and is only shown while there is a key left to show it with.
+///
+/// Returns whether it was clicked. `key` is shown only while there is a key
+/// left to show it with.
 fn square(
     ui: &mut egui::Ui,
     look: &Look<'_>,
@@ -737,7 +755,7 @@ fn square(
         );
     }
 
-    response.on_hover_text(name).clicked()
+    crate::client::views::hover_centred(response, name).clicked()
 }
 
 fn draw_text(painter: &egui::Painter, rect: egui::Rect, text: &str, colour: egui::Color32) {
@@ -829,7 +847,7 @@ mod tests {
     /// and the bar claimed you were holding two things.
     #[test]
     fn holding_a_stamp_does_not_also_light_the_pencil() {
-        let lit = |held: Held| flip_face(held).1;
+        let lit = |held: Held| flip_face(held).lit;
         assert!(lit(Held::default()), "a pencil in hand should light the shape square");
         assert!(
             !lit(Held { shape: Shape::Stamp(0), ..Default::default() }),
@@ -839,6 +857,47 @@ mod tests {
             !lit(Held { shape: Shape::Capture, ..Default::default() }),
             "a capture in hand lit the pencil as well"
         );
+    }
+
+    /// **The square never names one thing while drawing another.** It drew a
+    /// pencil with a stamp in hand — correctly, since pressing it goes back to
+    /// drawing — and called itself "pattern", which is what was in your hand
+    /// rather than what the square does.
+    #[test]
+    fn the_shape_square_says_what_it_draws() {
+        let says = |held: Held| {
+            let flip = flip_face(held);
+            (flip.icon, flip.name)
+        };
+        let pencil = (glyph::PENCIL, Shape::Draw.name());
+        let pane = (glyph::RECT, Shape::Rect.name());
+
+        assert_eq!(says(Held::default()), pencil);
+        assert_eq!(says(Held { shape: Shape::Rect, ..Default::default() }), pane);
+
+        // Holding a pattern or a capture: the square is the way back to
+        // drawing, and both halves of it say so.
+        for shape in [Shape::Stamp(0), Shape::Capture] {
+            let flip = flip_face(Held { shape, ..Default::default() });
+            assert_ne!(flip.name, Shape::Stamp(0).name(), "{shape:?} named what was held");
+            assert_eq!((flip.icon, flip.name), pencil, "{shape:?}");
+        }
+    }
+
+    /// The shape square draws a glyph, and only two of the four shapes have
+    /// one — a capture is a drawn camera and a pattern is its own thumbnail.
+    /// What reaches [`flip_face`] is a kind's usual shape, so that has to stay
+    /// one of the two.
+    #[test]
+    fn a_tool_is_usually_drawn_or_panned() {
+        for tool in kinds() {
+            assert!(
+                matches!(tool.usually, Shape::Draw | Shape::Rect),
+                "{} is usually {:?}, which the shape square cannot draw",
+                tool.name,
+                tool.usually
+            );
+        }
     }
 
     /// **One list, so the keyboard and the layout cannot go out by one.**

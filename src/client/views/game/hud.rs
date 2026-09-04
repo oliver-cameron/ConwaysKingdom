@@ -5,6 +5,7 @@
 //! came from and cannot change them.
 
 use crate::client::desync::{Geiger, Level};
+use crate::client::views;
 use crate::client::views::hue::player_colour;
 use crate::client::views::words::hud as words;
 use crate::client::views::words::w;
@@ -150,7 +151,7 @@ pub fn show(
                     egui::StrokeKind::Inside,
                 );
                 crate::client::views::icons::back(ui.painter(), rect.shrink(5.0), ink);
-                if response.on_hover_text(w().hud.back_hint).clicked() {
+                if views::hover_centred(response, w().hud.back_hint).clicked() {
                     did = Did::Back;
                 }
                 // The same colour the shader gives this player's cells, so the

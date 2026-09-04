@@ -49,6 +49,31 @@ pub fn wide(
     )
 }
 
+/// A tooltip **centred on the thing it names**, above it.
+///
+/// egui anchors a tooltip `BOTTOM_START`: below the widget and lined up with
+/// its *left edge*. Over a row of square buttons that reads as skewed, because
+/// the label is almost always wider than the square and so grows off to one
+/// side of it. On the hotbar it is worse than skewed — the bar sits at the
+/// bottom of the screen, so below is off it, and egui's fallback moves the box
+/// somewhere else again.
+///
+/// Above and centred, then, with the default order as the fallback for a
+/// widget near the top. The text is centred too, which matters only when
+/// something else has widened the box.
+pub fn hover_centred(response: egui::Response, text: &str) -> egui::Response {
+    egui::Tooltip::for_enabled(&response)
+        .popup
+        .align(egui::RectAlign::TOP)
+        .align_alternatives(&[egui::RectAlign::TOP, egui::RectAlign::BOTTOM])
+        .show(|ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.label(text);
+            });
+        });
+    response
+}
+
 pub mod face;
 pub mod game;
 pub mod glyph;
