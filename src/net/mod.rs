@@ -18,6 +18,7 @@
 
 pub mod auth;
 pub mod codec;
+pub mod jsonl;
 pub mod keep;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
@@ -193,12 +194,17 @@ pub const PLAYER_NAME_MAX: usize = 24;
 /// nobody is helped by being kept out of a game over it, and a `Join` is not a
 /// message anybody retries.
 ///
-/// What it must not carry is a **tab or a newline**. `server::people` and
-/// `server::profiles` are one line per person and tab separated, and a name is
-/// the last field of a profile row — so a name of `"x\n3\t<somebody else's
-/// id>\t9999\t50\t500\t\tmine"` wrote a second line that read back as that
-/// person with a rating of 9999. Control characters go for the same reason
-/// they go from a side's name, and this is the one that is not cosmetic.
+/// **A length, and not a defence.** It was both: the stores were tab separated
+/// and a name was the last field of a profile row, so a name carrying a newline
+/// wrote a second row that read back as somebody else. The stores are
+/// [`jsonl`] now and a value cannot reach the separator at all, which is the
+/// difference between a format that is safe and one that every future field has
+/// to remember to keep safe.
+///
+/// What is left is the honest job: a row has to fit a lobby, a standings line
+/// and a log line, and "a string a client chose, of any length" fits none of
+/// them. Control characters go because they do not draw, not because they
+/// break anything.
 pub fn player_name(raw: &str) -> String {
     raw.trim().chars().filter(|c| !c.is_control()).take(PLAYER_NAME_MAX).collect()
 }
@@ -1637,9 +1643,9 @@ pub fn apply(world: &mut World, stamped: &Stamped) {
 mod tests {
     use super::*;
 
-    /// **A name is a label, so it is clamped rather than refused** — and the
-    /// clamp is not cosmetic: it is what stops a tab or a newline reaching the
-    /// one-line-per-person files under `server::`.
+    /// **A name is a label, so it is clamped rather than refused.** What it is
+    /// clamped to is a width a row can hold; keeping it out of the separator is
+    /// [`jsonl`]'s job now and not this one.
     #[test]
     fn a_name_is_clamped_to_something_a_line_can_hold() {
         assert_eq!(player_name("  alice  "), "alice");

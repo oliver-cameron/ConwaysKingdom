@@ -6,12 +6,11 @@
 //! last seen in — which is the whole reason it exists, since a rating kept
 //! against a seat belongs to whoever sits there next.
 //!
-//! One line per person, tab separated, with a version on the front, for the
-//! reason [`crate::client::record`] gives for the same choice: a store you can
-//! read with `cat` is one you can debug when something has gone wrong with it,
-//! and a hex-encoded blob is not. A line this build cannot read is skipped
-//! rather than fatal — losing one person out of a table is a nuisance, and
-//! refusing to start because one line is from the future is not.
+//! One JSON object per person per line — see [`crate::net::jsonl`], which says
+//! why it is text and why the separator is not a character a value can hold.
+//! A row this build cannot read is skipped rather than fatal: losing one person
+//! out of a table is a nuisance, and refusing to start because one row is from
+//! the future is not.
 //!
 //! ## What is stored
 //!
@@ -38,15 +37,33 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-use crate::net::{PersonId, Secret};
+use serde::{Deserialize, Serialize};
 
-/// The format of a stored line, so a build that cannot read one can tell that
-/// rather than mis-splitting it.
+use crate::net::{jsonl, PersonId, Secret};
+
+/// The format of a stored row, so a build that cannot read one can tell that
+/// rather than reading it wrongly.
 ///
-/// Bumped to 3 when the id stopped being a public key and became something
-/// this server issues — so a secret sits beside it, and a version 2 line names
-/// a person whose secret nobody has.
-const VERSION: u8 = 3;
+/// Back to 1 with the move to [`crate::net::jsonl`]. Every version before it
+/// was tab separated and none of them are read: the id and the secret are both
+/// this server's to issue and to keep, so a table it cannot read is a table of
+/// people who have to be met again rather than data anybody can reconstruct.
+const VERSION: u8 = 1;
+
+/// One person as this table stores them.
+///
+/// A row rather than the map's own pair, because a file is a list and a
+/// `HashMap` is not, and because the version belongs on the row — see
+/// [`crate::net::jsonl`].
+#[derive(Serialize, Deserialize)]
+struct Row {
+    v: u8,
+    who: PersonId,
+    /// Kept as written rather than as a [`Secret`], so a row that is not one
+    /// is a row this table drops rather than a parse that panics somewhere
+    /// further in. [`Secret`] checks itself on the way back out.
+    secret: String,
+}
 
 /// Everybody this server has seen, and what it calls them.
 #[derive(Default)]
@@ -104,34 +121,26 @@ impl People {
         // diff between two of them says what changed rather than what moved.
         let mut rows: Vec<_> = self.known.iter().collect();
         rows.sort_by(|a, b| a.1.cmp(b.1));
-        rows.iter().map(|(s, id)| format!("{VERSION}\t{id}\t{}\n", s.written())).collect()
+        jsonl::write(rows.iter().map(|(secret, who)| Row {
+            v: VERSION,
+            who: (*who).clone(),
+            secret: secret.written(),
+        }))
     }
 
-    /// Read a table back, skipping any line this build cannot make sense of.
+    /// Read a table back, skipping any row this build cannot make sense of.
     pub fn from_lines(text: &str) -> Self {
-        let mut known = HashMap::new();
-        for (n, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let mut fields = line.split('\t');
-            match (fields.next(), fields.next(), fields.next(), fields.next()) {
-                (Some(v), Some(id), Some(secret), None)
-                    if v.parse::<u8>() == Ok(VERSION) && !id.is_empty() =>
-                {
-                    match Secret::read(secret) {
-                        Ok(secret) => {
-                            known.insert(secret, PersonId(id.to_string()));
-                        }
-                        Err(why) => {
-                            log::warn!("line {} of the people file: {why}", n + 1)
-                        }
-                    }
+        let known = jsonl::read::<Row>(text, "the people file")
+            .into_iter()
+            .filter(|row| row.v == VERSION && !row.who.as_str().is_empty())
+            .filter_map(|row| match Secret::read(&row.secret) {
+                Ok(secret) => Some((secret, row.who)),
+                Err(why) => {
+                    log::warn!("a row of the people file: {why}");
+                    None
                 }
-                _ => log::warn!("skipped line {} of the people file", n + 1),
-            }
-        }
+            })
+            .collect();
         Self { known }
     }
 
@@ -229,21 +238,54 @@ mod tests {
     fn a_table_that_is_not_there_is_empty() {
         let missing = std::env::temp_dir()
             .join(format!("ck-people-{}", std::process::id()))
-            .join("people.tsv");
+            .join("people.jsonl");
         let _ = std::fs::remove_dir_all(missing.parent().unwrap());
         assert!(People::load(&missing).unwrap().is_empty());
     }
 
-    /// A line this build cannot read is skipped rather than fatal: losing one
+    /// A row this build cannot read is skipped rather than fatal: losing one
     /// person out of a table is a nuisance, and refusing to start because one
-    /// line is from the future is not.
+    /// row is from the future is not.
     #[test]
-    fn an_unreadable_line_is_skipped_and_the_rest_kept() {
+    fn an_unreadable_row_is_skipped_and_the_rest_kept() {
         let mut people = People::new();
         let id = people.meet(&secret("a")).0;
-        let mixed = format!("{}\n99\tfrom-the-future\tzz\nrubbish\n", people.to_lines().trim());
+        let mixed = format!(
+            "{}\n\
+             {{\"v\":99,\"who\":\"from-the-future\",\"secret\":\"{zeros}\"}}\n\
+             {{\"v\":1,\"who\":\"nonsense\",\"secret\":\"not-a-key\"}}\n\
+             {{\"v\":1,\"who\":\"\",\"secret\":\"{zeros}\"}}\n\
+             not json at all\n",
+            people.to_lines().trim(),
+            zeros = "0".repeat(32),
+        );
         let back = People::from_lines(&mixed);
-        assert_eq!(back.len(), 1);
+        assert_eq!(back.len(), 1, "a bad row took a good one with it");
         assert!(back.knows(&id));
+    }
+
+    /// **A secret cannot write its own row.** It is the one field here a client
+    /// chooses, and the store this replaced was tab separated: a secret with a
+    /// newline in it wrote a second row naming somebody else's id, and on the
+    /// next start that key was that person. The wire refuses one now and the
+    /// format escapes one, which is two answers to a question that only needs
+    /// to be wrong once.
+    #[test]
+    fn a_secret_cannot_forge_a_row() {
+        let mut people = People::new();
+        let victim = people.meet(&secret("a")).0;
+        // Not reachable over the wire, which checks a secret is hex -- so this
+        // reaches past it to ask what the *file* would do.
+        let mut sneaky = People::new();
+        sneaky.known.insert(
+            Secret::read(&"f".repeat(32)).expect("a key"),
+            PersonId(format!(
+                "x\"}}\n{{\"v\":1,\"who\":\"{victim}\",\"secret\":\"{}\"}}",
+                "e".repeat(32)
+            )),
+        );
+        let text = sneaky.to_lines();
+        assert_eq!(text.lines().count(), 1, "an id wrote its own row:\n{text}");
+        assert!(!People::from_lines(&text).knows(&victim), "an id forged a person");
     }
 }

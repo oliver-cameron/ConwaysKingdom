@@ -18,10 +18,9 @@
 //! need servers to trust each other's results, which is a much larger thing
 //! than a key. These are facts about how somebody has done *here*.
 //!
-//! One line per person, tab separated with a version on the front, beside
-//! `people.tsv` and for the same reasons: a store you can read with `cat` is
-//! one you can debug, and a line this build cannot read is skipped rather than
-//! fatal.
+//! One JSON object per person per line, beside `people.jsonl` and in the same
+//! shape — see [`crate::net::jsonl`], which says why the separator is not a
+//! character a value can contain.
 //!
 //! [player profiles]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#player-profiles
 
@@ -29,14 +28,37 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-use crate::net::PersonId;
+use serde::{Deserialize, Serialize};
+
+use crate::net::{jsonl, PersonId};
 use crate::server::rating::{self, Entrant};
 
-/// Bumped to 2 when a row stopped being a rating and became a profile, and to
-/// 3 when it gained the ratings behind the current one. Both read forward:
-/// what an older line does not say is what the server was not keeping, so the
-/// counts start at nought and the line is empty, which is the honest answer.
-const VERSION: u8 = 3;
+/// The format of a stored row.
+///
+/// Back to 1 with the move to [`crate::net::jsonl`]. The three versions before
+/// it were tab separated and none of them are read: a rating is a fact about
+/// matches this server ran, and a server whose table it cannot read is one
+/// where everybody is provisional again. That is a line in a release note
+/// rather than a migration, which is the same answer this file already gives
+/// for records filed under a room's display name.
+const VERSION: u8 = 1;
+
+/// One person as this table stores them.
+///
+/// Flat rather than a [`Record`] with the id beside it, because a row is what
+/// is read forward and a nested object hides which fields a version added.
+/// `rating` is `null` for somebody met and not yet settled — see
+/// [`Record::rating`], where nought and unearned are different things.
+#[derive(Serialize, Deserialize)]
+struct Row {
+    v: u8,
+    who: PersonId,
+    name: String,
+    rating: Option<i32>,
+    games: u32,
+    best: usize,
+    history: Vec<i32>,
+}
 
 /// **What one person has done here.**
 ///
@@ -245,47 +267,36 @@ impl Profiles {
         // between two of them says what changed rather than what moved.
         let mut all: Vec<_> = self.known.iter().collect();
         all.sort_by(|a, b| a.0.cmp(b.0));
-        all.iter()
-            .map(|(who, r)| {
-                // A rating nobody has earned is written as an empty field
-                // rather than as the starting number, so reading the table
-                // back cannot invent a result.
-                let rating = r.rating.map(|n| n.to_string()).unwrap_or_default();
-                // Commas inside a tab-separated field, so the shape of a line
-                // does not depend on how long somebody has played.
-                let history: Vec<String> = r.history.iter().map(|n| n.to_string()).collect();
-                format!(
-                    "{VERSION}\t{who}\t{rating}\t{}\t{}\t{}\t{}\n",
-                    r.games,
-                    r.best,
-                    history.join(","),
-                    r.name
-                )
-            })
-            .collect()
+        jsonl::write(all.into_iter().map(|(who, r)| Row {
+            v: VERSION,
+            who: who.clone(),
+            name: r.name.clone(),
+            // A rating nobody has earned is written as `null` rather than as
+            // the starting number, so reading the table back cannot invent a
+            // result -- see `Record::rating`.
+            rating: r.rating,
+            games: r.games,
+            best: r.best,
+            history: r.history.clone(),
+        }))
     }
 
-    /// Read a table back, **including the one this replaced**.
-    ///
-    /// A version 1 line is a person and a rating, which is a version 2 line
-    /// with the counts at nought — and nought is the honest answer, because
-    /// the server was not counting them. The alternative was to skip those
-    /// lines, which throws away every rating anybody has earned to gain three
-    /// numbers that would have been guesses.
+    /// Read a table back, skipping any row this build cannot make sense of.
     pub fn from_lines(text: &str) -> Self {
-        let mut known = HashMap::new();
-        for (n, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let fields: Vec<&str> = line.split('\t').collect();
-            let Some(row) = read_row(&fields) else {
-                log::warn!("skipped line {} of the profiles file", n + 1);
-                continue;
-            };
-            known.insert(row.0, row.1);
-        }
+        let known = jsonl::read::<Row>(text, "the profiles file")
+            .into_iter()
+            .filter(|row| row.v == VERSION && !row.who.as_str().is_empty())
+            .map(|row| {
+                let record = Record {
+                    name: crate::net::player_name(&row.name),
+                    games: row.games,
+                    best: row.best,
+                    rating: row.rating,
+                    history: row.history,
+                };
+                (row.who, record)
+            })
+            .collect();
         Self { known }
     }
 
@@ -303,53 +314,6 @@ impl Profiles {
         }
         std::fs::write(path, self.to_lines())
     }
-}
-
-/// One stored line, of either version, or `None` for one this build cannot
-/// make sense of.
-///
-/// An empty rating field is somebody who has been met and has not finished a
-/// match, which is a different thing from being on the starting number — see
-/// [`Record::rating`].
-fn read_row(fields: &[&str]) -> Option<(PersonId, Record)> {
-    let (version, who, rating) = match fields {
-        [v, who, rating, ..] => (v.parse::<u8>().ok()?, *who, *rating),
-        _ => return None,
-    };
-    if who.is_empty() {
-        return None;
-    }
-    let rating = match rating {
-        "" => None,
-        n => Some(n.parse::<i32>().ok()?),
-    };
-    let record = match (version, fields) {
-        // What this replaced: a person and a number, and no counts because
-        // nothing was counting.
-        (1, [_, _, _]) => Record { rating, ..Default::default() },
-        // And the one before the history, whose line is the same minus that
-        // field. A rating with nowhere it has been is a point, which is what
-        // it always was.
-        (2, [_, _, _, games, best, name]) => Record {
-            rating,
-            games: games.parse().ok()?,
-            best: best.parse().ok()?,
-            history: Vec::new(),
-            name: name.to_string(),
-        },
-        (VERSION, [_, _, _, games, best, history, name]) => Record {
-            rating,
-            games: games.parse().ok()?,
-            best: best.parse().ok()?,
-            // A point this build cannot read is dropped rather than taking the
-            // person with it: a gap in a line is a worse thing to lose a
-            // rating over.
-            history: history.split(',').filter_map(|n| n.parse().ok()).collect(),
-            name: name.to_string(),
-        },
-        _ => return None,
-    };
-    Some((PersonId(who.to_string()), record))
 }
 
 #[cfg(test)]
@@ -573,21 +537,15 @@ mod tests {
         }
     }
 
-    /// **Every table this replaced reads forward.** What an older line does
-    /// not say is what the server was not keeping, so those fields come back
-    /// empty — which is the honest answer, and better than skipping the line
-    /// and throwing away every rating anybody has earned.
+    /// **The tables this replaced are not read**, and that is a decision rather
+    /// than an oversight: they were tab separated, nothing is deployed on one,
+    /// and carrying three dead formats to save ratings that exist on nobody's
+    /// disk is machinery with no job. A server that met people under the old
+    /// format meets them again and everybody is provisional.
     #[test]
-    fn a_rating_from_an_old_table_survives_the_new_one() {
-        let table = Profiles::from_lines("1\tabc\t1300\n2\tdef\t1400\t7\t90\tdee\n");
-        let one = table.of(&PersonId("abc".into()));
-        assert_eq!(one.rating(), 1300, "a rating was lost in the migration");
-        assert_eq!((one.games, one.best), (0, 0), "and nothing was invented");
-        assert!(one.provisional(), "with no games behind it, it is unearned");
-
-        let two = table.of(&PersonId("def".into()));
-        assert_eq!((two.rating(), two.games, two.best, two.name.as_str()), (1400, 7, 90, "dee"));
-        assert!(two.history.is_empty(), "a line from before the history has none");
+    fn a_table_from_before_this_format_is_not_read() {
+        let old = "1\tabc\t1300\n3\tdef\t1400\t7\t90\t1300,1400\tdee\n";
+        assert!(Profiles::from_lines(old).is_empty(), "an old line was read as a new one");
     }
 
     /// **A point per settled match**, including the ones that moved nothing:
@@ -640,19 +598,23 @@ mod tests {
         assert_eq!(back.of(&victim).name, "victim", "and took a name with it");
     }
 
-    /// A line this build cannot read is skipped rather than fatal. Losing one
+    /// A row this build cannot read is skipped rather than fatal. Losing one
     /// person's number is a nuisance; refusing to start is not better.
     #[test]
-    fn a_line_this_build_cannot_read_is_skipped() {
-        let table = Profiles::from_lines(&format!(
-            "{VERSION}\tabc\t1300\t4\t80\t1200,1250,1300\tabby\n\
-             9\tfrom\tthe\tfuture\n\n\
-             {VERSION}\tdef\tnot-a-number\t0\t0\t\t\n\
-             rubbish\n"
+    fn a_row_this_build_cannot_read_is_skipped() {
+        let table = Profiles::from_lines(concat!(
+            r#"{"v":1,"who":"abc","name":"abby","rating":1300,"games":4,"best":80,"history":[1200,1300]}"#,
+            "\n",
+            r#"{"v":9,"who":"future","name":"f","rating":1,"games":0,"best":0,"history":[]}"#,
+            "\n\n",
+            r#"{"v":1,"who":"def","name":"dee"}"#,
+            "\n",
+            "rubbish\n",
         ));
-        assert_eq!(table.len(), 1, "a bad line took a good one with it");
-        assert_eq!(table.rating_of(&PersonId("abc".into())), 1300);
-        assert_eq!(table.of(&PersonId("abc".into())).best, 80);
-        assert_eq!(table.rating_of(&PersonId("def".into())), rating::START);
+        assert_eq!(table.len(), 1, "a bad row took a good one with it");
+        let abby = table.of(&PersonId("abc".into()));
+        assert_eq!((abby.rating(), abby.best, abby.games), (1300, 80, 4));
+        assert_eq!(abby.history, vec![1200, 1300]);
+        assert_eq!(table.rating_of(&PersonId("def".into())), rating::START, "a short row was read");
     }
 }

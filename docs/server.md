@@ -243,7 +243,7 @@ Every 30 seconds and on a clean shutdown, every room at once. Writes go to a tem
 
 **One file per room**, `<name>.ckw` in the rooms directory. The format holds one world and its players, which is exactly one room, so the file is unchanged and the directory is what grew. The room's name is the file's name and is not written inside it: two places to keep one fact is one too many, and the one a person can rename is the one that has to win. Renaming `lobby.ckw` renames the room.
 
-A player record carries **who is sitting there** — the `PersonId`, not the secret behind it — so a restart does not hand every returning player a new number and leave their ground standing there, theirs and unreachable. The proof stays in `people.tsv` and in the client's own store; a world has no business holding it.
+A player record carries **who is sitting there** — the `PersonId`, not the secret behind it — so a restart does not hand every returning player a new number and leave their ground standing there, theirs and unreachable. The proof stays in `people.jsonl` and in the client's own store; a world has no business holding it.
 
 **What is not in the format is whether they were connected**, and that is deliberate: `online` is a fact about a socket, and the socket ended with the process. It also has to be *set* on the way back in, which is where this went wrong for a while. `Player::new` is what a player joins with, and joining means being online, so a player rebuilt from a file came back marked connected — and a player who is online cannot be returned to at all, that check being what stops two tabs becoming one player. Every player who was in a room when it was written therefore found their own seat refused on the next run and joined as somebody new, which is the exact failure coming back exists to prevent, arriving only when the server closed. `persist::load` clears it now, and `a_seat_survives_the_server_closing` is the test that would have caught it.
 
@@ -257,14 +257,18 @@ Not everything a server keeps is a world. Two files sit in the rooms directory a
 
 | file | what is in it | written when |
 |---|---|---|
-| `people.tsv` | a secret and the `PersonId` this server issued for it, one line each | a person is met for the first time |
-| `profiles.tsv` | a person's name, rating, the ratings behind it, matches settled and most ground ever held | a match settles, and on the ordinary save |
+| `people.jsonl` | a secret and the `PersonId` this server issued for it, one line each | a person is met for the first time |
+| `profiles.jsonl` | a person's name, rating, the ratings behind it, matches settled and most ground ever held | a match settles, and on the ordinary save |
 
-Both are **one line per person, tab separated, with a version on the front**, and both skip a line they cannot read rather than refusing to start: losing one person's row is a nuisance and not starting is worse. A `cat` is meant to be enough to see what a server thinks it knows.
+Both are **one JSON object per person per line**, with a version on the row, and both skip a row they cannot read rather than refusing to start: losing one person's row is a nuisance and not starting is worse. A `cat` is meant to be enough to see what a server thinks it knows.
 
-`people.tsv` is written the moment somebody new joins rather than on the next ordinary save, because a rating earned by a person the server forgets on a restart is worse than no rating. It is also the file worth stealing — see [who somebody is](#who-somebody-is).
+One object a line rather than one array for the file, because a whole-file array parses all-or-nothing — a truncated write would cost every row rather than the last one, and a row from a future build would take the file with it. A line still greps and still diffs a row at a time, which is what the tab-separated format this replaces was chosen for.
 
-The tab is load-bearing, which is why `net::player_name` exists. A name is the last field of a profile row and it is the one field a client chooses, so a name with a newline in it wrote a *second* row; one naming somebody else's id came back on the next start as that person, with whatever rating it claimed. Names are clamped where they enter a record, and `Secret` is checked on the wire for the same reason rather than only where one is pasted.
+JSON rather than tabs because **a separator that can appear inside a value is a format one careless field breaks**, and this one did: a name is a value a client chooses, and a name carrying a newline wrote a second row that read back as a different person with a rating they had not earned. `net::player_name` still clamps a name, but to a width a lobby row can hold rather than to keep it out of the separator. See `net::jsonl`.
+
+`people.jsonl` is written the moment somebody new joins rather than on the next ordinary save, because a rating earned by a person the server forgets on a restart is worse than no rating. It is also the file worth stealing — see [who somebody is](#who-somebody-is).
+
+A `Secret` is checked on the wire as well, rather than only where one is pasted: it is the other value a client chooses, and it was the other half of the same hole.
 
 ### The `.ckw` format
 

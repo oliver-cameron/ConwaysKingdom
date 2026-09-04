@@ -1275,11 +1275,11 @@ fn code() -> Code {
 /// A plain extension, so `ls` on the directory says which file is which and
 /// `saved_in` -- which looks for `.ckw` -- never mistakes it for a world.
 fn people_path(dir: &Path) -> PathBuf {
-    dir.join("people.tsv")
+    dir.join("people.jsonl")
 }
 
 fn profiles_path(dir: &Path) -> PathBuf {
-    dir.join("profiles.tsv")
+    dir.join("profiles.jsonl")
 }
 
 fn save_path(dir: &Path, room: &RoomId) -> PathBuf {

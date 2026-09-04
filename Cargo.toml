@@ -78,6 +78,13 @@ bytemuck = { version = "1.16", features = ["derive", "extern_crate_alloc", "min_
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1.1", features = ["alloc"] }
+# The stores under `net::jsonl`, which is a different job from postcard's.
+# Postcard is the wire: compact, positional and unreadable on purpose. These are
+# files a person opens when something has gone wrong, so they are text -- and
+# JSON rather than a separator, because a separator that can appear inside a
+# value is a format that one careless field breaks. Already linked on the server
+# through axum, and small enough on wasm to be worth one format for both ends.
+serde_json = "1"
 # Decoding an atlas sheet. Tiny, pure Rust, and builds for wasm.
 png = "0.18"
 

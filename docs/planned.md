@@ -206,7 +206,7 @@ The one with a shape already: **density**. Conway's classic soup is a half, whic
 
 A reading of the rest of this file, in the order the things depend on each other rather than in the order they were thought of. Nothing here is new; what it adds is which one unblocks the most.
 
-**1. [An identity a server cannot take](#identity-is-a-keypair-and-today-it-is-not).** `people.tsv` holds a plaintext secret per person, and a secret is a bearer credential — so every server that has met you can be you on every other server that has met you, and that file is the thing on the machine worth stealing. `net::auth::person` says so itself and says it has to change before there are two servers. It is first not because anything is broken today but because it is the only item here that gets **worse** the more the project succeeds, and because everything social — a directory, friends, inviting somebody in particular, a leaderboard that means anything — is built on top of who somebody is.
+**1. [An identity a server cannot take](#identity-is-a-keypair-and-today-it-is-not).** `people.jsonl` holds a plaintext secret per person, and a secret is a bearer credential — so every server that has met you can be you on every other server that has met you, and that file is the thing on the machine worth stealing. `net::auth::person` says so itself and says it has to change before there are two servers. It is first not because anything is broken today but because it is the only item here that gets **worse** the more the project succeeds, and because everything social — a directory, friends, inviting somebody in particular, a leaderboard that means anything — is built on top of who somebody is.
 
 **2. [A level of detail](#zooming-out-without-lying).** Low zoom does not work and it is not the sampling: one chunk is one texture array layer against a guaranteed floor of 256, so a 1080p screen is mostly backdrop below about zoom five and an island in a sea of nothing at the floor. The answer is the cell without its art — one texel a cell, one quad, no sheet lookup — and it is **one piece of work with four uses**: zooming out, a minimap, a world overview, and a spectator following a player. Three of those are separate entries in this file.
 
@@ -598,7 +598,7 @@ There was a real design here and it is worth recording what it cost, because the
 
 **Built.** A number that says how good somebody is, updated by results, in the shape of Elo. It is on the home screen, above the record and deliberately not inside it: what `views::record` shows is what this *client* has done out of its own store, and a rating is what a *server* thinks of you against everybody else there. Folding one into the other would suggest the client had worked it out, which it must never look like it can.
 
-`server::profiles` is the table, keyed by `PersonId`, saved to `profiles.tsv` beside `people.tsv`. `Rooms::step` settles a match on the generation it is decided — not the room that ended, because a rating outlives every world here and a match's world is about to stop existing — and broadcasts `ServerMessage::Rated` to everybody who was in it, so the number moves on the screen somebody is looking at rather than on their next join. A `Welcome` carries it too, for arriving.
+`server::profiles` is the table, keyed by `PersonId`, saved to `profiles.jsonl` beside `people.jsonl`. `Rooms::step` settles a match on the generation it is decided — not the room that ended, because a rating outlives every world here and a match's world is about to stop existing — and broadcasts `ServerMessage::Rated` to everybody who was in it, so the number moves on the screen somebody is looking at rather than on their next join. A `Welcome` carries it too, for arriving.
 
 What is **not** built is [a leaderboard](#a-leaderboard), and it is not an oversight: a table of who is best is a reason to cheat, and this game has never had one. Per server the only lever is who you play and how often, which is a question about what results count rather than about who recorded them.
 
@@ -634,10 +634,10 @@ So what decentralises is **discovery and identity**. Three pieces, in the order 
 
 **Open, and this entry said Built.** Correcting the record first, because the claim that was here is the kind that matters: it said the client mints a keypair, never sends it, and signs a challenge, and that `server::people` "holds no secrets at all". None of that is true of the code.
 
-What is true is in [`net::auth::person`](../src/net/auth/person.rs) and [`server::people`](../src/server/people.rs), both of which say so plainly. The ed25519 scheme was **removed**: a `Secret` is now sixteen random bytes that the client sends on every join, and the server stores it beside the id it issued, in `people.tsv`, in plaintext. So today:
+What is true is in [`net::auth::person`](../src/net/auth/person.rs) and [`server::people`](../src/server/people.rs), both of which say so plainly. The ed25519 scheme was **removed**: a `Secret` is now sixteen random bytes that the client sends on every join, and the server stores it beside the id it issued, in `people.jsonl`, in plaintext. So today:
 
 - a secret is a **bearer credential** — whoever holds it is you, and the server it is presented to holds it;
-- `people.tsv` is the file on the machine worth stealing, because every line in it is a player somebody can be;
+- `people.jsonl` is the file on the machine worth stealing, because every line in it is a player somebody can be;
 - and a server that has met you can be you **on every other server that has met you**.
 
 `person.rs` calls that a single-server design and says it has to change before there are two. That is exactly right, and it is the first thing in this entry rather than a footnote to it: everything below assumes an identity a server cannot take.
@@ -652,13 +652,13 @@ What is true is in [`net::auth::person`](../src/net/auth/person.rs) and [`server
 
 ### The scheme, and the one detail worth getting right
 
-ed25519, back where it was: the server offers a nonce on the socket's first word and the client signs. `PersonId` becomes a **fingerprint of the public key** rather than something a server issues — derived, so every server calls you the same thing, which is the whole point and is also what makes `people.tsv` a table with nothing secret in it.
+ed25519, back where it was: the server offers a nonce on the socket's first word and the client signs. `PersonId` becomes a **fingerprint of the public key** rather than something a server issues — derived, so every server calls you the same thing, which is the whole point and is also what makes `people.jsonl` a table with nothing secret in it.
 
 **Sign more than the nonce.** A signature over a bare challenge is replayable sideways: server A, which you are joining honestly, hands your signature to server B and is you there. So the signed message names **the server and the room** as well as the nonce — a signature is then evidence about one join to one place, and a relay has nothing to relay. This is the bug the previous scheme would have had and nobody would have found until there were two servers, which is to say until it mattered.
 
 A server's identity is its own keypair, so "which server" is a public key rather than a hostname somebody could take. That also gives the client something to pin, which is what stops a room list from sending you to an impostor.
 
-Migration is a version 4 line in `people.tsv` holding a public key. A person whose version 3 line holds a secret cannot be re-keyed, because the thing that would key them was never on that machine — their rating starts again. One line in a release note, which is the same answer this file already gives for records filed under a room's display name.
+Migration is a row in `people.jsonl` holding a public key instead of a secret. A person whose row holds a secret cannot be re-keyed, because the thing that would key them was never on that machine — their rating starts again. One line in a release note, which is the same answer this file already gives for records filed under a room's display name.
 
 ### Non-extractable keys, which is what "never leaves the device" needs
 
@@ -682,7 +682,7 @@ rather than work.
 so it is a different string from the one a server issued — which means every
 existing rating, every settled match, every "most ground held" and every seat
 somebody could return to is attached to a name nobody can prove any more.
-`people.tsv` and the `.ckw` files are full of ids that no longer refer to
+`people.jsonl` and the `.ckw` files are full of ids that no longer refer to
 anybody. There are two honest answers and they are not close: **wipe** and say
 so, or keep the old id beside the new one for a grace period and let a returning
 player claim it with their old secret, which is a migration path that must
@@ -706,7 +706,7 @@ connection that has not signed anything. That is the part most likely to go
 subtly wrong.
 
 **4. Then the mechanical part.** `Secret` becomes a signing key; `PersonId::new`
-becomes a fingerprint of the verifying key; `people.tsv` loses its secret column
+becomes a fingerprint of the verifying key; `people.jsonl` loses its secret field
 and becomes a table with nothing worth stealing in it, which is the whole point;
 `net::keep` stores a key rather than sixteen bytes; and `server::people::knows`
 becomes a verification rather than a lookup.
