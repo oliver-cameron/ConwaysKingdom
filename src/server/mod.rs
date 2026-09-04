@@ -1237,7 +1237,12 @@ impl Server {
             // and the patterns and diary the server merely keeps for them.
             ClientMessage::Profile { .. }
             | ClientMessage::People { .. }
-            | ClientMessage::Keep(_) => Vec::new(),
+            | ClientMessage::Keep(_)
+            // A challenge names a *person* and makes a room, and a room knows
+            // of no others — both are `Rooms`' business, like everything else
+            // that outlives one world.
+            | ClientMessage::Challenge { .. }
+            | ClientMessage::Answer { .. } => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::JoinTeam { team } => {

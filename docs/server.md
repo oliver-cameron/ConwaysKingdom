@@ -251,6 +251,16 @@ A missing file starts fresh. A corrupt or mismatched one is an **error** naming 
 
 The shutdown save is **waited for**, not aborted. The simulation task saves after its loop; `sim.abort()` cancelled it at its next await point, which is inside the loop, so the save never ran and a clean exit quietly lost up to thirty seconds of every room. The wait is bounded at ten seconds, because a shutdown that does not shut down is worse than one that loses a save it warned about.
 
+### Challenges
+
+`ClientMessage::Challenge { who }` makes a **private match for two**, puts the challenger in it, and holds the way in for one named person. It is a room like any other once it exists: the answer is a `Join`, the whistle is the whistle, and nothing about the match knows it began as a challenge. Territory rather than a timer, because a challenge is somebody asking for a game and not for an appointment.
+
+**It waits.** There is no channel to a *person* — replies go back to whoever asked and broadcasts go to a room — so a challenge sits in the server's hands until its target is heard from, and rides out with whatever they say next. That is soon: a client on the menu asks for the room list every few seconds and one in a world checkpoints. The honest cost is that somebody who closed the tab is challenged when they open it again, and somebody who never comes back never sees it. A challenge is an invitation rather than a notification, so arriving late is the right failure.
+
+What is *waiting* and what is *standing* are two tables, and briefly were one. A queued message is delivered once; an invitation stands until it is answered — so keeping the challenge in the outbox meant handing it over consumed it, and the answer that came back a moment later found nothing to answer.
+
+One challenge to a person at a time, so it cannot be a way to fill somebody's screen and so the room a decline names is the room they were shown. A decline is sent rather than dropped: the point of asking is finding out, and silence is the one answer that cannot be told from not having seen it.
+
 ### Screens a server would rather not be offered
 
 `--hide NAME` puts a name in `net::Hidden`, which rides on the room list — the first thing a menu asks any server, so the answer is known before the menu draws anything. Today the only name is `howto`, and `--hide howtoo` is refused with the list of names rather than starting a server that quietly ignores the flag.

@@ -106,6 +106,11 @@ pub enum Effect {
     /// [`Session::locker`]. What is done with it is the app's, because the
     /// library it replaces is the app's — see [`crate::net::kept`].
     LockerArrived,
+    /// **Somebody wants a game.** Into [`Session::challenge`], for whatever
+    /// puts an invitation on screen.
+    Challenged,
+    /// They said yes or no — [`Session::answered`].
+    Answered,
     /// A list of who else plays here arrived, into whatever asked for it.
     FoundPeople,
     /// The server would not have us, and this is why. The link is kept and its
@@ -257,6 +262,13 @@ pub struct Session {
     /// right way round: a client with no server has nobody's opinion to
     /// honour and shows everything.
     pub hidden: crate::net::Hidden,
+    /// **A challenge waiting to be answered**, and the room it is in. Taken by
+    /// whatever puts it on screen, so one that has been shown is not shown
+    /// twice — see [`Effect::Challenged`].
+    pub challenge: Option<(crate::net::Profile, RoomId)>,
+    /// What somebody said to one of ours. `None` in the second half is a
+    /// decline.
+    pub answered: Option<(crate::net::Profile, Option<RoomId>)>,
     /// Whether a game has gone into the diary since the app last looked.
     ///
     /// A flag rather than an effect, because `file_game` is called from four
@@ -349,6 +361,8 @@ impl Session {
             looked_up: None,
             locker: None,
             hidden: crate::net::Hidden::default(),
+            challenge: None,
+            answered: None,
             filed_a_game: false,
             people: None,
             room: None,
@@ -847,6 +861,26 @@ impl Session {
                     );
                     self.locker = Some(kept);
                     effects.push(Effect::LockerArrived);
+                }
+                // **Somebody wants a game**, and the room is already there.
+                // Held rather than acted on: a challenge that joined you to a
+                // world would take the screen away from whatever you were
+                // doing, which is exactly what an invitation must not do.
+                ServerMessage::Challenged { from, room } => {
+                    log::info!("{} challenged us in {room}", from.label());
+                    self.challenge = Some((from, room));
+                    effects.push(Effect::Challenged);
+                }
+                // And the answer, either way. A decline reaches the person who
+                // asked instead of looking like a server that lost it.
+                ServerMessage::Answered { who, room } => {
+                    log::info!(
+                        "{} answered: {}",
+                        who.label(),
+                        if room.is_some() { "yes" } else { "no" }
+                    );
+                    self.answered = Some((who, room));
+                    effects.push(Effect::Answered);
                 }
                 ServerMessage::Spawned { player, at } => {
                     if Some(player) == self.plays_as {
@@ -1367,6 +1401,16 @@ impl Session {
         self.asked_at = None;
         self.link = None;
         true
+    }
+
+    /// **Play me.** A match for two, made by the server and held for them.
+    pub fn challenge(&mut self, who: crate::net::PersonId) {
+        self.tell(ClientMessage::Challenge { who });
+    }
+
+    /// Yes or no, to whoever asked.
+    pub fn answer(&mut self, from: crate::net::PersonId, yes: bool) {
+        self.tell(ClientMessage::Answer { from, yes });
     }
 
     /// **Here is my locker; keep it.**

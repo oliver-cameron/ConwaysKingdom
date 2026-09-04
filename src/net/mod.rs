@@ -148,6 +148,18 @@ pub fn room_name(raw: &str) -> Result<RoomName, String> {
     Ok(name)
 }
 
+/// What a challenge is played to, in squares held.
+///
+/// **Territory rather than a timer**, because a challenge is somebody asking
+/// for a game rather than for an appointment: a match that ends when one of
+/// them has built something is over when it is over, and one that ends at a
+/// clock needs both of them to have agreed how long they have.
+///
+/// Five hundred is a few minutes of two people building at four generations a
+/// second, and is what the make-a-world form already offers as its middle
+/// answer.
+pub const CHALLENGE_SQUARES: usize = 500;
+
 /// The most sides a match may have.
 ///
 /// **Every number there is**, which is what a side costs: a side *is* a
@@ -1061,6 +1073,23 @@ pub enum ClientMessage {
     /// still at tick nine hundred in — the ground is what is being cleared,
     /// not the clock.
     Wipe,
+    /// **Play me.** A match for two, made and handed to somebody by name.
+    ///
+    /// The server makes a private match with two sides, puts the challenger in
+    /// it, and holds the room for whoever was named — see
+    /// [`ServerMessage::Challenged`]. It is a room like any other once it
+    /// exists: the answer is a `Join`, the whistle is the whistle, and nothing
+    /// about the match knows it began as a challenge.
+    ///
+    /// **Answerable without a seat.** You challenge somebody from a profile
+    /// panel or a list of who plays here, and neither is inside a room.
+    Challenge { who: PersonId },
+    /// **Yes or no**, to the person who asked.
+    ///
+    /// A decline is worth sending rather than letting a challenge rot: the
+    /// point of asking somebody is finding out, and silence is the one answer
+    /// that cannot be told from not having seen it.
+    Answer { from: PersonId, yes: bool },
     /// **Here is my locker; keep it.**
     ///
     /// Last in the list on purpose. Postcard writes a variant as its index, so
@@ -1243,6 +1272,24 @@ pub enum ServerMessage {
         /// asks any server, so the answer is known before anything is drawn.
         #[serde(default)]
         hidden: Hidden,
+    },
+    /// **Somebody has challenged you**, and the room is already there.
+    ///
+    /// Carries who, so the panel that shows it can show a face and a rating
+    /// rather than an id, and the room, so accepting is a `Join` and nothing
+    /// else. Delivered on the next thing this client says: a challenge waits
+    /// in the server's hands until its target is heard from, which is what
+    /// lets somebody be challenged while they are on the menu.
+    Challenged {
+        from: Profile,
+        room: RoomId,
+    },
+    /// **They answered.** `None` for a decline, so a refusal reaches the
+    /// person who asked instead of looking like a server that lost the
+    /// message.
+    Answered {
+        who: Profile,
+        room: Option<RoomId>,
     },
     /// **What this server holds for you**, sent on joining — see [`kept`].
     ///

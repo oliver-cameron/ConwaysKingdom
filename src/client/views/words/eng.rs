@@ -588,6 +588,24 @@ pub mod menu {
         }
     }
 }
+pub mod challenge {
+    /// Said out loud when one arrives, because a panel nobody is looking at is
+    /// a challenge nobody answers.
+    pub fn asked(who: &str) -> String {
+        format!("{who} wants a game")
+    }
+
+    /// And the answer, either way — a decline reaches the person who asked
+    /// rather than looking like a server that lost it.
+    pub fn answered(who: &str, yes: bool) -> String {
+        if yes {
+            format!("{who} is coming")
+        } else {
+            format!("{who} said no")
+        }
+    }
+}
+
 pub mod hotbar {
     /// What a rate means, in the unit somebody actually feels it in.
     ///

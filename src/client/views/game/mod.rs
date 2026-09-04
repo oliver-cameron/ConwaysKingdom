@@ -1319,6 +1319,22 @@ impl GameApp {
             // Both land on `session`, which is what the frame reads them
             // from, so there is nothing for the client to carry across.
             Effect::LookedUp | Effect::FoundPeople => {}
+            // **An invitation, not a summons.** Both land on `session`, which
+            // is what the frame reads them from — a challenge that took the
+            // screen away from whatever somebody was doing is the one thing an
+            // invitation must not be. What it does do is say so out loud,
+            // because a panel somebody is not looking at is a challenge nobody
+            // answers.
+            Effect::Challenged => {
+                if let Some((from, _)) = &self.session.challenge {
+                    self.notice = Some(words::challenge::asked(&from.label()));
+                }
+            }
+            Effect::Answered => {
+                if let Some((who, room)) = &self.session.answered {
+                    self.notice = Some(words::challenge::answered(&who.label(), room.is_some()));
+                }
+            }
             // **The server's copy is the copy, except when there isn't one.**
             // A locker with anything in it replaces what this client was
             // carrying; an empty one from a server that has met us is the

@@ -36,6 +36,7 @@ pub mod eng;
 // The formatters, from whichever language is compiled in. See the note above:
 // this is a re-export today and wants to be a trait the day there are two.
 pub use eng::{
+    challenge,
     clock,
     // And the handful that sit at the top rather than under a screen.
     describe,

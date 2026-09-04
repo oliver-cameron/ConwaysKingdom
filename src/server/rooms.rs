@@ -45,6 +45,16 @@ pub type Seat = (RoomId, PlayerId);
 /// The extension a room's world is saved under.
 const SAVE_EXT: &str = "ckw";
 
+/// A refusal, in the shape everything else here refuses in.
+///
+/// One line because a challenge fails in five ways and all of them are a
+/// sentence for the person who pressed something — see
+/// [`ServerMessage::Rejected`], which the menu already puts on screen.
+fn refuse(why: &str) -> Vec<ServerMessage> {
+    log::info!("refused a challenge: {why}");
+    vec![ServerMessage::Rejected { reason: why.to_string() }]
+}
+
 /// Which socket a message came in on. Unique for as long as the process lives
 /// and never reused, so a room's owner cannot become somebody else by a
 /// counter wrapping onto a number a departed connection had.
@@ -193,6 +203,31 @@ pub struct Rooms {
     /// A field rather than a `Config` this map borrows, because it is the only
     /// thing here a room list has to carry and `Rooms` is what answers one.
     pub hidden: crate::net::Hidden,
+    /// **Messages waiting for somebody who is not listening yet.**
+    ///
+    /// A challenge is the first thing here addressed to a *person* rather than
+    /// answered to whoever asked, and there is no channel for that: replies go
+    /// back to the caller and broadcasts go to a room. Rather than build one,
+    /// a challenge waits until its target is heard from — which is soon,
+    /// because a client on the menu is asking for the room list and one in a
+    /// world is checkpointing.
+    ///
+    /// The cost is honest: somebody who closed the tab is challenged the next
+    /// time they open it, and somebody who never comes back never sees it. A
+    /// challenge is an invitation rather than a notification, so arriving late
+    /// is the right failure.
+    waiting: BTreeMap<PersonId, Vec<ServerMessage>>,
+    /// **Challenges standing against each person**, which is a different thing
+    /// from the outbox above and was briefly the same one.
+    ///
+    /// A message in `waiting` is delivered *once*, the next time its target
+    /// says anything. An invitation stands until it is answered — so keeping
+    /// the challenge in the outbox meant that handing it over consumed it, and
+    /// the `Answer` that came back a moment later found nothing to answer.
+    ///
+    /// One per person, so a challenge cannot be a way to fill somebody's
+    /// screen and the room a decline names is the room they were shown.
+    challenges: BTreeMap<PersonId, (PersonId, RoomId)>,
     /// What a room made after startup runs at, so one made at the console
     /// keeps the speed the command line asked for.
     default_bpm: u16,
@@ -322,6 +357,8 @@ impl Rooms {
             lockers,
             hidden: crate::net::Hidden::default(),
             default_bpm: crate::net::DEFAULT_BPM,
+            waiting: BTreeMap::new(),
+            challenges: BTreeMap::new(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -344,6 +381,8 @@ impl Rooms {
             lockers: crate::server::lockers::Lockers::new(),
             hidden: crate::net::Hidden::default(),
             default_bpm: crate::net::DEFAULT_BPM,
+            waiting: BTreeMap::new(),
+            challenges: BTreeMap::new(),
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -456,6 +495,19 @@ impl Rooms {
     /// is from the `Welcome` it never got, would go on believing it was still
     /// there.
     pub fn handle(&mut self, caller: &Caller, msg: ClientMessage) -> Vec<ServerMessage> {
+        // **Anything held for this caller rides out with whatever they asked
+        // for.** There is no channel to a person — see `Self::waiting` — so a
+        // challenge waits until its target is heard from, which is soon: a
+        // client on the menu is asking for the room list and one in a world is
+        // checkpointing. Taken here, at the top, so every path answers with it
+        // rather than the handful that remembered to.
+        let mut out = self.deliver(caller);
+        out.extend(self.answer_for(caller, msg));
+        out
+    }
+
+    /// What this caller asked for, without what was waiting for them.
+    fn answer_for(&mut self, caller: &Caller, msg: ClientMessage) -> Vec<ServerMessage> {
         // Answered without a seat, like `Join` and for the same reason: it
         // names no world. A player has to see the rooms before picking one,
         // and a room *is* a world, so asking from inside one is asking too
@@ -491,6 +543,15 @@ impl Rooms {
                 like: like.clone(),
                 found: self.people_like(like),
             }];
+        }
+        // **Play me.** Answered without a seat, because you challenge somebody
+        // from a profile panel or a list of who plays here and neither is
+        // inside a room.
+        if let ClientMessage::Challenge { who } = &msg {
+            return self.challenge(caller, who);
+        }
+        if let ClientMessage::Answer { from, yes } = &msg {
+            return self.answer(caller, from, *yes);
         }
         // Answered without a seat for the same reason again, and one of its
         // own: a library is edited *between* games, on a screen that is not
@@ -828,6 +889,105 @@ impl Rooms {
             server.set_rate(bpm);
         }
         self.default_bpm = bpm;
+    }
+
+    /// **Make a match for two and hold it for somebody.**
+    ///
+    /// A room like any other once it exists — private, two sides, and the
+    /// challenger in it. What makes it a challenge is only that the server is
+    /// holding the way in for one named person, and will tell them the next
+    /// time it hears from them.
+    fn challenge(&mut self, caller: &Caller, who: &PersonId) -> Vec<ServerMessage> {
+        let Some(from) = caller.person.clone() else {
+            return refuse("a challenge comes from somebody, and this client has no key");
+        };
+        if from == *who {
+            return refuse("you cannot challenge yourself");
+        }
+        if !self.people.knows(who) {
+            return refuse("this server has never met them");
+        }
+        if self.challenges.contains_key(who) {
+            return refuse("they already have a challenge waiting");
+        }
+
+        // Named for the two of them, so the room list -- which does not show
+        // it, being private -- and a log line both say what it is.
+        let name = format!("{}-v-{}", from.short(), who.short());
+        let made = match self.make(
+            caller.connection,
+            &name,
+            WorldKind::Infinite,
+            Some(Victory::Territory { squares: crate::net::CHALLENGE_SQUARES }),
+            Some(2),
+            true,
+            false,
+        ) {
+            Ok(made) => made,
+            Err(why) => return refuse(&why),
+        };
+
+        let Some(theirs) = self.profile_of(&from) else {
+            return refuse("this server has nothing to say about you yet");
+        };
+        // Recorded *and* queued: the record is what an answer looks up and
+        // stands until then, the message is delivered once.
+        self.challenges.insert(who.clone(), (from.clone(), made.id.clone()));
+        self.waiting
+            .entry(who.clone())
+            .or_default()
+            .push(ServerMessage::Challenged { from: theirs, room: made.id.clone() });
+        log::info!("{from} challenged {who} in room {}", made.id);
+        vec![ServerMessage::Made(Ok(made))]
+    }
+
+    /// **Yes or no, back to whoever asked.**
+    ///
+    /// A yes is the room, which the challenger already holds — the answer is
+    /// worth sending anyway, because "they are coming" is the thing you are
+    /// waiting to hear. A no is the same message with no room in it, so a
+    /// refusal reaches somebody rather than looking like a server that lost it.
+    fn answer(&mut self, caller: &Caller, from: &PersonId, yes: bool) -> Vec<ServerMessage> {
+        let Some(me) = caller.person.clone() else {
+            return refuse("an answer comes from somebody, and this client has no key");
+        };
+        // Taken whichever way it is answered: it has been decided, and one
+        // left standing would be offered again.
+        let Some((asked_by, _)) = self.challenges.get(&me) else {
+            return refuse("there is no challenge to answer");
+        };
+        if asked_by != from {
+            return refuse("there is no challenge from them to answer");
+        }
+        let room = self.challenges.remove(&me).map(|(_, room)| room);
+
+        let Some(mine) = self.profile_of(&me) else {
+            return refuse("this server has nothing to say about you yet");
+        };
+        let told = ServerMessage::Answered { who: mine, room: yes.then(|| room.clone()).flatten() };
+        self.waiting.entry(from.clone()).or_default().push(told);
+        log::info!("{me} answered {from}'s challenge: {}", if yes { "yes" } else { "no" });
+        match (yes, room) {
+            // Handed straight back, so accepting is one press: what a client
+            // does with it is the `Join` it would have made anyway.
+            (true, Some(room)) => vec![ServerMessage::Challenged {
+                from: self.profile_of(from).expect("challenged by somebody this server knows"),
+                room,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
+    /// What is waiting for somebody, without taking it.
+    /// **Everything held for this caller**, taken as it is handed over.
+    ///
+    /// Appended to whatever they asked for, because there is no channel to a
+    /// person — see [`Self::waiting`]. Any message will do: a client on the
+    /// menu is asking for the room list every few seconds and one in a world
+    /// is checkpointing.
+    fn deliver(&mut self, caller: &Caller) -> Vec<ServerMessage> {
+        let Some(who) = &caller.person else { return Vec::new() };
+        self.waiting.remove(who).unwrap_or_default()
     }
 
     /// Write the lockers, and say so if they will not go.
@@ -2104,6 +2264,167 @@ mod tests {
         let why = hidden.hide("howtoo").expect_err("a typo was accepted");
         assert!(why.contains("howto"), "the refusal does not say what the names are: {why}");
         assert_eq!(hidden, crate::net::Hidden::default(), "a refused name changed something");
+    }
+
+    /// **A challenge is a room made and held for one named person**, and it
+    /// reaches them on the next thing they say — there is no channel to a
+    /// person, so it waits.
+    #[test]
+    fn a_challenge_makes_a_room_and_reaches_the_person_it_names() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (a, b) = (Secret::new().unwrap(), Secret::new().unwrap());
+        let join = |s: &Secret| ClientMessage::Join {
+            name: "somebody".into(),
+            room: Some(RoomId::from("hall")),
+            person: Some(s.clone()),
+        };
+        // Both have to be somebody this server has met.
+        let out = rooms.handle(&Caller::new(1), join(&a));
+        let [ServerMessage::Welcome { profile, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let a_id = profile.clone().expect("a profile").who;
+        rooms.handle(
+            &Caller::sitting(1, (RoomId::from("hall"), crate::sim::PlayerId(1))),
+            ClientMessage::Leave,
+        );
+        let out = rooms.handle(&Caller::new(2), join(&b));
+        let [ServerMessage::Welcome { profile, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let b_id = profile.clone().expect("a profile").who;
+
+        let out = rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Challenge { who: b_id.clone() },
+        );
+        let [ServerMessage::Made(Ok(made))] = &out[..] else { panic!("{out:?}") };
+        let room = made.id.clone();
+        assert!(made.code.is_some(), "a challenge is not in the listing");
+
+        // Nothing reaches them until they say something -- and then it does,
+        // riding out with whatever they asked for.
+        let out = rooms.handle(&Caller::known(2, b_id.clone()), ClientMessage::Rooms);
+        let told = out.iter().find_map(|m| match m {
+            ServerMessage::Challenged { from, room } => Some((from.clone(), room.clone())),
+            _ => None,
+        });
+        let (from, told_room) = told.expect("the challenge never arrived");
+        assert_eq!(from.who, a_id, "it came from the wrong person");
+        assert_eq!(told_room, room);
+
+        // Taken as it is handed over, so it is not shown twice.
+        let out = rooms.handle(&Caller::known(2, b_id.clone()), ClientMessage::Rooms);
+        assert!(!out.iter().any(|m| matches!(m, ServerMessage::Challenged { .. })), "shown twice");
+
+        // Yes, and the answer reaches the person who asked.
+        let out = rooms.handle(
+            &Caller::known(2, b_id.clone()),
+            ClientMessage::Answer { from: a_id.clone(), yes: true },
+        );
+        assert!(out.iter().any(|m| matches!(m, ServerMessage::Challenged { .. })), "{out:?}");
+
+        let out = rooms.handle(&Caller::known(1, a_id), ClientMessage::Rooms);
+        let answered = out.iter().find_map(|m| match m {
+            ServerMessage::Answered { who, room } => Some((who.who.clone(), room.clone())),
+            _ => None,
+        });
+        let (who, room_back) = answered.expect("the answer never arrived");
+        assert_eq!(who, b_id);
+        assert_eq!(room_back, Some(room), "a yes did not name the room");
+    }
+
+    /// **A no reaches somebody**, because the point of asking is finding out
+    /// and silence cannot be told from not having seen it.
+    #[test]
+    fn a_decline_reaches_the_person_who_asked() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (a_id, b_id) = two_people(&mut rooms);
+
+        rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Challenge { who: b_id.clone() },
+        );
+        rooms.handle(&Caller::known(2, b_id.clone()), ClientMessage::Rooms);
+        rooms.handle(
+            &Caller::known(2, b_id.clone()),
+            ClientMessage::Answer { from: a_id.clone(), yes: false },
+        );
+
+        // Searched rather than positioned: what is waiting is handed over
+        // *before* what was asked for, so an answer arrives in front of the
+        // room list it rode out with.
+        let out = rooms.handle(&Caller::known(1, a_id), ClientMessage::Rooms);
+        let answered = out.iter().find_map(|m| match m {
+            ServerMessage::Answered { who, room } => Some((who.who.clone(), room.clone())),
+            _ => None,
+        });
+        let (who, room) = answered.unwrap_or_else(|| panic!("no answer: {out:?}"));
+        assert_eq!(who, b_id);
+        assert!(room.is_none(), "a no named a room to join");
+    }
+
+    /// The five ways it will not go, each a sentence somebody can act on.
+    #[test]
+    fn a_challenge_nobody_can_answer_is_refused_with_a_reason() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (a_id, b_id) = two_people(&mut rooms);
+        let why = |out: &[ServerMessage]| match out {
+            [ServerMessage::Rejected { reason }] => reason.clone(),
+            other => panic!("not a refusal: {other:?}"),
+        };
+
+        // A client with no key is nobody, so there is nowhere to answer to.
+        let out = rooms.handle(&Caller::new(9), ClientMessage::Challenge { who: b_id.clone() });
+        assert!(why(&out).contains("no key"), "{:?}", why(&out));
+
+        // Yourself.
+        let out = rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Challenge { who: a_id.clone() },
+        );
+        assert!(why(&out).contains("yourself"));
+
+        // Somebody this server has never met.
+        let stranger = crate::net::PersonId("nobody-here".into());
+        let out = rooms
+            .handle(&Caller::known(1, a_id.clone()), ClientMessage::Challenge { who: stranger });
+        assert!(why(&out).contains("never met"));
+
+        // And twice over, so a challenge cannot fill somebody's screen.
+        rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Challenge { who: b_id.clone() },
+        );
+        let out =
+            rooms.handle(&Caller::known(1, a_id.clone()), ClientMessage::Challenge { who: b_id });
+        assert!(why(&out).contains("already"), "{:?}", why(&out));
+
+        // An answer to nothing.
+        let out = rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Answer { from: a_id, yes: true },
+        );
+        assert!(why(&out).contains("no challenge"), "{:?}", why(&out));
+    }
+
+    /// Two people this server has met, each having left the room again.
+    fn two_people(rooms: &mut Rooms) -> (PersonId, PersonId) {
+        let hall = RoomId::from("hall");
+        let mut meet = |n: u64| {
+            let key = Secret::new().unwrap();
+            let out = rooms.handle(
+                &Caller::new(n),
+                ClientMessage::Join {
+                    name: "somebody".into(),
+                    room: Some(hall.clone()),
+                    person: Some(key),
+                },
+            );
+            let [ServerMessage::Welcome { you, profile, .. }, ..] = &out[..] else {
+                panic!("{out:?}")
+            };
+            let (seat, who) = (*you, profile.clone().expect("a profile").who);
+            rooms.handle(&Caller::sitting(n, (hall.clone(), seat)), ClientMessage::Leave);
+            who
+        };
+        (meet(1), meet(2))
     }
 
     /// **A locker is nobody's to offer without a name.** `Keep` writes a
