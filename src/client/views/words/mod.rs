@@ -219,6 +219,10 @@ pub struct MenuWatch {
 pub struct MenuMake {
     /// The action, when there is no server to ask. The same form, so the
     /// same questions; a different place for the answer to go.
+    ///
+    /// Just "Play", because the answer above it already says *alone* — see
+    /// [`Self::solo_access`]. A button repeating the toggle it sits under is
+    /// the same word twice for two different jobs.
     pub alone: &'static str,
     /// Opens the form. Says "world" rather than "room" because that is
     /// what you get and what the game calls it everywhere else; "room" is
