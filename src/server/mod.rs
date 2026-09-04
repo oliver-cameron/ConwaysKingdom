@@ -60,6 +60,9 @@ pub struct Server {
     /// `allied()` call threaded through placement, pricing, spawning, manufacture,
     /// scoring and colour.
     sides: Vec<PlayerId>,
+    /// Seconds owed to the next generation — see [`Self::owe`]. Not saved: a
+    /// fraction of a tick is not a fact about a world.
+    owed: f32,
     /// Stopped, and not stepping until somebody says otherwise.
     ///
     /// Every room steps four times a second for as long as the process lives,
@@ -161,6 +164,7 @@ impl Server {
             phase: Phase::Open,
             victory: None,
             sides: Vec::new(),
+            owed: 0.0,
             asleep: false,
             started_by: None,
             lobby_changed: false,
@@ -453,8 +457,19 @@ impl Server {
         if !self.rules.laboratory {
             return Err("this room is a game, so its rules are not yours to change".into());
         }
-        self.rules = Rules { laboratory: true, ..asked };
+        // **The rate is checked; the three flags cannot be wrong.** A bool is
+        // one of two answers and either is a room somebody might want, but a
+        // rate is a number off the wire and `0` or `65535` are a stopped world
+        // and a busy loop -- see `net::Rules::rate`.
+        let bpm = Rules::rate(asked.bpm)?;
+        self.rules = Rules { laboratory: true, bpm, ..asked };
         Ok(self.rules)
+    }
+
+    /// Set what this room runs at, out of range clamped rather than refused:
+    /// this is a server's own default reaching a room, not a client asking.
+    pub fn set_rate(&mut self, bpm: u16) {
+        self.rules.bpm = bpm.clamp(crate::net::SLOWEST_BPM, crate::net::FASTEST_BPM);
     }
 
     pub fn phase(&self) -> &Phase {
@@ -1366,6 +1381,28 @@ impl Server {
         let out = self.step();
         self.rules.paused = true;
         out
+    }
+
+    /// **Advance if this room owes a generation**, banking the rest.
+    ///
+    /// The server's ticker is fine and every room decides for itself, because
+    /// the rate is one of the room's [`crate::net::Rules`] and a laboratory's
+    /// is its own to change. A leftover rather than a reset, so a slow tick
+    /// does not lose a generation and a fast one does not run two.
+    ///
+    /// The same shape `World::update` gives the client, and deliberately: two
+    /// clocks banking time differently is two clocks that drift.
+    pub fn owe(&mut self, dt: std::time::Duration) -> Vec<ServerMessage> {
+        self.owed += dt.as_secs_f32();
+        let span = self.rules.generation_span();
+        if self.owed < span {
+            return Vec::new();
+        }
+        // At most one a tick however far behind it is: a server that stalled
+        // for a second should arrive late rather than run four generations
+        // into one frame and hand every client four steps at once.
+        self.owed = 0.0;
+        self.step()
     }
 
     /// Apply everything queued for this tick, advance one generation, and hand
@@ -2769,6 +2806,50 @@ mod tests {
         s.start_match(Some(a)).unwrap();
         assert!(s.join_team(a, PlayerId(2)).is_err(), "changed sides mid-match");
         assert!(s.name_team(PlayerId(1), "Blues").is_err(), "renamed a side mid-match");
+    }
+
+    /// **A room keeps its own clock, and banks what is left over.**
+    ///
+    /// Every room used to step on one ticker at the server's span, so a
+    /// laboratory could not be slowed down and a rate was a launch flag rather
+    /// than a control. The ticker is a grain now and each room decides — the
+    /// same shape `World::update` already gave the client, deliberately,
+    /// because two clocks banking time differently are two clocks that drift.
+    #[test]
+    fn a_room_steps_at_its_own_rate_and_keeps_the_remainder() {
+        use std::time::Duration;
+        let mut s = Server::new(World::infinite_empty());
+        s.rules.laboratory = true;
+        s.set_rules(crate::net::Rules { laboratory: true, bpm: 60, ..Default::default() })
+            .expect("a laboratory would not take a rate");
+
+        // One a second now, so a quarter of one is not yet a generation.
+        let was = s.tick();
+        assert!(s.owe(Duration::from_millis(250)).is_empty());
+        assert!(s.owe(Duration::from_millis(250)).is_empty());
+        assert_eq!(s.tick(), was, "it stepped early");
+        assert!(!s.owe(Duration::from_millis(500)).is_empty(), "a whole second did not step it");
+        assert_eq!(s.tick(), was + 1);
+
+        // At most one a tick however far behind: a server that stalled should
+        // arrive late rather than hand every client four steps at once.
+        let was = s.tick();
+        s.owe(Duration::from_secs(10));
+        assert_eq!(s.tick(), was + 1, "it caught up all at once");
+    }
+
+    /// **A rate off the wire is checked and the three flags are not**, because
+    /// a bool is one of two answers and either is a room somebody might want,
+    /// where `0` is a stopped world said twice and `65535` is a busy loop.
+    #[test]
+    fn a_laboratory_cannot_be_set_to_an_impossible_rate() {
+        let mut s = Server::new(World::infinite_empty());
+        s.rules.laboratory = true;
+        for bad in [0, crate::net::FASTEST_BPM + 1, u16::MAX] {
+            let asked = crate::net::Rules { laboratory: true, bpm: bad, ..Default::default() };
+            assert!(s.set_rules(asked).is_err(), "{bad} was accepted");
+        }
+        assert_eq!(s.rules.bpm, crate::net::DEFAULT_BPM, "a refused rate changed the room");
     }
 
     /// **Arriving puts you on a side, and the lobby decides which.**

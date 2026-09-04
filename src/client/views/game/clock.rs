@@ -14,12 +14,17 @@ use crate::client::views::theme::Theme;
 use crate::client::views::words::clock as words;
 use crate::net::{MatchPhase, Victory};
 
-/// Generations per second, so a count of them can be said in seconds. The
-/// client steps its own world at this rate and the server is asked to, so it
-/// is right unless somebody has started a server with a different `--span` —
-/// and then the *bar* is still right, since a bar is a fraction rather than a
-/// duration.
-const PER_SECOND: f64 = 1.0 / crate::client::views::game::GENERATION_SPAN as f64;
+/// How long a count of generations lasts, in seconds, at this room's rate.
+///
+/// **Asked of the room rather than assumed.** This was one over a constant
+/// that meant four a second, with a doc comment admitting it was wrong for a
+/// server started at a different span — and it was wrong in the worst place,
+/// since the number it feeds is a *countdown* somebody is timing a match
+/// against. The bar was right either way, a bar being a fraction.
+fn seconds(generations: u64, bpm: u16) -> u64 {
+    let per_second = bpm.max(1) as f64 / 60.0;
+    (generations as f64 / per_second).round() as u64
+}
 
 /// Draw it, if there is a match running. Returns what it covered.
 pub fn show(
@@ -30,6 +35,9 @@ pub fn show(
     victory: Option<Victory>,
     standing: &[crate::net::Holding],
     paused: bool,
+    // This room's rate, for turning a count of generations into a time -- see
+    // `net::Rules::bpm`.
+    bpm: u16,
 ) -> crate::client::views::Shown<()> {
     // **A stopped world says so, and nothing else has to.** A board that is
     // not moving is indistinguishable from one that has settled, and settling
@@ -49,7 +57,7 @@ pub fn show(
         Victory::Timer { generations } => {
             let gone = generation.saturating_sub(*from);
             let left = generations.saturating_sub(gone);
-            (words::generations_left(left, seconds(left)), gone, generations)
+            (words::generations_left(left, seconds(left, bpm)), gone, generations)
         }
         Victory::Territory { squares } => {
             // Against the **leader**, not against you: the question a target
@@ -114,10 +122,6 @@ fn pill(ctx: &egui::Context, theme: &Theme, text: String) -> crate::client::view
     crate::client::views::Shown::new(area.response.rect, ())
 }
 
-fn seconds(generations: u64) -> u64 {
-    (generations as f64 / PER_SECOND).round() as u64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,9 +147,14 @@ mod tests {
     /// Seconds, from the rate the world is stepped at.
     #[test]
     fn generations_read_as_a_clock() {
-        assert_eq!(seconds(4), 1, "four a second");
-        assert_eq!(seconds(2000), 500);
-        assert_eq!(w::generations_left(2000, seconds(2000)), "2000 left  ·  8:20");
+        assert_eq!(seconds(4, crate::net::DEFAULT_BPM), 1, "four a second");
+        assert_eq!(seconds(2000, crate::net::DEFAULT_BPM), 500);
+        // And a room set to half speed takes twice as long to get there.
+        assert_eq!(seconds(2000, crate::net::DEFAULT_BPM / 2), 1000, "a slower room read fast");
+        assert_eq!(
+            w::generations_left(2000, seconds(2000, crate::net::DEFAULT_BPM)),
+            "2000 left  ·  8:20"
+        );
         assert_eq!(w::generations_left(0, 0), "time", "which is what a whistle is");
     }
 }

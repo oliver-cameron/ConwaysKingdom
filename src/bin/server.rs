@@ -7,7 +7,7 @@
 //!     --room  NAME   declare a room; repeatable  (default one called main)
 //!     --torus RxC    a world that wraps, in chunks (default infinite)
 //!     --serve DIR    static files at /           (default: none)
-//!     --span  MS     milliseconds per generation (default 250)
+//!     --bpm   N      generations a minute        (default 240)
 //!     --fresh        ignore every existing save and start new worlds
 //!     --max-rooms N  how many rooms players may make (default 32)
 //!     --hide NAME    a screen this server asks clients not to offer;
@@ -51,7 +51,7 @@ fn main() -> std::io::Result<()> {
     let mut rooms_dir = PathBuf::from("rooms");
     let mut declared: Vec<String> = Vec::new();
     let mut static_dir: Option<PathBuf> = None;
-    let mut span = Duration::from_millis(250);
+    let mut bpm = conwayskingdom::net::DEFAULT_BPM;
     let mut fresh = false;
     let mut shape = conwayskingdom::sim::WorldKind::Infinite;
     let mut max_rooms = conwayskingdom::server::rooms::MAX_MADE_ROOMS;
@@ -66,10 +66,27 @@ fn main() -> std::io::Result<()> {
             "--rooms" => rooms_dir = args.next().expect("--rooms needs a directory").into(),
             "--room" => declared.push(args.next().expect("--room needs a name")),
             "--serve" => static_dir = Some(args.next().expect("--serve needs a directory").into()),
+            "--bpm" => {
+                let asked: u16 = args
+                    .next()
+                    .expect("--bpm needs a number")
+                    .parse()
+                    .expect("--bpm takes a number");
+                bpm = conwayskingdom::net::Rules::rate(asked)
+                    .unwrap_or_else(|e| panic!("--bpm: {e}"));
+            }
+            // **Gone, and named rather than ignored.** A span in milliseconds
+            // is a rate spelled so that nobody can tell 250 is a round number:
+            // it is four generations a second, which is 240 a minute. Passing
+            // the old flag says what to pass instead, the way `--world` does.
             "--span" => {
                 let ms: u64 =
                     args.next().expect("--span needs milliseconds").parse().expect("bad span");
-                span = Duration::from_millis(ms);
+                let same = (60_000 / ms.max(1)).clamp(1, u16::MAX as u64);
+                panic!(
+                    "--span is gone: a world's speed is generations a minute now. \
+                     --span {ms} is --bpm {same}."
+                );
             }
             // **A request to the client, not a rule.** Nothing is enforced
             // and nothing could be: the client is somebody else's and every
@@ -141,6 +158,10 @@ fn main() -> std::io::Result<()> {
     };
 
     rooms.cap_made(max_rooms);
+    rooms.run_at(bpm);
+    if bpm != conwayskingdom::net::DEFAULT_BPM {
+        log::info!("every room runs at {bpm} generations a minute");
+    }
     rooms.hidden = hidden;
     if hidden.howto {
         log::info!("--hide howto: clients are asked not to offer the how-to page");
@@ -202,7 +223,7 @@ fn main() -> std::io::Result<()> {
             addr,
             static_dir,
             save_every: Duration::from_secs(30),
-            generation_span: span,
+            bpm,
             // What `new NAME` at the console makes when it is not given a
             // size, so typing it means what --room would have meant.
             shape,

@@ -59,9 +59,6 @@ use crate::sim::PlayerId;
 /// gets near this at its peak.
 const WHEEL_NOTCH: f64 = 60.0;
 
-/// Seconds of wall clock per generation.
-pub const GENERATION_SPAN: f32 = 0.25;
-
 /// Screen pixels per cell at startup.
 const START_ZOOM: f32 = 16.0;
 
@@ -1113,6 +1110,7 @@ impl GameApp {
                 paused: true,
                 place_anywhere: true,
                 place_free: true,
+                ..Default::default()
             });
             self.last_action = Some(w().help.paused.into());
         }
@@ -1825,7 +1823,13 @@ impl App for GameApp {
         // Only offline, and the session is what knows that. Connected, the
         // world advances when the server says a generation happened and never
         // on this client's own clock.
-        self.session.advance_alone(&mut self.world, dt, GENERATION_SPAN);
+        // **The room's rate, not a constant here.** This was `GENERATION_SPAN
+        // = 0.25`, which is the server's `--span 250` said a second time in a
+        // second unit -- so a room running at anything else had a client
+        // stepping at four a second regardless, and correcting on every
+        // checkpoint. See `net::Rules::bpm`.
+        let span = self.session.rules.generation_span();
+        self.session.advance_alone(&mut self.world, dt, span);
 
         // **Which world is on screen**, which the menu and the board answer
         // differently -- see `menu::attract`. One store and one camera buffer
@@ -2122,6 +2126,7 @@ impl App for GameApp {
                         let clock_rect = lobby.as_ref().and_then(|l| {
                             clock::show(
                                 ctx, &theme, generation, &l.phase, l.victory, &standing, paused,
+                                rules.bpm,
                             )
                             .rect
                         });
@@ -2234,7 +2239,7 @@ impl App for GameApp {
         if let Some(key) = picked {
             self.pick(key);
         }
-        // The two rules, and the press that shuts the panel. Sent as well as
+        // The rules, and the press that shuts the panel. Sent as well as
         // applied, because the room holds them and everybody in it shares
         // them — see `set_rules`.
         let now = self.session.rules;
@@ -2246,6 +2251,7 @@ impl App for GameApp {
             rules::Did::Free(on) => {
                 self.session.set_rules(crate::net::Rules { place_free: on, ..now })
             }
+            rules::Did::Bpm(bpm) => self.session.set_rules(crate::net::Rules { bpm, ..now }),
         }
         if !rules_open {
             self.ui.showing_rules = false;

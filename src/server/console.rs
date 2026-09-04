@@ -339,6 +339,12 @@ mod tests {
     use crate::server::Server;
     use crate::sim::World;
 
+    /// A whole generation's worth of time, so one call is one generation
+    /// whatever rate the room is set to — see `Server::owe`.
+    fn a_generation() -> std::time::Duration {
+        std::time::Duration::from_secs_f32(crate::net::Rules::default().generation_span())
+    }
+
     fn rooms() -> Rooms {
         Rooms::just(Server::named("main", World::infinite_empty()))
     }
@@ -386,12 +392,16 @@ mod tests {
         // The tick is the generation, so a sleeping world does not move and
         // waking is indistinguishable from never having slept.
         let at = rooms.get(&"arena".into()).unwrap().tick();
-        rooms.step();
-        rooms.step();
+        // A whole generation's worth each time, so two calls is two
+        // generations whatever the rate -- see `Server::owe`.
+        let span =
+            std::time::Duration::from_secs_f32(crate::net::Rules::default().generation_span());
+        rooms.step(span);
+        rooms.step(span);
         assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), at, "asleep is a whole stop");
 
         assert!(out("world wake arena", &mut rooms).contains("wake"));
-        rooms.step();
+        rooms.step(a_generation());
         assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), at + 1);
 
         // A match has a clock and a deadline in generations, so a sleep would
@@ -510,14 +520,14 @@ mod tests {
         // A gathering match does not step, which is what makes the opening
         // drawn rather than raced.
         let before = rooms.get(&"arena".into()).unwrap().tick();
-        rooms.step();
+        rooms.step(a_generation());
         assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), before, "gathering holds still");
 
         assert!(out("match", &mut rooms).contains("gathering"));
         assert!(out("match dispatch", &mut rooms).contains("running"));
         assert!(out("match dispatch", &mut rooms).contains("no match is waiting"));
 
-        rooms.step();
+        rooms.step(a_generation());
         assert_eq!(rooms.get(&"arena".into()).unwrap().tick(), before + 1, "running steps");
         assert!(out("match", &mut rooms).contains("running"));
     }

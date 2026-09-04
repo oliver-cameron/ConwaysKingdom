@@ -193,6 +193,9 @@ pub struct Rooms {
     /// A field rather than a `Config` this map borrows, because it is the only
     /// thing here a room list has to carry and `Rooms` is what answers one.
     pub hidden: crate::net::Hidden,
+    /// What a room made after startup runs at, so one made at the console
+    /// keeps the speed the command line asked for.
+    default_bpm: u16,
     /// The code that reaches each private room.
     ///
     /// A credential, not an identity: it is separate from the id so that a
@@ -318,6 +321,7 @@ impl Rooms {
             profiles,
             lockers,
             hidden: crate::net::Hidden::default(),
+            default_bpm: crate::net::DEFAULT_BPM,
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -339,6 +343,7 @@ impl Rooms {
             profiles: crate::server::profiles::Profiles::new(),
             lockers: crate::server::lockers::Lockers::new(),
             hidden: crate::net::Hidden::default(),
+            default_bpm: crate::net::DEFAULT_BPM,
             codes: BTreeMap::new(),
             made: BTreeMap::new(),
             owner: BTreeMap::new(),
@@ -746,17 +751,24 @@ impl Rooms {
     /// belongs to. A `Step` is only meaningful to the clients in its own
     /// world, so the room travels with it as far as the connection that
     /// decides whether to send it on.
-    pub fn step(&mut self) -> Vec<(RoomId, ServerMessage)> {
+    pub fn step(&mut self, dt: std::time::Duration) -> Vec<(RoomId, ServerMessage)> {
         // Cloned so the stamp below can read them while the rooms are borrowed
         // mutably. Sixteen bytes and a short string per room, once a tick.
         let owners = self.owner.clone();
         let codes = self.codes.clone();
+        // **Each room on its own clock.** They shared one, on the reasoning
+        // that a room with its own rate would be a second thing to tell a
+        // client and a second way to disagree about what a tick is — which was
+        // true until the rate became one of the room's `Rules`, and a `Welcome`
+        // has carried those all along. So the ticker is a *fine* one now and
+        // each room banks time against its own rate, which is exactly what the
+        // client already does with `World::update`.
         let mut out: Vec<(RoomId, ServerMessage)> = self
             .rooms
             .iter_mut()
             .flat_map(|(id, server)| {
                 let (owner, code) = (owners.get(id).copied(), codes.get(id).cloned());
-                server.step().into_iter().map(move |mut m| {
+                server.owe(dt).into_iter().map(move |mut m| {
                     stamp(&mut m, owner, code.clone());
                     (id.clone(), m)
                 })
@@ -806,6 +818,16 @@ impl Rooms {
         if let Some(server) = self.rooms.get_mut(room) {
             server.leave(*id);
         }
+    }
+
+    /// **What every room here runs at**, for rooms nobody has said anything
+    /// about — see [`crate::net::Rules::bpm`]. A laboratory may still be set
+    /// to something else once it exists; this is the answer it starts from.
+    pub fn run_at(&mut self, bpm: u16) {
+        for server in self.rooms.values_mut() {
+            server.set_rate(bpm);
+        }
+        self.default_bpm = bpm;
     }
 
     /// Write the lockers, and say so if they will not go.
@@ -1420,6 +1442,12 @@ fn saved_in(dir: &Path) -> std::io::Result<Vec<RoomName>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A whole generation's worth of time, so one call to `Rooms::step` is one
+    /// generation whatever rate a room is set to — see `Server::owe`.
+    fn a_generation() -> std::time::Duration {
+        std::time::Duration::from_secs_f32(crate::net::Rules::default().generation_span())
+    }
     use crate::net::Secret;
     use crate::sim::World;
 
@@ -1496,7 +1524,7 @@ mod tests {
         let mut rooms =
             Rooms::open(temp_dir("step"), &["a".into(), "b".into()], WorldKind::Infinite, true)
                 .unwrap();
-        let stepped = rooms.step();
+        let stepped = rooms.step(a_generation());
         let names: Vec<&str> = stepped.iter().map(|(r, _)| r.as_str()).collect();
         assert_eq!(names, ["a", "b"], "one Step per room, each labelled");
         assert_eq!(rooms.get(&RoomId::from("a")).unwrap().tick(), 1);
@@ -1510,7 +1538,7 @@ mod tests {
         {
             let mut rooms = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
             rooms.get_mut(&RoomId::from("kept")).unwrap().join("alice").unwrap();
-            rooms.step();
+            rooms.step(a_generation());
             rooms.save().unwrap();
         }
 
@@ -1531,7 +1559,7 @@ mod tests {
         let dir = temp_dir("fresh");
         {
             let mut rooms = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
-            rooms.step();
+            rooms.step(a_generation());
             rooms.save().unwrap();
         }
         let back = Rooms::open(&dir, &["kept".into()], WorldKind::Infinite, true).unwrap();
@@ -1973,7 +2001,7 @@ mod tests {
         // to all of them. A gathering match does not advance its world, and it
         // still has to produce this — which is the thing most likely to have
         // been got wrong.
-        let broadcast = rooms.step();
+        let broadcast = rooms.step(a_generation());
         let owner = broadcast
             .iter()
             .find_map(|(_, m)| match m {
@@ -2309,7 +2337,7 @@ mod tests {
             server.start_match(None).unwrap();
         }
         for _ in 0..40 {
-            rooms.step();
+            rooms.step(a_generation());
         }
 
         let late = Caller::new(11);
@@ -2401,13 +2429,13 @@ mod tests {
                 },
             }),
         );
-        rooms.step();
+        rooms.step(a_generation());
         assert_eq!(
             rooms.get(&RoomId::from("hall")).unwrap().world().digest(),
             {
                 let mut clean = Rooms::just(Server::named("hall", World::infinite_empty()));
                 clean.get_mut(&RoomId::from("hall")).unwrap().join("alice").unwrap();
-                clean.step();
+                clean.step(a_generation());
                 clean.get(&RoomId::from("hall")).unwrap().world().digest()
             },
             "a watcher put something in the world"

@@ -10,7 +10,7 @@ pub mod route;
 pub mod session;
 pub mod views;
 
-pub use views::game::{GameApp, GENERATION_SPAN};
+pub use views::game::GameApp;
 
 /// Native only: the browser client learns its server from the page it came
 /// from, so there is nothing to tell it.

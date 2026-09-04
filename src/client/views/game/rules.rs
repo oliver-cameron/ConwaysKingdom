@@ -15,6 +15,7 @@
 //! see [`crate::net::Rules`].
 
 use crate::client::views::theme::Theme;
+use crate::client::views::words::hotbar as words;
 use crate::client::views::words::w;
 use crate::client::views::Shown;
 
@@ -31,6 +32,11 @@ pub enum Did {
     Nothing,
     Anywhere(bool),
     Free(bool),
+    /// **How fast the world runs**, in generations a minute — see
+    /// [`crate::net::Rules::bpm`]. A rule like the other two rather than a
+    /// launch flag: it is a fact about the room, everybody in one has to agree
+    /// about it, and a laboratory is where a rule is yours to change.
+    Bpm(u16),
 }
 
 pub fn show(
@@ -66,6 +72,25 @@ pub fn show(
             did = Did::Free(free);
         }
         ui.colored_label(p.text_dim, egui::RichText::new(w().hotbar.free_note).size(m.text_small));
+
+        // **A rate, not a span.** Four generations a second is 240 a minute,
+        // which is a number people can halve and double meaningfully; 250
+        // milliseconds is the same fact spelled so nobody can tell it is round.
+        ui.add_space(m.item_spacing * 2.0);
+        ui.separator();
+        ui.add_space(m.item_spacing);
+        ui.label(egui::RichText::new(w().hotbar.speed).size(m.text_small));
+        let mut bpm = rules.bpm;
+        let slider = egui::Slider::new(&mut bpm, crate::net::SLOWEST_BPM..=crate::net::FASTEST_BPM)
+            .suffix(w().hotbar.bpm_suffix)
+            .logarithmic(true);
+        if ui.add(slider).changed() {
+            did = Did::Bpm(bpm);
+        }
+        ui.colored_label(
+            p.text_dim,
+            egui::RichText::new(words::speed_note(bpm)).size(m.text_small),
+        );
         did
     })
 }

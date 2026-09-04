@@ -244,6 +244,8 @@ pub static WORDS: super::Words = super::Words {
     },
     hotbar: super::Hotbar {
             step_key: ".",
+            speed: "Speed",
+            bpm_suffix: " a minute",
         purse: "purse",
         ground: "ground",
         tick: "tick",
@@ -586,6 +588,23 @@ pub mod menu {
         }
     }
 }
+pub mod hotbar {
+    /// What a rate means, in the unit somebody actually feels it in.
+    ///
+    /// A slider in generations a minute is precise and hard to picture, so the
+    /// line under it says the same number as a wait: 240 is four a second, 60
+    /// is one, 12 is one every five seconds. The threshold is where "a second"
+    /// stops being the useful half of the sentence.
+    pub fn speed_note(bpm: u16) -> String {
+        let per_second = bpm as f32 / 60.0;
+        if per_second >= 1.0 {
+            format!("{per_second:.0} a second")
+        } else {
+            format!("one every {:.0} seconds", 60.0 / bpm.max(1) as f32)
+        }
+    }
+}
+
 pub mod stamps {
     /// A sweep larger than the pad it would be edited on. Said as the size
     /// rather than as "too big", because the next thing somebody does is sweep

@@ -631,7 +631,7 @@ impl Victory {
 /// decided for itself would predict placements the server refuses and resync
 /// every time it drew — which is why a laboratory could only ever be offline,
 /// and why it is a room now.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rules {
     /// The world is stopped.
     ///
@@ -642,10 +642,86 @@ pub struct Rules {
     pub place_anywhere: bool,
     /// Placing costs nothing.
     pub place_free: bool,
-    /// Whether a client in this room may change the three above. True in an
+    /// **How fast the world runs, in generations a minute.**
+    ///
+    /// A rate rather than a span, and the unit is the point: 250 milliseconds
+    /// a generation is four a second is **240 a minute**, which is a number
+    /// people have intuition about and can halve and double meaningfully.
+    /// Milliseconds were the same fact spelled so that nobody could tell 250
+    /// was a round number.
+    ///
+    /// **Safe to change while a world is running**, which almost nothing here
+    /// is. The dice are seeded by `seed::generation_seed(world, generation)` —
+    /// the generation *number*, never a clock — so how fast generations arrive
+    /// changes nothing any peer computes. Rate is not a rule.
+    ///
+    /// Zero would be [`Self::paused`] said twice, so it is not allowed: pausing
+    /// keeps the rate it will resume at, and a stopped world is a state rather
+    /// than a speed.
+    #[serde(default = "default_bpm")]
+    pub bpm: u16,
+    /// Whether a client in this room may change the four above. True in an
     /// experiment and false everywhere else, which is the whole difference
     /// between a laboratory and a world.
     pub laboratory: bool,
+}
+
+/// **By hand, because a derived one would be stopped.** Every other field here
+/// is a `false` that means "an ordinary world", and a rate's zero is not the
+/// ordinary rate — it is no rate at all, which [`Rules::bpm`] does not allow
+/// and which `Rules::default()` is used far too widely to be allowed to mean.
+impl Default for Rules {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            place_anywhere: false,
+            place_free: false,
+            bpm: DEFAULT_BPM,
+            laboratory: false,
+        }
+    }
+}
+
+/// What a world runs at when nobody says: four generations a second.
+///
+/// The number the game was designed and balanced at, said in the unit the
+/// control uses — see [`Rules::bpm`].
+pub const DEFAULT_BPM: u16 = 240;
+
+/// The slowest and fastest a room may be asked to run.
+///
+/// **A floor because a stopped world is `paused`**, and one generation a
+/// minute is already "watch it think". The ceiling is what a server can
+/// actually step: `examples/frametime` measures a generation at about 41
+/// nanoseconds a cell, so four million cells is a sixth of a second and 360 a
+/// minute is where a full torus stops keeping up. A client alone can go
+/// faster than a server can serve, and one number for both is one fewer thing
+/// to disagree about.
+pub const SLOWEST_BPM: u16 = 1;
+pub const FASTEST_BPM: u16 = 360;
+
+fn default_bpm() -> u16 {
+    DEFAULT_BPM
+}
+
+impl Rules {
+    /// How long one generation lasts, in seconds.
+    ///
+    /// The conversion, in one place, so the client's clock and the server's
+    /// cannot disagree about what a rate means.
+    pub fn generation_span(&self) -> f32 {
+        60.0 / self.bpm.clamp(SLOWEST_BPM, FASTEST_BPM) as f32
+    }
+
+    /// A rate a room may actually be set to, or why not.
+    pub fn rate(asked: u16) -> Result<u16, String> {
+        if !(SLOWEST_BPM..=FASTEST_BPM).contains(&asked) {
+            return Err(format!(
+                "a world runs between {SLOWEST_BPM} and {FASTEST_BPM} generations a minute"
+            ));
+        }
+        Ok(asked)
+    }
 }
 
 /// What kind of room this is: the one question the make-a-world form asks, and

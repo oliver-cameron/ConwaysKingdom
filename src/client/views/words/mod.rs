@@ -41,6 +41,7 @@ pub use eng::{
     describe,
     desync,
     help,
+    hotbar,
     hud,
     lobby,
     menu,
@@ -403,6 +404,9 @@ pub struct Hotbar {
     /// Run has no field because a space bar has no spelling in either bundled
     /// face and is drawn — see `views::icons::space_bar`.
     pub step_key: &'static str,
+    /// The clock control in a laboratory's rules panel, and the unit under it.
+    pub speed: &'static str,
+    pub bpm_suffix: &'static str,
     /// The four figures on the bar. One word each, lower case: they label a
     /// number rather than heading a section, and a capital would make each of
     /// them look like the start of something.

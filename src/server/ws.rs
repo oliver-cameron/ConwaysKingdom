@@ -79,7 +79,10 @@ pub struct Config {
     /// How often every room is written out. Where is the rooms directory,
     /// which [`Rooms`] already knows.
     pub save_every: Duration,
-    pub generation_span: Duration,
+    /// What every room here starts at, in generations a minute — see
+    /// [`crate::net::Rules::bpm`]. A room may be set to something else once it
+    /// exists; this is the answer for one nobody has said anything about.
+    pub bpm: u16,
     /// What shape a room made from the console gets when it is not given one.
     /// The same shape the command line asked for, so `new arena` means what
     /// `--room arena` would have meant.
@@ -337,7 +340,13 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
 
     let sim_broadcast = broadcast_tx.clone();
     let save_every = config.save_every;
-    let span = config.generation_span;
+    // **Fine, because each room keeps its own rate now.** This was one
+    // interval at the generation span and every room stepped on it; a
+    // laboratory's rate is its own to change, so the ticker is a grain and
+    // `Rooms::step` hands each room the elapsed time to bank -- see
+    // `Server::owe`. Fast enough that the fastest allowed rate is smooth, and
+    // slow enough that a quiet server is not a busy loop.
+    let grain = std::time::Duration::from_millis(25);
     let shape = config.shape;
 
     // Three things say stop -- a signal, a `stop` typed at the console, and
@@ -357,7 +366,7 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     // making a room is touching one and there is exactly one place that is
     // allowed to.
     let sim = tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(span);
+        let mut ticker = tokio::time::interval(grain);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut save_timer = tokio::time::interval(save_every);
         save_timer.tick().await; // the first tick is immediate; skip it
@@ -402,12 +411,12 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                     }
                 }
 
-                // Every room advances on the same clock. Separate worlds, but
-                // one generation span: a room with its own rate would be a
-                // second thing for a client to be told and a second way for
-                // the two to disagree about what a tick is.
+                // Each room advances on its own clock, at the rate in its
+                // `Rules` -- which a `Welcome` has always carried, so there is
+                // nothing new for a client to be told. The ticker is the
+                // grain; `Server::owe` is what decides.
                 _ = ticker.tick() => {
-                    for labelled in rooms.step() {
+                    for labelled in rooms.step(grain) {
                         let _ = sim_broadcast.send(labelled);
                     }
                 }
