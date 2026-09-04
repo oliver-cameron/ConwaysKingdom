@@ -61,21 +61,58 @@ pub enum Look<'a> {
     },
 }
 
-pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) -> Shown<()> {
-    let p = theme.palette;
+/// What the player did with it, which is one thing: ask them for a game.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub enum Did {
+    #[default]
+    Nothing,
+    Challenge(crate::net::PersonId),
+}
+
+pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) -> Shown<Did> {
     crate::client::views::panel(
         ctx,
         theme,
         crate::client::views::Panel::middle("profile", w().profile.title),
         open,
-        |ui| match look {
+        |ui| body_of(ui, theme, look),
+    )
+}
+
+/// The panel's contents, apart from the panel, so the one thing it answers
+/// with has somewhere to be built up.
+fn body_of(ui: &mut egui::Ui, theme: &Theme, look: &Look) -> Did {
+    let p = theme.palette;
+    let mut did = Did::Nothing;
+    {
+        match look {
             Look::Asking => {
                 ui.colored_label(p.text_dim, w().profile.asking);
             }
             Look::Unknown => {
                 ui.colored_label(p.text_dim, w().profile.unknown);
             }
-            Look::Found { it, hue, yours } => body(ui, theme, it, *hue, *yours),
+            Look::Found { it, hue, yours } => {
+                body(ui, theme, it, *hue, *yours);
+                // **Only somebody else's**, because a challenge is an
+                // invitation and there is nobody else in one of your own.
+                // `yours` is what says which this is.
+                if yours.is_none() {
+                    ui.add_space(theme.metrics.item_spacing * 2.0);
+                    if crate::client::views::wide(
+                        ui,
+                        egui::RichText::new(w().challenge.ask)
+                            .size(theme.metrics.text_body)
+                            .color(p.ground),
+                        theme.metrics.action_height,
+                        p.accent,
+                    )
+                    .clicked()
+                    {
+                        did = Did::Challenge(it.who.clone());
+                    }
+                }
+            }
             Look::Unrated { who, yours } => {
                 let name = crate::net::keep::name().unwrap_or_else(|| w().profile.nobody.into());
                 who_is_it(ui, theme, &name, *who, None, true);
@@ -84,8 +121,9 @@ pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) ->
                 ui.add_space(theme.metrics.item_spacing);
                 mine(ui, theme, yours);
             }
-        },
-    )
+        }
+    }
+    did
 }
 
 fn body(
@@ -156,7 +194,7 @@ fn body(
 /// The fingerprint is **dim and never absent**. It is not decoration and it is
 /// not the headline: the name is what somebody reads, and this is what settles
 /// which of two people called alice it is.
-fn who_is_it(
+pub(super) fn who_is_it(
     ui: &mut egui::Ui,
     theme: &Theme,
     name: &str,

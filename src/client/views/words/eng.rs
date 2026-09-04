@@ -297,6 +297,13 @@ pub static WORDS: super::Words = super::Words {
     clock: super::Clock {
 
     },
+    challenge: super::Challenge {
+        title: "A game",
+        accept: "Play them",
+        decline: "Not now",
+        ask: "Challenge",
+        asked_them: "Asked. They will see it when they are next looking.",
+    },
     profile: super::Profile {
         title: "Player",
         asking: "asking…",
@@ -589,6 +596,12 @@ pub mod menu {
     }
 }
 pub mod challenge {
+    /// What the match is, said once on the panel: a challenge is a game rather
+    /// than an appointment, so what it names is a target and not a clock.
+    pub fn terms(squares: usize) -> String {
+        format!("A match for two. First to hold {squares} squares wins.")
+    }
+
     /// Said out loud when one arrives, because a panel nobody is looking at is
     /// a challenge nobody answers.
     pub fn asked(who: &str) -> String {

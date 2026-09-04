@@ -34,6 +34,7 @@ pub use start::{default_address, set_connection, set_world, Connection};
 
 use std::cell::RefCell;
 
+use super::social;
 use super::social::profile;
 use super::words;
 use super::{icons, menu, Views};
@@ -2029,6 +2030,13 @@ impl App for GameApp {
             sheet,
         };
         let me = self.session.player();
+        // **Held rather than taken**, so a frame that draws it does not also
+        // decide it: the panel is open for as long as there is one to answer,
+        // and answering is what clears it.
+        let challenge = self.session.challenge.clone();
+        let mut challenging = challenge.is_some();
+        let mut answered_challenge = social::challenge::Did::Nothing;
+        let mut asked_for_a_game = profile::Did::Nothing;
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
         // slow server and a stranger look like the same thing.
@@ -2244,10 +2252,54 @@ impl App for GameApp {
             // profile answers a question about the screen underneath it, so it
             // sits on that screen rather than replacing it.
             if let Some(look) = &profile_look {
-                rects.extend(profile::show(ctx, &theme, look, &mut profile_open).rect);
+                let shown = profile::show(ctx, &theme, look, &mut profile_open);
+                asked_for_a_game = shown.did;
+                rects.extend(shown.rect);
+            }
+            // Over everything, including a profile: somebody asking for a game
+            // is the newest thing on screen and the one with two answers on it.
+            if let Some((from, _)) = &challenge {
+                let shown = social::challenge::show(ctx, &theme, from, &mut challenging);
+                answered_challenge = shown.did;
+                rects.extend(shown.rect);
             }
             rects
         });
+
+        // Asked from a profile, which is where you are when you have decided
+        // you want to play somebody: the panel is opened from a lobby row, a
+        // standings bar or a list of who plays here, and all three are places
+        // you got to by wondering about a person.
+        if let profile::Did::Challenge(who) = asked_for_a_game {
+            self.session.challenge(who);
+            self.ui.showing_profile = None;
+            self.notice = Some(w().challenge.asked_them.into());
+        }
+
+        // The two answers, and both are sent: a decline reaches the person who
+        // asked instead of looking like a server that lost it.
+        if let Some((from, room)) = challenge {
+            match answered_challenge {
+                social::challenge::Did::Nothing if challenging => {}
+                social::challenge::Did::Nothing => {
+                    // Shut without answering, which is not an answer: the
+                    // challenge stays with the server and comes back the next
+                    // time this client says anything.
+                    self.session.challenge = None;
+                }
+                social::challenge::Did::Accept => {
+                    self.session.answer(from.who.clone(), true);
+                    self.session.challenge = None;
+                    // The same `Join` the room list would have made: the
+                    // match is an ordinary room and accepting is going to it.
+                    self.chose(menu::Chose::Join(room));
+                }
+                social::challenge::Did::Decline => {
+                    self.session.answer(from.who.clone(), false);
+                    self.session.challenge = None;
+                }
+            }
+        }
 
         // **Shut before anything can open**, and only ever shut.
         //

@@ -493,6 +493,18 @@ pub struct Stamps {
 pub struct Clock {}
 
 /// What a server says about somebody.
+/// Somebody asking for a game.
+pub struct Challenge {
+    pub title: &'static str,
+    pub accept: &'static str,
+    pub decline: &'static str,
+    /// The button on somebody else's profile.
+    pub ask: &'static str,
+    /// Said when one goes out, because a press with no visible answer reads as
+    /// a button that does nothing — and the answer may be a while.
+    pub asked_them: &'static str,
+}
+
 pub struct Profile {
     pub title: &'static str,
     /// Asked for, and not answered yet. Its own line rather than an empty
@@ -731,6 +743,7 @@ pub struct Words {
     /// How much of a match is left.
     pub clock: Clock,
     /// What a server says about somebody.
+    pub challenge: Challenge,
     pub profile: Profile,
     /// The screen before a match starts.
     pub lobby: Lobby,
