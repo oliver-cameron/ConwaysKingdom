@@ -376,6 +376,31 @@ impl World {
         }
     }
 
+    /// **Drop every stored chunk the predicate rejects**, and say how many went.
+    ///
+    /// Infinite worlds only. A torus is allocated whole — its chunks are an
+    /// array and there is nothing to drop — so this answers nought there
+    /// rather than pretending.
+    ///
+    /// A client uses it to stop paying for ground it walked away from an hour
+    /// ago; see `client::session::forget_what_is_far`. Nothing on the server
+    /// calls it, and nothing should: a server is the world, and a world that
+    /// forgot its own chunks would be one where a player's country stopped
+    /// existing when nobody was looking at it.
+    pub fn forget_chunks(&mut self, keep: impl Fn(Coord) -> bool) -> usize {
+        let Storage::Infinite(map) = &mut self.storage else { return 0 };
+        let before = map.len();
+        map.retain(|coord, _| keep(*coord));
+        let gone = before - map.len();
+        if gone > 0 {
+            // The active set names chunks by coordinate and is rebuilt at the
+            // top of every step, but the instance list and the digests are read
+            // before that — so say the world moved.
+            self.dirty = true;
+        }
+        gone
+    }
+
     pub fn stored_count(&self) -> usize {
         match &self.storage {
             Storage::Infinite(map) => map.len(),

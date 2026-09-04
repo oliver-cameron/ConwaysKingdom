@@ -1689,6 +1689,11 @@ impl App for GameApp {
         if self.playing() {
             let (min, max) = self.camera.visible_cells(VIEW_MARGIN);
             self.session.subscribe(&self.world, min, max);
+            // **And drop what is far behind.** Without this the world a client
+            // holds only ever grows — every chunk it has been sent is stepped
+            // every generation for the rest of the session, whether or not
+            // anybody is looking at it. See `Session::forget_what_is_far`.
+            self.session.forget_what_is_far(&mut self.world, min, max);
         }
 
         if let Some(Pending { drag, to_px }) = self.pending.take() {

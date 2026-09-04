@@ -152,6 +152,47 @@ pub struct Rating {
 }
 
 /// The client's side of a room.
+/// The policy itself, apart from the socket that decides whether to run it.
+///
+/// Split out so it can be tested: whether this client may forget anything is a
+/// question about the link, and *what* it forgets is arithmetic on a rectangle,
+/// and only the second one is interesting.
+///
+/// Boundless worlds only. A torus is allocated whole and has nothing to drop —
+/// `World::forget_chunks` says so too, and this returns early rather than
+/// walking a world it cannot change.
+fn forget_beyond(
+    world: &mut World,
+    subscribed: &mut std::collections::HashSet<Coord>,
+    min: (i32, i32),
+    max: (i32, i32),
+) -> usize {
+    if world.size_in_cells().is_some() {
+        return 0;
+    }
+    let n = crate::sim::CHUNK_N as i32;
+    let keep = FORGET_BEYOND;
+    let (r0, c0) = (min.0.div_euclid(n) - keep, min.1.div_euclid(n) - keep);
+    let (r1, c1) = (max.0.div_euclid(n) + keep, max.1.div_euclid(n) + keep);
+    let near = |(r, c): Coord| (r0..=r1).contains(&r) && (c0..=c1).contains(&c);
+    let gone = world.forget_chunks(near);
+    if gone > 0 {
+        // Forgotten from the asked-for set too, or coming back would find the
+        // ground missing and never ask for it again — `subscribe` skips
+        // anything already subscribed, which is what makes it cheap.
+        subscribed.retain(|coord| near(*coord));
+    }
+    gone
+}
+
+/// How many chunks beyond the view a client keeps before forgetting the ground.
+///
+/// Far enough that ordinary panning never crosses it — `subscribe` fetches one
+/// chunk past the edge, so this is eight times that — and near enough that a
+/// long game does not accumulate a world's worth of ground nobody is looking
+/// at. See [`Session::forget_what_is_far`].
+const FORGET_BEYOND: i32 = 8;
+
 pub struct Session {
     /// The server connection, if there is one. A client with no link still
     /// simulates: the rules are deterministic, so offline is a game of one
@@ -1071,6 +1112,36 @@ impl Session {
         link.send(ClientMessage::Checkpoint { tick: world.generation, chunks });
     }
 
+    /// **Drop the ground this client walked away from.**
+    ///
+    /// A client steps every chunk it holds — `World::compute_active` walks the
+    /// whole store — and nothing ever dropped one: `subscribe` asks for a chunk
+    /// the first time it comes into view and `World::prune` only removes chunks
+    /// that are *empty*. So a chunk with a single live cell in it stayed
+    /// resident and stepped forever, and the cost of a generation went up every
+    /// time somebody panned somewhere new and never came back down.
+    ///
+    /// That is the shape of "fine for twenty minutes, then one frame a second":
+    /// not a slow thing, a growing one.
+    ///
+    /// **Only connected, and only on a boundless world.** Offline this client
+    /// is the authority and forgetting a chunk destroys it. A torus is
+    /// allocated whole and has nothing to drop.
+    ///
+    /// The radius is deliberately far outside what `subscribe` asks for. The
+    /// two are opposite forces — one fetches what is near, the other drops what
+    /// is far — and if they met, panning a few cells back and forth would
+    /// re-fetch a chunk every frame, which is worse than keeping it.
+    pub fn forget_what_is_far(&mut self, world: &mut World, min: (i32, i32), max: (i32, i32)) {
+        if !self.connected() {
+            return;
+        }
+        let gone = forget_beyond(world, &mut self.subscribed, min, max);
+        if gone > 0 {
+            log::debug!("forgot {gone} chunks out of view; {} left", world.stored_count());
+        }
+    }
+
     /// Ask for any chunk in view that has not been asked for already.
     ///
     /// Written against the viewport, which the camera hands in, so panning
@@ -1410,6 +1481,70 @@ mod tests {
     /// and a solitary world is still a world, so a plain solo game has nothing
     /// to press.
     #[test]
+    /// **A client that never forgets is a client that gets slower forever.**
+    ///
+    /// It steps every chunk it holds, and it held every chunk it had ever been
+    /// sent: `subscribe` asks once and `World::prune` only drops chunks that
+    /// are empty, so one live cell kept a chunk resident and stepping for the
+    /// rest of the session. Twenty minutes of panning around a busy world and
+    /// the cost of a generation had nowhere to go but up.
+    ///
+    /// So: pan a long way and the ground behind goes. What this asserts is the
+    /// growth stopping, not a particular number — the radius is a tuning
+    /// decision and the property is not.
+    #[test]
+    fn a_client_forgets_the_ground_it_walked_away_from() {
+        let mut subscribed = std::collections::HashSet::new();
+        let mut world = World::infinite_empty();
+
+        // Ground everywhere along a line, as though somebody had walked it.
+        let n = crate::sim::CHUNK_N as i32;
+        for chunk in 0..40 {
+            world.set_cell_at(0, chunk * n, crate::sim::Cell::alive(PlayerId(1)));
+        }
+        let walked = world.stored_count();
+        assert!(walked >= 40, "the walk did not touch {walked} chunks");
+
+        // Standing at one end, looking at a screenful.
+        forget_beyond(&mut world, &mut subscribed, (0, 0), (n, n));
+        let kept = world.stored_count();
+        assert!(kept < walked, "nothing was forgotten: {kept} of {walked}");
+        assert!(
+            kept <= (FORGET_BEYOND * 2 + 2) as usize,
+            "kept {kept} chunks, which is more than the radius allows"
+        );
+
+        // And what is underfoot is still there, or this would be a client that
+        // forgot the world it is standing in.
+        assert!(world.cell_at(0, 0).is_some_and(|c| c.is_alive()), "forgot the ground here");
+    }
+
+    /// **Never offline**, where this client is the authority and a forgotten
+    /// chunk is a destroyed one, and never on a torus, which is allocated whole
+    /// and has nothing to drop.
+    #[test]
+    fn a_solitary_client_forgets_nothing() {
+        let mut s = Session::new();
+        let mut world = World::infinite_empty();
+        let n = crate::sim::CHUNK_N as i32;
+        for chunk in 0..40 {
+            world.set_cell_at(0, chunk * n, crate::sim::Cell::alive(PlayerId(1)));
+        }
+        let held = world.stored_count();
+        // Offline: `connected` is false, so the method returns before the
+        // policy is ever reached.
+        s.forget_what_is_far(&mut world, (0, 0), (n, n));
+        assert!(!s.connected(), "this test is not testing what it says it is");
+        assert_eq!(world.stored_count(), held, "an offline client threw its own world away");
+
+        // And a torus, which the policy itself refuses whatever the link says.
+        let mut torus = World::toroidal_empty(4, 4);
+        let mut subscribed = std::collections::HashSet::new();
+        let whole = torus.stored_count();
+        forget_beyond(&mut torus, &mut subscribed, (0, 0), (n, n));
+        assert_eq!(torus.stored_count(), whole, "a torus is allocated whole");
+    }
+
     fn a_solitary_session_is_the_authority_and_keeps_its_own_time() {
         let mut world = World::infinite();
         crate::net::grant(&mut world, PlayerId(1));
