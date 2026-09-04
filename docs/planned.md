@@ -1239,9 +1239,26 @@ if the others are ever in doubt, and worth measuring against, since a cell
 without its art at zoom twelve may read better than a sprite sampled at half
 its detail.
 
-## Something to see when it goes off — thought about
+## Something to see when it goes off — built
 
-**The hard part is that this renderer has nowhere to put an effect.** Everything
+**Built, as a fireball in the overlay.** `World` reports what went off —
+`sim::Blast`, where and how big and whose — and that was the actual missing
+piece this entry named: the client learned about a detonation only as cells
+that had changed. A server broadcasts them after the `Step` they belong to and
+a solitary client takes them off its own world, so both paths end in one list
+and one piece of drawing code.
+
+It is drawn in `views::game::overlay`, which is the third answer below and the
+one this entry recommended: a mesh fan, bright at the core and transparent at
+the rim, expanding fast then settling, cooling white → yellow → orange → ember,
+and fading late. `FIREBALL` is 0.75s against a generation's 0.25, deliberately:
+an effect that lived exactly as long as the event is under the threshold at
+which anybody notices *what* happened as against that something did.
+
+What is still open is everything else the message unlocks — a sound, a screen
+shake, a notice in the corner — none of which are rendering either.
+
+**The hard part was that this renderer has nowhere to put an effect.** Everything
 on screen is a cell: the world pass draws quads out of the chunk texture and the
 interface is egui on top, and there is no layer in between for something that is
 neither. So the question is not what a detonation should look like, it is where

@@ -1459,6 +1459,12 @@ impl Server {
             self.apply(stamped);
         }
         let mined = self.world.step();
+        // **Said out loud, because nothing else says it.** A blast is a
+        // generation in which a disc of ground quietly becomes different, and
+        // a client watching that happen sees a glitch -- see
+        // `ServerMessage::Blasts`. Taken before anything else looks at the
+        // world, so a blast is broadcast once.
+        let blasts = self.world.take_blasts();
 
         // What the factories paid out. The world counted the births; the price is
         // here, and this is the only place a purse is authoritative.
@@ -1495,6 +1501,11 @@ impl Server {
         // in step, and a quiet generation still moves the world on.
         let mut out = lobby;
         out.push(ServerMessage::Step { tick: self.tick(), actions: applied });
+        // After the step it belongs to, so a client draws the fireball over
+        // the ground it has already been handed.
+        if !blasts.is_empty() {
+            out.push(ServerMessage::Blasts(blasts));
+        }
 
         // And the standings on a cadence. One pass over the world to work out,
         // and a bar that moved four times a second would be harder to read

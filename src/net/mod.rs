@@ -1291,6 +1291,17 @@ pub enum ServerMessage {
         who: Profile,
         room: Option<RoomId>,
     },
+    /// **Something went off**, and where.
+    ///
+    /// Broadcast to the room, because a blast is a thing that *happened*
+    /// rather than a thing the world is: the cells before and the cells after
+    /// are both just cells, so a client watching the board sees a disc quietly
+    /// become different and reads it as a glitch. Nothing in the simulation
+    /// reads this back — it is for whatever is drawing.
+    ///
+    /// A list rather than one, because a blob is one bomb and a chain sets off
+    /// several in the same generation. See [`crate::sim::Blast`].
+    Blasts(Vec<crate::sim::Blast>),
     /// **What this server holds for you**, sent on joining — see [`kept`].
     ///
     /// Only ever to the person it belongs to. It is the one thing on a profile

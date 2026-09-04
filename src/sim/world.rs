@@ -123,6 +123,18 @@ impl WorldKind {
     }
 }
 
+/// **A blast that went off**, for whoever is drawing rather than for the rule.
+///
+/// Where and how big, which is everything an effect needs and nothing the
+/// simulation reads back. `by` is whose it was, so the fireball can be their
+/// colour rather than a colour the interface chose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Blast {
+    pub at: (i32, i32),
+    pub reach: i32,
+    pub by: PlayerId,
+}
+
 pub struct World {
     storage: Storage,
     /// **This game's own number**, mixed into every roll — see
@@ -148,6 +160,15 @@ pub struct World {
     elapsed: f32,
     pub generation: u64,
     pub dirty: bool,
+    /// **Blasts that went off this generation**, for whoever is drawing.
+    ///
+    /// Not a rule and not a bill — the bill is paid when the stick is laid,
+    /// see [`super::rule::DYNAMITE_COST`]. It is here because nothing else
+    /// says a blast happened: the cells before and the cells after are both
+    /// just cells, so the largest thing a player can do reads as the board
+    /// having glitched. Drained by the caller, like [`Self::dirty`] is
+    /// cleared by one.
+    pub blasts: Vec<Blast>,
 }
 
 /// Read a torus size written as `ROWSxCOLS`, in chunks.
@@ -247,6 +268,7 @@ impl World {
             elapsed: 0.0,
             generation: 0,
             dirty: true,
+            blasts: Vec::new(),
         }
     }
 
@@ -603,6 +625,11 @@ impl World {
     /// That is the warning: a fuse reaches full during one generation's rule,
     /// is drawn full for that whole generation, and goes off at the start of
     /// the next.
+    /// Take what went off, leaving nothing behind: a blast is drawn once.
+    pub fn take_blasts(&mut self) -> Vec<Blast> {
+        std::mem::take(&mut self.blasts)
+    }
+
     fn detonate(&mut self) {
         let ready = self.dynamite_ready();
         if ready.is_empty() {
@@ -653,6 +680,12 @@ impl World {
         }
 
         for (centre, owner, seed, reach) in blasts {
+            // **Reported, because nothing else says it happened.** A blast is
+            // a generation in which a disc of ground quietly becomes
+            // different: the cells before and after are both just cells, so
+            // the largest thing a player can do reads as the board having
+            // glitched. Whoever is drawing takes these; the rule does not care.
+            self.blasts.push(Blast { at: centre, reach, by: owner });
             self.scramble(centre, owner, seed, reach);
         }
     }

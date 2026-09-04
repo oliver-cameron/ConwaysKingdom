@@ -1294,6 +1294,39 @@ impl GameApp {
         });
     }
 
+    /// **What is still burning**, in screen points, and dropping what is not.
+    ///
+    /// The camera arithmetic is here because the camera is here — a view doing
+    /// its own would be a second place for it to be wrong, which is the same
+    /// arrangement the hover box and the drag preview already use.
+    ///
+    /// Old ones are dropped as they are read rather than on a timer of their
+    /// own: this runs every frame, and a list nothing is looking at is a list
+    /// nothing needs to prune.
+    fn fireballs(&self) -> Vec<overlay::Fireball> {
+        let now = self.elapsed;
+        let life = overlay::FIREBALL as f64;
+        self.session
+            .blasts
+            .iter()
+            .map(|(blast, at)| {
+                // The disc it turned over, which is the thing the fire is
+                // standing in for -- so the fireball is the size of the
+                // damage rather than a size somebody picked.
+                let reach = blast.reach;
+                let rect = self.camera.cell_rect(
+                    (blast.at.0 - reach, blast.at.1 - reach),
+                    (blast.at.0 + reach, blast.at.1 + reach),
+                );
+                overlay::Fireball {
+                    at: rect.center(),
+                    reach: rect.width() * 0.5,
+                    age: ((now - at) / life) as f32,
+                }
+            })
+            .collect()
+    }
+
     /// **Act on what the session could not.**
     ///
     /// The other half of [`Effect`]: everything here needs a screen, a camera
@@ -1792,6 +1825,13 @@ impl App for GameApp {
         for effect in effects {
             self.act_on(effect);
         }
+        // **Burnt out ones go here**, where nothing else is borrowed, rather
+        // than while they are being read: a frame builds its marks out of a
+        // borrow of the whole app, and dropping from the same list it is
+        // reading is what that borrow exists to stop.
+        let life = overlay::FIREBALL as f64;
+        let now = self.elapsed;
+        self.session.blasts.retain(|(_, at)| now - at < life);
         // A game that went into the diary is a locker out of date. Asked here
         // rather than raised as an effect, because `file_game` is called from
         // inside the session as well as from the way back to the menu, and
@@ -1846,7 +1886,7 @@ impl App for GameApp {
         // stepping at four a second regardless, and correcting on every
         // checkpoint. See `net::Rules::bpm`.
         let span = self.session.rules.generation_span();
-        self.session.advance_alone(&mut self.world, dt, span);
+        self.session.advance_alone(&mut self.world, dt, span, self.elapsed);
 
         // **Which world is on screen**, which the menu and the board answer
         // differently -- see `menu::attract`. One store and one camera buffer
@@ -1988,6 +2028,7 @@ impl App for GameApp {
             tint: egui::Color32::from_rgb(r, g, b),
             hover: self.hover_mark(status.pointer_on_ui),
             selection: self.selection_mark(),
+            blasts: self.fireballs(),
         };
         let mut picked = None;
         let mut told_rules = rules::Did::default();

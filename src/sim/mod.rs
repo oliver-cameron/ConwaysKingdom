@@ -39,4 +39,4 @@ pub use rule::{
     TURRET_REACH,
 };
 pub use seed::{mix, Roll, OUT_OF};
-pub use world::{parse_torus, Coord, World, WorldKind};
+pub use world::{parse_torus, Blast, Coord, World, WorldKind};
