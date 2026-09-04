@@ -20,7 +20,7 @@ Each of the client's own screens is answered with the page, so a refresh on `/pl
 
 One `Server` is one **room**: one world, one player table, one tick. A process runs several side by side in a `server::rooms::Rooms`, so "the server" in the sense of the address you connect to is the `Rooms`, and a `Server` is one of the worlds behind it.
 
-A room is a separate world rather than a view of a shared one, which is the simpler of the two things it could have meant and what "rooms" usually means. Nothing in `sim` had to learn that a world might be one of many, because a world never is. What it costs is that **territory, value, player numbers and the rejoin token are all per room**, so a player in two rooms is two players and their number in one says nothing about the other. `rooms::Seat` is the pair that does identify somebody: which room, and who they are in it.
+A room is a separate world rather than a view of a shared one, which is the simpler of the two things it could have meant and what "rooms" usually means. Nothing in `sim` had to learn that a world might be one of many, because a world never is. What it costs is that **territory, value and player numbers are all per room**, so a player in two rooms is two players and their number in one says nothing about the other. `rooms::Seat` is the pair that does identify somebody: which room, and who they are in it.
 
 **Rooms are declared, not conjured.** Joining a name nobody declared is refused, and the refusal names the rooms that do exist:
 
@@ -32,7 +32,7 @@ The alternative — creating a room for whoever asks — turns a typo into a wor
 
 The menu asks `ClientMessage::Rooms` and shows what comes back, so a name is normally clicked rather than typed. The rejection still carries the names, because a name can still arrive typed — `--room` on a command line, `?room=` in a link — and a client refused that way falls back to the menu with **both** the reason and the live list on screen. The two are halves of one answer, and showing only the list reads as the click having done nothing.
 
-`Join` carries `room: Option<RoomName>`; `None` takes the server's default, so a client with nothing to say about rooms still lands somewhere. `Welcome` names the room back, because the client may have asked for none and because the token it is about to keep is filed under that name.
+`Join` carries `room: Option<RoomName>`; `None` takes the server's default, so a client with nothing to say about rooms still lands somewhere. `Welcome` names the room back, because the client may have asked for none and because a client that does not know which world it is in cannot draw it.
 
 A room name is lowercase letters, digits, `-` and `_`, at most 24 characters, and is folded to lowercase. Narrow because the name is also the save file's name: a path separator in it would escape the rooms directory, and on a case-insensitive filesystem `Lobby` and `lobby` would be two rooms on one machine and one on another. `net::room_name` is the whole rule, and the client checks `--room` against it before connecting so a bad name is a message about the argument rather than a connection that opens and is turned away.
 
@@ -64,7 +64,7 @@ Its own condition, which `decide` checks after each step so the generation that 
 
 **Whoever started it calls it off**, with `ClientMessage::EndMatch` — the same person and the same reasoning as the whistle: they arranged it, so they are the one who can say it has stopped being worth playing. The result is real and is rated, because a match that ends with no result is one nobody can be held to.
 
-**Everybody else gives up.** `ClientMessage::Forfeit` concedes for a **seat**, which is the distinction a team needs — one of three walking away leaves two pairs of hands on the team, and `Server::still_in` says a number is in the match while at least one seat playing it has not conceded. Being *offline* is not being out: a dropped connection is a player who can come back with their token, which is what the token is for. A seat that has given up stops placing, or a concession would show in the scoreboard and nowhere else.
+**Everybody else gives up.** `ClientMessage::Forfeit` concedes for a **seat**, which is the distinction a team needs — one of three walking away leaves two pairs of hands on the team, and `Server::still_in` says a number is in the match while at least one seat playing it has not conceded. Being *offline* is not being out: a dropped connection is a player who can come back, which is what a person outliving a socket is for. A seat that has given up stops placing, or a concession would show in the scoreboard and nowhere else.
 
 The check for "one number left" lives in `forfeit` and not in `decide`, and that is not tidiness: a match that simply *has* one player in it has not been won by them, and putting it in `decide` ended every such match on its first generation.
 
@@ -76,15 +76,15 @@ That means the client cannot know its own public name until a server has told it
 
 **It was an ed25519 keypair.** The client made both halves, the public one *was* the id, and a join was a signature over a nonce the server had just sent. That buys exactly one thing this does not: a server cannot be you on a *different* server, because it never learns the secret half. With one server it buys nothing, and it cost a signature scheme, an OpenSSH key parser, a round trip before every join, and a dependency — so it went, along with `ServerMessage::Challenge` and the state on both sides that waited for it.
 
-What is left is exactly as strong as the rejoin token it will replace: whoever holds the secret is you, and the server it is presented to knows it. That is the strength [networking.md](networking.md#coming-back) already argues is right for a game with no accounts.
+What is left is exactly as strong as the rejoin token it replaced: whoever holds the secret is you, and the server it is presented to knows it. That is the strength [networking.md](networking.md#coming-back) already argues is right for a game with no accounts. The token itself is gone — a seat is found by the person in it, and `persist` is at version 7 for that.
 
 **Before a second server exists this has to change**, and not because anything breaks — because "the server knows your secret" stops being harmless the moment there is somewhere else to be you. See [planned.md](planned.md#player-profiles).
 
-`server::people` therefore holds secrets now, which it did not before and which is worth saying out loud rather than leaving to be discovered: that file is what an attacker who reached the disk would want. It is not a new exposure — a room file already holds a rejoin token per seat, which is the same bargain with a smaller blast radius — but it is a single-server design written down as one.
+`server::people` therefore holds secrets now, which it did not before and which is worth saying out loud rather than leaving to be discovered: that file is what an attacker who reached the disk would want. It was not a new exposure when it arrived — a room file held a rejoin token per seat, which was the same bargain with a smaller blast radius — but it is a single-server design written down as one.
 
 ### Watching
 
-`ClientMessage::Watch` takes a room and no seat. `ServerMessage::Watching` answers with the room, its name, its tick and its shape — a `Welcome` without a player, because a spectator has no number, no token, no purse and no spawn, and sending zeroes would have the client draw a purse belonging to nobody.
+`ClientMessage::Watch` takes a room and no seat. `ServerMessage::Watching` answers with the room, its name, its tick and its shape — a `Welcome` without a player, because a spectator has no number, no purse and no spawn, and sending zeroes would have the client draw a purse belonging to nobody.
 
 A spectator is **not a player with the actions taken away**, and that is forced rather than chosen. A seat is one of fifteen — `PlayerId::MAX`, four bits of cell — so spending one on somebody who is only watching costs a real player their place. And **no late joining is a rule about players**: somebody arriving at generation four hundred is exactly who watching is for, so `Watch` is admitted at any generation while `Join` to a running match is still refused.
 
@@ -133,7 +133,7 @@ Three phases, on `server::matches::Phase`:
 
 What that makes the opening is a race rather than a draw: everybody is looking at the same thing when the clock starts, and the first thing anybody lays is laid against a running world, where hesitating costs generations. An action arriving before the whistle is **dropped**, which is what an action the server will not take already does — the client predicted it locally and the next `Checkpoint` puts the world and the purse back. It will keep doing that until a match's phase reaches the client and it can refuse for itself.
 
-**No late joining.** A player arriving at generation four hundred is not in the same race: everyone else has four hundred generations of ground and they have a block. A `Join` into a running match is refused with a reason rather than allowed and hopeless, which would read as the game being broken. A player *already* in the match is a different question and still gets back in with their token — that is the door, not the room.
+**No late joining.** A player arriving at generation four hundred is not in the same race: everyone else has four hundred generations of ground and they have a block. A `Join` into a running match is refused with a reason rather than allowed and hopeless, which would read as the game being broken. A player *already* in the match is a different question and still gets back into their own seat — that is the door, not the room.
 
 The deadline is a **tick**, not a clock. The tick is the generation and is already what a client adopts from its `Welcome`, so a match ending at generation N needs no clock synchronisation, cannot be lengthened by a client that pauses, and is the same instant for everybody by construction. It is measured from the tick the match started at, so a match that gathered for an hour still runs its full length.
 
@@ -243,13 +243,28 @@ Every 30 seconds and on a clean shutdown, every room at once. Writes go to a tem
 
 **One file per room**, `<name>.ckw` in the rooms directory. The format holds one world and its players, which is exactly one room, so the file is unchanged and the directory is what grew. The room's name is the file's name and is not written inside it: two places to keep one fact is one too many, and the one a person can rename is the one that has to win. Renaming `lobby.ckw` renames the room.
 
-A player record carries their token, so a restart does not hand every returning player a new number and leave their ground standing there, theirs and unreachable.
+A player record carries **who is sitting there** — the `PersonId`, not the secret behind it — so a restart does not hand every returning player a new number and leave their ground standing there, theirs and unreachable. The proof stays in `people.tsv` and in the client's own store; a world has no business holding it.
 
-**What is not in the format is whether they were connected**, and that is deliberate: `online` is a fact about a socket, and the socket ended with the process. It also has to be *set* on the way back in, which is where this went wrong for a while. `Player::new` is what a player joins with, and joining means being online, so a player rebuilt from a file came back marked connected — and a player who is online cannot be returned to by their token, that check being what stops two tabs becoming one player. Every player who was in a room when it was written therefore found their token refused on the next run and joined as somebody new, which is the exact failure the token exists to prevent, arriving only when the server closed. `persist::load` clears it now, and `a_token_survives_the_server_closing` is the test that would have caught it.
+**What is not in the format is whether they were connected**, and that is deliberate: `online` is a fact about a socket, and the socket ended with the process. It also has to be *set* on the way back in, which is where this went wrong for a while. `Player::new` is what a player joins with, and joining means being online, so a player rebuilt from a file came back marked connected — and a player who is online cannot be returned to at all, that check being what stops two tabs becoming one player. Every player who was in a room when it was written therefore found their own seat refused on the next run and joined as somebody new, which is the exact failure coming back exists to prevent, arriving only when the server closed. `persist::load` clears it now, and `a_seat_survives_the_server_closing` is the test that would have caught it.
 
 A missing file starts fresh. A corrupt or mismatched one is an **error** naming the room that failed, not a silent reset — discarding a world is the worst possible response to a bad read, and with several of them "cannot read the world" no longer says which. A file in the directory that is not a room name is skipped with a warning rather than opened: refusing to start over one stray name would take every other world down with it. One room failing to save does not stop the others, for the same reason.
 
 The shutdown save is **waited for**, not aborted. The simulation task saves after its loop; `sim.abort()` cancelled it at its next await point, which is inside the loop, so the save never ran and a clean exit quietly lost up to thirty seconds of every room. The wait is bounded at ten seconds, because a shutdown that does not shut down is worse than one that loses a save it warned about.
+
+### The two tables beside the rooms
+
+Not everything a server keeps is a world. Two files sit in the rooms directory alongside the `.ckw` files, and neither is per room, because neither is about a room:
+
+| file | what is in it | written when |
+|---|---|---|
+| `people.tsv` | a secret and the `PersonId` this server issued for it, one line each | a person is met for the first time |
+| `profiles.tsv` | a person's name, rating, the ratings behind it, matches settled and most ground ever held | a match settles, and on the ordinary save |
+
+Both are **one line per person, tab separated, with a version on the front**, and both skip a line they cannot read rather than refusing to start: losing one person's row is a nuisance and not starting is worse. A `cat` is meant to be enough to see what a server thinks it knows.
+
+`people.tsv` is written the moment somebody new joins rather than on the next ordinary save, because a rating earned by a person the server forgets on a restart is worse than no rating. It is also the file worth stealing — see [who somebody is](#who-somebody-is).
+
+The tab is load-bearing, which is why `net::player_name` exists. A name is the last field of a profile row and it is the one field a client chooses, so a name with a newline in it wrote a *second* row; one naming somebody else's id came back on the next start as that person, with whatever rating it claimed. Names are clamped where they enter a record, and `Secret` is checked on the wire for the same reason rather than only where one is pasted.
 
 ### The `.ckw` format
 

@@ -1028,16 +1028,8 @@ impl GameApp {
     /// as anyway.
     fn back_to_menu(&mut self) {
         self.session.file_game(&self.world);
-        // **Give the seat up.** Going back used to keep it, on the reasoning
-        // that another `Join` would take its place — true of somebody who
-        // rejoins the same room, and false of everything else. The player
-        // stayed online, so the room went on counting them, and the rejoin
-        // token, which only returns you to a player who is *not* online, found
-        // them online and issued a new one. Leave and come back three times
-        // and a room with one person in it said three.
-        //
-        // The token is kept: this is the seat being vacated, not the player
-        // being forgotten, and coming back should still be coming back.
+        // **Give the seat up**, keeping the key — see `Session::leave`, which
+        // says what keeping the seat instead cost.
         self.session.leave(&self.world, self.elapsed);
         let asking = self.session.connected();
         self.show_menu(if asking { menu::Stage::Asking } else { menu::Stage::Idle });
@@ -1419,7 +1411,7 @@ impl GameApp {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
                 }
             }
-            // Watching takes no name and keeps no token: there is no player
+            // Watching takes no name and offers no key: there is no player
             // to be remembered as.
             // Your own, which needs no server and no room — and which was
             // the missing way in: a profile was reachable from a lobby roster

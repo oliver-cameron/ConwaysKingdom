@@ -94,7 +94,7 @@ Ice is cleared on a birth because a parent may be *under a pane* and still count
 
 ### Factories, and what the rule counts
 
-`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner **once** for each corpse it leaves — `rule::MINE_UPKEEP`, sixteen times in sixty-four, and when the charge falls due the square loses its kind and is ordinary ground. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Earned`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
+`Kind::FACTORY` pays its owner when one of its kind is **born**, and costs its owner **once** for each corpse it leaves — `rule::FACTORY_UPKEEP`, sixteen times in sixty-four, and when the charge falls due the square loses its kind and is ordinary ground. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Earned`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
 
 Note what `upkeep` counts. Not deaths — charges falling due. A corpse reborn before its charge lands escapes it entirely, which is the whole of why a blinker pays and a glider does not: one re-uses its ground and the other abandons it.
 

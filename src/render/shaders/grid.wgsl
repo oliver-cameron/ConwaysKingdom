@@ -278,30 +278,19 @@ fn player_hue(player: u32) -> f32 {
     return cam.hues[player / 4u][player % 4u] * TAU;
 }
 
-/// Saturation is a second axis for telling players apart, because hue alone
-/// gets crowded: over the 31 players the owner field used to hold, the closest
-/// pair ended up 0.026 apart in OKLab.
-///
-/// Two tiers, alternating, so neighbouring player numbers differ in saturation
-/// as well as hue. That lifted the closest pair to 0.037 over 31 and to 0.119
-/// over the first eight. The field is four bits now, so the crowding it was
-/// measured against is gone and the alternation is cheap insurance rather than
-/// a fix. Spreading saturation smoothly instead is worse than doing nothing,
-/// since lowering it shrinks the chroma radius and pulls colours together.
 /// A player's lightness, as a multiplier on the sheet's own — **the third
 /// axis**, and the one that does the most work.
 ///
 /// Hue is stepped by the golden ratio, which spreads a prefix about as well as
 /// a prefix can be and still wraps: by fifteen players two of them are nearer
-/// each other than the eye separates at the size a cell is drawn. Saturation
-/// was the second axis and repeats every two, so it does nothing for a pair
-/// four apart.
+/// each other than the eye separates at the size a cell is drawn.
 ///
 /// Five tiers cycling on five, against saturation's three — the smallest pair
 /// of periods for which every one of the fifteen live players gets its own
-/// combination, since their least common multiple is fifteen. Multiplied into the sheet's lightness exactly the way
-/// saturation is multiplied into its saturation, so the art keeps its shading
-/// and the whole cell moves together rather than only its colour.
+/// combination, since their least common multiple is fifteen. Multiplied into
+/// the sheet's lightness exactly the way saturation is multiplied into its
+/// saturation, so the art keeps its shading and the whole cell moves together
+/// rather than only its colour.
 ///
 /// The range is narrow on purpose: below about two thirds a cell stops reading
 /// as its own art and starts reading as a dark patch, which is worse than two
@@ -322,6 +311,17 @@ fn player_lightness(player: u32) -> f32 {
     return 0.68;
 }
 
+/// A player's saturation, as a multiplier on the sheet's own — the second
+/// axis, because hue alone crowds.
+///
+/// **Three tiers, cycling on three**, and the three is the point. It
+/// alternated, which is the one period that could not help: hues step by the
+/// golden ratio, so the pairs it brings closest are a Fibonacci number apart,
+/// and eight is even — players 1 and 9 got the same strength on top of nearly
+/// the same hue. Three against lightness's five repeats every fifteen, which
+/// is every live player.
+///
+/// MUST MATCH `client::views::hue::saturation_tier`.
 fn player_saturation(player: u32) -> f32 {
     // Player zero is nobody. Unclaimed ground has no colour of its own, so it
     // is grey, and territory reads as colour against it -- which is the whole
@@ -330,12 +330,6 @@ fn player_saturation(player: u32) -> f32 {
     if player == 0u {
         return 0.0;
     }
-    // **Three, not two.** It alternated, which is the one period that could not
-    // help: hues step by the golden ratio, so the pairs it brings closest are a
-    // Fibonacci number apart, and eight is even — players 1 and 9 got the same
-    // strength on top of nearly the same hue. Three against lightness's five
-    // repeats every fifteen, which is every live player.
-    // MUST MATCH `client::views::hue::saturation_tier`.
     let tier = player % 3u;
     if tier == 0u { return 1.0; }
     if tier == 1u { return 0.78; }
@@ -684,11 +678,11 @@ fn shaded(in: VsOut, offset: vec2<f32>, n: f32) -> vec3<f32> {
     }
     // **Flat grey once the backdrop's own detail is sub-pixel.** It is one
     // quad standing in for thousands of chunks, drawn by wrapping the world
-    // onto a single dead chunk — so what is on it is the dead sprite and the
-    // ring `grid_tint` puts round every chunk, and the ring is one cell in
-    // sixteen. Below a couple of pixels a cell neither is anything a reader
-    // can see and both are moire: a field of shimmering grid nobody asked for,
-    // which is worse than the nothing it is drawing.
+    // onto a single dead chunk — so what is on it is the dead sprite, one cell
+    // in sixteen of which is the transparent gap between sprites. Below a
+    // couple of pixels a cell that is not anything a reader can see and it is
+    // moire: a field of shimmering grid nobody asked for, which is worse than
+    // the nothing it is drawing.
     //
     // The same grey the coarse path gives unheld ground, so the two agree
     // exactly where they meet rather than stepping — see [known-bugs], which

@@ -42,9 +42,9 @@ const VERSION: u8 = 1;
 /// How many games are kept.
 ///
 /// A cap rather than everything, because this lives in `localStorage` beside
-/// a rejoin token that matters more, and a history nobody reads should not be
-/// what fills a quota. Fifty is more than a home screen ever shows and enough
-/// that "most ground ever held" means something.
+/// a key that matters more, and a history nobody reads should not be what
+/// fills a quota. Fifty is more than a home screen ever shows and enough that
+/// "most ground ever held" means something.
 pub const KEEP: usize = 50;
 
 /// How a game ended for this player.

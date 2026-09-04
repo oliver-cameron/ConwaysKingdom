@@ -181,11 +181,11 @@ pub fn load(path: &Path) -> io::Result<Snapshot> {
         //
         // `Player::new` is what a player *joins* with, and joining means being
         // online, so a player rebuilt from a file came back marked connected
-        // and stayed that way. A player who is online cannot be returned to by
-        // their token -- that check is what stops two tabs being one player --
-        // so every player who was in the room when it was saved found their
-        // token refused on the next run and joined as somebody new, beside
-        // territory they could see and could not build on.
+        // and stayed that way. A player who is online cannot be returned to at
+        // all -- that check is what stops two tabs being one player -- so every
+        // player who was in the room when it was saved was refused their own
+        // seat on the next run and joined as somebody new, beside territory
+        // they could see and could not build on.
         //
         // Set here rather than at the call site because this is where a
         // `Player` who never joined is built, and it is the file's business to

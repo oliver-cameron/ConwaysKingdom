@@ -20,12 +20,12 @@
 //! attacker who reached the disk would want, because a secret in it is a
 //! player they can be.
 //!
-//! It is not a new exposure. A room file already holds a rejoin token per
-//! seat, which is the same bargain with a smaller blast radius, and this
-//! replaces those. What it is, is a **single-server** design: a server that
-//! knows your secret can be you on any other server that has met it, and there
-//! is one. Before there are two, this has to change — see the note on
-//! [`crate::net::auth`].
+//! It was not a new exposure when it arrived: a room file held a rejoin token
+//! per seat, which was the same bargain with a smaller blast radius, and this
+//! replaced those — there is no token in the tree now. What it is, is a
+//! **single-server** design: a server that knows your secret can be you on any
+//! other server that has met it, and there is one. Before there are two, this
+//! has to change — see the note on [`crate::net::auth`].
 //!
 //! The id is issued here and is random, so it says nothing about the secret it
 //! stands for; that is what makes it safe to show in a lobby.

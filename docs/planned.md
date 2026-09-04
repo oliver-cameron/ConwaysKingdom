@@ -222,7 +222,7 @@ And what is not next. [The simulation on the GPU](#the-simulation-on-the-gpu) is
 
 ## Player profiles
 
-**Part built.** The server keeps a profile per person — `server::profiles`, which is what `server::ratings` became when a row stopped being a number. It holds the name last joined under, the rating, how many matches have been settled and the most ground ever held, and `net::Profile` is that on the wire. `ClientMessage::Profile` asks about anybody and is answerable **without a seat**, because a profile is looked at from a lobby, from a standings bar and from a menu and only one of those is inside a room.
+**Part built.** The server keeps a profile per person — `server::profiles`, which is what `server::rating` became when a row stopped being a number. It holds the name last joined under, the rating and the ratings behind it, how many matches have been settled and the most ground ever held, and `net::Profile` is that on the wire. `ClientMessage::Profile` asks about anybody and is answerable **without a seat**, because a profile is looked at from a lobby, from a standings bar and from a menu and only one of those is inside a room.
 
 **Ratings are provisional until ten matches.** `rating::PROVISIONAL_AFTER` is the threshold and `K_PROVISIONAL` is twice the ordinary K, so somebody new reaches their level in a handful of matches rather than thirty. Each entrant moves by **their own** K, which stops a settled player being dragged about by whoever they happened to draw — and makes a match between the two not zero-sum, which is the point rather than a defect: the two are not equally uncertain, so the same result is not equally informative about them. A draw between equals moves nothing and still counts, because it says everything about how much the table now knows.
 
@@ -370,7 +370,7 @@ A cell is 16x16 texels of sprite, and that is the entire reason residency is one
 
 **A boundless world draws only the chunks it has.** `fill` walks `world.stored()` rather than the window, so an infinite world's coarse texture is exactly its resident set and everywhere else reads as a dead unowned cell — which is what the backdrop is. Unloaded ground draws as unloaded ground for nothing.
 
-**And the backdrop goes flat.** It is one quad wrapping the world onto a single dead chunk, so what is on it is the dead sprite and the ring `grid_tint` puts round every chunk — one cell in sixteen. Below a couple of pixels a cell neither is visible and both are moiré, so under `BACKDROP_FLAT` it draws the same grey the coarse path gives unheld ground. The two then agree exactly where they meet, which also takes most of [the brightness difference](known-bugs.md#loaded-chunks-read-differently-from-the-backdrop) with it.
+**And the backdrop goes flat.** It is one quad wrapping the world onto a single dead chunk, so what is on it is the dead sprite and the transparent gap between sprites — one cell in sixteen. Below a couple of pixels a cell neither is visible and both are moiré, so under `BACKDROP_FLAT` it draws the same grey the coarse path gives unheld ground. The two then agree exactly where they meet, which also takes most of [the brightness difference](known-bugs.md#loaded-chunks-read-differently-from-the-backdrop) with it.
 
 The antialiasing carries across unchanged, which is what its footprint being measured in texels bought: a coarse texel is a cell, so below one pixel per cell it averages over cells exactly as it averages over sprite texels above.
 
@@ -402,7 +402,7 @@ A **depleted** factory is the push-back: past some point it stops paying and is 
 
 Byte 1 is full — alive, ice, kind, age; see [simulation.md](simulation.md#the-cell). There is no spare bit, so this is a choice between three, and they are not equally good.
 
-**A kind.** `Kind::DEPLETED_MINE` beside `Kind::MINE`, costing one of eight kind indices and no bits at all — four of the eight are spent now, on normal, factory, turret and dynamite. It gets art of its own for free, which a flag would not — a depleted factory has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted factory's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
+**A kind.** `Kind::DEPLETED_FACTORY` beside `Kind::FACTORY`, costing one of eight kind indices and no bits at all — four of the eight are spent now, on normal, factory, turret and dynamite. It gets art of its own for free, which a flag would not — a depleted factory has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted factory's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
 
 **The age field.** A factory's age *is* its depletion: `net::earnings` scales down with it and a factory at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that factories can no longer use age for anything else, and it collides with dynamite if a dynamite is ever also a factory.
 
@@ -598,7 +598,7 @@ There was a real design here and it is worth recording what it cost, because the
 
 **Built.** A number that says how good somebody is, updated by results, in the shape of Elo. It is on the home screen, above the record and deliberately not inside it: what `views::record` shows is what this *client* has done out of its own store, and a rating is what a *server* thinks of you against everybody else there. Folding one into the other would suggest the client had worked it out, which it must never look like it can.
 
-`server::ratings` is the table, keyed by `PersonId`, saved to `ratings.tsv` beside `people.tsv`. `Rooms::step` settles a match on the generation it is decided — not the room that ended, because a rating outlives every world here and a match's world is about to stop existing — and broadcasts `ServerMessage::Rated` to everybody who was in it, so the number moves on the screen somebody is looking at rather than on their next join. A `Welcome` carries it too, for arriving.
+`server::profiles` is the table, keyed by `PersonId`, saved to `profiles.tsv` beside `people.tsv`. `Rooms::step` settles a match on the generation it is decided — not the room that ended, because a rating outlives every world here and a match's world is about to stop existing — and broadcasts `ServerMessage::Rated` to everybody who was in it, so the number moves on the screen somebody is looking at rather than on their next join. A `Welcome` carries it too, for arriving.
 
 What is **not** built is [a leaderboard](#a-leaderboard), and it is not an oversight: a table of who is best is a reason to cheat, and this game has never had one. Per server the only lever is who you play and how often, which is a question about what results count rather than about who recorded them.
 

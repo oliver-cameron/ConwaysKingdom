@@ -1223,7 +1223,7 @@ impl Session {
             return false;
         }
         // A link that says watch is answered by `Watch`, which takes no name
-        // and no token: there is no player to be remembered as.
+        // and no key: there is no player to be remembered as.
         match (room, watch) {
             (Some(room), true) => self.tell(ClientMessage::Watch { room }),
             (room, _) => self.join(name, room),
@@ -1239,7 +1239,7 @@ impl Session {
         self.send_pending_join();
     }
 
-    /// Watch one, which takes no name and keeps no token: there is no player
+    /// Watch one, which takes no name and offers no key: there is no player
     /// to be remembered as.
     pub fn watch(&mut self, room: RoomId) -> bool {
         let Some(link) = &self.link else { return false };
@@ -1336,11 +1336,11 @@ impl Session {
     /// Going back used to keep it, on the reasoning that another `Join` would
     /// take its place — true of somebody who rejoins the same room, and false
     /// of everything else. The player stayed online, so the room went on
-    /// counting them, and the rejoin token, which only returns you to a player
-    /// who is *not* online, found them online and issued a new one. Leave and
-    /// come back three times and a room with one person in it said three.
+    /// counting them, and a return, which only seats you again if you are
+    /// *not* online, found them online and made a stranger. Leave and come
+    /// back three times and a room with one person in it said three.
     ///
-    /// The token is kept: this is the seat being vacated, not the player being
+    /// The key is kept: this is the seat being vacated, not the person being
     /// forgotten.
     pub fn leave(&mut self, world: &World, now: f64) {
         self.file_game(world);

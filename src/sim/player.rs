@@ -61,9 +61,9 @@ pub struct Player {
     /// they are one player with two people at the controls, and every rule
     /// that used to ask "are these two allied" is a `==` again.
     ///
-    /// A seat keeps everything else that is its own: its name, its token, its
-    /// record, and the person sitting in it. What it lends to the side is only
-    /// the cells.
+    /// A seat keeps everything else that is its own: its name, its record,
+    /// and the person sitting in it. What it lends to the side is only the
+    /// cells.
     ///
     /// Not saved. A match is never written to disk — see `Rooms::save` — so a
     /// player read back from a file plays as themselves, which is what a
@@ -94,8 +94,8 @@ pub struct Player {
     ///
     /// `None` for a seat filled before this existed, and for one filled by a
     /// client that has not been told who it is yet. A seat with no person is
-    /// still a player: it plays, it holds ground, it comes back with its
-    /// token. What it cannot do is carry anything that outlives the room.
+    /// still a player: it plays and it holds ground. What it cannot do is be
+    /// come back to, because there is nothing to come back as.
     pub person: Option<String>,
     /// Whether this seat has given up.
     ///

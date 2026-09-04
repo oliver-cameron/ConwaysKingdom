@@ -1,54 +1,28 @@
 //! What colour a player's cells are, and what that colour is in sRGB.
 //!
-//! Both halves here because they are one decision: the hue table the shader is
-//! handed and the swatch beside a name have to agree, and two derivations of
-//! one number is two chances for the lobby and the board to disagree about who
-//! is who. The conversion used to live in the HUD, which made every other
-//! screen that wanted a swatch depend on the HUD to get one.
-//!
 //! A hue per player, worked out **once on the client** and used in two places
-//! that must not disagree: the shader, which is handed the whole table in the
-//! camera uniform, and the interface, which reads the same table for a swatch
-//! beside a name. Two derivations of one number is two chances for the lobby
-//! and the board to say different things about who is who.
-//!
-//! Hues are stepped by the golden ratio, which is the usual answer to "spread
-//! N things around a circle without knowing N": every prefix of the sequence is
-//! about as evenly spread as it can be, so the first three players are far
-//! apart and so are the first twelve.
-//!
-//! ## Teams need nothing here
-//!
-//! **Allies have to read as allies across a whole screen of cells**, at a zoom
-//! where a cell is a few pixels and nobody is comparing two of them side by
-//! side. That used to be most of this file: a team took a *family* of hue, its
-//! members were spread over a narrow arc around the family's middle, and the
-//! width of the arc was a judgement about which mistake costs more — mistaking
-//! a teammate for a teammate, or an enemy for an ally.
-//!
-//! None of it is needed now, because a team is a player: everybody on it
-//! places cells carrying one number, so they are one colour by construction
-//! rather than by arrangement. There is no arc to size, no family to keep clear
-//! of its neighbour, and no way for two allies to be drawn differently.
+//! that must not disagree: the shader, handed the whole table in the camera
+//! uniform, and the interface, which reads the same table for a swatch beside
+//! a name. Two derivations of one number are two chances for the lobby and the
+//! board to say different things about who is who. A team needs nothing extra,
+//! because a team *is* a player: everybody on it places cells carrying one
+//! number, so they are one colour by construction.
 //!
 //! ## Three axes, because one wraps and two were not enough
 //!
-//! Hue alone crowds. The golden step spreads a prefix about as well as a prefix
-//! can be spread and still comes back around, so over fifteen players some pair
-//! ends up nearly the same colour — and which pair is not arbitrary: the ones
-//! it brings closest are a **Fibonacci** number apart.
+//! Hue alone crowds. Stepping by the golden ratio spreads a prefix about as
+//! well as a prefix can be spread — which is why the step is what it is — and
+//! it still comes back around, so over fifteen players some pair ends up
+//! nearly the same colour. Which pair is not arbitrary: the ones it brings
+//! closest are a **Fibonacci** number apart, so an axis with a period of two
+//! does nothing for exactly the pairs the first one crowded.
 //!
-//! Saturation was the second axis and alternated, which is a period of two —
-//! and eight is even, so it gave players 1 and 9 the same strength on top of
-//! nearly the same hue. The second axis did nothing for exactly the pairs the
-//! first one crowded.
-//!
-//! So: saturation cycles on **three** and lightness on **five**, which is the
-//! smallest pair of periods for which every one of the fifteen live players
-//! gets its own combination — their least common multiple is fifteen. No two
-//! players are told apart by hue alone, and the worst pair is about thirty
-//! apart in sRGB, which `the_closest_two_players_are_far_enough_apart`
-//! measures rather than asserts.
+//! So: saturation cycles on **three** and lightness on **five**, the smallest
+//! pair of periods for which every one of the fifteen live players gets its own
+//! combination — their least common multiple is fifteen. No two players are
+//! told apart by hue alone, and the worst pair is about thirty apart in sRGB,
+//! which `the_closest_two_players_are_far_enough_apart` measures rather than
+//! asserts.
 //!
 //! Both are **multipliers on the sheet**, not replacements for it: a texel
 //! carries its own saturation and lightness, the player scales each, and the
@@ -185,15 +159,6 @@ pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) ->
 
     let hue = turn * TAU;
     let tier = saturation_tier(player);
-    // **And a third axis, because two were not enough.** Hue alone crowds: the
-    // golden step spreads a prefix well and still comes back around, and by
-    // fifteen players the closest pair is closer than the eye separates at the
-    // size a cell is drawn. Saturation was the second axis and alternates, so
-    // it repeats every two.
-    //
-    // Lightness is the third and cycles every three, so the pair repeats every
-    // six rather than every two — and it is the axis the eye is *best* at, so
-    // it does the most work per step of the three. See [`lightness_tier`].
     let lightness = lightness * lightness_tier(player);
     // Chroma tapers off at the ends, where there is no room for it.
     let taper = 1.0 - (2.0 * lightness - 1.0).abs().powi(2);

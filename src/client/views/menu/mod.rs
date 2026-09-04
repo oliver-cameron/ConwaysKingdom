@@ -275,8 +275,9 @@ pub enum Chose {
     Clear,
     /// Back into the world already behind this menu, without joining anything.
     Resume,
-    /// Forget the key, the record, the name and every room's token. There is
-    /// no way back from this, which is why it is asked about first.
+    /// Forget everything this client keeps — see [`crate::net::keep`]. There
+    /// is no way back from this, and the key is why, which is why it is asked
+    /// about first.
     ResetEverything,
     /// Be the person this key names, from the next join onwards.
     ///
