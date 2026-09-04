@@ -104,7 +104,8 @@ Keep comments concise: replace five lines of comment with well-labelled code and
 ## Testing
 
 ```
-cargo test                                             # everything
+cargo test                                             # every test there is
+cargo check --features server --bins                   # and the one file they miss
 cargo test --no-default-features                       # without the renderer
 cargo build --target wasm32-unknown-unknown --lib      # the browser client
 wasm-pack test --headless --firefox                    # GPU setup, in a browser
@@ -112,5 +113,7 @@ cargo run --example headless -- 400 infinite           # the simulation, no GPU
 cargo run --no-default-features --example balance      # what manufacture pays, per pattern
 cargo run --no-default-features --example territory    # what ground does, in numbers and shapes
 ```
+
+`server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, everything else under `src/server/` compiles by default, and there is no test that opens a socket. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it.
 
 [planned.md](planned.md) holds everything not built yet, with a status on each entry — built, being built, designed, or decided and not costed. [inspiration.md](inspiration.md) says where a design was borrowed from and for what.
