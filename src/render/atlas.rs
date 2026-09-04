@@ -1,6 +1,7 @@
 //! The sprites a cell is drawn from.
 //!
-//! One 256x256 sheet of 16x16 tiles. A cell's tile byte is the index into it,
+//! One 256x384 sheet: a 256x256 grid of 16x16 tiles, and under it a strip of
+//! the same grid at every reduced level. A cell's tile byte is the index into it,
 //! low nibble across and high nibble down, and that byte already carries alive
 //! and ice — so what a cell looks like is one number, and finding its picture
 //! is arithmetic rather than a lookup.
@@ -75,8 +76,8 @@ pub const HALF_TILE_N: u32 = LEVEL_TILE_N[1];
 ///
 /// The tile byte's fields are placed so the sheet reads as a grid: a kind's
 /// four states are four columns, and its eight ages are eight rows under them.
-/// Kinds 0-3 are the top half of the sheet and 4-7 the bottom. Nothing
-/// advances age yet — see `sim::cell::bits::AGE_SHIFT`.
+/// Kinds 0-3 are the top half of the sheet and 4-7 the bottom. A fuse and a
+/// factory's wear are what advance an age — see `sim::cell::Ages`.
 ///
 /// **Provisional art.** This sheet is a stand-in: four flat tiles so the four
 /// states are told apart and the game is playable. Redraw it and drop it in;

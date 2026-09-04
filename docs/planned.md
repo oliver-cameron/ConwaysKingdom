@@ -65,13 +65,13 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 ## Dynamite
 
-**Built**, and the age field it was designed around finally does something. `Kind::PAYLOAD` counts down while it lives, `World::detonate` runs at the top of the generation, and the blast walks outward to somewhere worth hitting. What is left is the **art** — the sprites in the sheet are a generated placeholder, a casing that fills as the fuse burns — and the numbers, which want `examples/balance.rs` pointed at them.
+**Built**, and the age field it was designed around finally does something. `Kind::DYNAMITE` counts down while it lives, `World::detonate` runs at the top of the generation, and the blast walks outward to somewhere worth hitting. What is left is the **art** — the sprites in the sheet are a generated placeholder, a casing that fills as the fuse burns — and the numbers, which `examples/blast.rs` is pointed at.
 
 Three things came out of building it that the design did not say.
 
 **A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A dynamite's fuse and a factory's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
 
-**A factory's age is not for this, and the table is where that is written down.** A dead factory still clears on `MINE_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spoken for by [depleted factories](#depleted-factories) below — a factory's age is a fade where a flag would be a cliff, so `Ages::Never` on that row is a reservation and not an absence.
+**A factory's age is not for this, and the table is where that is written down.** A dead factory still clears on `FACTORY_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spent on [depleted factories](#depleted-factories) — `Ages::Depletes` on that row is the wear on the square a factory was born on, a fade where a flag would be a cliff — so nothing else may count on it.
 
 **The detonating dynamite takes its own blast's roll**, and goes through the same `World::blasted` as every other square in the disc. Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
 
@@ -89,7 +89,7 @@ The goal was *make the surrounding area look like random noise*, and the design 
 
 **Every peer already agrees about randomness.** `sim::seed` is a seeded stream per cell per generation, it exists precisely so that two peers make the same random choice without exchanging anything, and it is what a birth already uses to pick a parent. So the scoring function is a way of *manufacturing* randomness with a deterministic optimiser inside a codebase that has deterministic randomness. One `mix` per square gives the same result for nothing.
 
-So detonation is: **every square within `PAYLOAD_REACH` takes its own roll, and comes up alive at `PAYLOAD_DENSITY` out of sixty-four.** One constant, and it is the same constant the cost function was reaching for — the density term was the only thing in that design doing work that a probability does not do directly.
+So detonation is: **every square within `DYNAMITE_REACH` takes its own roll, and comes up alive at `DYNAMITE_DENSITY` out of sixty-four.** One constant, and it is the same constant the cost function was reaching for — the density term was the only thing in that design doing work that a probability does not do directly.
 
 Three more reasons to drop the search, beyond not needing it:
 
@@ -108,10 +108,22 @@ standing a dynamite deep in their own territory is making that mistake by
 accident rather than on purpose.
 
 So the blast **walks outward** until it is worth something: search rings at
-increasing distance from the dynamite for a centre whose disc is not already
-its owner's, take the nearest, and break a tie with a seeded roll. Which is
-`turret_target` again, in shape and in code — the nearest square that answers a
-question, with the tie broken so a volley does not always favour one direction.
+increasing distance from the dynamite for a centre whose disc is at least
+`DYNAMITE_FOREIGN` in sixty-four not its owner's, take the nearest, and break a
+tie with a seeded roll. Which is `turret_target` again, in shape and in code —
+the nearest square that answers a question, with the tie broken so a volley
+does not always favour one direction.
+
+**Not its owner's, which includes nobody's.** A blast claims what it reaches,
+so open country is worth hitting, and a count of somebody *else's* ground —
+which is what `worth_hitting` used to take — would leave a dynamite unable to
+do the thing it was given. What that re-admits is the crater loop: the debris
+of a blast is mostly unowned, so one can be aimed at the last one's hole. It is
+priced out rather than ruled out, since a third of a disc for `DYNAMITE_COST`
+is a worse rate than any ordinary way of holding ground. And the quarter is
+lower than it reads: a disc centred on a frontier is half somebody else's at
+best, and anything further in is reached by walking past ground that
+qualifies less.
 
 Two things make the search cheap enough to be a pass rather than a search.
 
@@ -120,7 +132,7 @@ candidate disc are already this player's — the same question
 [`crowding`](../src/net/mod.rs) asks when it seats a latecomer, and one pass
 over a disc rather than a scored optimisation over every cell in it.
 
-**And it is bounded.** `PAYLOAD_THROW` is the furthest a centre may be
+**And it is bounded.** `DYNAMITE_THROW` is the furthest a centre may be
 displaced, so a dynamite in the middle of a large country lobs itself at the
 nearest frontier and not across the map. Unbounded, it would be a homing weapon
 with a range of the whole world, which is a different thing entirely and a much
@@ -137,17 +149,18 @@ near my edge" is good enough, and the rule finds the rest.
 ### A blob is one bomb, and each charge is worth an area
 
 **A hundred dynamite reach ten times as far as one, not a hundred times.**
-`blast_reach` is `PAYLOAD_REACH * sqrt(n)`, so each one going off adds a
+`blast_reach` is `DYNAMITE_REACH * sqrt(n)`, so each one going off adds a
 constant *area* of blast — which is the only scaling that makes a cluster
 worth building without making it the only thing in the game. Below it, a blob
 does less than the same dynamite laid apart and nobody clusters; above it,
 nothing else matters.
 
-It is also the honest reading of what a cluster is. Dynamite whose discs would
-overlap are grouped, transitively, so a line of them is one long bomb rather
-than a chain of pairs — and the blast is centred on the middle of the blob,
-because that is where a bomb made of all of them is. `PAYLOAD_MOST_REACH`
-bounds it: the pass is one roll per square, which is nothing until somebody
+It is also the honest reading of what a cluster is. Dynamite that stand in
+each other's disc — within `DYNAMITE_REACH` of one another, which is closer
+than discs merely overlapping — are grouped, transitively, so a line of them
+is one long bomb rather than a chain of pairs, and the blast is centred on the
+middle of the blob, because that is where a bomb made of all of them is.
+`DYNAMITE_MOST_REACH` bounds it: the pass is one roll per square, which is nothing until somebody
 works out that a thousand of them would rewrite a quarter of a large world in
 one generation.
 
@@ -170,15 +183,15 @@ So, per square in the disc:
 
 What that buys is that a bomb **breaks a country apart and leaves you a third of the pieces**, rather than merely animating what was there. Their factories' corpses still cost them upkeep and their shapes still stop being shapes; what is new is that you hold what is left.
 
-It is now a land grab, deliberately, and that is the thing to watch in `examples/balance.rs`: at `PAYLOAD_COST` a dynamite buys about a third of a disc of `PAYLOAD_REACH`, and if that rate ever beats growing life outward then the turret stops being the tool that takes ground.
+It is now a land grab, deliberately, and that is the thing to watch in `examples/blast.rs`: at `DYNAMITE_COST` a dynamite buys about a third of a disc of `DYNAMITE_REACH`, and if that rate ever beats growing life outward then the turret stops being the tool that takes ground.
 
 **Two squares are exempt.** Ice, because a pane stops time over whatever it covers and that is every rule. And **granted ground**, which is subtler and matters more: `rule::territory` returns before a home square, so nothing else in the game moves one, and `net::already_granted` reads exactly that to know a returning player still has a seat. A blast that converted one would evict somebody from their spawn permanently and hand them a second patch on their next join. And because the owner there cannot move, a home square that came up *alive* would be alive **for them** — the gift bug again, in the one place somebody would aim to exploit it. So a blast may take life off a granted patch and may never put it there. `a_blast_clears_a_granted_patch_without_taking_or_feeding_it`.
 
-It needs no new placement rule. `net::may_place` confines you to your own influence, so a dynamite is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
+It needs no new placement rule. `net::may_place` confines you to your own influence, so a dynamite is laid on your own frontier and its blast reaches across the border — which is exactly the range question `DYNAMITE_REACH` is for.
 
 ### What it is made of
 
-`Kind::PAYLOAD`, which is a row in `kinds!` and costs one of eight kind indices — three are used, and [depleted factories](#depleted-factories) wants a fourth, leaving three spare. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
+`Kind::DYNAMITE`, which is a row in `kinds!` and costs one of eight kind indices — four are used, and four are spare, since [depleted factories](#depleted-factories) went into the age field rather than a kind. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
 
 **It inherits**, which is the decision that makes it a weapon rather than a factory you cannot eat. A birth copies its parent, so a glider that picks one up carries it — a pattern that crosses a border and goes off inside somebody's country, which is the piece the rest of this entry was missing. The cost is real and worth stating: a gun that catches one is a factory. What limits it is that the **fuse travels too**, so a factory's output goes off near the factory, and that a dynamite is a live cell like any other — kill the pattern and there is nothing left to inherit.
 
@@ -198,9 +211,9 @@ Worth checking rather than assuming, because a weapon that deletes a screen of s
 
 ### The numbers, which are not decided
 
-`PAYLOAD_COST`, `PAYLOAD_REACH`, `PAYLOAD_DENSITY`, `PAYLOAD_THROW` and the fuse chance. `examples/balance.rs` is where they should be argued out, the way [turrets](#turrets) says its own numbers should be.
+`DYNAMITE_COST`, `DYNAMITE_REACH`, `DYNAMITE_DENSITY`, `DYNAMITE_THROW`, `DYNAMITE_FOREIGN` and the fuse chance. `examples/blast.rs` is where they should be argued out, the way [turrets](#turrets) says its own numbers should be.
 
-The one with a shape already: **density**. Conway's classic soup is a half, which mostly burns down; a third is where a random field produces the most that goes on happening. So `PAYLOAD_DENSITY` around twenty-four in sixty-four, and it wants playing with rather than deriving.
+The one with a shape already: **density**. Conway's classic soup is a half, which mostly burns down; a third is where a random field produces the most that goes on happening. So `DYNAMITE_DENSITY` around twenty-four in sixty-four, and it wants playing with rather than deriving.
 
 ## What to do next
 

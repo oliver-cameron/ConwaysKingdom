@@ -9,8 +9,8 @@
 //!
 //! What it prints is squares turned over per stick. `blast_reach` grows as the
 //! square root of a blob, so the area grows as the blob and the figure is flat:
-//! the one exception is two sticks, which sit inside one disc and so turn over
-//! no more ground than one.
+//! the one exception is two sticks, whose reach rounds down to eight — a disc
+//! of 197, which is less a stick than one on its own.
 
 use conwayskingdom::sim::{bits, Cell, Kind, PlayerId, World};
 

@@ -644,8 +644,8 @@ impl World {
         // stepping the same generation must make the same choices, and a
         // choice that depended on which dynamite was handled first would
         // depend on the iteration order of a map.
-        // **A blob of them is one bomb, not many.** Dynamite whose blasts
-        // would overlap go off as a single, larger one — see
+        // **A blob of them is one bomb, not many.** Dynamite standing in each
+        // other's disc go off as a single, larger one — see
         // [`rule::blast_reach`], where each is worth a constant area — so a
         // hundred of them reach ten times as far as one rather than a hundred
         // small craters in the same place.
@@ -1403,12 +1403,13 @@ fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: PlayerId) {
     }
 }
 
-/// Which dynamite go off together: the groups whose blasts would overlap.
+/// Which dynamite go off together: the groups standing in each other's disc.
 ///
-/// **Two whose discs touch are one bomb.** Otherwise a blob of them is a
-/// hundred craters in the same place, each doing again what the last already
-/// did — where what a player built is one charge made of a hundred, and
-/// [`rule::blast_reach`] is what that is worth.
+/// **Two within one reach of each other are one bomb** — nearer than discs
+/// merely overlapping, which would join a pair two reaches apart. Otherwise a
+/// blob of them is a hundred craters in the same place, each doing again what
+/// the last already did — where what a player built is one charge made of a
+/// hundred, and [`rule::blast_reach`] is what that is worth.
 ///
 /// Connected by distance and transitively, so a line of dynamite is one long
 /// bomb rather than a chain of pairs. `O(n²)` over the ones that are *ready*,

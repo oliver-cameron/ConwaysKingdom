@@ -40,7 +40,7 @@ The fields are placed so that reads as a **grid**. Alive and ice are the bottom 
 
 That split is the price of the placement, and it is worth paying: with the state in bits 0–1 and the age in 4–6, the only bits left for a three-bit kind are 2, 3 and 7. The alternative puts age in bits 5–7 and keeps the kind contiguous, at the cost of a sheet where age advances every *two* rows.
 
-**Nothing advances age yet.** It was six bits of kind, of which three were used, and sixty-one spare kinds is not worth a nibble that does not line up. See [dynamite](planned.md#dynamite), which is what it is for, and [depleted factories](planned.md#depleted-factories), which may want it instead. The art that exists did not move: every kind in play is 0–2 at age nought, so all of it is in the sheet's first row exactly where `kind * 4 + state` put it.
+**Two kinds advance it, and `Kind::ages` is the table that says what each counts.** A dynamite's age is its fuse, stepped by the rule while it lives — see [dynamite](planned.md#dynamite) — and a factory's is the wear on the square it was born on, set at birth and never stepped on its own — see [depleted factories](planned.md#depleted-factories). It was six bits of kind, of which three were used, and sixty-one spare kinds is not worth a nibble that does not line up. The art that exists did not move: every kind at age nought is in the sheet's first row exactly where `kind * 4 + state` put it, and the seven rows under a kind that ages are what its fuse or its wear draws from.
 
 The player sits at the top of its byte, so extracting it is a shift with no mask.
 

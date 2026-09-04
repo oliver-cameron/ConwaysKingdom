@@ -111,9 +111,6 @@ pub const DYNAMITE_WARN: u8 = bits::MAX_AGE - 1;
 ///
 /// [`DYNAMITE_MOST_REACH`] follows it, being a multiple.
 ///
-/// Ten rather than eight: a dynamite has to be built around and kept alive to
-/// go off at all, and eight was a blast you had to look for.
-///
 /// A cluster that goes off together reaches further — see [`blast_reach`],
 /// where each dynamite is worth a constant *area* of blast.
 pub const DYNAMITE_REACH: i32 = 6;
@@ -144,7 +141,7 @@ pub fn blast_reach(n: usize) -> i32 {
 ///
 /// Conway's classic soup is a half, which mostly burns down; a third is where
 /// a random field goes on happening longest. This wants playing with rather
-/// than deriving — see `examples/balance.rs`.
+/// than deriving, and `examples/blast` sweeps it.
 pub const DYNAMITE_DENSITY: u64 = 24;
 /// The furthest a blast's centre may be thrown from the dynamite, in cells.
 ///
@@ -152,16 +149,16 @@ pub const DYNAMITE_DENSITY: u64 = 24;
 /// dynamite deep inside a large country lobs itself at the nearest frontier;
 /// past this it goes off where it stands.
 pub const DYNAMITE_THROW: i32 = 12;
-/// How much of a blast's disc has to be **held by somebody else** for it to be
-/// worth setting off there, in squares out of sixty-four.
+/// How much of a blast's disc has to be **not already the bomber's** for it
+/// to be worth setting off there, in squares out of sixty-four.
 ///
-/// Somebody else's, not merely not-yours: unowned ground passes "not mine"
-/// trivially, so that test sent dynamite out of their own country to go off
-/// over the nearest empty stretch — and over the debris of earlier blasts,
-/// which is mostly unowned, so they detonated in each other's craters.
+/// Nobody's counts. A blast claims what it reaches, so open country is worth
+/// hitting, and the crater loop that re-admits — the debris of a blast is
+/// mostly unowned, so one can be aimed at the last one's hole — is priced out
+/// rather than ruled out; see `World::worth_hitting`.
 ///
 /// A quarter, which is lower than it reads: a disc centred on a frontier is
-/// half somebody's country at best, and anything further in has to be reached
+/// half somebody else's at best, and anything further in has to be reached
 /// by walking past ground that qualifies less.
 pub const DYNAMITE_FOREIGN: u64 = 16;
 
