@@ -1197,7 +1197,7 @@ mod tests {
     fn a_sweep_larger_than_the_pad_is_refused_rather_than_cropped() {
         let me = PlayerId(1);
         let wide: Vec<((i32, i32), Kind, PlayerId)> =
-            (0..SKETCH_N + 1).map(|c| (((0, c)), Kind::NORMAL, me)).collect();
+            (0..SKETCH_N + 1).map(|c| ((0, c), Kind::NORMAL, me)).collect();
         let world = world_with(&wide);
 
         assert!(fits((0, 0), (0, SKETCH_N - 1)), "a stamp exactly the pad's width does not fit");

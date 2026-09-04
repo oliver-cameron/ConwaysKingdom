@@ -996,6 +996,10 @@ impl GameApp {
     }
 
     /// Whether input from the world should be acted on at all.
+    ///
+    /// Every handler of a click, a touch, a scroll or a pinch opens by asking:
+    /// the menu is drawn *over* the world and the world is still there, so a
+    /// press that lands beside the panel would otherwise draw on it.
     fn playing(&self) -> bool {
         matches!(self.ui.screen, Screen::Playing)
     }
@@ -2383,8 +2387,6 @@ impl App for GameApp {
                 }
             }
         }
-        // The menu is over the world, and the world is still there. A click
-        // that lands beside the panel must not draw on it.
         if !self.playing() {
             return;
         }
@@ -2454,8 +2456,6 @@ impl App for GameApp {
     /// A trackpad pinch, on the platforms that report one as a gesture.
     /// `delta` is a relative change, so it multiplies rather than adds.
     fn on_pinch(&mut self, delta: f64) {
-        // The menu is over the world, and the world is still there. A click
-        // that lands beside the panel must not draw on it.
         if !self.playing() {
             return;
         }
@@ -2477,8 +2477,6 @@ impl App for GameApp {
     /// draw with, and the hotbar has already promised the player is holding
     /// something.
     fn on_touch(&mut self, id: u64, phase: winit::event::TouchPhase, x: f64, y: f64) {
-        // The menu is over the world, and the world is still there. A click
-        // that lands beside the panel must not draw on it.
         if !self.playing() {
             return;
         }
@@ -2547,8 +2545,6 @@ impl App for GameApp {
     /// every scroll as zoom made a two-finger swipe on a trackpad lurch the
     /// zoom when every other application pans with it.
     fn on_scroll(&mut self, delta: winit::event::MouseScrollDelta, ctrl: bool) {
-        // The menu is over the world, and the world is still there. A click
-        // that lands beside the panel must not draw on it.
         if !self.playing() {
             return;
         }
@@ -2596,8 +2592,6 @@ impl App for GameApp {
     /// view are never the same gesture and neither has to guess which was
     /// meant — and every mouse and trackpad has at least one of the three.
     fn on_click(&mut self, button: winit::event::MouseButton, pressed: bool) {
-        // The menu is over the world, and the world is still there. A click
-        // that lands beside the panel must not draw on it.
         if !self.playing() {
             return;
         }
