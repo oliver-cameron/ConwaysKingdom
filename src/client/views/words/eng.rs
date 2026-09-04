@@ -211,8 +211,9 @@ pub static WORDS: super::Words = super::Words {
             private: "Who can find it",
             listed: "Anyone",
             unlisted: "By code",
-            solo_access: "Just me",
-            solo_note: "No server and nobody else. The simulation is the same one a match runs.",
+            solo_access: "Play alone",
+            solo_note: "No server, nobody else, nothing to join. The simulation is the \
+             same one a match runs.",
             listed_note: "In the room list, for whoever is on this server.",
             unlisted_note: "Not listed. The server gives it a code to share, instead of a name.",
             kind: "Kind",

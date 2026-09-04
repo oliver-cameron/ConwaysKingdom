@@ -520,6 +520,13 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // Shown whether or not a server has answered. With none, the only
             // answer that can work is `Solo`, and the toggles say so by being
             // the place the choice lives rather than by disappearing.
+            //
+            // **And it is the only place it lives.** Playing alone had a page
+            // and then a full-width button under this form, and it is neither:
+            // it is this form with the last question answered "nobody". What
+            // that costs is findability, which the *label* pays rather than a
+            // second control -- the answer is called "Play alone" and not
+            // "Just me" for exactly that reason.
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(w().menu.make.private).size(m.text_small));
             let mut access = draft.access;

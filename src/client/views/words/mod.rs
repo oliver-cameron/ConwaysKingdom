@@ -254,8 +254,15 @@ pub struct MenuMake {
     pub private: &'static str,
     pub listed: &'static str,
     pub unlisted: &'static str,
-    /// The third answer to who can find it, and the one that used to be a
-    /// page of its own: nobody, and no server.
+    /// The third answer to who can find it: nobody, and no server.
+    ///
+    /// **Named "Play alone" rather than "Just me"**, which breaks the
+    /// parallelism of the three answers on purpose. The other two are
+    /// descriptions of an audience and this one is the name of a *thing people
+    /// look for* — it was a page of its own and a button of its own before
+    /// that, so somebody arriving with "play alone" in their head has to find
+    /// those words, and "Just me" made them work out that the two were the
+    /// same errand.
     pub solo_access: &'static str,
     pub solo_note: &'static str,
     pub listed_note: &'static str,
