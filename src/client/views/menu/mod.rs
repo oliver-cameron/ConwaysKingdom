@@ -411,7 +411,7 @@ pub struct Where {
     /// The sprite sheet, once the interface has registered it.
     ///
     /// The menu draws no world and still wants this: **how to play is about
-    /// cells**, and a page explaining what a mine does while showing no mine is
+    /// cells**, and a page explaining what a factory does while showing no factory is
     /// a page of assertions. `None` before the first frame that registers it,
     /// and every page that uses it has to read without it.
     pub sheet: Option<egui::TextureId>,

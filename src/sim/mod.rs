@@ -26,16 +26,17 @@ mod rule;
 mod seed;
 mod world;
 
-pub use cell::{bits, Ages, Cell, Chunk, Halo, Kind, Mined, CHUNK_CELLS, CHUNK_N, HALO_N};
+pub use cell::{bits, Ages, Cell, Chunk, Halo, Kind, Takings, CHUNK_CELLS, CHUNK_N, HALO_N};
 pub use dir::Dir;
 pub use player::{Player, PlayerId};
 pub use rule::YIELD_STREAM;
 pub use rule::{
-    blast_reach, mine_chance, next_cell, Chance, Neighbours, RuleFn, Then, BLAST_DRAIN, BORN_ON,
-    DEFAULT_TORUS, ICE_COST, LEVEL_ADJUST, LEVEL_EBB, LEVEL_FALL, LEVEL_SPREAD, LIFE_COST,
-    MINE_COST, MINE_DRAIN, MINE_UPKEEP, MINE_YIELD, PAYLOAD_COST, PAYLOAD_DENSITY, PAYLOAD_FOREIGN,
-    PAYLOAD_FUSE, PAYLOAD_REACH, PAYLOAD_THROW, PAYLOAD_WARN, RECLAIM, RULES, STARTING_VALUE,
-    SURVIVES_ON, TURRET_COST, TURRET_DECAY, TURRET_POWER, TURRET_PUSH, TURRET_REACH,
+    blast_reach, factory_chance, next_cell, Chance, Neighbours, RuleFn, Then, BLAST_DRAIN, BORN_ON,
+    DEFAULT_TORUS, DYNAMITE_COST, DYNAMITE_DENSITY, DYNAMITE_FOREIGN, DYNAMITE_FUSE,
+    DYNAMITE_REACH, DYNAMITE_THROW, DYNAMITE_WARN, FACTORY_COST, FACTORY_DRAIN, FACTORY_UPKEEP,
+    FACTORY_YIELD, ICE_COST, LEVEL_ADJUST, LEVEL_EBB, LEVEL_FALL, LEVEL_SPREAD, LIFE_COST, RECLAIM,
+    RULES, STARTING_VALUE, SURVIVES_ON, TURRET_COST, TURRET_DECAY, TURRET_POWER, TURRET_PUSH,
+    TURRET_REACH,
 };
 pub use seed::{mix, Roll, OUT_OF};
 pub use world::{parse_torus, Coord, World, WorldKind};

@@ -1,7 +1,7 @@
 //! What a click puts down.
 //!
 //! ```text
-//!   [ figures ] [ Life Mine Turret Ice ] [ shape │ grab │ stamps │ ⋯ ] [ ▶ +1 ⚙ ] [ ? ]
+//!   [ figures ] [ Life Factory Turret Ice ] [ shape │ grab │ stamps │ ⋯ ] [ ▶ +1 ⚙ ] [ ? ]
 //! ```
 //!
 //! [`slots`] is that line as a list, and the keyboard, the key list and the
@@ -32,9 +32,9 @@ pub enum Stroke {
 
 /// One of the four things a cell can be: the **kind** axis.
 ///
-/// It was a tool, which is to say a shape and a material at once — a mine came
+/// It was a tool, which is to say a shape and a material at once — a factory came
 /// with a pencil and ice came with a rectangle, and there was no way to draw a
-/// line of ice or sweep a pane of mines. The two are chosen separately now and
+/// line of ice or sweep a pane of factories. The two are chosen separately now and
 /// this is half of the choice.
 #[derive(Clone, Copy)]
 pub struct Tool {
@@ -57,12 +57,12 @@ pub struct Tool {
 /// What each tool leaves on a square, which is what its button shows. Built
 /// here rather than named, so a button cannot show one thing and lay another.
 const LIVE: Cell = Cell::DEAD.with_alive(true);
-const MINED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::MINE);
+const MINED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::FACTORY);
 const TURRETED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::TURRET);
 const ICED: Cell = Cell::DEAD.with_ice(true);
 /// Age nought, which is a fuse that has not started. The bar shows what a
 /// square puts down, and what it puts down is unlit.
-const PAYLOADED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::PAYLOAD);
+const PAYLOADED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::DYNAMITE);
 
 /// The left segment: what you draw with.
 /// The four kinds, in the order they sit on the bar.
@@ -87,9 +87,9 @@ pub fn kinds() -> [Tool; 5] {
             apart: false,
         },
         Tool {
-            name: w().hotbar.mine,
+            name: w().hotbar.factory,
             shows: MINED,
-            placement: Placement::Mine,
+            placement: Placement::Factory,
             usually: Shape::Draw,
             apart: false,
         },
@@ -100,13 +100,13 @@ pub fn kinds() -> [Tool; 5] {
             usually: Shape::Draw,
             apart: false,
         },
-        // A pencil, not a pane. A payload is placed one at a time and kept alive
+        // A pencil, not a pane. A dynamite is placed one at a time and kept alive
         // by what is built round it, so a drag that laid twenty is a gesture
         // nobody wants and could afford even less.
         Tool {
-            name: w().hotbar.payload,
+            name: w().hotbar.dynamite,
             shows: PAYLOADED,
-            placement: Placement::Payload,
+            placement: Placement::Dynamite,
             usually: Shape::Draw,
             apart: false,
         },
@@ -166,7 +166,7 @@ impl Shape {
 
 /// **Two axes: a shape and what it is made of.** The shape says how cells are
 /// chosen, the kind says what goes in them, and every combination is reachable
-/// — a line of ice and a pane of mines were both unsayable when it was one
+/// — a line of ice and a pane of factories were both unsayable when it was one
 /// list of tools.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Held {
@@ -787,7 +787,7 @@ fn shadowed_in(
 mod tests {
     use super::*;
 
-    /// **Every kind gets a square.** The payload existed, burned its fuse and
+    /// **Every kind gets a square.** The dynamite existed, burned its fuse and
     /// detonated for a whole commit with no way to put one down, because
     /// `kinds` is the bar and it was not in it. A kind that cannot be placed
     /// is a kind that is not in the game.
@@ -806,8 +806,8 @@ mod tests {
             );
         }
         assert!(
-            kinds().iter().any(|t| t.placement == crate::net::Placement::Payload),
-            "the payload is not among the kinds the bar offers"
+            kinds().iter().any(|t| t.placement == crate::net::Placement::Dynamite),
+            "the dynamite is not among the kinds the bar offers"
         );
     }
 
@@ -815,9 +815,9 @@ mod tests {
     /// stopped board in a world the server is stepping would be a lie.
     #[test]
     fn the_clock_squares_are_there_when_the_clock_is_ours() {
-        let mine = slots(&Library::default(), true);
+        let factory = slots(&Library::default(), true);
         for key in [Key::Run, Key::Step, Key::Rules] {
-            assert!(mine.iter().any(|s| s.key == key), "{key:?} is missing when time is ours");
+            assert!(factory.iter().any(|s| s.key == key), "{key:?} is missing when time is ours");
         }
         let theirs = slots(&Library::default(), false);
         for key in [Key::Run, Key::Step, Key::Rules] {
@@ -970,7 +970,7 @@ mod tests {
     /// **The two axes are independent, which is the whole of the change.**
     ///
     /// Every combination is reachable now rather than the dozen somebody
-    /// happened to list: a pane of mines and a pencil of ice were both
+    /// happened to list: a pane of factories and a pencil of ice were both
     /// unsayable, because a tool carried its stroke with it.
     #[test]
     fn a_shape_and_a_kind_are_chosen_separately() {
@@ -981,11 +981,11 @@ mod tests {
 
         let panes_of_mine = Held {
             shape: Shape::Rect,
-            kind: kinds().iter().position(|k| k.placement == Placement::Mine).unwrap(),
+            kind: kinds().iter().position(|k| k.placement == Placement::Factory).unwrap(),
             turn: Default::default(),
         };
         assert_eq!(panes_of_mine.stroke(), Stroke::Rectangle, "a pane of mines was unsayable");
-        assert_eq!(panes_of_mine.placement(), Some(Placement::Mine));
+        assert_eq!(panes_of_mine.placement(), Some(Placement::Factory));
 
         // A stamp is a shape, so it keeps whatever it is being made of --
         // which is what "remove the stamps know what they are made of" means
@@ -1034,7 +1034,7 @@ mod tests {
 
         for (what, expected) in [
             (Placement::Life, Shape::Draw),
-            (Placement::Mine, Shape::Draw),
+            (Placement::Factory, Shape::Draw),
             (Placement::Turret, Shape::Draw),
             (Placement::Ice, Shape::Rect),
         ] {

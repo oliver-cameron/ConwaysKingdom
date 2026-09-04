@@ -1233,15 +1233,15 @@ mod tests {
 
     /// **The relation is "would draw the same sprite"**, not "is alive": a
     /// mass of cells is one shape only where it looks like one, so somebody
-    /// else's cell next to yours is an edge and so is a mine next to life.
+    /// else's cell next to yours is an edge and so is a factory next to life.
     #[test]
     fn a_different_owner_or_a_different_kind_is_an_edge() {
         let mut world = World::infinite_empty();
         alive(&mut world, &[(0, 0)], 1);
         alive(&mut world, &[(0, 1)], 2);
-        world.set_cell_at(1, 0, Cell::alive(PlayerId(1)).with_kind(crate::sim::Kind::MINE));
-        let mine = world.cell_at(0, 0).unwrap();
-        assert_eq!(neighbours(&world, mine, (0, 0)), 0, "an edge was missed");
+        world.set_cell_at(1, 0, Cell::alive(PlayerId(1)).with_kind(crate::sim::Kind::FACTORY));
+        let factory = world.cell_at(0, 0).unwrap();
+        assert_eq!(neighbours(&world, factory, (0, 0)), 0, "an edge was missed");
     }
 
     /// A torus has no edge, so a cell against the seam is joined to whatever

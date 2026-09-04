@@ -97,15 +97,15 @@ pub fn expected(a: i32, b: i32) -> f64 {
     1.0 / (1.0 + 10f64.powf((b - a) as f64 / SPREAD))
 }
 
-/// What holding `mine` against `theirs` scored: a win, a draw, or a loss.
+/// What holding `factory` against `theirs` scored: a win, a draw, or a loss.
 ///
 /// **Ground held, not a winner's flag.** A match names one winner, and rating
 /// everybody against that one name would say the same thing about the player
 /// who came second by a square and the one who never got off their block.
 /// Every pair is its own result, which is what makes a fifteen-player match
 /// fifteen players' worth of information rather than one bit.
-fn outcome(mine: usize, theirs: usize) -> f64 {
-    match mine.cmp(&theirs) {
+fn outcome(factory: usize, theirs: usize) -> f64 {
+    match factory.cmp(&theirs) {
         std::cmp::Ordering::Greater => 1.0,
         std::cmp::Ordering::Equal => 0.5,
         std::cmp::Ordering::Less => 0.0,
@@ -424,9 +424,9 @@ mod tests {
         let (mut me, mut them) = (START, START);
         for game in 0..300 {
             // Two wins in three, for ever.
-            let (mine, theirs) = if game % 3 == 2 { (4, 9) } else { (9, 4) };
+            let (factory, theirs) = if game % 3 == 2 { (4, 9) } else { (9, 4) };
             let after = after(&[
-                Entrant { rating: me, team: 1, score: mine, games: PROVISIONAL_AFTER },
+                Entrant { rating: me, team: 1, score: factory, games: PROVISIONAL_AFTER },
                 Entrant { rating: them, team: 2, score: theirs, games: PROVISIONAL_AFTER },
             ]);
             (me, them) = (after[0], after[1]);

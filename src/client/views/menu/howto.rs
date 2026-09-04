@@ -6,8 +6,8 @@
 //! people lose to before they learn it, and none of them is visible on the
 //! board. The order is the order they bite in.
 //!
-//! **Each one shows the cell it is about.** A page explaining what a mine does
-//! while showing no mine is a page of assertions — and the art is right there,
+//! **Each one shows the cell it is about.** A page explaining what a factory does
+//! while showing no factory is a page of assertions — and the art is right there,
 //! tinted in the reader's own colour by the same sheet the hotbar draws from.
 //!
 //! The argument behind each rule is in [game.md]; what is here is the shortest
@@ -28,10 +28,10 @@ use crate::sim::{Cell, PlayerId};
 /// `words` holds strings.
 const FACES: [Option<Placement>; 5] = [
     None,
-    Some(Placement::Mine),
+    Some(Placement::Factory),
     Some(Placement::Turret),
     Some(Placement::Ice),
-    Some(Placement::Payload),
+    Some(Placement::Dynamite),
 ];
 
 /// The cell for a rule, or the player's own live cell where the rule is about

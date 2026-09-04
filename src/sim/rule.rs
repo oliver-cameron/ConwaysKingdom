@@ -57,20 +57,20 @@ pub const LEVEL_EBB: u8 = 2;
 /// How often a square works out what reaches it. The rate, not the outcome.
 pub const LEVEL_ADJUST: Chance = 16;
 
-// --- mines -------------------------------------------------------------------
+// --- factories -------------------------------------------------------------------
 
-/// A dead mine costs its owner [`MINE_DRAIN`] and becomes ordinary ground.
+/// A dead factory costs its owner [`FACTORY_DRAIN`] and becomes ordinary ground.
 ///
 /// **A roll and not a count**, which was tried the other way and is wrong for
 /// two reasons. The scatter is doing work: a corpse reborn before the charge
 /// falls due escapes it, and a chance means *some* of a pattern's corpses
 /// escape rather than all of them or none, which is what grades the cost by
 /// how much a pattern leaves lying about. And the age field is spoken for —
-/// [depleted mines] wants it, and a mine's age is a much better fade than a
+/// [depleted factories] wants it, and a factory's age is a much better fade than a
 /// flag would be.
 ///
-/// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
-pub const MINE_UPKEEP: Chance = 16;
+/// [depleted factories]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-factories
+pub const FACTORY_UPKEEP: Chance = 16;
 
 // --- turrets -----------------------------------------------------------------
 
@@ -83,20 +83,20 @@ pub const TURRET_PUSH: u8 = bits::MAX_LEVEL;
 /// A dead turret becomes ordinary ground.
 pub const TURRET_DECAY: Chance = 4;
 
-// --- payloads ----------------------------------------------------------------
+// --- dynamite ----------------------------------------------------------------
 
-/// How often a payload's fuse advances, while it is alive and not under ice.
+/// How often a dynamite's fuse advances, while it is alive and not under ice.
 ///
 /// A chance rather than a count, and the second reason is what earns it. A
-/// chance **scatters** payloads laid in one gesture, so four do not go off in
-/// lockstep. And [`PAYLOAD_WARN`] makes the last step certain, so the warning
+/// chance **scatters** dynamite laid in one gesture, so four do not go off in
+/// lockstep. And [`DYNAMITE_WARN`] makes the last step certain, so the warning
 /// is reliable — a weapon with a random warning is a weapon with no warning.
-pub const PAYLOAD_FUSE: Chance = 16;
+pub const DYNAMITE_FUSE: Chance = 16;
 /// The age at and above which the fuse always advances.
 ///
 /// One below [`bits::MAX_AGE`], so the last sprite is on screen for exactly
 /// one generation, always.
-pub const PAYLOAD_WARN: u8 = bits::MAX_AGE - 1;
+pub const DYNAMITE_WARN: u8 = bits::MAX_AGE - 1;
 /// How far **one** stick of dynamite reaches from its centre, in cells.
 ///
 /// **Six, and it was ten.** Area goes as the square, so ten was a disc of about
@@ -106,61 +106,61 @@ pub const PAYLOAD_WARN: u8 = bits::MAX_AGE - 1;
 /// in one generation than they could rebuild in twenty, which is a weapon that
 /// ends a game rather than one that changes it.
 ///
-/// [`PAYLOAD_MOST_REACH`] follows it, being a multiple.
+/// [`DYNAMITE_MOST_REACH`] follows it, being a multiple.
 ///
-/// Ten rather than eight: a payload has to be built around and kept alive to
+/// Ten rather than eight: a dynamite has to be built around and kept alive to
 /// go off at all, and eight was a blast you had to look for.
 ///
 /// A cluster that goes off together reaches further — see [`blast_reach`],
-/// where each payload is worth a constant *area* of blast.
-pub const PAYLOAD_REACH: i32 = 6;
+/// where each dynamite is worth a constant *area* of blast.
+pub const DYNAMITE_REACH: i32 = 6;
 
-/// The furthest any blast may reach, however many payloads went into it.
+/// The furthest any blast may reach, however many dynamite went into it.
 ///
-/// Ten times one payload's, so a hundred of them is the biggest bomb there is.
+/// Ten times one dynamite's, so a hundred of them is the biggest bomb there is.
 /// A bound rather than a balance figure: the pass is one roll per square,
-/// which is nothing until somebody works out that a thousand payloads would
+/// which is nothing until somebody works out that a thousand dynamite would
 /// rewrite a quarter of a large world in one generation.
-pub const PAYLOAD_MOST_REACH: i32 = PAYLOAD_REACH * 10;
+pub const DYNAMITE_MOST_REACH: i32 = DYNAMITE_REACH * 10;
 
-/// How far a cluster of `n` payloads reaches when they go off together.
+/// How far a cluster of `n` dynamite reaches when they go off together.
 ///
-/// **Each payload is worth a constant area**, so the radius goes as the square
+/// **Each dynamite is worth a constant area**, so the radius goes as the square
 /// root of how many there are: a hundred of them reach ten times as far as
 /// one, not a hundred times. Anything else and a blob is either worth less
-/// than laying the same payloads apart — which makes clustering pointless —
+/// than laying the same dynamite apart — which makes clustering pointless —
 /// or so much more that nothing else in the game matters.
 ///
 /// It is also the honest reading of what a cluster *is*: one bomb made of n
 /// charges, rather than n bombs that happen to be adjacent.
 pub fn blast_reach(n: usize) -> i32 {
-    let reach = (PAYLOAD_REACH as f64 * (n as f64).sqrt()).round() as i32;
-    reach.clamp(PAYLOAD_REACH, PAYLOAD_MOST_REACH)
+    let reach = (DYNAMITE_REACH as f64 * (n as f64).sqrt()).round() as i32;
+    reach.clamp(DYNAMITE_REACH, DYNAMITE_MOST_REACH)
 }
 /// How many squares in sixty-four a detonation brings to life.
 ///
 /// Conway's classic soup is a half, which mostly burns down; a third is where
 /// a random field goes on happening longest. This wants playing with rather
 /// than deriving — see `examples/balance.rs`.
-pub const PAYLOAD_DENSITY: u64 = 24;
-/// The furthest a blast's centre may be thrown from the payload, in cells.
+pub const DYNAMITE_DENSITY: u64 = 24;
+/// The furthest a blast's centre may be thrown from the dynamite, in cells.
 ///
 /// **Bounded, or it is a homing weapon with a range of the whole world.** A
-/// payload deep inside a large country lobs itself at the nearest frontier;
+/// dynamite deep inside a large country lobs itself at the nearest frontier;
 /// past this it goes off where it stands.
-pub const PAYLOAD_THROW: i32 = 12;
+pub const DYNAMITE_THROW: i32 = 12;
 /// How much of a blast's disc has to be **held by somebody else** for it to be
 /// worth setting off there, in squares out of sixty-four.
 ///
 /// Somebody else's, not merely not-yours: unowned ground passes "not mine"
-/// trivially, so that test sent payloads out of their own country to go off
+/// trivially, so that test sent dynamite out of their own country to go off
 /// over the nearest empty stretch — and over the debris of earlier blasts,
 /// which is mostly unowned, so they detonated in each other's craters.
 ///
 /// A quarter, which is lower than it reads: a disc centred on a frontier is
 /// half somebody's country at best, and anything further in has to be reached
 /// by walking past ground that qualifies less.
-pub const PAYLOAD_FOREIGN: u64 = 16;
+pub const DYNAMITE_FOREIGN: u64 = 16;
 
 // --- what a new world defaults to ---------------------------------------------
 
@@ -173,85 +173,85 @@ pub const DEFAULT_TORUS: (i32, i32) = (12, 12);
 pub const STARTING_VALUE: i32 = 100;
 /// The most anybody may hold: six figures.
 ///
-/// **A ceiling on hoarding, not on earning.** Mining pays on birth and births
+/// **A ceiling on hoarding, not on earning.** Manufacture pays on birth and births
 /// scale with a growing pattern, so income runs away from a big player and
-/// there is nothing in the rules pushing back — see [depleted mines], which is
+/// there is nothing in the rules pushing back — see [depleted factories], which is
 /// the shape of a proper answer. This is the blunt half of it, and it does two
 /// things at once: it stops a purse nobody could ever spend, and it makes the
 /// figure a fixed six columns wide, which is what lets the bar draw it without
 /// the number changing size under the reader's eye.
 ///
-/// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
+/// [depleted factories]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-factories
 pub const MAX_VALUE: i32 = 999_999;
 /// One cell of life.
 pub const LIFE_COST: i32 = 1;
-/// One mine.
-pub const MINE_COST: i32 = 10;
+/// One factory.
+pub const FACTORY_COST: i32 = 10;
 /// One turret. Read per emplacement: the smallest that works is four.
 pub const TURRET_COST: i32 = 15;
-/// What a payload costs. Dearer than a turret: a turret takes one square a
+/// What a dynamite costs. Dearer than a turret: a turret takes one square a
 /// generation and this rearranges a disc.
-pub const PAYLOAD_COST: i32 = 40;
+pub const DYNAMITE_COST: i32 = 40;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.
 pub const RECLAIM: i32 = 1;
-/// One birth of [`super::Kind::MINE`] that pays.
-pub const MINE_YIELD: i32 = 1;
+/// One birth of [`super::Kind::FACTORY`] that pays.
+pub const FACTORY_YIELD: i32 = 1;
 
-/// The age a mine pays most often at, and how often it pays there and when it
+/// The age a factory pays most often at, and how often it pays there and when it
 /// is spent — out of [`super::OUT_OF`].
 ///
-/// **Mine income used to scale faster than territory.** A mine pays when one of
+/// **Factory income used to scale faster than territory.** A factory pays when one of
 /// its kind is born, and births scale with the perimeter of a growing pattern,
 /// so a player with four times the ground earned more than four times as much
 /// and could spend it on more ground. Nothing pushed back. See
-/// [docs/planned.md#depleted-mines].
+/// [docs/planned.md#depleted-factories].
 ///
-/// What pushes back is the square. A mine born where a mine has been born
+/// What pushes back is the square. A factory born where a factory has been born
 /// before inherits that square's depletion and adds to it, so a pattern that
 /// keeps re-birthing over the same cells wears them out — and the wear stays on
 /// the corpse, so it is not escaped by dying. It is cleared only when the
-/// corpse is finally swept to ordinary ground, which is [`MINE_UPKEEP`].
+/// corpse is finally swept to ordinary ground, which is [`FACTORY_UPKEEP`].
 ///
 /// **A parabola rather than a fade, so there is an age worth holding.** A curve
-/// that only fell would make every mine worth most on the generation it was
+/// that only fell would make every factory worth most on the generation it was
 /// laid, and the only decision would be to lay more. With a peak at
-/// [`MINE_PRIME`] the shape rewards letting a field mature and then retiring
-/// it, and most of a mine's life is on the falling side, so "older pays less"
+/// [`FACTORY_PRIME`] the shape rewards letting a field mature and then retiring
+/// it, and most of a factory's life is on the falling side, so "older pays less"
 /// is still what a player sees:
 ///
 /// ```text
 ///   age    0   1   2   3   4   5   6   7
 ///   pays  55  62  64  62  55  43  26   4     out of 64
 /// ```
-pub const MINE_PRIME: u8 = 2;
-/// What a mine at its prime pays, out of [`super::OUT_OF`].
-pub const MINE_BEST: Chance = 64;
-/// And what one worn all the way out still pays. Not nought: a mine that could
+pub const FACTORY_PRIME: u8 = 2;
+/// What a factory at its prime pays, out of [`super::OUT_OF`].
+pub const FACTORY_BEST: Chance = 64;
+/// And what one worn all the way out still pays. Not nought: a factory that could
 /// never pay again is a cell to be told about, and it is told by the sprite
 /// rather than by a surprise.
-pub const MINE_SPENT: Chance = 4;
+pub const FACTORY_SPENT: Chance = 4;
 
-/// How likely a mine this depleted is to pay for a birth.
+/// How likely a factory this depleted is to pay for a birth.
 ///
 /// Integer arithmetic throughout, because two peers must agree exactly and a
 /// float is a way for them not to — see [docs/simulation.md] on determinism.
-pub fn mine_chance(age: u8) -> Chance {
-    let prime = MINE_PRIME as i64;
+pub fn factory_chance(age: u8) -> Chance {
+    let prime = FACTORY_PRIME as i64;
     let far = (age as i64 - prime).abs();
     // The longer arm of the parabola, so the far end lands exactly on spent.
     let widest = (bits::MAX_AGE as i64 - prime).max(prime).max(1);
-    let fall = (MINE_BEST as i64 - MINE_SPENT as i64) * far * far / (widest * widest);
-    (MINE_BEST as i64 - fall).max(MINE_SPENT as i64) as Chance
+    let fall = (FACTORY_BEST as i64 - FACTORY_SPENT as i64) * far * far / (widest * widest);
+    (FACTORY_BEST as i64 - fall).max(FACTORY_SPENT as i64) as Chance
 }
-/// One upkeep charge on a dead mine.
-pub const MINE_DRAIN: i32 = 2;
+/// One upkeep charge on a dead factory.
+pub const FACTORY_DRAIN: i32 = 2;
 
 /// What one square of blast costs the player who set it off.
 ///
 /// **Charged on detonation and by area, which is the nerf.** Dynamite used to
-/// cost [`PAYLOAD_COST`] once, when it was laid, and nothing afterwards — so
+/// cost [`DYNAMITE_COST`] once, when it was laid, and nothing afterwards — so
 /// the cheapest thing in the game was to lay one and let a glider carry it,
 /// and a blob of them was the cheapest of all, because
 /// [`blast_reach`] gives a hundred of them ten times the reach and therefore a
@@ -262,7 +262,7 @@ pub const MINE_DRAIN: i32 = 2;
 /// decision on a chain: each link is another disc and another bill, and a chain
 /// that runs away is one that empties a purse.
 ///
-/// Small, because the areas are not: one payload's disc is a little over three
+/// Small, because the areas are not: one dynamite's disc is a little over three
 /// hundred squares, so at this it is about the price of laying it again.
 pub const BLAST_DRAIN: i32 = 1;
 
@@ -312,7 +312,7 @@ fn ice(cell: Cell, _: &Neighbours, _: Roll) -> Then {
 ///
 /// After `ice`, so a frozen fuse does not burn: a pane stops time over what it
 /// covers and that is every rule. Before `conway`, so this reads the cell as
-/// it is now — a payload that dies this generation stops at the age it had
+/// it is now — a dynamite that dies this generation stops at the age it had
 /// reached rather than gaining one on the way out.
 fn fuse(cell: Cell, _: &Neighbours, roll: Roll) -> Then {
     if cell.age() >= bits::MAX_AGE {
@@ -321,10 +321,10 @@ fn fuse(cell: Cell, _: &Neighbours, roll: Roll) -> Then {
     match cell.kind().ages() {
         Ages::Never => Then::Next(cell),
         // **While it lives.** Certain at the last step and a chance before it:
-        // the chance scatters payloads laid in one gesture, and the certainty
+        // the chance scatters dynamite laid in one gesture, and the certainty
         // is what makes the warning a tell somebody can act on.
         Ages::Fuse(rate) if cell.is_alive() => {
-            if cell.age() >= PAYLOAD_WARN || roll.chance(stream::FUSE, rate) {
+            if cell.age() >= DYNAMITE_WARN || roll.chance(stream::FUSE, rate) {
                 Then::Next(cell.with_age(cell.age() + 1))
             } else {
                 Then::Next(cell)
@@ -385,10 +385,10 @@ fn contested(neighbours: &Neighbours, holder: PlayerId) -> (PlayerId, u8) {
     // Ties to the holder, then to the lower number, so two peers agree and a
     // matched border does not flicker.
     let mut won = (PlayerId::UNOWNED, 0i32);
-    for (i, &mine) in total.iter().enumerate().skip(1) {
-        let net = mine - (all - mine);
+    for (i, &ours) in total.iter().enumerate().skip(1) {
+        let net = ours - (all - ours);
         let who = PlayerId(i as u8);
-        if mine > 0 && (net > won.1 || (net == won.1 && net > 0 && who == holder)) {
+        if ours > 0 && (net > won.1 || (net == won.1 && net > 0 && who == holder)) {
             won = (who, net);
         }
     }
@@ -421,13 +421,13 @@ fn conway(cell: Cell, neighbours: &Neighbours, roll: Roll) -> Then {
         }
     } else if BORN_ON.contains(&live) {
         let born = parent(neighbours, roll).with_ice(false).with_home(cell.is_home());
-        // **A mine inherits the square's depletion, not its parent's.** What
+        // **A factory inherits the square's depletion, not its parent's.** What
         // wears out is the ground: a pattern that keeps re-birthing over the
         // same cells is what income has to be bounded by, and a lineage that
         // travels is not. `parent` clears the age for every other kind, which
-        // is right — a payload carried by a glider arms itself from nought —
+        // is right — a dynamite carried by a glider arms itself from nought —
         // and this is the one kind whose age is a fact about where it is.
-        if born.kind() == super::Kind::MINE {
+        if born.kind() == super::Kind::FACTORY {
             born.with_age((cell.age() + 1).min(bits::MAX_AGE))
         } else {
             born
@@ -450,23 +450,23 @@ mod stream {
     /// Whether a square works out what reaches it this generation.
     pub const LEVEL: u64 = 1;
     pub const PARENT: u64 = 3;
-    /// Whether a dead mine's charge fell due this generation.
+    /// Whether a dead factory's charge fell due this generation.
     pub const UPKEEP: u64 = 4;
     /// Which of the squares that tie for nearest a turret acts on.
     pub const TURRET: u64 = 6;
     /// Whether a dead turret has become ordinary ground.
     pub const TURRET_ROT: u64 = 7;
-    /// Whether a payload's fuse advanced this generation.
+    /// Whether a dynamite's fuse advanced this generation.
     pub const FUSE: u64 = 8;
     /// Whether a square inside a blast comes up alive.
     pub const BLAST: u64 = 9;
     /// Which of the centres that tie for nearest a blast is thrown to.
     pub const THROW: u64 = 10;
-    /// Whether a mine's birth paid, which falls with the square's depletion.
+    /// Whether a factory's birth paid, which falls with the square's depletion.
     ///
     /// **Its own stream**, like every other roll here. Two questions asked of
     /// one stream on one square in one generation get the same answer, so a
-    /// mine's payout would have been decided by whatever the upkeep roll said.
+    /// factory's payout would have been decided by whatever the upkeep roll said.
     pub const YIELD: u64 = 11;
 }
 
@@ -494,9 +494,9 @@ fn parent(neighbours: &Neighbours, roll: Roll) -> Cell {
     if chosen.kind().inherits() {
         // **The kind travels and the age does not.** A birth is a new cell, so
         // whatever its parent was part way through, this one is at the start:
-        // a payload carried by a glider arms itself from nought rather than
-        // arriving already about to go off, and a mine's depletion is a fact
-        // about a mine rather than about its line.
+        // a dynamite carried by a glider arms itself from nought rather than
+        // arriving already about to go off, and a factory's depletion is a fact
+        // about a factory rather than about its line.
         chosen.with_age(0)
     } else {
         // Ownership alone: the ground changes hands, the machine does not copy.

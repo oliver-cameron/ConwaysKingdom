@@ -42,7 +42,7 @@ A room name is lowercase letters, digits, `-` and `_`, at most 24 characters, an
 
 Nothing else in the crate learns that teams exist. `net::reach`, `may_place`, `value_delta`, `grant`, `spawn_for`, `credit`, `territory` and `matches::leader` take a `PlayerId` and compare it, exactly as they did before there were teams — because two allies *are* the same player, so "are these two on the same side" is a question with nobody left to ask it about.
 
-What that replaced: a `Sides` array indexed by `PlayerId`, copied onto every `Match` broadcast so the client could price a placement beside a teammate the way the server would, and an `allied()` call threaded through placement, pricing, spawning, mining, scoring and colour. There is nothing to price differently now — a teammate's cells are the client's own.
+What that replaced: a `Sides` array indexed by `PlayerId`, copied onto every `Match` broadcast so the client could price a placement beside a teammate the way the server would, and an `allied()` call threaded through placement, pricing, spawning, manufacture, scoring and colour. There is nothing to price differently now — a teammate's cells are the client's own.
 
 `ClientMessage::Create` carries `teams: Option<u8>` — `None` is a free-for-all and `Some(n)` is n teams. **A world may have them as much as a match can**: a team is people playing as one player, one purse and one patch of ground, and that is worth having without a result to win. What a match adds is that the teams have to be even at the whistle.
 

@@ -56,7 +56,7 @@ pub struct Server {
     /// leaves them out.
     ///
     /// What this replaces is a `Sides` array copied onto the wire and an
-    /// `allied()` call threaded through placement, pricing, spawning, mining,
+    /// `allied()` call threaded through placement, pricing, spawning, manufacture,
     /// scoring and colour.
     sides: Vec<PlayerId>,
     /// Stopped, and not stepping until somebody says otherwise.
@@ -1218,12 +1218,12 @@ impl Server {
                     .map(|(coord, _)| coord)
                     .collect();
 
-                // The purse rides along, because mining made value something a
+                // The purse rides along, because manufacture made value something a
                 // client cannot predict on its own: earnings depend on births
                 // anywhere in the world, and a client holds a viewport. It
                 // would drift down for as long as it played, and never
                 // correct. The machinery for "your copy is wrong, here is
-                // mine" already exists and runs every few seconds, so value
+                // factory" already exists and runs every few seconds, so value
                 // uses it rather than growing a second one.
                 let mut out = Vec::new();
                 if let Some(value) = from.and_then(|id| self.value_of(id)) {
@@ -1342,11 +1342,11 @@ impl Server {
         }
         let mined = self.world.step();
 
-        // What the mines paid out. The world counted the births; the price is
+        // What the factories paid out. The world counted the births; the price is
         // here, and this is the only place a purse is authoritative.
         //
         // **One purse to a side**, which is now the same sentence as one
-        // purse to a player: a team's mines carry the team's number, so the
+        // purse to a player: a team's factories carry the team's number, so the
         // world counted them under it and there is nothing to sum. This used
         // to be quadratic in the roster to hold allies at the same figure.
         let ids: Vec<PlayerId> = self.players.keys().copied().collect();
@@ -2960,7 +2960,7 @@ mod tests {
 
     /// And a mess does not pay, which is the point of charging for corpses.
     ///
-    /// An r-pentomino of mines grows into a couple of hundred live cells
+    /// An r-pentomino of factories grows into a couple of hundred live cells
     /// dragging eight hundred corpses behind it. Every one of those is charged
     /// one generation in eight, so sprawl costs far more than its own births
     /// bring in — measured at about twenty a generation against it. Without
@@ -2985,7 +2985,7 @@ mod tests {
         );
     }
 
-    /// Nothing dies on a still life, so nothing is charged. A block of mines
+    /// Nothing dies on a still life, so nothing is charged. A block of factories
     /// is free to hold and earns nothing, which is the honest answer for
     /// something that never does anything.
     #[test]
@@ -3001,7 +3001,7 @@ mod tests {
         assert_eq!(s.value_of(me).unwrap(), purse, "no births and no corpses");
     }
 
-    /// Lay mines at offsets inside this player's granted ground, and apply
+    /// Lay factories at offsets inside this player's granted ground, and apply
     /// them, without advancing the world.
     fn place_mines(s: &mut Server, id: PlayerId, offsets: &[(i32, i32)]) {
         let tick = s.tick();
@@ -3012,7 +3012,7 @@ mod tests {
                 tick,
                 player: id,
                 seat: id,
-                action: Action::Paint { cells: mine(id, offsets), placement: Placement::Mine },
+                action: Action::Paint { cells: mine(id, offsets), placement: Placement::Factory },
             }),
         );
         // `handle` queues; `step` is what applies. Stepping once here would

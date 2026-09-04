@@ -21,7 +21,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
 
     ui.add_space(m.item_spacing * 2.0);
     ui.label(egui::RichText::new(w().menu.home.settings.key).size(m.text_small));
-    let Some(mine) = crate::net::keep::secret() else {
+    let Some(factory) = crate::net::keep::secret() else {
         // A key is made at startup, so reaching this means the store refused
         // it or there was no entropy to make one from — a browser with no
         // `crypto`, or one with storage switched off. Rare, and worth saying
@@ -62,7 +62,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
         // Loaded on the way open rather than held all the time: a secret that
         // is only in memory while somebody is looking at it is one that cannot
         // be typed over while they are not.
-        menu.key = if menu.revealed { mine.written() } else { String::new() };
+        menu.key = if menu.revealed { factory.written() } else { String::new() };
     }
     if menu.revealed {
         ui.small(w().menu.home.settings.key_note);
@@ -77,7 +77,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
         // that usually means "become who I already am", is one that only ever
         // gets pressed by accident.
         let typed = crate::net::Secret::read(&menu.key).ok().map(|k| k.written());
-        if let Some(typed) = typed.filter(|t| *t != mine.written()) {
+        if let Some(typed) = typed.filter(|t| *t != factory.written()) {
             ui.add_space(m.item_spacing);
             if ui.button(w().menu.home.settings.key_take).clicked() {
                 menu.asking = Some(Ask::UseKey(typed));

@@ -3,7 +3,7 @@ use bytemuck::{Pod, Zeroable};
 use super::dir::Dir;
 use super::player::PlayerId;
 use super::rule::{
-    mine_chance, next_cell, Neighbours, MINE_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM,
+    factory_chance, next_cell, Neighbours, FACTORY_UPKEEP, TURRET_DECAY, TURRET_ROT_STREAM,
     UPKEEP_STREAM, YIELD_STREAM,
 };
 use super::seed::Roll;
@@ -406,7 +406,7 @@ macro_rules! kinds {
             /// Whether a birth copies this kind from the parent it chose.
             ///
             /// A birth otherwise takes **everything** from its parent, which
-            /// is how a kind travels: a mine's children are mines, and since
+            /// is how a kind travels: a factory's children are factories, and since
             /// the parent is picked at random the kind spreads through a
             /// mixed population rather than being handed down whole.
             ///
@@ -442,9 +442,9 @@ macro_rules! kinds {
 
             /// **Whether a dead one is still one.**
             ///
-            /// A mine's corpse costs its owner and a dead turret fires
+            /// A factory's corpse costs its owner and a dead turret fires
             /// backwards over the ground behind it, so both go on being what
-            /// they were for a while. A payload does neither: it is a fuse,
+            /// they were for a while. A dynamite does neither: it is a fuse,
             /// and a fuse that has gone out is ordinary dead ground. Anything
             /// whose whole behaviour is what it does *alive* belongs on this
             /// side of the row.
@@ -468,10 +468,10 @@ macro_rules! kinds {
 ///
 /// One thing or nothing, never two, because there is one field. Which is why
 /// what a kind spends it on is worth writing in the table rather than
-/// discovering: a mine's is **reserved** for [depleted mines], and a dead
-/// mine's clearing is a roll partly so that nothing else takes it.
+/// discovering: a factory's is **reserved** for [depleted factories], and a dead
+/// factory's clearing is a roll partly so that nothing else takes it.
 ///
-/// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
+/// [depleted factories]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-factories
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ages {
     /// Nothing. The field stays at nought and the kind is one row of the
@@ -480,22 +480,22 @@ pub enum Ages {
     /// **How worn out the square under it is**, counted up by the rule when
     /// this kind is born there and never on its own.
     ///
-    /// A mine's yield rises to [`super::rule::MINE_PRIME`] and falls away
-    /// after it — see [`super::rule::mine_chance`] — so a pattern that keeps
+    /// A factory's yield rises to [`super::rule::FACTORY_PRIME`] and falls away
+    /// after it — see [`super::rule::factory_chance`] — so a pattern that keeps
     /// re-birthing over the same cells wears them out and income stops scaling
     /// with how big one lineage got. It survives the cell's death, so dying is
     /// not a way out of it, and it clears when the corpse is finally swept to
     /// ordinary ground.
     Depletes,
     /// **A fuse, while it lives**, advancing on this chance a generation —
-    /// and certainly from [`super::rule::PAYLOAD_WARN`], so the last sprite is
+    /// and certainly from [`super::rule::DYNAMITE_WARN`], so the last sprite is
     /// on screen for exactly one generation.
     ///
     /// The rate is on the row rather than in a constant somewhere else,
     /// because "what it counts" and "how fast" are one fact about a kind and
     /// splitting them is how the two come to disagree.
     ///
-    /// A chance and not a count, because it **scatters**: four payloads laid
+    /// A chance and not a count, because it **scatters**: four dynamite laid
     /// in one gesture do not go off in lockstep. What happens when it runs out
     /// is not a rule at all; see [`super::World::detonate`].
     Fuse(super::rule::Chance),
@@ -508,34 +508,34 @@ kinds! {
     ///
     /// Not a marker on the ground and not a rule about death: income is a
     /// property of a lineage. A birth copies its parent, kind and all, so a
-    /// mine's children are mines — and since a birth picks one of its three
+    /// factory's children are factories — and since a birth picks one of its three
     /// parents at random, the kind spreads through a mixed population rather
-    /// than being handed down whole. One mine dropped into a growing pattern
+    /// than being handed down whole. One factory dropped into a growing pattern
     /// takes about a third of the next births and drifts from there.
     ///
     /// What that makes valuable is **turnover**, not holdings. A block of
-    /// mines is a still life and never gives birth, so it earns nothing. An
+    /// factories is a still life and never gives birth, so it earns nothing. An
     /// oscillator earns every period, and a gun earns forever — which is the
     /// right shape for a game about patterns that work.
     ///
     /// It counts nothing **yet**, and that is a reservation rather than an
-    /// absence: [depleted mines] is a mine that stops paying, and the age
+    /// absence: [depleted factories] is a factory that stops paying, and the age
     /// field is a fade where a flag would be a cliff. Nothing else may spend
     /// it.
     ///
-    /// [depleted mines]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-mines
-    MINE = 1, inherited: true, ages: Ages::Depletes, corpse: true,
+    /// [depleted factories]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-factories
+    FACTORY = 1, inherited: true, ages: Ages::Depletes, corpse: true,
     /// A cell that claims ground at range: every generation it takes the
     /// nearest square that is not its owner's and makes it theirs.
     ///
     /// A dead turret runs the same rule backwards — it takes the nearest
     /// square that *is* its owner's and gives it up — and since a live cell
     /// must have an owner, doing that to a living square kills it. It decays
-    /// back to ordinary ground after a while, the way a dead mine does.
+    /// back to ordinary ground after a while, the way a dead factory does.
     ///
-    /// The opposite of a mine in every way that matters. A mine earns on
+    /// The opposite of a factory in every way that matters. A factory earns on
     /// **turnover** and a turret works by **standing still**, so the block
-    /// that is a mine's worst shape is a turret's best: four turrets is the
+    /// that is a factory's worst shape is a turret's best: four turrets is the
     /// cheapest thing in Conway that never dies and never gives birth, which
     /// is why a turret is placed in fours. It does not inherit, so a turret
     /// is always exactly the cells somebody paid for.
@@ -544,9 +544,9 @@ kinds! {
     ///
     /// The **age** field is the fuse — see [`bits::AGE_SHIFT`], which is where
     /// it sits precisely so that eight ages are eight rows of the sheet and a
-    /// payload visibly counts down with no interface at all. It advances on a
+    /// dynamite visibly counts down with no interface at all. It advances on a
     /// chance while the cell is alive and not under ice, and at
-    /// [`super::rule::PAYLOAD_WARN`] it always advances, so the last sprite is
+    /// [`super::rule::DYNAMITE_WARN`] it always advances, so the last sprite is
     /// on screen for exactly one generation. A weapon with a random warning is
     /// a weapon with no warning.
     ///
@@ -555,34 +555,34 @@ kinds! {
     /// [`super::World::detonate`].
     ///
     /// **It travels**, which is the whole of what makes it a weapon rather
-    /// than a mine you cannot eat. A birth copies its parent, so a glider that
-    /// picks up a payload carries one — and a fuse carries with it, so what
+    /// than a factory you cannot eat. A birth copies its parent, so a glider that
+    /// picks up a dynamite carries one — and a fuse carries with it, so what
     /// arrives is already part burnt. A pattern that reaches somebody's
     /// country and goes off in it is the piece the design was missing.
     ///
     /// The cost, said plainly because it is real: a gun that catches one is a
     /// factory. What limits it is that the fuse travels too, so a factory's
-    /// output goes off near the factory, and that a payload is a live cell
+    /// output goes off near the factory, and that a dynamite is a live cell
     /// like any other — kill the pattern and there is nothing to inherit.
-    PAYLOAD = 3, inherited: true, ages: Ages::Fuse(super::rule::PAYLOAD_FUSE), corpse: false,
+    DYNAMITE = 3, inherited: true, ages: Ages::Fuse(super::rule::DYNAMITE_FUSE), corpse: false,
 }
 
-/// What each player's mines did in one generation, indexed by the number the
+/// What each player's factories did in one generation, indexed by the number the
 /// cell carries.
 ///
 /// Counts rather than a sum of money: what a birth or a death is *worth* is the
 /// economy's business and the economy lives in `net`. The rule counts.
 ///
 /// `born` is a count of births. `upkeep` is a count of **charges falling due**
-/// on dead mines — not of deaths. A dead mine is charged once, on the
-/// generation the roll in [`super::rule::MINE_UPKEEP`] comes up, so one that
+/// on dead factories — not of deaths. A dead factory is charged once, on the
+/// generation the roll in [`super::rule::FACTORY_UPKEEP`] comes up, so one that
 /// is painted over, iced or born again before then is never counted at all.
 ///
 /// Two counts rather than one net figure, so the two can be priced apart —
 /// which is what lets the rule decide *how often* a corpse is charged and
 /// `net` decide *how much*.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Mined {
+pub struct Takings {
     pub born: [u32; PlayerId::COUNT],
     pub upkeep: [u32; PlayerId::COUNT],
     /// Squares turned over by each player's own detonations.
@@ -596,12 +596,12 @@ pub struct Mined {
     pub blasted: [u32; PlayerId::COUNT],
 }
 
-impl Mined {
+impl Takings {
     /// Fold another generation's tally into this one.
     ///
     /// Saturating, so a world that somehow ran for four billion births does
     /// not wrap a player's earnings round to nothing.
-    pub fn add(&mut self, other: &Mined) {
+    pub fn add(&mut self, other: &Takings) {
         for (t, n) in self.born.iter_mut().zip(&other.born) {
             *t = t.saturating_add(*n);
         }
@@ -686,7 +686,7 @@ impl Chunk {
     pub fn step(&self, next: &mut Chunk) {
         let mut halo = Halo::dead();
         halo.set_centre(self);
-        halo.step_into(next, 0, (0, 0), &mut Mined::default());
+        halo.step_into(next, 0, (0, 0), &mut Takings::default());
     }
 }
 
@@ -733,11 +733,17 @@ impl Halo {
     /// same number a compute thread could work out from its own coordinates,
     /// and one that does not change if the chunking does.
     ///
-    /// `mined` is added to, never cleared: a caller sums a whole world into one
+    /// `earned` is added to, never cleared: a caller sums a whole world into one
     /// tally. Counted here because this is the one place that holds a cell
     /// before and after in the same breath, so a birth costs a comparison and
     /// no second pass over the world.
-    pub fn step_into(&self, next: &mut Chunk, generation: u64, at: (i32, i32), mined: &mut Mined) {
+    pub fn step_into(
+        &self,
+        next: &mut Chunk,
+        generation: u64,
+        at: (i32, i32),
+        earned: &mut Takings,
+    ) {
         for row in 0..CHUNK_N {
             for col in 0..CHUNK_N {
                 let (hr, hc) = (row + 1, col + 1);
@@ -745,31 +751,32 @@ impl Halo {
                     super::seed::cell_seed(generation, at.0 + row as i32, at.1 + col as i32);
                 let before = self.get(hr, hc);
                 let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
-                if after.kind() == Kind::MINE && after.player().is_owned() {
+                if after.kind() == Kind::FACTORY && after.player().is_owned() {
                     if after.is_alive() {
                         // **Paid on a chance that peaks and then falls away**,
-                        // so a square that has been mined over and over stops
-                        // being worth mining — see [`super::rule::mine_chance`],
+                        // so a square that has been earned over and over stops
+                        // being worth manufacture — see [`super::rule::factory_chance`],
                         // which is the whole of the diminishing return. The age
                         // is the square's depletion and the rule has already
                         // put this birth's on the cell, so what is rolled
                         // against is what the sprite is showing.
                         if !before.is_alive()
-                            && Roll::new(cell_seed).chance(YIELD_STREAM, mine_chance(after.age()))
+                            && Roll::new(cell_seed)
+                                .chance(YIELD_STREAM, factory_chance(after.age()))
                         {
-                            mined.born[after.player().0 as usize] += 1;
+                            earned.born[after.player().0 as usize] += 1;
                         }
-                    } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, MINE_UPKEEP) {
+                    } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, FACTORY_UPKEEP) {
                         // A corpse costs once and is then ordinary ground.
-                        // Charging it for as long as it lay there made a mine
+                        // Charging it for as long as it lay there made a factory
                         // field a debt you could not pay off; this way what a
-                        // mine costs in the end is bounded by how many died.
+                        // factory costs in the end is bounded by how many died.
                         //
                         // The age goes with the kind, which is the one moment
-                        // it resets: a mine's age is its depletion, so ground
-                        // that has stopped being a mine has nothing left to be
+                        // it resets: a factory's age is its depletion, so ground
+                        // that has stopped being a factory has nothing left to be
                         // depleted.
-                        mined.upkeep[after.player().0 as usize] += 1;
+                        earned.upkeep[after.player().0 as usize] += 1;
                         after = after.with_kind(Kind::NORMAL).with_age(0);
                     }
                 }
@@ -788,10 +795,10 @@ impl Halo {
                 // — see [`Kind::leaves_a_corpse`], which is where that is said
                 // for every kind rather than as a branch each.
                 //
-                // A payload is the one that matters: it never goes off after
+                // A dynamite is the one that matters: it never goes off after
                 // it dies, and it does not lie there being a bomb either. An
                 // armed corpse would take away the one answer that does not
-                // need ice, which is that a payload is a live cell and has to
+                // need ice, which is that a dynamite is a live cell and has to
                 // be kept alive to be worth anything.
                 if !after.is_alive() && !after.kind().leaves_a_corpse() {
                     after = after.with_kind(Kind::NORMAL).with_age(0);
@@ -979,15 +986,16 @@ mod tests {
     /// one row for each and blanks beneath — and anything that changes a cell's
     /// kind without clearing its age points at one of those blanks and draws
     /// nothing at all. `Placement::apply_to` did exactly that: a plain cell
-    /// drawn over a worn mine kept the mine's depletion and vanished.
+    /// drawn over a worn factory kept the factory's depletion and vanished.
     #[test]
     fn a_kind_that_never_ages_is_never_given_one() {
         for kind in Kind::ALL {
             if !matches!(kind.ages(), Ages::Never) {
                 continue;
             }
-            for placement in
-                [Kind::NORMAL, Kind::MINE, Kind::TURRET, Kind::PAYLOAD].into_iter().map(|over| {
+            for placement in [Kind::NORMAL, Kind::FACTORY, Kind::TURRET, Kind::DYNAMITE]
+                .into_iter()
+                .map(|over| {
                     Cell::DEAD.with_kind(over).with_age(bits::MAX_AGE).with_player(PlayerId(1))
                 })
             {

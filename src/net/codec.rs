@@ -81,7 +81,7 @@ mod tests {
                 tick: 11,
                 player: PlayerId(4),
                 seat: PlayerId(4),
-                action: Action::Paint { cells: vec![(2, 2)], placement: Placement::Mine },
+                action: Action::Paint { cells: vec![(2, 2)], placement: Placement::Factory },
             }),
             // A world and a match, which differ on the wire by one field.
             ClientMessage::Create {

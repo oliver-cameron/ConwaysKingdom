@@ -9,12 +9,12 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | | |
 |---|---|
 | place life | −1 each |
-| place a mine | −10 each |
+| place a factory | −10 each |
 | place a turret | −15 each, and four is the smallest one that works |
 | place ice | −5 each |
 | **anywhere but your own ground** | **×10**, whatever is being placed |
-| **a mine of yours is born** | **+1** |
-| **a dead mine of yours, each generation it lies there** | **−1**, sixteen times in sixty-four |
+| **a factory of yours is born** | **+1** |
+| **a dead factory of yours, each generation it lies there** | **−1**, sixteen times in sixty-four |
 | reclaim your own | +1 |
 | take another player's | −1, because taking ground should not be free |
 | take what is not there | nothing |
@@ -29,13 +29,13 @@ An action that cannot be afforded is refused. The client prices and refuses loca
 
 Cost is read **before** the action is applied, since it depends on what is there now.
 
-## Mining
+## Manufacture
 
-A **mine** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a mine's children are mines — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
+A **factory** is a living cell that pays its owner every time one of its kind is born. It is bought once and inherited afterwards: a birth copies its parent, so a factory's children are factories — and because a birth picks one of three parents at random, the kind spreads through a mixed population rather than being handed down whole. What you are paying for is a **lineage**, not a cell.
 
-**A mine's corpse costs once and is then ordinary ground.** The charge falls due at `MINE_UPKEEP`, sixteen in sixty-four, and when it does the square loses its kind — so a mine field is a debt with a bottom to it rather than one you cannot pay off.
+**A factory's corpse costs once and is then ordinary ground.** The charge falls due at `MINE_UPKEEP`, sixteen in sixty-four, and when it does the square loses its kind — so a factory field is a debt with a bottom to it rather than one you cannot pay off.
 
-It costs `MINE_DRAIN`, which is **two** against a birth's **one**. That is what decides which patterns pay, and the discriminator is *how long your corpses lie about*: a corpse that is reborn before its charge falls due escapes it entirely. A blinker re-uses its own ground every other generation and escapes most of them; a glider abandons its corpses behind it and escapes none. That is what stops mining being the answer to everything: making every cell you own a mine used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
+It costs `MINE_DRAIN`, which is **two** against a birth's **one**. That is what decides which patterns pay, and the discriminator is *how long your corpses lie about*: a corpse that is reborn before its charge falls due escapes it entirely. A blinker re-uses its own ground every other generation and escapes most of them; a glider abandons its corpses behind it and escapes none. That is what stops manufacture being the answer to everything: making every cell you own a factory used to be free money, because a settled pattern gives birth constantly and each birth paid, and the wreckage was free.
 
 So income is births minus the upkeep of everything you have let die, and the thing being rewarded is a **compact machine**. `cargo run --no-default-features --example balance` prints the table, in value per generation at steady state:
 
@@ -47,25 +47,25 @@ So income is births minus the upkeep of everything you have let die, and the thi
 
 Net over three hundred generations, placement included. **Two is the line where a blinker pays and a glider does not**, and that is the rule the number was chosen to satisfy: a machine that stays where you put it earns, and anything that wanders off dragging a trail of corpses costs. At one everything pays and sprawl pays best, which is where this started; at three even a blinker is barely worth building.
 
-A block of mines is the honest edge case: nothing is ever born and nothing ever dies, so it neither earns nor costs. It is simply forty spent on nothing.
+A block of factories is the honest edge case: nothing is ever born and nothing ever dies, so it neither earns nor costs. It is simply forty spent on nothing.
 
 A corpse whose ground decays away is never charged at all, because nobody owns it to charge — so a trail far from anything alive fades before the bill arrives.
 
-Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a mine's payback period, and `MINE_UPKEEP` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
+Three constants, and they are one decision: `MINE_COST` against `MINE_YIELD` is a factory's payback period, and `MINE_UPKEEP` decides how much a mess costs to hold. All of them live in `sim::rule` with the rest of the tunable numbers, which is where anybody balancing the game should be looking.
 
-Value is capped at **`Player::MAX_VALUE`**, six figures, and floored at zero. The ceiling is a rule rather than a display: mining pays on birth and births scale with a growing pattern, so income runs away from a big player and nothing in the rules pushes back — see [depleted mines](planned.md#depleted-mines), which is the shape of a proper answer. This is the blunt half of it, and it does the second job of making the figure a fixed six columns on the bar.
+Value is capped at **`Player::MAX_VALUE`**, six figures, and floored at zero. The ceiling is a rule rather than a display: manufacture pays on birth and births scale with a growing pattern, so income runs away from a big player and nothing in the rules pushes back — see [depleted factories](planned.md#depleted-factories), which is the shape of a proper answer. This is the blunt half of it, and it does the second job of making the figure a fixed six columns on the bar.
 
 Value is floored at zero. A cost that comes from an action is refused when it cannot be paid; a drain arrives whether or not there is anything to take it from, and a player in debt would be one who cannot act and has no way to stop owing.
 
-A mine's corpse keeps its kind, as any cell does — so ground a mine died on shows the mine sprite, and life born there from an ordinary parent is ordinary. Placing plain Life over it explicitly sets the kind back to normal, or drawing over a mine's corpse would hand you a free mine.
+A factory's corpse keeps its kind, as any cell does — so ground a factory died on shows the factory sprite, and life born there from an ordinary parent is ordinary. Placing plain Life over it explicitly sets the kind back to normal, or drawing over a factory's corpse would hand you a free factory.
 
 ## Turrets
 
-A **turret** claims ground at range. Every generation it takes the nearest square that is not yours and makes it yours — wherever that is, out to six cells. It is the opposite of a mine in every way that matters: a mine earns on turnover and a turret works by standing still, a mine is bought once per lineage and a turret once per cell, and a mine wants a machine that keeps giving birth where a turret wants one that never has to.
+A **turret** claims ground at range. Every generation it takes the nearest square that is not yours and makes it yours — wherever that is, out to six cells. It is the opposite of a factory in every way that matters: a factory earns on turnover and a turret works by standing still, a factory is bought once per lineage and a turret once per cell, and a factory wants a machine that keeps giving birth where a turret wants one that never has to.
 
 **A turret is placed in fours.** One turret is one live cell with no live neighbours and is gone in a generation, so the smallest turret that works is the 2×2 block — the cheapest thing in Conway that never dies and never gives birth. Sixty against a starting hundred, which is an opening you can afford exactly one of.
 
-That the block gives no births is the point rather than a cost. A block of mines is the honest edge case above, forty spent on nothing; a block of turrets is the best thing a turret can be. **The still life is a mine's worst shape and a turret's best.**
+That the block gives no births is the point rather than a cost. A block of factories is the honest edge case above, forty spent on nothing; a block of turrets is the best thing a turret can be. **The still life is a factory's worst shape and a turret's best.**
 
 How much it takes is `rule::TURRET_POWER`, and that number decides what a turret is *for*. Low, and a claim is taken straight back by the ordinary spread of territory wherever anything is alive, so a turret is a way of reaching past your own frontier into empty land. High, and it holds ground against a living neighbour and becomes a way of pushing on one. A dead turret gives back whatever a live one would take.
 
@@ -81,7 +81,7 @@ So a failed emplacement fires on the ground behind it, including the other three
 
 Granted ground is exempt, for the same reason it never decays: it is the ground you can always build on at the ordinary price, and a machine of yours that failed must not be what takes that away.
 
-A turret is not inherited. A mine's children are mines, but a birth beside a turret is ordinary life owned by the turret's owner — the ground changes hands and the machine does not copy itself. Without that a gun would be a turret factory, and whoever built one first would own the map.
+A turret is not inherited. A factory's children are factories, but a birth beside a turret is ordinary life owned by the turret's owner — the ground changes hands and the machine does not copy itself. Without that a gun would be a turret factory, and whoever built one first would own the map.
 
 ## Placing and taking
 
@@ -92,9 +92,9 @@ One button, and the cell under it decides which — for whatever the hotbar is h
 
 Keyed on what is held rather than on whether the cell is occupied at all, because **life and ice are independent**. Holding Life and clicking a living cell under a pane kills the life and leaves the pane standing; clearing the square outright would destroy a pane the player never aimed at, at five a cell. Holding Ice and clicking that same pane lifts it and leaves the life, which is the only way a misplaced pane comes back.
 
-**Life and a mine are different things to hold, and clicking one over the other replaces it.** Holding Mine and clicking your own living cell makes that cell a mine, at what a mine costs; holding Life and clicking a mine makes it ordinary life again, at what a cell costs. It used to kill the cell instead, because the question being asked was whether taking the held thing away would change anything — and life and a mine are both taken away by clearing the same bit, so a mine held over life read as already being there. What a player holding Mine over their own life means is *make this a mine*, and the only click that should take a mine back is one holding a mine. `net::Placement::is_on` is the question now, and it asks whether the square holds *this*.
+**Life and a factory are different things to hold, and clicking one over the other replaces it.** Holding Factory and clicking your own living cell makes that cell a factory, at what a factory costs; holding Life and clicking a factory makes it ordinary life again, at what a cell costs. It used to kill the cell instead, because the question being asked was whether taking the held thing away would change anything — and life and a factory are both taken away by clearing the same bit, so a factory held over life read as already being there. What a player holding Factory over their own life means is *make this a factory*, and the only click that should take a factory back is one holding a factory. `net::Placement::is_on` is the question now, and it asks whether the square holds *this*.
 
-That is a different relationship from the one life has with ice. Life and ice are **independent** — a square may carry both, so holding one and clicking the other leaves the other standing. Life and a mine are **exclusive**: they are the same cell in two states, so holding one and clicking the other converts it. A corpse is neither, whatever kind it kept, so a click over a dead mine places rather than takes — which is what stops drawing over one handing out a free mine.
+That is a different relationship from the one life has with ice. Life and ice are **independent** — a square may carry both, so holding one and clicking the other leaves the other standing. Life and a factory are **exclusive**: they are the same cell in two states, so holding one and clicking the other converts it. A corpse is neither, whatever kind it kept, so a click over a dead factory places rather than takes — which is what stops drawing over one handing out a free factory.
 
 The owner is no part of it. Somebody else's life is still life, so a click holding Life takes it, at the reclaim price, which is what lets you clear a glider that has flown onto your ground.
 
@@ -143,7 +143,7 @@ Every dead cell carries an owner **and a level** — how much of that owner's in
 
 **A player may only place where their own influence reaches**, and it costs the same wherever that is.
 
-Both the other arrangements are out and they went together. Placing anywhere for ten times the price was too weak — no obstacle at all to anybody with a mine running — and it made the map somewhere you bought your way into rather than somewhere you grew into. Grading the price by how thin your influence was went with it: a cost the player cannot see is a cost they cannot play around, and once ground stopped being shaded by its level there was nothing on screen to read it off.
+Both the other arrangements are out and they went together. Placing anywhere for ten times the price was too weak — no obstacle at all to anybody with a factory running — and it made the map somewhere you bought your way into rather than somewhere you grew into. Grading the price by how thin your influence was went with it: a cost the player cannot see is a cost they cannot play around, and once ground stopped being shaded by its level there was nothing on screen to read it off.
 
 A wall was tried before levels and was worse than either, because a player whose life went out was finished — they could not place, so could not grow ground, so could not place. The wall is safe now for a reason that has nothing to do with price: **granted ground is a source**, so everybody always has a patch with a live gradient to build on.
 
@@ -221,13 +221,13 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 Two segments, and one thing selected across both:
 
 ```
-    [ Life  Mine  Turret  Ice ]   [ Draw │ Grab  stamps … +7 ]
+    [ Life  Factory  Turret  Ice ]   [ Draw │ Grab  stamps … +7 ]
 ```
 
 **Two axes: what a cell is, and how the cells are chosen.** It was one — a row
 of tools and stamps where picking any of them replaced everything about the
-last — so a mine was always a pencil, ice was always a pane, and a stamp was
-always whatever it had been captured as. A line of ice and a pane of mines were
+last — so a factory was always a pencil, ice was always a pane, and a stamp was
+always whatever it had been captured as. A line of ice and a pane of factories were
 not unimplemented, they were *unsayable*, because the stroke came attached to
 the material. The left segment is the material and the right is the shape, and
 picking one never disturbs the other.
@@ -239,7 +239,7 @@ because it was the one that walls people off and because it came with a
 different stroke; the stroke is the other axis, so what is left is a material
 like the others.
 
-**Every square shows a picture rather than a word.** Life, Mine, Turret and Ice are drawn from the same sprite sheet the world is drawn from, tinted with the same hue, so what you are choosing is what will be on the board — which is where you are looking. Grab is a camera, painted rather than sampled, because capturing is not a cell and the sheet has no picture of one. A stamp shows **the pattern it holds, drawn from the same sheet**: `2x2` said nothing about what was about to be placed, and at button size a glider is a glider and a block is a block. It is drawn in whatever the kind axis is holding, because a stamp is a shape and not a material — the same glider reads as life, as mines or as ice depending on what would come out of it, which is more useful than a fixed picture of how it happened to be captured. The names are still there, on hover.
+**Every square shows a picture rather than a word.** Life, Factory, Turret and Ice are drawn from the same sprite sheet the world is drawn from, tinted with the same hue, so what you are choosing is what will be on the board — which is where you are looking. Grab is a camera, painted rather than sampled, because capturing is not a cell and the sheet has no picture of one. A stamp shows **the pattern it holds, drawn from the same sheet**: `2x2` said nothing about what was about to be placed, and at button size a glider is a glider and a block is a block. It is drawn in whatever the kind axis is holding, because a stamp is a shape and not a material — the same glider reads as life, as factories or as ice depending on what would come out of it, which is more useful than a fixed picture of how it happened to be captured. The names are still there, on hover.
 
 The kinds are the game's own vocabulary and never change; the stamps are whatever you happened to capture, and there may be none or thirty. Run together, the Ice key would move every time you saved a pattern, which is why they are two segments.
 
@@ -269,7 +269,7 @@ A stamp is **the live cells and their kind**, not the rectangle you swept, and t
 
 **Or draw one.** The library has a pad on it: pick a kind, click cells or drag a run of them, and keep what you drew. Capturing needs something already alive and standing where you can reach it, which makes the first stamp of a session the hardest one to get and makes trying a pattern out mean building it first — a pad needs nothing. What is kept is trimmed to what was drawn, so which corner of the pad you used is not part of the pattern, and a drawn stamp is a stamp like any other: the same `Paint` on the wire, priced and judged the same way.
 
-The pad asks the same questions the board does. A click lays a cell, or lifts it if what is there is already what you are holding; a drag only ever lays, because a sweep across cells already drawn is far more likely to be drawing over them than asking for them back. What the pad holds is its own choice and not the hotbar's — a pad that changed what your next click on the world would do would be a trap. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of mines is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
+The pad asks the same questions the board does. A click lays a cell, or lifts it if what is there is already what you are holding; a drag only ever lays, because a sweep across cells already drawn is far more likely to be drawing over them than asking for them back. What the pad holds is its own choice and not the hotbar's — a pad that changed what your next click on the world would do would be a trap. The dead ones are gaps, and a stamp carrying them would wipe whatever it was placed over; the kind travels because a gun built of factories is a different thing from one built of life. It trims to what it caught, so a sloppy box round a glider still gives you a glider — and it takes only *your own* life, because somebody else's pattern is a thing they built.
 
 Placing one puts its middle under the pointer, and goes as one action per placement it holds, priced whole: half a pattern is not the pattern.
 
@@ -285,7 +285,7 @@ The library is behind a key that is **always** there, not only when something ha
 
 Picks what a click acts on — both what it places and, on ground that already has it, what it takes back — and what a drag with it held lays. Slots are data in `client::views::hotbar::SLOTS`, so adding one is a row: a name, a `Placement`, and a `Stroke`. The placement is named for what is put down, since a cell is the square and life is one of the things that can be on it.
 
-Mine is a pencil rather than a rectangle, because a mine is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out. Turret is a pencil for the same reason and a shorter stroke: four cells in a block is a gesture, and a gesture is what a pencil is for.
+Factory is a pencil rather than a rectangle, because a factory is placed a few at a time and *into* a pattern — what it is worth depends on what it is next to — where a pane is a wall you lay out. Turret is a pencil for the same reason and a shorter stroke: four cells in a block is a gesture, and a gesture is what a pencil is for.
 
 What is being placed travels in the action as a named `Placement`, not as cell bits: the server has to judge whether a placement is allowed, and it can only do that against a vocabulary it understands. A client that could send arbitrary bits could place anything.
 

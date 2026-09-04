@@ -16,7 +16,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     let mut chose = Chose::Nothing;
     // Whoever this server has said you are. `None` offline, and before a first
     // join, which is what the two arms below are for.
-    let mine = menu.whoami.clone();
+    let ours = menu.whoami.clone();
 
     ui.horizontal(|ui| {
         if ui.small_button(w().menu.back).clicked() {
@@ -31,7 +31,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
     ui.horizontal(|ui| {
         let side = m.action_height * 1.4;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
-        match mine.as_ref() {
+        match ours.as_ref() {
             // Derived from the key, so it is yours and nobody chose it — see
             // [`crate::client::views::face`].
             Some(who) => crate::client::views::face::show(ui.painter(), rect, who),
@@ -51,7 +51,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         ui.vertical(|ui| {
             let shown = menu.name.trim();
             ui.heading(if shown.is_empty() { w().menu.account.title } else { shown });
-            match mine.as_ref() {
+            match ours.as_ref() {
                 Some(who) => {
                     ui.label(
                         egui::RichText::new(who.short())

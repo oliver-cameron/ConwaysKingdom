@@ -104,7 +104,7 @@ const VIEW_MARGIN: i32 = CHUNK_N as i32;
 #[derive(Clone, PartialEq, Eq)]
 enum Whose {
     /// Your own, whether or not a server has ever named you.
-    Mine,
+    Factory,
     Somebody(crate::net::PersonId),
 }
 
@@ -395,7 +395,7 @@ impl GameApp {
     ///
     /// `Placement::is_on` asks whether the square holds *this* thing, not
     /// whether taking it away would change anything — which is what this used
-    /// to ask, and it could not tell life from a mine, since both are taken
+    /// to ask, and it could not tell life from a factory, since both are taken
     /// away by clearing the same bit. Holding one over the other now replaces
     /// the kind instead of killing the cell.
     fn already_there(&self, row: i32, col: i32) -> bool {
@@ -1439,7 +1439,7 @@ impl GameApp {
                 self.session.look_up(who);
             }
             menu::Chose::Profile => {
-                self.ui.showing_profile = Some(Whose::Mine);
+                self.ui.showing_profile = Some(Whose::Factory);
                 if let Some(who) = self.session.profile.as_ref().map(|p| p.who.clone()) {
                     self.session.look_up(who);
                 }
@@ -1883,7 +1883,7 @@ impl App for GameApp {
             let who = match whose {
                 Whose::Somebody(who) => Some(who),
                 // Your own is whatever the last server called you, if one has.
-                Whose::Mine => self.session.profile.as_ref().map(|p| &p.who),
+                Whose::Factory => self.session.profile.as_ref().map(|p| &p.who),
             };
             // Nobody has named you, so there is nothing to have arrived and
             // nothing missing — only what is yours.

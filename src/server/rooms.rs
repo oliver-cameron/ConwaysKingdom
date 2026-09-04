@@ -619,12 +619,12 @@ impl Rooms {
                     });
                     for reply in &mut out {
                         if let ServerMessage::Welcome {
-                            room, name: called, profile: mine, ..
+                            room, name: called, profile: factory, ..
                         } = reply
                         {
                             *room = name.clone();
                             *called = room_name.clone();
-                            mine.clone_from(&profile);
+                            factory.clone_from(&profile);
                         }
                         stamp(reply, owner, code.clone());
                     }
@@ -1780,7 +1780,7 @@ mod tests {
     #[test]
     fn only_whoever_made_a_match_can_start_it() {
         let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
-        let mine = Caller::new(5);
+        let factory = Caller::new(5);
         let theirs = Caller::new(6);
 
         let made = rooms
@@ -1802,7 +1802,7 @@ mod tests {
 
         // Nobody owns it until the maker joins: the owner is a PlayerId, and
         // there is no player until somebody has one.
-        let out = rooms.handle(&mine, join("owner"));
+        let out = rooms.handle(&factory, join("owner"));
         let [ServerMessage::Welcome { you, .. }] = &out[..] else { panic!("{out:?}") };
         let owner = *you;
 
@@ -1934,10 +1934,10 @@ mod tests {
 
         let out = rooms.handle(&Caller::new(1), join(Some(me.clone())));
         let [ServerMessage::Welcome { you, profile, .. }] = &out[..] else { panic!("{out:?}") };
-        let mine = profile.clone().expect("no profile was issued");
-        let first = mine.who.clone();
-        assert_eq!(mine.name, "alice", "the name a join was made under");
-        assert!(mine.provisional, "a first join has no result behind it");
+        let factory = profile.clone().expect("no profile was issued");
+        let first = factory.who.clone();
+        assert_eq!(factory.name, "alice", "the name a join was made under");
+        assert!(factory.provisional, "a first join has no result behind it");
         assert_eq!(named(&rooms, you).as_deref(), Some(first.as_str()));
 
         // Away, and back: the same secret finds the same seat and the same

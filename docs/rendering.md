@@ -63,7 +63,7 @@ The byte used to *be* that index, which is why the kind sat in two pieces around
 
 The fields are placed so the sheet reads as a grid rather than as a list. Alive and ice are the bottom two bits, so a kind's **four states are four columns**; age is the low three bits of the high nibble, so its **eight ages are eight rows** under them. The kind's third bit is the top bit of the byte, which splits the sheet in half: kinds 0–3 above, 4–7 below.
 
-Nothing advances age yet — see [payloads](planned.md#payloads), which is what it is for. What that costs today is nothing: every kind in play is 0–3 and every cell is age nought, so all the art that exists is in the first row, exactly where the old `kind * 4 + state` mapping put it.
+Nothing advances age yet — see [dynamite](planned.md#dynamite), which is what it is for. What that costs today is nothing: every kind in play is 0–3 and every cell is age nought, so all the art that exists is in the first row, exactly where the old `kind * 4 + state` mapping put it.
 
 | tile | state |
 |---|---|
@@ -74,7 +74,7 @@ Nothing advances age yet — see [payloads](planned.md#payloads), which is what 
 
 A tile per state rather than compositing a pane over a cell. That is partly an art decision — what an iced cell looks like is decided in the art — and partly a correctness one: compositing meant sampling inside an `if` on whether the cell was alive, and WGSL requires anything using implicit derivatives to sit in **uniform control flow**. One tile, one unconditional sample, and now not even a layer index to compute.
 
-The sheet in the repo is **provisional**: flat tiles so the states are told apart. Kinds 0–2 are in the first row; the payload's four states and its eight fuse rows are generated placeholders — a casing that fills. The mine's seven age rows are a placeholder too, a mark that fades, and nothing draws them yet: a mine's age is held for [depletion](planned.md#depleted-mines) and nothing advances it. Redraw any of it and drop it in; no code changes, because the mapping is `Cell::sprite` and nothing else.
+The sheet in the repo is **provisional**: flat tiles so the states are told apart. Kinds 0–2 are in the first row; the dynamite's four states and its eight fuse rows are generated placeholders — a casing that fills. The factory's seven age rows are a placeholder too, a mark that fades, and nothing draws them yet: a factory's age is held for [depletion](planned.md#depleted-factories) and nothing advances it. Redraw any of it and drop it in; no code changes, because the mapping is `Cell::sprite` and nothing else.
 
 The PNGs are the source, and `cnvt` converts between what you draw and what the shader reads, in both directions:
 

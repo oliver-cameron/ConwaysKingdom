@@ -26,9 +26,9 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
-| [Payloads](#payloads) | Built | the art is a placeholder; the numbers want arguing out |
+| [Dynamite](#dynamite) | Built | the art is a placeholder; the numbers want arguing out |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
-| [Depleted mines](#depleted-mines) | Decided | a mine that stops paying, so income does not scale with size |
+| [Depleted factories](#depleted-factories) | Decided | a factory that stops paying, so income does not scale with size |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
 | [Spectating](#spectating) | Built | a room with no seat in it |
@@ -52,7 +52,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [A leaderboard](#a-leaderboard) | Part built | per server it is built; across servers it waits on identity |
 | [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Built | what is left is the gesture-to-cells half |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
-| [Auto-mining](#auto-mining) | Built | |
+| [Auto-manufacture](#auto-manufacture) | Built | |
 | [Turrets](#turrets) | Built | |
 | [Stamps](#stamps) | Built | a shape; what it is made of is the hotbar's other axis |
 | [Territory as a level, not a flag](#territory-as-a-level-not-a-flag) | Built | what is left is drawing it |
@@ -63,25 +63,25 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Mobile](#mobile) | Designed | |
 | [Known, and left alone](#known-and-left-alone) | — | |
 
-## Payloads
+## Dynamite
 
 **Built**, and the age field it was designed around finally does something. `Kind::PAYLOAD` counts down while it lives, `World::detonate` runs at the top of the generation, and the blast walks outward to somewhere worth hitting. What is left is the **art** — the sprites in the sheet are a generated placeholder, a casing that fills as the fuse burns — and the numbers, which want `examples/balance.rs` pointed at them.
 
 Three things came out of building it that the design did not say.
 
-**A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A payload's fuse and a mine's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
+**A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A dynamite's fuse and a factory's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
 
-**A mine's age is not for this, and the table is where that is written down.** A dead mine still clears on `MINE_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spoken for by [depleted mines](#depleted-mines) below — a mine's age is a fade where a flag would be a cliff, so `Ages::Never` on that row is a reservation and not an absence.
+**A factory's age is not for this, and the table is where that is written down.** A dead factory still clears on `MINE_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spoken for by [depleted factories](#depleted-factories) below — a factory's age is a fade where a flag would be a cliff, so `Ages::Never` on that row is a reservation and not an absence.
 
-**The detonating payload takes its own blast's roll**, and goes through the same `World::blasted` as every other square in the disc. Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
+**The detonating dynamite takes its own blast's roll**, and goes through the same `World::blasted` as every other square in the disc. Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
 
 ### The fuse
 
-The **age** field is the fuse: three bits, so nought to seven. While a payload is alive and not under ice it has a chance each generation to advance, and at six it always advances — so it goes off on the generation after it reaches seven.
+The **age** field is the fuse: three bits, so nought to seven. While a dynamite is alive and not under ice it has a chance each generation to advance, and at six it always advances — so it goes off on the generation after it reaches seven.
 
-Two reasons for a chance rather than a count, and the second is the one that earns it. A chance **scatters** payloads placed together, so four laid in one gesture do not go off in lockstep. And the certain last step makes the warning **reliable**: the sprite for "about to go" is on screen for exactly one generation, always, so it is a tell somebody can act on rather than a maybe. That is worth a rule of its own, because a weapon with a random warning is a weapon with no warning.
+Two reasons for a chance rather than a count, and the second is the one that earns it. A chance **scatters** dynamite placed together, so four laid in one gesture do not go off in lockstep. And the certain last step makes the warning **reliable**: the sprite for "about to go" is on screen for exactly one generation, always, so it is a tell somebody can act on rather than a maybe. That is worth a rule of its own, because a weapon with a random warning is a weapon with no warning.
 
-Ages are rows on the sheet — eight of them under a kind's four states, which is [why age sits where it does](simulation.md#the-cell) — so a payload visibly counts down and needs no interface at all to be readable.
+Ages are rows on the sheet — eight of them under a kind's four states, which is [why age sits where it does](simulation.md#the-cell) — so a dynamite visibly counts down and needs no interface at all to be readable.
 
 ### Detonation, simplified
 
@@ -97,18 +97,18 @@ Three more reasons to drop the search, beyond not needing it:
 
 **Cost that varies with the board is the enemy of a prediction.** The same step runs on the server and on every client, and [a rollout](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) runs it hundreds of times over. A detonation whose cost depends on how crowded the neighbourhood is makes all of that unschedulable.
 
-**And the numbers do not fit.** "Payloads with a fuse of less than 14 will be set to 14" — the age field is three bits, so a fuse is nought to seven and fourteen is not a number it can hold. That is what a design written beside the code rather than in it eventually does.
+**And the numbers do not fit.** "Dynamite with a fuse of less than 14 will be set to 14" — the age field is three bits, so a fuse is nought to seven and fourteen is not a number it can hold. That is what a design written beside the code rather than in it eventually does.
 
 ### Where it goes off, which is not always where it is
 
 **A blast wasted on its owner's own ground is a blast wasted.** A square the
 blast rolls up is already yours afterwards, so a detonation inside your own
 country buys you what you had and destroys your own patterns to do it. A player
-standing a payload deep in their own territory is making that mistake by
+standing a dynamite deep in their own territory is making that mistake by
 accident rather than on purpose.
 
 So the blast **walks outward** until it is worth something: search rings at
-increasing distance from the payload for a centre whose disc is not already
+increasing distance from the dynamite for a centre whose disc is not already
 its owner's, take the nearest, and break a tie with a seeded roll. Which is
 `turret_target` again, in shape and in code — the nearest square that answers a
 question, with the tie broken so a volley does not always favour one direction.
@@ -121,29 +121,29 @@ candidate disc are already this player's — the same question
 over a disc rather than a scored optimisation over every cell in it.
 
 **And it is bounded.** `PAYLOAD_THROW` is the furthest a centre may be
-displaced, so a payload in the middle of a large country lobs itself at the
+displaced, so a dynamite in the middle of a large country lobs itself at the
 nearest frontier and not across the map. Unbounded, it would be a homing weapon
 with a range of the whole world, which is a different thing entirely and a much
 worse one.
 
 What that buys, and it is worth stating because it makes the piece playable
-rather than merely correct: **a payload does not have to be placed exactly.**
+rather than merely correct: **a dynamite does not have to be placed exactly.**
 Placing is confined to your own influence, so without this the only useful
-payload is one laid on the exact square of your border nearest something worth
+dynamite is one laid on the exact square of your border nearest something worth
 hitting — which is a precision the interface does not really support and a
 frontier that moves every generation anyway. Walking outward means "somewhere
 near my edge" is good enough, and the rule finds the rest.
 
 ### A blob is one bomb, and each charge is worth an area
 
-**A hundred payloads reach ten times as far as one, not a hundred times.**
+**A hundred dynamite reach ten times as far as one, not a hundred times.**
 `blast_reach` is `PAYLOAD_REACH * sqrt(n)`, so each one going off adds a
 constant *area* of blast — which is the only scaling that makes a cluster
 worth building without making it the only thing in the game. Below it, a blob
-does less than the same payloads laid apart and nobody clusters; above it,
+does less than the same dynamite laid apart and nobody clusters; above it,
 nothing else matters.
 
-It is also the honest reading of what a cluster is. Payloads whose discs would
+It is also the honest reading of what a cluster is. Dynamite whose discs would
 overlap are grouped, transitively, so a line of them is one long bomb rather
 than a chain of pairs — and the blast is centred on the middle of the blob,
 because that is where a bomb made of all of them is. `PAYLOAD_MOST_REACH`
@@ -153,7 +153,7 @@ one generation.
 
 ### The chain, which is the best idea in it
 
-The one part of the scoring design worth keeping outright, and it needs no score: **on detonation, every payload within reach has its fuse set to full**, so it goes off the next generation. A line of them is then a fuse, and a cluster is one blast a generation wide rather than one big one.
+The one part of the scoring design worth keeping outright, and it needs no score: **on detonation, every dynamite within reach has its fuse set to full**, so it goes off the next generation. A line of them is then a fuse, and a cluster is one blast a generation wide rather than one big one.
 
 It cannot recurse, and that is worth saying because it reads as though it might: setting a fuse to full means the cell detonates on the **next** generation, not this one, so a chain is one ring per generation and the pass never re-enters itself.
 
@@ -161,30 +161,30 @@ It cannot recurse, and that is worth saying because it reads as though it might:
 
 **The blast decides**, and one roll decides both halves: a square that comes up alive is the bomber's, and a square that does not is nobody's. `World::blasted` is the whole rule.
 
-It used to be the other way round — the ground decided, a square brought to life kept the owner already on it, and a square nobody held could not come alive at all. That read well and was wrong in play, because most of anybody's territory is ground with nothing standing on it. A payload thrown at an empty frontier filled a third of it with live cells that were **still the defender's**, on ground they still held. The bomb was a gift, and the more of their country was empty the bigger the gift. `a_blast_leaves_no_life_belonging_to_anybody_else` is the test that says so.
+It used to be the other way round — the ground decided, a square brought to life kept the owner already on it, and a square nobody held could not come alive at all. That read well and was wrong in play, because most of anybody's territory is ground with nothing standing on it. A dynamite thrown at an empty frontier filled a third of it with live cells that were **still the defender's**, on ground they still held. The bomb was a gift, and the more of their country was empty the bigger the gift. `a_blast_leaves_no_life_belonging_to_anybody_else` is the test that says so.
 
 So, per square in the disc:
 
 - **Alive: yours**, at full strength, because `Cell::alive` is — level and influence have to agree on a source, and a corpse owned at level nought is a state the rule says cannot exist.
 - **Dead: nobody's**, at level nought, which is that same impossible state from the other side. So the two move together and a crater is genuine no-man's-land.
 
-What that buys is that a bomb **breaks a country apart and leaves you a third of the pieces**, rather than merely animating what was there. Their mines' corpses still cost them upkeep and their shapes still stop being shapes; what is new is that you hold what is left.
+What that buys is that a bomb **breaks a country apart and leaves you a third of the pieces**, rather than merely animating what was there. Their factories' corpses still cost them upkeep and their shapes still stop being shapes; what is new is that you hold what is left.
 
-It is now a land grab, deliberately, and that is the thing to watch in `examples/balance.rs`: at `PAYLOAD_COST` a payload buys about a third of a disc of `PAYLOAD_REACH`, and if that rate ever beats growing life outward then the turret stops being the tool that takes ground.
+It is now a land grab, deliberately, and that is the thing to watch in `examples/balance.rs`: at `PAYLOAD_COST` a dynamite buys about a third of a disc of `PAYLOAD_REACH`, and if that rate ever beats growing life outward then the turret stops being the tool that takes ground.
 
 **Two squares are exempt.** Ice, because a pane stops time over whatever it covers and that is every rule. And **granted ground**, which is subtler and matters more: `rule::territory` returns before a home square, so nothing else in the game moves one, and `net::already_granted` reads exactly that to know a returning player still has a seat. A blast that converted one would evict somebody from their spawn permanently and hand them a second patch on their next join. And because the owner there cannot move, a home square that came up *alive* would be alive **for them** — the gift bug again, in the one place somebody would aim to exploit it. So a blast may take life off a granted patch and may never put it there. `a_blast_clears_a_granted_patch_without_taking_or_feeding_it`.
 
-It needs no new placement rule. `net::may_place` confines you to your own influence, so a payload is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
+It needs no new placement rule. `net::may_place` confines you to your own influence, so a dynamite is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
 
 ### What it is made of
 
-`Kind::PAYLOAD`, which is a row in `kinds!` and costs one of eight kind indices — three are used, and [depleted mines](#depleted-mines) wants a fourth, leaving three spare. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
+`Kind::PAYLOAD`, which is a row in `kinds!` and costs one of eight kind indices — three are used, and [depleted factories](#depleted-factories) wants a fourth, leaving three spare. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
 
-**It inherits**, which is the decision that makes it a weapon rather than a mine you cannot eat. A birth copies its parent, so a glider that picks one up carries it — a pattern that crosses a border and goes off inside somebody's country, which is the piece the rest of this entry was missing. The cost is real and worth stating: a gun that catches one is a factory. What limits it is that the **fuse travels too**, so a factory's output goes off near the factory, and that a payload is a live cell like any other — kill the pattern and there is nothing left to inherit.
+**It inherits**, which is the decision that makes it a weapon rather than a factory you cannot eat. A birth copies its parent, so a glider that picks one up carries it — a pattern that crosses a border and goes off inside somebody's country, which is the piece the rest of this entry was missing. The cost is real and worth stating: a gun that catches one is a factory. What limits it is that the **fuse travels too**, so a factory's output goes off near the factory, and that a dynamite is a live cell like any other — kill the pattern and there is nothing left to inherit.
 
-And it leaves **no corpse**. `Kind::leaves_a_corpse` is the row that says so: a mine's corpse costs its owner and a dead turret fires backwards over the ground behind it, so both go on being what they were, and a fuse that has gone out is ordinary dead ground. An armed corpse would take away the one answer that does not need ice, which is that a payload has to be kept alive to be worth anything.
+And it leaves **no corpse**. `Kind::leaves_a_corpse` is the row that says so: a factory's corpse costs its owner and a dead turret fires backwards over the ground behind it, so both go on being what they were, and a fuse that has gone out is ordinary dead ground. An armed corpse would take away the one answer that does not need ice, which is that a dynamite has to be kept alive to be worth anything.
 
-The payload is **consumed** — it becomes ordinary dead ground, the way a spent mine does.
+The dynamite is **consumed** — it becomes ordinary dead ground, the way a spent factory does.
 
 ### The counterplay is already in the rules
 
@@ -192,9 +192,9 @@ Worth checking rather than assuming, because a weapon that deletes a screen of s
 
 **You can see it coming.** Eight ages are eight sprites, and the last one lasts exactly one generation.
 
-**Ice stops it.** A pane freezes what it covers and that is every rule, so an iced payload's fuse does not advance. Ice is the counter, and it is the one defensive tool in the game — which is an argument for [ice anywhere, at a price](#ice-anywhere-at-a-price), since a payload is precisely the thing you want to wall off on somebody else's doorstep.
+**Ice stops it.** A pane freezes what it covers and that is every rule, so an iced dynamite's fuse does not advance. Ice is the counter, and it is the one defensive tool in the game — which is an argument for [ice anywhere, at a price](#ice-anywhere-at-a-price), since a dynamite is precisely the thing you want to wall off on somebody else's doorstep.
 
-**It has to survive to go off.** A payload is a live cell, so one on its own dies of loneliness in a generation, exactly like a turret. Keeping it alive means building something around it, and that is the real cost rather than the purchase price.
+**It has to survive to go off.** A dynamite is a live cell, so one on its own dies of loneliness in a generation, exactly like a turret. Keeping it alive means building something around it, and that is the real cost rather than the purchase price.
 
 ### The numbers, which are not decided
 
@@ -214,7 +214,7 @@ A reading of the rest of this file, in the order the things depend on each other
 
 **4. ~~The session comes out of the game view.~~** Done — `client::session` holds the link, the seat and the purse, and nothing in it needs a GPU. What is left of that entry is `lay`, `click` and `stamp_at`, which is smaller and is about wording rather than structure.
 
-**5. [Depleted mines](#depleted-mines).** The economy has no ceiling that is not the blunt one, `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. Small, needs nothing first, and `Kind::inherits` already makes it a row in a table rather than a rule.
+**5. [Depleted factories](#depleted-factories).** The economy has no ceiling that is not the blunt one, `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. Small, needs nothing first, and `Kind::inherits` already makes it a row in a table rather than a rule.
 
 Worth saying what is **closer than this file implies**. [A leaderboard](#a-leaderboard) says it waits on a person being a keypair; per server it does not, because `server::ratings` is already keyed by `PersonId` and already saved — what is left is a message answerable without a seat and a screen. Only a leaderboard that spans servers needs item 1.
 
@@ -305,7 +305,7 @@ The four figures on the hotbar are labelled with a word each — `purse`, `groun
 
 **A cell that steps more than once a generation.** Twice, or more. Not designed yet; this is here to say what it will run into, because that is the part that is already decidable.
 
-**A generation is the unit everything else is keyed to.** The seeded dice are derived from it, so a birth's owner is a function of the generation — see [simulation.md](simulation.md#determinism). The server broadcasts one `Step` per generation and a client that finds itself at a different tick throws its world away and asks again. Mining pays per birth and the standings go out every eight generations. So "twice a generation" is not a rule about a cell so much as a question about what a generation *is*, and the answer has to be one of two shapes:
+**A generation is the unit everything else is keyed to.** The seeded dice are derived from it, so a birth's owner is a function of the generation — see [simulation.md](simulation.md#determinism). The server broadcasts one `Step` per generation and a client that finds itself at a different tick throws its world away and asks again. Manufacture pays per birth and the standings go out every eight generations. So "twice a generation" is not a rule about a cell so much as a question about what a generation *is*, and the answer has to be one of two shapes:
 
 **Sub-steps inside one generation.** The generation stays the unit on the wire and in the save; inside `World::step`, a region containing an overclocker runs the rule twice before the generation is called done. Everything outside the sim is untouched — one `Step`, one tick, one digest. What it needs is a rule for what a sub-step reads: the second pass sees the first pass's output, which means overclocked regions and ordinary ones are being stepped against different states at their border, and the border is where it will look wrong.
 
@@ -392,27 +392,27 @@ The decision it records is still worth keeping, because it is the one that makes
 
 `render::chunks::covered` is that arithmetic, pure and out of `sync` so it can be checked without a device. Two tests hold it: a 4x4 torus under a 12x12-chunk viewport is 144 quads over 16 layers, and panning a thousand worlds along finds no new chunks.
 
-## Depleted mines
+## Depleted factories
 
-**The problem is that mine income scales faster than size.** A mine pays when one of its kind is *born*, and births scale with the perimeter of a growing pattern — so a player with four times the territory does not earn four times as much, they earn more than that, and they can spend it on more territory. Nothing in the rules pushes back.
+**The problem is that factory income scales faster than size.** A factory pays when one of its kind is *born*, and births scale with the perimeter of a growing pattern — so a player with four times the territory does not earn four times as much, they earn more than that, and they can spend it on more territory. Nothing in the rules pushes back.
 
-A **depleted** mine is the push-back: past some point it stops paying and is an ordinary cell that happens to have cost more. What that buys is a ceiling on what any one lineage is worth, so income comes from *building new things* rather than from having built a big one.
+A **depleted** factory is the push-back: past some point it stops paying and is an ordinary cell that happens to have cost more. What that buys is a ceiling on what any one lineage is worth, so income comes from *building new things* rather than from having built a big one.
 
 ### Where the bit comes from
 
 Byte 1 is full — alive, ice, kind, age; see [simulation.md](simulation.md#the-cell). There is no spare bit, so this is a choice between three, and they are not equally good.
 
-**A kind.** `Kind::DEPLETED_MINE` beside `Kind::MINE`, costing one of eight kind indices and no bits at all — four of the eight are spent now, on normal, mine, turret and payload. It gets art of its own for free, which a flag would not — a depleted mine has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted mine's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
+**A kind.** `Kind::DEPLETED_MINE` beside `Kind::MINE`, costing one of eight kind indices and no bits at all — four of the eight are spent now, on normal, factory, turret and dynamite. It gets art of its own for free, which a flag would not — a depleted factory has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted factory's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
 
-**The age field.** A mine's age *is* its depletion: `net::earnings` scales down with it and a mine at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that mines can no longer use age for anything else, and it collides with payloads if a payload is ever also a mine.
+**The age field.** A factory's age *is* its depletion: `net::earnings` scales down with it and a factory at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that factories can no longer use age for anything else, and it collides with dynamite if a dynamite is ever also a factory.
 
-**This is the one to do, and the field is now held for it.** `Kind::ages` says `Ages::Never` for a mine, which is a reservation: a dead mine's clearing was tried as an age count and put back to a roll precisely so nothing else spends the field. What is left is `net::earnings` reading the age, and something to advance it — a count of births is the honest one, since it is what a mine is paid for.
+**This is the one to do, and the field is now held for it.** `Kind::ages` says `Ages::Never` for a factory, which is a reservation: a dead factory's clearing was tried as an age count and put back to a roll precisely so nothing else spends the field. What is left is `net::earnings` reading the age, and something to advance it — a count of births is the honest one, since it is what a factory is paid for.
 
 **A bit off age.** Three bits become two, four ages instead of eight. Cheapest to write and the worst of the three: it takes resolution away from the one field that has a use lined up, to buy a flag that a kind gives away.
 
 ### What is not decided
 
-How much is "past some point", and whether depletion is a count of births or of generations. A count of births is the honest one — it is what a mine is paid for — but it needs somewhere to keep the count, which is the age field again.
+How much is "past some point", and whether depletion is a count of births or of generations. A count of births is the honest one — it is what a factory is paid for — but it needs somewhere to keep the count, which is the age field again.
 
 ## The simulation on the GPU
 
@@ -552,7 +552,7 @@ It also wants a word on the screen. A price that changes depending on where the 
 
 **Designed.** A player can reach a state where nothing they do has any effect, and the game does not notice.
 
-Two ways in. **No money and nothing alive** — value floors at zero, so a player who spent everything and then lost their pattern has nothing to place and no way to earn, because income comes from mine births and they have no mines. And **no territory**, which sounds impossible because a granted patch never decays, but is not: an opponent who grows over your home keeps it as theirs, mark and all. Either way the player is sitting in front of a world they cannot touch, clicking, with the client saying only that the placement was refused.
+Two ways in. **No money and nothing alive** — value floors at zero, so a player who spent everything and then lost their pattern has nothing to place and no way to earn, because income comes from factory births and they have no factories. And **no territory**, which sounds impossible because a granted patch never decays, but is not: an opponent who grows over your home keeps it as theirs, mark and all. Either way the player is sitting in front of a world they cannot touch, clicking, with the client saying only that the placement was refused.
 
 What should happen is that they become a **spectator** — which is now a state that exists, so this is a rule rather than a feature. They keep watching the room they were in, they are told why, and their seat goes back into the pool. That last part is the reason to do it rather than a nicety: a seat is one of fifteen, and one held by somebody who cannot play is a seat a player who could is being refused.
 
@@ -822,7 +822,7 @@ What would end it in one step is the browser console on a failing load, or the s
 
 Everything here rests on one claim: **a pattern written down by somebody else runs here the way it runs anywhere.** If it does not, reading fifty years of other people's work means reading it wrong, and the whole idea is a curiosity.
 
-It holds, and it is not obvious from the code that it should. Three of the four things this simulation adds to Conway do not touch whether a cell lives — territory writes the owner byte of *dead* squares, a mine is a tally, and ice is inert until a pane is laid. That is an argument; `sim::world`'s `liveness_is_exactly_b3_s23` is the measurement, comparing two hundred generations of a 64x64 soup cell for cell against a B3/S23 stepper written out longhand. An R-pentomino also stabilises here at generation 1103 with 116 cells, which is the figure in every book.
+It holds, and it is not obvious from the code that it should. Three of the four things this simulation adds to Conway do not touch whether a cell lives — territory writes the owner byte of *dead* squares, a factory is a tally, and ice is inert until a pane is laid. That is an argument; `sim::world`'s `liveness_is_exactly_b3_s23` is the measurement, comparing two hundred generations of a 64x64 soup cell for cell against a B3/S23 stepper written out longhand. An R-pentomino also stabilises here at generation 1103 with 116 cells, which is the figure in every book.
 
 **The caveat is two things, and it is worth knowing exactly which.** Turrets and ice are the only rules that touch liveness — a turret because unowning a live square kills what stands on it, ice because it stops time. Neither is on an empty board, so an imported pattern is unaffected by anything this game adds.
 
@@ -971,9 +971,9 @@ What it has to say, in the order it bites. Each of these is a rule somebody lose
 
 **You can only build where your influence already reaches.** This is the first thing anybody runs into and nothing on screen explains it — a click lands, says "not yours to build on", and the player has no idea what would make it theirs. The answer is that territory is a field with sources: your granted patch is a spring that never runs dry, and live cells feed it, so you grow ground by growing life outward from what you have. See [game.md](game.md#where-you-may-build).
 
-**A mine pays on turnover, not on holdings.** A block of mines is a still life, never gives birth, and earns nothing at all — which is the exact opposite of what "I own a lot of mines" suggests. An oscillator earns every period and a gun earns forever. This is the single most counter-intuitive rule in the game and the one that decides whether somebody's economy works.
+**A factory pays on turnover, not on holdings.** A block of factories is a still life, never gives birth, and earns nothing at all — which is the exact opposite of what "I own a lot of factories" suggests. An oscillator earns every period and a gun earns forever. This is the single most counter-intuitive rule in the game and the one that decides whether somebody's economy works.
 
-**A turret is the other way round, so it is placed in fours.** It works by standing still, and one on its own dies of loneliness in a generation. The block that is a mine's worst shape is a turret's best: four is the cheapest thing in Conway that never dies and never gives birth.
+**A turret is the other way round, so it is placed in fours.** It works by standing still, and one on its own dies of loneliness in a generation. The block that is a factory's worst shape is a turret's best: four is the cheapest thing in Conway that never dies and never gives birth.
 
 **Ice cannot be taken back.** It stops time over whatever it covers and only life reaching it breaks it, so a misplaced pane is a decision you live with. Worth saying before somebody spends on one.
 
@@ -1116,7 +1116,7 @@ sample lands in them and nothing that happens later can know they were there.
 The resolve filters over one *screen* pixel, which by then is too late; the
 information is already gone.
 
-It degrades quickly because the art is high frequency. A mine is a diamond
+It degrades quickly because the art is high frequency. A factory is a diamond
 outline and a turret a plus, both drawn in strokes one and two texels wide, so
 the moment the sample rate drops below two a stroke they stop being sampled
 consistently and start winking in and out with the camera.
@@ -1152,7 +1152,7 @@ reasoning and what is left.
 sheet that is already there.** Mipmapping by hand, with the atlas problem
 solved by construction: each reduced tile is a whole tile, so nothing bleeds
 across a boundary the way a real mip level would. It also gives the art a say,
-which is the part no amount of filtering buys — a mine at four texels can be
+which is the part no amount of filtering buys — a factory at four texels can be
 *drawn* as something legible rather than averaged into a grey smudge, which is
 what every pixel-art game with a zoom does.
 
@@ -1168,7 +1168,7 @@ sum `sprite_index` already is.
 What it costs is **kinds**. The bottom-right quadrant is rows 8-15 and columns
 8-15, which the tile arithmetic reads as kinds 6 and 7 at every age and state —
 so reserving it spends two of the three kind indices still free.
-[Depleted mines](#depleted-mines) wants a fourth kind, which leaves one spare
+[Depleted factories](#depleted-factories) wants a fourth kind, which leaves one spare
 after this rather than three. That is the trade and it should be made
 deliberately: a kind is a mechanic and a level is a zoom band, and there are
 currently three of one and none of the other.
@@ -1226,7 +1226,7 @@ rather than a rendering one, and worth making when somebody draws the art.
 **Left: the art itself.** The reduced tiles are generated two-to-one from the
 full ones, with coverage kept binary because `sprites_have_hard_edges` means it
 at every level. That is a stand-in like the rest of the sheet. The whole point
-of reduced tiles is that a mine at eight texels can be *drawn* legible rather
+of reduced tiles is that a factory at eight texels can be *drawn* legible rather
 than averaged into a smudge, and this is the one entry on the list whose real
 cost is somebody drawing rather than somebody typing. The layout is what
 matters, and the day the art exists it goes in the same place and `cnvt` stops
@@ -1296,7 +1296,7 @@ second and stops in a laboratory.
 
 **Where the list comes from is the one real question**, and there are two
 answers. The client already knows: `net::apply` is deterministic and every peer
-steps the same world, so a client could notice a payload at `MAX_AGE` about to
+steps the same world, so a client could notice a dynamite at `MAX_AGE` about to
 go and draw the ring itself, with no protocol change at all — and a client that
 is a generation behind draws it a generation late, which nobody can see. Or the
 server says so, which is a message and is exact. The first is free and is
@@ -1353,7 +1353,7 @@ One rollout per victory condition, and both read off machinery that exists. **Ti
 
 ### What it assumes, which is the interesting part
 
-A rollout with nobody acting answers *who wins if everybody stops playing*, and that is a **bad predictor in a game where income compounds**. A player with mines running and money in hand is exactly the one whose position keeps improving, and a no-input rollout scores them as though they had already spent everything they were going to.
+A rollout with nobody acting answers *who wins if everybody stops playing*, and that is a **bad predictor in a game where income compounds**. A player with factories running and money in hand is exactly the one whose position keeps improving, and a no-input rollout scores them as though they had already spent everything they were going to.
 
 So there are two versions and they differ by one thing.
 
@@ -1430,21 +1430,21 @@ What is left is lifetime — [auto-sleep](#making-rooms-from-the-client), above 
 
 **The token is keyed by room but not by server.** Two servers both holding a room whose id is `main` share one secret, and visiting the second costs you your player on the first. `client::record` has the same hole from the other end: a game is filed under a room's display name, so two servers' `arena` are one line of history. Both stop being bugs rather than being fixed if the token becomes a key the client owns — see [many servers](#many-servers-and-what-must-not-be-decentralised).
 
-## Auto-mining
+## Auto-manufacture
 
-**Built** — see [game.md](game.md#mining). A mine is a living cell that pays its owner every time one of its kind is born, and the mechanism is **inheritance**: a birth copies its parent, kind and all, so a mine's children are mines and the kind spreads through a mixed population because the parent is picked at random.
+**Built** — see [game.md](game.md#manufacture). A factory is a living cell that pays its owner every time one of its kind is born, and the mechanism is **inheritance**: a birth copies its parent, kind and all, so a factory's children are factories and the kind spreads through a mixed population because the parent is picked at random.
 
-That is a better idea than what was written here before, which was a mine as a marker on the ground paying out on deaths. Inheritance makes a mine an investment in a *lineage* rather than a square, needs no per-square bookkeeping, and the payout is counted where the rule already holds a cell before and after — so it costs a comparison and no second pass.
+That is a better idea than what was written here before, which was a factory as a marker on the ground paying out on deaths. Inheritance makes a factory an investment in a *lineage* rather than a square, needs no per-square bookkeeping, and the payout is counted where the rule already holds a cell before and after — so it costs a comparison and no second pass.
 
 Two of the three open questions answered themselves. The rule counts births and `net` prices them, so the tally never taught the simulation about money. And the prediction problem went the way this section said it should: `Purse` rides on every `Checkpoint` reply, reusing the machinery that already exists for "your copy is wrong, here is mine".
 
-A mine's corpse now costs while it lies there, sixteen generations in sixty-four, so income is births minus the upkeep of everything you have let die. What that rewards is a machine that stays where you put it: a blinker pays, and a glider dragging twenty corpses behind it bleeds. `cargo run --no-default-features --example balance` prints the table, and the rate was picked off it rather than argued about.
+A factory's corpse now costs while it lies there, sixteen generations in sixty-four, so income is births minus the upkeep of everything you have let die. What that rewards is a machine that stays where you put it: a blinker pays, and a glider dragging twenty corpses behind it bleeds. `cargo run --no-default-features --example balance` prints the table, and the rate was picked off it rather than argued about.
 
-What is left is a hole rather than a number: **there is no way to clear a mine's corpse.** A dead cell cannot be reclaimed, so the only remedy for a mine field you regret is to let the life on it go out and wait for territory decay to take the ground. That is a long punishment for a misclick, and value floors at zero so a bad enough mess simply stops you playing. Reclaiming a corpse to clear its kind — for a price, or for nothing — is the obvious fix and needs a decision about what it should cost.
+What is left is a hole rather than a number: **there is no way to clear a factory's corpse.** A dead cell cannot be reclaimed, so the only remedy for a factory field you regret is to let the life on it go out and wait for territory decay to take the ground. That is a long punishment for a misclick, and value floors at zero so a bad enough mess simply stops you playing. Reclaiming a corpse to clear its kind — for a price, or for nothing — is the obvious fix and needs a decision about what it should cost.
 
 The art is a stand-in like the rest of the sheet: the ordinary cell with a diamond and a pip stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 4–7. It reads clearly against all four states and in any player's hue, and it is not what anybody would draw on purpose.
 
-Also unsettled: **a mine under ice**. A pane freezes what it covers, so a frozen mine gives no births and earns nothing — a cheap way to switch off somebody's income without taking their ground. Whether that is a feature or a hole is a question for whoever sets the rate.
+Also unsettled: **a factory under ice**. A pane freezes what it covers, so a frozen factory gives no births and earns nothing — a cheap way to switch off somebody's income without taking their ground. Whether that is a feature or a hole is a question for whoever sets the rate.
 
 ## Turrets
 
@@ -1456,25 +1456,25 @@ The inheritance problem was answered by splitting kinds into those a birth inher
 
 What is left is numbers rather than mechanism.
 
-**The balance is argued, not measured.** `TURRET_COST` at fifteen, `TURRET_REACH` at six and `TURRET_DECAY` at four in sixty-four were reasoned off the decay arithmetic — a claim a generation against `DECAY` settles at about thirty squares, so a block of four holds about a hundred and thirty — and nothing has run to check it. `examples/balance.rs` is the harness that answered this for mines and prints nothing about turrets. It should, and the shapes to put in it are the block against a lone turret against a turret dropped into a glider, since those are the three things a player will try.
+**The balance is argued, not measured.** `TURRET_COST` at fifteen, `TURRET_REACH` at six and `TURRET_DECAY` at four in sixty-four were reasoned off the decay arithmetic — a claim a generation against `DECAY` settles at about thirty squares, so a block of four holds about a hundred and thirty — and nothing has run to check it. `examples/balance.rs` is the harness that answered this for factories and prints nothing about turrets. It should, and the shapes to put in it are the block against a lone turret against a turret dropped into a glider, since those are the three things a player will try.
 
 **Half of this landed with territory levels.** A turret plants influence rather than flipping a flag: `rule::TURRET_PUSH` is what it puts on a square it takes, and it plants at full rather than nudging, because the rule assigns a square the strongest claim reaching it rather than adding to what is there — a push of three would be wiped the next time that square worked itself out. What did *not* change is `TURRET_POWER`, which is still a count of squares. Making it a quantity of level instead is the version that contests properly with everything else pushing on the same ground, and it is still worth doing.
 
 **Whether a turret should press on a living neighbour is a number rather than a rewrite.** `rule::TURRET_POWER` is how many squares it takes a generation and sits at **one**, which makes it the reaching tool rather than the weapon. The arithmetic that used to be here was written against `SPREAD`, a constant the level rule deleted; what a turret now holds against a living colony is whatever `LEVEL_SPREAD` and `LEVEL_EBB` give back, and that has not been measured. `examples/balance.rs` is where the answer should be printed rather than argued about.
 
-**A turret under ice** is the same open question as a mine under ice, and sharper. A frozen turret does not fire, so a pane is a cheap way to switch off somebody's territory engine without taking any ground from them. Whether that is a feature or a hole is for whoever sets the rate.
+**A turret under ice** is the same open question as a factory under ice, and sharper. A frozen turret does not fire, so a pane is a cheap way to switch off somebody's territory engine without taking any ground from them. Whether that is a feature or a hole is for whoever sets the rate.
 
-**The remedy for a corpse gets dearer the longer it is left.** A dead turret is cleared by building on it — placing life sets the kind back to ordinary, as it does over a dead mine — and what the corpse is doing is taking your ground away a square at a time, so the square you need to build on stops being yours and the fix goes from one to ten. That may be exactly the right shape and it has not been played enough to say.
+**The remedy for a corpse gets dearer the longer it is left.** A dead turret is cleared by building on it — placing life sets the kind back to ordinary, as it does over a dead factory — and what the corpse is doing is taking your ground away a square at a time, so the square you need to build on stops being yours and the fix goes from one to ten. That may be exactly the right shape and it has not been played enough to say.
 
 **A turret should not also kill, and the reason is that a claim is contested and a kill is not.** Ground a turret takes is taken straight back by `SPREAD` at forty in sixty-four, which is why it cannot touch ground anything is alive on and why one square a generation is nearly nothing. Nothing does that to a kill: a dead cell stays dead unless Conway hands it back. So the same "one a generation, forever" that is almost nothing for claiming is decisive for killing — and a turret is a **still life**, four cells, immortal, free after purchase and unreachable without flying something into it. A block of them killing four cells a generation forever is not a territory tool, it is area denial with no answer.
 
 It would also cost the two things that make a turret readable. The dead turret's kill is not a rule about killing — it is the `Cell::alive` invariant showing through, since unowning a live square kills what stands on it — and that reads as a mirror only while the live turret does not kill. And a turret that finds no frontier in reach falls back to reinforcing its own thin ground, which is a slow indirect push; one that kills always has something to shoot at, wherever it stands, and that distinction goes.
 
-So: **another kind**, and the interesting question is what powers it, because "stands there and fires" is exactly what the turret does and exactly what should not have a kill attached. The shape that fits this game is a kind that spends a **birth** — a cell that, when one of its kind is born, kills the nearest enemy life. Its rate is then your pattern's birth rate, which is what the game already rewards building; a gun feeds it and a block does not; and it is counted where `Halo::step_into` already counts a mine's births, holding each cell before and after in one breath. That makes killing something you run a machine for rather than something you park.
+So: **another kind**, and the interesting question is what powers it, because "stands there and fires" is exactly what the turret does and exactly what should not have a kill attached. The shape that fits this game is a kind that spends a **birth** — a cell that, when one of its kind is born, kills the nearest enemy life. Its rate is then your pattern's birth rate, which is what the game already rewards building; a gun feeds it and a block does not; and it is counted where `Halo::step_into` already counts a factory's births, holding each cell before and after in one breath. That makes killing something you run a machine for rather than something you park.
 
 Worth saying out loud first: **Conway already has a weapon.** A glider is five cells and one gesture and it kills what it hits. Whatever this kind turns out to be has to be worth more than that, or it is a button for a thing players can already do.
 
-**The art is a stand-in** like the rest of the sheet: the ordinary cell with a solid plus stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 8–11 with the mine's own mark colours so the two read as siblings. It is legible against all four states and in any player's hue, and it is not what anybody would draw on purpose.
+**The art is a stand-in** like the rest of the sheet: the ordinary cell with a solid plus stamped into it, generated rather than drawn, in `assets/sprites/art.png` at tiles 8–11 with the factory's own mark colours so the two read as siblings. It is legible against all four states and in any player's hue, and it is not what anybody would draw on purpose.
 
 ## Stamps
 
@@ -1548,7 +1548,7 @@ Three readings, and they are different games.
 
 The middle one is the recommendation, with the first worth trying as a variant because it costs nothing to offer.
 
-**And if the grant is to be a machine after all**, an oscillator is the only thing that is immortal, stationary and gives births: a blinker of mines is the smallest, three cells earning every other generation forever. It is a fallback rather than an answer — it pays a flat rate, which is the clicker again with a better animation.
+**And if the grant is to be a machine after all**, an oscillator is the only thing that is immortal, stationary and gives births: a blinker of factories is the smallest, three cells earning every other generation forever. It is a fallback rather than an answer — it pays a flat rate, which is the clicker again with a better animation.
 
 ### Scoring
 

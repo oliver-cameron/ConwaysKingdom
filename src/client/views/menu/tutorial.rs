@@ -127,11 +127,11 @@ impl Patch {
                 // The same question `Chunk::step_into` asks, and the same
                 // answer: a factory pays when one is *born*, on a chance that
                 // falls as its square wears out.
-                if after.kind() == Kind::MINE && after.is_alive() && !before.is_alive() {
+                if after.kind() == Kind::FACTORY && after.is_alive() && !before.is_alive() {
                     let pays = crate::sim::Roll::new(cell)
-                        .chance(crate::sim::YIELD_STREAM, crate::sim::mine_chance(after.age()));
+                        .chance(crate::sim::YIELD_STREAM, crate::sim::factory_chance(after.age()));
                     if pays {
-                        self.purse += crate::sim::MINE_YIELD;
+                        self.purse += crate::sim::FACTORY_YIELD;
                     }
                 }
                 next[self.index(row, col)] = after;
@@ -302,14 +302,14 @@ mod tests {
     #[test]
     fn a_block_of_factories_earns_nothing_and_a_blinker_earns() {
         let block = &[(0, 0), (0, 1), (1, 0), (1, 1)][..];
-        let mut still = Patch::new(9, Placement::Mine, block);
+        let mut still = Patch::new(9, Placement::Factory, block);
         still.fill_in_the_target();
         for _ in 0..20 {
             still.step();
         }
         assert_eq!(still.purse, 0, "a block of factories paid something");
 
-        let mut turning = Patch::new(9, Placement::Mine, &[(0, -1), (0, 0), (0, 1)]);
+        let mut turning = Patch::new(9, Placement::Factory, &[(0, -1), (0, 0), (0, 1)]);
         turning.fill_in_the_target();
         for _ in 0..20 {
             turning.step();
@@ -329,9 +329,9 @@ pub fn lessons() -> Vec<Patch> {
     vec![
         // A blinker of factories: three in a row, which turn over every
         // generation and so pay every generation.
-        Patch::new(9, Placement::Mine, &[(0, -1), (0, 0), (0, 1)]),
+        Patch::new(9, Placement::Factory, &[(0, -1), (0, 0), (0, 1)]),
         // And the same four cells that never move: a block, which is a still
         // life and earns nothing at all.
-        Patch::new(9, Placement::Mine, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
+        Patch::new(9, Placement::Factory, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
     ]
 }

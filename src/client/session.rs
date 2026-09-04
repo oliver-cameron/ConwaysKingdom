@@ -502,7 +502,7 @@ impl Session {
         }
     }
 
-    /// Step a world nobody else is keeping time in, and bank what it mined.
+    /// Step a world nobody else is keeping time in, and bank what it earned.
     ///
     /// Offline only, and guarded on it: connected, the world advances when the
     /// server says a generation happened and never on this client's own clock
@@ -520,7 +520,7 @@ impl Session {
         let mined = match (self.rules.paused || stopped, std::mem::take(&mut self.step_once)) {
             (false, _) => world.update(dt, span),
             (true, true) => world.step(),
-            (true, false) => crate::sim::Mined::default(),
+            (true, false) => crate::sim::Takings::default(),
         };
         self.bank(&mined);
         // **And its own standings**, which nothing else produces: they arrive
@@ -634,13 +634,13 @@ impl Session {
         self.geiger.reset();
     }
 
-    /// Fold a generation's mining into the predicted purse, floored at zero
+    /// Fold a generation's manufacture into the predicted purse, floored at zero
     /// the way the server floors the real one.
     ///
-    /// A prediction, and a low one: only the mines in chunks this client holds
+    /// A prediction, and a low one: only the factories in chunks this client holds
     /// are counted. `Purse` is what makes it right again.
-    fn bank(&mut self, mined: &crate::sim::Mined) {
-        self.spend(crate::net::earnings(mined, self.player()));
+    fn bank(&mut self, earned: &crate::sim::Takings) {
+        self.spend(crate::net::earnings(earned, self.player()));
     }
 
     // ---- the wire ----------------------------------------------------------
@@ -673,8 +673,8 @@ impl Session {
                     // the server said we are, so the settings screen can say
                     // it without waiting for the next join — the server issues
                     // it, so this is the only way the client ever has it.
-                    if let Some(mine) = &profile {
-                        crate::net::keep::remember_person(&mine.who);
+                    if let Some(ours) = &profile {
+                        crate::net::keep::remember_person(&ours.who);
                     }
                     self.profile = profile;
                     // A different room is a different match, or none.
@@ -731,14 +731,14 @@ impl Session {
                 ServerMessage::Rated { who, rating, change } => {
                     if self.profile.as_ref().map(|p| &p.who) == Some(&who) {
                         log::info!("rated {rating} ({change:+})");
-                        if let Some(mine) = &mut self.profile {
-                            mine.rating = rating;
+                        if let Some(ours) = &mut self.profile {
+                            ours.rating = rating;
                             // A result is one of the matches a rating stops
                             // being provisional after, and the server said so
                             // by sending this — but only it knows the count,
                             // so what this can do is show the new number and
                             // wait for the next join to settle the mark.
-                            mine.games += 1;
+                            ours.games += 1;
                         }
                         self.rating_change = Some(change);
                         effects.push(Effect::Rated);
@@ -813,8 +813,8 @@ impl Session {
                     self.plays_as = self
                         .me
                         .map(|me| {
-                            let mine = lobby.teams.iter().find(|t| t.players.contains(&me));
-                            mine.map_or(me, |t| t.id)
+                            let ours = lobby.teams.iter().find(|t| t.players.contains(&me));
+                            ours.map_or(me, |t| t.id)
                         })
                         .or(self.plays_as);
                     self.lobby = Some(lobby);
@@ -829,13 +829,13 @@ impl Session {
                 }
                 ServerMessage::Standing { held, .. } => {
                     if let (Some(live), Some(me)) = (self.in_play.as_mut(), self.plays_as) {
-                        let mine = held.iter().find(|h| h.who == me);
-                        live.holding(mine.map(|h| h.score).unwrap_or(0));
+                        let ours = held.iter().find(|h| h.who == me);
+                        live.holding(ours.map(|h| h.score).unwrap_or(0));
                     }
                     self.standing = held;
                 }
                 ServerMessage::Purse { value } => {
-                    // Taken, not reconciled. A client only sees the mines in
+                    // Taken, not reconciled. A client only sees the factories in
                     // its own viewport, so its guess is always low and always
                     // getting lower; the server's number is the number. The
                     // cost is that an action sent for this tick and not yet

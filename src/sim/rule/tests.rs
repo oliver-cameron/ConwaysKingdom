@@ -69,16 +69,16 @@ fn a_turret_is_not_inherited() {
     }
 }
 
-/// And a mine still is, because that is the whole of what a mine is: what was
+/// And a factory still is, because that is the whole of what a factory is: what was
 /// bought is a lineage, and it travels by being copied.
 #[test]
 fn a_mine_is_still_inherited() {
     let mut n = [Cell::DEAD; 8];
     for i in [0, 3, 6] {
-        n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::MINE);
+        n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::FACTORY);
     }
     for seed in 0..64 {
-        assert_eq!(next_cell(Cell::DEAD, &n, seed).kind(), Kind::MINE, "seed {seed}");
+        assert_eq!(next_cell(Cell::DEAD, &n, seed).kind(), Kind::FACTORY, "seed {seed}");
     }
 }
 
@@ -188,34 +188,34 @@ fn ice_and_alive_are_independent() {
 
 /// A birth takes everything it is from a parent, and nothing from the
 /// ground it lands on. That is how a kind travels down a line, which is
-/// what makes a mine an investment rather than a square.
+/// what makes a factory an investment rather than a square.
 #[test]
 fn a_birth_is_a_copy_of_a_parent_not_of_the_corpse() {
     let corpse = Cell::DEAD.with_kind(Kind(37)).with_player(PlayerId(6));
     let mut n = [Cell::DEAD; 8];
     for i in 0..3 {
-        n[i] = Cell::alive(PlayerId(2)).with_kind(Kind::MINE);
+        n[i] = Cell::alive(PlayerId(2)).with_kind(Kind::FACTORY);
     }
     let born = next_cell(corpse, &n, 1);
     assert!(born.is_alive());
     assert_eq!(born.player(), PlayerId(2), "a parent's number");
-    assert_eq!(born.kind(), Kind::MINE, "and a parent's kind");
+    assert_eq!(born.kind(), Kind::FACTORY, "and a parent's kind");
     assert!(!born.is_ice(), "never a parent's pane");
 }
 
 /// The kind is inherited from *the parent that was chosen*, so in a mixed
-/// neighbourhood it spreads rather than being handed down whole. One mine
+/// neighbourhood it spreads rather than being handed down whole. One factory
 /// dropped into a growing pattern takes a share of the births, not all of
 /// them and not none.
 #[test]
 fn a_kind_spreads_through_a_mixed_neighbourhood() {
     let mut n = [Cell::DEAD; 8];
-    n[0] = Cell::alive(PlayerId(1)).with_kind(Kind::MINE);
+    n[0] = Cell::alive(PlayerId(1)).with_kind(Kind::FACTORY);
     n[3] = Cell::alive(PlayerId(1));
     n[6] = Cell::alive(PlayerId(1));
 
     let mines =
-        (0..300).filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::MINE).count();
+        (0..300).filter(|&seed| next_cell(Cell::DEAD, &n, seed).kind() == Kind::FACTORY).count();
     assert!((60..140).contains(&mines), "one parent in three should carry it, got {mines} in 300");
 }
 
@@ -274,7 +274,7 @@ fn influence_comes_from_the_sum_of_what_pushes() {
 fn the_heaviest_net_takes_the_square() {
     let (me, them) = (PlayerId(1), PlayerId(2));
 
-    // Outnumbered: three of theirs against two of mine, so it goes to them.
+    // Outnumbered: three of theirs against two of factory, so it goes to them.
     let mut n = [Cell::DEAD; 8];
     n[0] = Cell::DEAD.with_player(me).with_level(6);
     n[1] = Cell::DEAD.with_player(me).with_level(6);
@@ -283,7 +283,7 @@ fn the_heaviest_net_takes_the_square() {
     }
     assert_eq!(settled(Cell::DEAD, &n).player(), them, "weight of numbers");
 
-    // And what they take is what is *left* after mine is counted against it,
+    // And what they take is what is *left* after factory is counted against it,
     // which is less than they would hold unopposed.
     let contested = settled(Cell::DEAD, &n).level();
     let mut alone = [Cell::DEAD; 8];
@@ -366,19 +366,19 @@ fn settled(cell: Cell, neighbours: &Neighbours) -> Cell {
 }
 
 /// **The curve has a peak, and that is the point.** A yield that only fell
-/// would make every mine worth most on the generation it was laid, and the only
+/// would make every factory worth most on the generation it was laid, and the only
 /// decision left would be to lay more. A peak means a field is worth letting
 /// mature and then worth retiring.
 #[test]
 fn a_mine_pays_best_at_its_prime() {
-    let best = super::mine_chance(super::MINE_PRIME);
-    assert_eq!(best, super::MINE_BEST, "the prime is not the peak");
+    let best = super::factory_chance(super::FACTORY_PRIME);
+    assert_eq!(best, super::FACTORY_BEST, "the prime is not the peak");
     for age in 0..=bits::MAX_AGE {
-        assert!(super::mine_chance(age) <= best, "age {age} beats the prime");
+        assert!(super::factory_chance(age) <= best, "age {age} beats the prime");
     }
     assert!(
-        super::mine_chance(0) < best,
-        "a fresh mine is already at its best, so there is nothing to mature into"
+        super::factory_chance(0) < best,
+        "a fresh factory is already at its best, so there is nothing to mature into"
     );
 }
 
@@ -386,39 +386,43 @@ fn a_mine_pays_best_at_its_prime() {
 /// the last, which is what bounds what one lineage can ever be worth.
 #[test]
 fn past_its_prime_a_mine_only_gets_worse() {
-    for age in super::MINE_PRIME..bits::MAX_AGE {
+    for age in super::FACTORY_PRIME..bits::MAX_AGE {
         assert!(
-            super::mine_chance(age + 1) < super::mine_chance(age),
-            "a mine at {} pays no less than at {age}",
+            super::factory_chance(age + 1) < super::factory_chance(age),
+            "a factory at {} pays no less than at {age}",
             age + 1
         );
     }
-    assert_eq!(super::mine_chance(bits::MAX_AGE), super::MINE_SPENT, "spent is not the floor");
+    assert_eq!(
+        super::factory_chance(bits::MAX_AGE),
+        super::FACTORY_SPENT,
+        "spent is not the floor"
+    );
 }
 
-/// **Never nothing.** A mine that could not pay again is a cell worth telling
+/// **Never nothing.** A factory that could not pay again is a cell worth telling
 /// somebody about, and it is told by the sprite rather than by a surprise — so
 /// the floor is small and real rather than zero.
 #[test]
 fn a_spent_mine_still_pays_sometimes() {
     for age in 0..=bits::MAX_AGE {
-        assert!(super::mine_chance(age) > 0, "a mine at {age} can never pay");
-        assert!(super::mine_chance(age) <= crate::sim::OUT_OF, "a chance out of range at {age}");
+        assert!(super::factory_chance(age) > 0, "a factory at {age} can never pay");
+        assert!(super::factory_chance(age) <= crate::sim::OUT_OF, "a chance out of range at {age}");
     }
 }
 
-/// **A mine takes the square's wear, not its parent's.** What has to be bounded
+/// **A factory takes the square's wear, not its parent's.** What has to be bounded
 /// is a pattern re-birthing over the same cells; a lineage that travels to
 /// fresh ground is the thing this must not punish, and it is what the game
 /// wants people doing.
 #[test]
 fn a_mine_inherits_the_ground_it_is_born_on() {
     let me = PlayerId(1);
-    let worn = Cell::DEAD.with_player(me).with_kind(Kind::MINE).with_age(4);
+    let worn = Cell::DEAD.with_player(me).with_kind(Kind::FACTORY).with_age(4);
     let parents = [
-        Cell::alive(me).with_kind(Kind::MINE),
-        Cell::alive(me).with_kind(Kind::MINE),
-        Cell::alive(me).with_kind(Kind::MINE),
+        Cell::alive(me).with_kind(Kind::FACTORY),
+        Cell::alive(me).with_kind(Kind::FACTORY),
+        Cell::alive(me).with_kind(Kind::FACTORY),
         Cell::DEAD,
         Cell::DEAD,
         Cell::DEAD,
@@ -426,12 +430,12 @@ fn a_mine_inherits_the_ground_it_is_born_on() {
         Cell::DEAD,
     ];
     let born = super::next_cell(worn, &parents, 7);
-    assert!(born.is_alive() && born.kind() == Kind::MINE, "no mine was born");
+    assert!(born.is_alive() && born.kind() == Kind::FACTORY, "no factory was born");
     assert_eq!(born.age(), 5, "the square's wear did not carry into the birth");
 
     // Fresh ground starts fresh, however worn the parents are.
     let born = super::next_cell(Cell::DEAD.with_player(me), &parents, 7);
-    assert_eq!(born.age(), 1, "a mine on clean ground started worn");
+    assert_eq!(born.age(), 1, "a factory on clean ground started worn");
 }
 
 /// **Wear survives dying and clears only when the corpse goes.** Otherwise
@@ -440,9 +444,9 @@ fn a_mine_inherits_the_ground_it_is_born_on() {
 #[test]
 fn wear_outlives_the_mine_and_goes_with_the_corpse() {
     let me = PlayerId(1);
-    let corpse = Cell::DEAD.with_player(me).with_kind(Kind::MINE).with_age(6);
+    let corpse = Cell::DEAD.with_player(me).with_kind(Kind::FACTORY).with_age(6);
     let alone = [Cell::DEAD; 8];
     let next = super::next_cell(corpse, &alone, 3);
     assert_eq!(next.age(), 6, "a corpse forgot how worn its square was");
-    assert_eq!(next.kind(), Kind::MINE, "and stopped being a mine too early");
+    assert_eq!(next.kind(), Kind::FACTORY, "and stopped being a factory too early");
 }

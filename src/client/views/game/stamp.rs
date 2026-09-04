@@ -8,7 +8,7 @@
 //! **Cells and their kind, not a rectangle of ground.** A pattern is the live
 //! cells in it; the dead ones are gaps, and a stamp that carried them would
 //! wipe whatever it was placed over. The kind travels because a glider gun
-//! built of mines is a different thing from one built of life, and a stamp that
+//! built of factories is a different thing from one built of life, and a stamp that
 //! forgot which would quietly hand you the cheap one.
 //!
 //! Coordinates are relative to the pattern's own top-left, so a stamp knows its
@@ -74,7 +74,7 @@ pub struct Stamp {
     /// `(row, col)` from the pattern's top-left. **A shape and not a
     /// material**: what a stamp is made of is chosen when it is laid, on the
     /// hotbar's second axis, so one captured glider can go down as life, as
-    /// mines or as ice. A stamp that carried its own kinds made that choice
+    /// factories or as ice. A stamp that carried its own kinds made that choice
     /// twice and let the two disagree.
     pub cells: Vec<(i32, i32)>,
     /// Rows and columns the pattern spans, for the preview and the label.
@@ -216,19 +216,19 @@ impl Stamp {
     /// carry the kind of every cell in it and a thumbnail showed them, which
     /// was right while a pattern was a pattern *and* a material. It is a shape
     /// now, so the square shows the shape in the material the hotbar is
-    /// holding — the same pattern reads as life, as mines or as ice depending
+    /// holding — the same pattern reads as life, as factories or as ice depending
     /// on what would come out of it, which is more useful than a fixed
     /// picture of how it was captured.
     ///
     /// The sheet can fail to build, and then the kinds fall back to
-    /// lightness: paler for a mine, paler still for a turret. That keeps the
+    /// lightness: paler for a factory, paler still for a turret. That keeps the
     /// distinction visible without art rather than losing it.
     /// **A stamp is a shape, so it is drawn as one.**
     ///
     /// It used to be drawn in whatever the hotbar was holding, on the
     /// reasoning that a preview should show what it would put down. That is
     /// the wrong question here: the bar already says what is held, and a
-    /// pattern redrawn in a mine's art every time somebody changed material
+    /// pattern redrawn in a factory's art every time somebody changed material
     /// made the same glider look like a different pattern. What the square is
     /// for is telling one saved shape from another.
     pub fn draw(
@@ -372,17 +372,17 @@ fn pad(
 /// Draw one cell of a pattern, as the world would draw it.
 ///
 /// One function because the preview on a button and the pad you draw on must
-/// agree: a cell that looks like a mine in one and like life in the other is
+/// agree: a cell that looks like a factory in one and like life in the other is
 /// worse than either.
 ///
 /// The sheet can fail to build, and then the kinds fall back to lightness —
-/// paler for a mine, paler still for a turret — so the distinction survives
+/// paler for a factory, paler still for a turret — so the distinction survives
 /// losing the art rather than going with it.
 /// One cell of a saved shape, in the player's colour.
 ///
 /// **Always plain life**, never the placement the bar is holding — see
 /// [`Stamp::draw`]. A stamp records where the cells are and nothing about what
-/// they are made of, so drawing it as a mine claims something the stamp does
+/// they are made of, so drawing it as a factory claims something the stamp does
 /// not say.
 fn cell(
     painter: &egui::Painter,
@@ -1245,7 +1245,7 @@ mod tests {
         let world = world_with(&[
             ((0, 0), Kind::NORMAL, me),
             ((0, 1), Kind::NORMAL, PlayerId(2)),
-            ((0, 2), Kind::MINE, me),
+            ((0, 2), Kind::FACTORY, me),
         ]);
 
         let stamp = Stamp::capture(&world, me, (0, 0), (0, 2)).unwrap();
@@ -1253,7 +1253,7 @@ mod tests {
         assert_eq!(stamp.size, (1, 3), "and the gap it leaves is part of the shape");
 
         // **And the kind does not travel.** A stamp is a shape; a gun of
-        // mines and a gun of life are one pattern laid in two materials, and
+        // factories and a gun of life are one pattern laid in two materials, and
         // which one is a decision made when it is placed rather than when it
         // was captured.
         assert_eq!(stamp.at((0, 0)), vec![(0, 0), (0, 2)]);

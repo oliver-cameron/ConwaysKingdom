@@ -146,11 +146,11 @@ mod tests {
     /// person in another.
     #[test]
     fn a_secret_survives_being_written_down() {
-        let mine = Secret::new().expect("no entropy");
-        assert_eq!(Secret::read(&mine.written()).expect("would not read back"), mine);
+        let ours = Secret::new().expect("no entropy");
+        assert_eq!(Secret::read(&ours.written()).expect("would not read back"), ours);
         // And spacing and case are what a paste brings with it.
-        let messy = format!("  {}  ", mine.written().to_ascii_uppercase());
-        assert_eq!(Secret::read(&messy).expect("a pasted secret was refused"), mine);
+        let messy = format!("  {}  ", ours.written().to_ascii_uppercase());
+        assert_eq!(Secret::read(&messy).expect("a pasted secret was refused"), ours);
     }
 
     /// Two of them are two people. A generator that repeated itself would make
@@ -176,9 +176,9 @@ mod tests {
     /// one thing that reliably puts it there is a `Debug` that includes it.
     #[test]
     fn a_secret_does_not_print_itself() {
-        let mine = Secret::new().expect("no entropy");
-        let shown = format!("{mine:?}");
-        assert!(!shown.contains(&mine.written()), "a secret printed itself: {shown}");
+        let ours = Secret::new().expect("no entropy");
+        let shown = format!("{ours:?}");
+        assert!(!shown.contains(&ours.written()), "a secret printed itself: {shown}");
     }
 
     /// The short form is what tells two people with one name apart, so it has

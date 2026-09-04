@@ -326,7 +326,7 @@ is what ships, and the pipeline reads one way:
 cargo run --bin cnvt -- art.png assets/sprites/sheet.png
 ```
 
-Nothing checks that the source has everything the sheet has. The payload art at
+Nothing checks that the source has everything the sheet has. The dynamite art at
 tiles 12–15 was generated straight into `sheet.png` and never written back, so
 `art.png` had four blank tiles where the sheet had pictures — and one forward
 pass overwrote them with nothing. `every_state_has_art_at_the_tile_its_byte_names`

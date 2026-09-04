@@ -415,10 +415,10 @@ pub struct Hotbar {
     pub tick: &'static str,
     pub rating: &'static str,
     pub life: &'static str,
-    pub mine: &'static str,
+    pub factory: &'static str,
     pub turret: &'static str,
     pub ice: &'static str,
-    pub payload: &'static str,
+    pub dynamite: &'static str,
     /// The square that takes a stamp. Short, because it sits in a 44px box.
     /// The shape axis. Verbs, because they are how the cells get chosen
     /// rather than what ends up in them.

@@ -40,7 +40,7 @@ The fields are placed so that reads as a **grid**. Alive and ice are the bottom 
 
 That split is the price of the placement, and it is worth paying: with the state in bits 0–1 and the age in 4–6, the only bits left for a three-bit kind are 2, 3 and 7. The alternative puts age in bits 5–7 and keeps the kind contiguous, at the cost of a sheet where age advances every *two* rows.
 
-**Nothing advances age yet.** It was six bits of kind, of which three were used, and sixty-one spare kinds is not worth a nibble that does not line up. See [payloads](planned.md#payloads), which is what it is for, and [depleted mines](planned.md#depleted-mines), which may want it instead. The art that exists did not move: every kind in play is 0–2 at age nought, so all of it is in the sheet's first row exactly where `kind * 4 + state` put it.
+**Nothing advances age yet.** It was six bits of kind, of which three were used, and sixty-one spare kinds is not worth a nibble that does not line up. See [dynamite](planned.md#dynamite), which is what it is for, and [depleted factories](planned.md#depleted-factories), which may want it instead. The art that exists did not move: every kind in play is 0–2 at age nought, so all of it is in the sheet's first row exactly where `kind * 4 + state` put it.
 
 The player sits at the top of its byte, so extracting it is a shift with no mask.
 
@@ -82,25 +82,25 @@ cell.update(&neighbours, seed) -> Cell
 
 At random, from the three parents — but seeded, from the generation and the chunk coordinate with each cell mixing in its own position, through SplitMix64's finaliser. Every peer rolls the same number without exchanging one. All three parents are reachable and the same seed always gives the same answer; both are tested.
 
-The newborn takes **everything** from that parent and nothing from the corpse it lands on. That is not a detail: it is how a kind travels. A mine's children are mines, and because the parent is chosen at random rather than by vote, a kind spreads through a mixed population instead of being handed down whole — one mine beside two ordinary cells wins about a third of the births there, and drifts from that. Three mines placed beside a starting block converted a whole growing colony inside thirty generations.
+The newborn takes **everything** from that parent and nothing from the corpse it lands on. That is not a detail: it is how a kind travels. A factory's children are factories, and because the parent is chosen at random rather than by vote, a kind spreads through a mixed population instead of being handed down whole — one factory beside two ordinary cells wins about a third of the births there, and drifts from that. Three factories placed beside a starting block converted a whole growing colony inside thirty generations.
 
 **Except for the kinds that are not inherited, which pass over ownership alone.** Pick a turret as the parent and the newborn is ordinary life belonging to the turret's owner: the ground still changes hands and the machine does not copy itself. Kinds are declared in one list, `kinds!` in `sim::cell`, which writes `Kind::ALL`, the count and `Kind::inherits` from the same rows for the same reason `rules!` writes the rule chain and its names — so what a kind is, what it looks like and whether it travels cannot drift apart.
 
-The split is what the two kinds are *for*. **An inheriting kind is an investment in a lineage; a non-inheriting one is a machine somebody placed.** A mine is bought once and spreads, so what was paid for is the lineage. A turret works by standing where it is put rather than by breeding, and a turret whose children were turrets would make any gun a factory that claims the map — so it is bought once per cell, forever, and costs more for it.
+The split is what the two kinds are *for*. **An inheriting kind is an investment in a lineage; a non-inheriting one is a machine somebody placed.** A factory is bought once and spreads, so what was paid for is the lineage. A turret works by standing where it is put rather than by breeding, and a turret whose children were turrets would make any gun a factory that claims the map — so it is bought once per cell, forever, and costs more for it.
 
 The carve-out is applied **after** the roll rather than before it, so which parent is chosen does not depend on what kind it turned out to be. Every peer must reach the same parent from the same seed whatever is standing there; `not_inheriting_does_not_move_the_roll` pins it.
 
 Ice is cleared on a birth because a parent may be *under a pane* and still count as a live neighbour while frozen. Without that, a cell born outside the pane would inherit it.
 
-### Mines, and what the rule counts
+### Factories, and what the rule counts
 
-`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner **once** for each corpse it leaves — `rule::MINE_UPKEEP`, sixteen times in sixty-four, and when the charge falls due the square loses its kind and is ordinary ground. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Mined`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
+`Kind::MINE` pays its owner when one of its kind is **born**, and costs its owner **once** for each corpse it leaves — `rule::MINE_UPKEEP`, sixteen times in sixty-four, and when the charge falls due the square loses its kind and is ordinary ground. The rule does not know what either is worth: it counts them, per player, and hands the tally back from `World::step` as a `Earned`, which is two arrays rather than one net figure so the two can be priced apart. The rule decides how *often* a corpse is charged and `net` decides how *much*.
 
 Note what `upkeep` counts. Not deaths — charges falling due. A corpse reborn before its charge lands escapes it entirely, which is the whole of why a blinker pays and a glider does not: one re-uses its ground and the other abandons it.
 
 Counted inside `Halo::step_into`, which is the one place that holds a cell before and after in the same breath, so it costs a comparison and no second pass over the world. The tally is returned rather than applied, because a world holds cells and not purses: the server folds it into the authoritative values and a client folds it into its predicted one.
 
-What that rewards is a **machine that stays where you put it**. A blinker is three cells and two corpses and pays; a glider drags twenty corpses behind it and bleeds; an r-pentomino of sprawl bleeds badly. A block of mines neither earns nor costs, because nothing is ever born on it and nothing ever dies.
+What that rewards is a **machine that stays where you put it**. A blinker is three cells and two corpses and pays; a glider drags twenty corpses behind it and bleeds; an r-pentomino of sprawl bleeds badly. A block of factories neither earns nor costs, because nothing is ever born on it and nothing ever dies.
 
 The drain is bounded by territory decay rather than by a timer: a corpse with nothing alive beside it loses its owner soon enough and stops costing anybody, while corpses inside a living colony are re-claimed every generation and go on costing.
 
@@ -245,15 +245,15 @@ The rule for taking has never changed; the world around it did. Before territory
 
 One turret is one live cell with no live neighbours, and it is gone in a generation. So a turret is only ever placed as part of something that survives, and the cheapest thing that survives is the 2×2 block: four turrets, still, never dying and never giving birth, claiming four squares a generation for as long as nothing disturbs them. At `TURRET_POWER` of one that settles at about a hundred and thirty squares, eleven across.
 
-Which is the exact shape that is worthless for a mine. A block of mines never gives birth so never earns — [the game](game.md#mining) calls it forty spent on nothing — and it is the best thing a turret can be, because a turret works by standing there. **The still life is a mine's worst shape and a turret's best.**
+Which is the exact shape that is worthless for a factory. A block of factories never gives birth so never earns — [the game](game.md#manufacture) calls it forty spent on nothing — and it is the best thing a turret can be, because a turret works by standing there. **The still life is a factory's worst shape and a turret's best.**
 
 It also means the inheritance split rarely fires for a turret in its natural form: a block gives no births, so there is no parent to pick. Non-inheritance is for the turret somebody drops into a live pattern, which is the case it exists to stop.
 
 ### The corpse
 
-`rule::TURRET_DECAY` returns a dead turret to ordinary ground, four times in sixty-four, the way `MINE_UPKEEP` does for a dead mine — slower, because the two punish different things. A dead mine is a bill that wants a bottom to it; a dead turret is a machine firing backwards over the ground behind it, and four in sixty-four leaves it doing that for about sixteen generations.
+`rule::TURRET_DECAY` returns a dead turret to ordinary ground, four times in sixty-four, the way `MINE_UPKEEP` does for a dead factory — slower, because the two punish different things. A dead factory is a bill that wants a bottom to it; a dead turret is a machine firing backwards over the ground behind it, and four in sixty-four leaves it doing that for about sixteen generations.
 
-Nothing is tallied for it. What a dead turret costs its owner is the ground it hands back and the life it takes with it, and that is applied rather than priced — which is why `Mined` says nothing about turrets and `Halo::step_into` only decays them.
+Nothing is tallied for it. What a dead turret costs its owner is the ground it hands back and the life it takes with it, and that is applied rather than priced — which is why `Earned` says nothing about turrets and `Halo::step_into` only decays them.
 
 Note what that means read literally: the mirror of "the nearest square that is not the owner's" is "the nearest that is", so a dead turret eats its owner's ground and shoots its owner's life, including the other three cells of its own block. A failing emplacement dismantles itself.
 

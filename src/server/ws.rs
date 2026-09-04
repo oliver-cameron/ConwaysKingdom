@@ -683,7 +683,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                         // spectator that heard no `Step` would be watching a
                         // world that never moved.
                         let mine = me.as_ref().map(|(r, _)| r).or(watching.as_ref());
-                        if mine.is_some_and(|mine| *mine == room)
+                        if factory.is_some_and(|factory| *factory == room)
                             && !send(&mut sink, &msg).await
                         {
                             break;

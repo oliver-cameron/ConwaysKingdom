@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::cell::{Cell, Chunk, Halo, Kind, Mined, CHUNK_N};
+use super::cell::{Cell, Chunk, Halo, Kind, Takings, CHUNK_N};
 use super::dir::Dir;
 use super::player::PlayerId;
 use super::rule;
@@ -412,33 +412,33 @@ impl World {
         self.active.len()
     }
 
-    /// Advance on a clock, and total what was mined over however many
+    /// Advance on a clock, and total what was earned over however many
     /// generations that turned out to be.
-    pub fn update(&mut self, dt: f32, span: f32) -> Mined {
-        let mut mined = Mined::default();
+    pub fn update(&mut self, dt: f32, span: f32) -> Takings {
+        let mut earned = Takings::default();
         if span <= 0.0 {
-            return mined;
+            return earned;
         }
         self.elapsed += dt;
         let mut steps = 0;
         while self.elapsed >= span && steps < MAX_CATCHUP_STEPS {
             self.elapsed -= span;
-            mined.add(&self.step());
+            earned.add(&self.step());
             steps += 1;
         }
         if steps == MAX_CATCHUP_STEPS {
             self.elapsed = 0.0;
         }
-        mined
+        earned
     }
 
-    /// Advance one generation, and say what each player mined doing it.
+    /// Advance one generation, and say what each player earned doing it.
     ///
     /// The tally is returned rather than applied: a world holds cells, not
     /// purses, and the server and the client each fold it into the number they
     /// keep. Summed in the order chunks are stepped, which is sorted, though
     /// integer addition would not care.
-    pub fn step(&mut self) -> Mined {
+    pub fn step(&mut self) -> Takings {
         // Taken before the rule runs, so a cell touching a pane breaks it even
         // if this is the generation it dies in. It is alive now and it is
         // against the ice now, and that is the whole of what breaking means --
@@ -452,11 +452,11 @@ impl World {
         let seeds = self.ice_seeds();
         // **Before the rule, where the other two passes are after it.** A fuse
         // that reached full during the rule and went off in the same breath
-        // would never be drawn full — and the whole of what makes a payload
+        // would never be drawn full — and the whole of what makes a dynamite
         // answerable is that its last sprite is on screen for exactly one
         // generation, always. See [`Self::detonate`].
-        // **What the blasts cost, folded into the tally the mines already use.**
-        // A detonation runs before the rule and so before `mined` exists, and
+        // **What the blasts cost, folded into the tally the factories already use.**
+        // A detonation runs before the rule and so before `earned` exists, and
         // it is the same kind of fact — squares that changed hands and are owed
         // for — so it rides the same channel rather than a second one.
         let blasts = self.detonate();
@@ -485,12 +485,12 @@ impl World {
         // anything, and the choice does not depend on how the world is stored.
         let generation = super::seed::generation_seed(self.seed, self.generation);
 
-        let mut mined = Mined::default();
+        let mut earned = Takings::default();
         for (i, &coord) in active.iter().enumerate() {
             let halo = self.scratch[i];
             let at = (coord.0 * CHUNK_N as i32, coord.1 * CHUNK_N as i32);
             if let Some(chunk) = self.chunk_at_mut(coord) {
-                halo.step_into(chunk, generation, at, &mut mined);
+                halo.step_into(chunk, generation, at, &mut earned);
             }
         }
 
@@ -500,8 +500,8 @@ impl World {
         self.fire_turrets();
         self.dirty = true;
         self.prune();
-        mined.add(&blasts);
-        mined
+        earned.add(&blasts);
+        earned
     }
 
     /// Copy a chunk and the facing strip of each neighbour into a flat padded
@@ -564,7 +564,7 @@ impl World {
             .collect()
     }
 
-    /// Set off every payload whose fuse has run out, and scramble the ground
+    /// Set off every dynamite whose fuse has run out, and scramble the ground
     /// around each one.
     ///
     /// **A pass and not a rule**, because "every square within reach" is not a
@@ -579,9 +579,9 @@ impl World {
     /// That is the warning: a fuse reaches full during one generation's rule,
     /// is drawn full for that whole generation, and goes off at the start of
     /// the next.
-    fn detonate(&mut self) -> Mined {
-        let mut owed = Mined::default();
-        let ready = self.payloads_ready();
+    fn detonate(&mut self) -> Takings {
+        let mut owed = Takings::default();
+        let ready = self.dynamite_ready();
         if ready.is_empty() {
             return owed;
         }
@@ -590,15 +590,15 @@ impl World {
         // Gathered before anything is written, so a blast does not scramble
         // the ground the next one is deciding where to land on. Two peers
         // stepping the same generation must make the same choices, and a
-        // choice that depended on which payload was handled first would
+        // choice that depended on which dynamite was handled first would
         // depend on the iteration order of a map.
-        // **A blob of them is one bomb, not many.** Payloads whose blasts
+        // **A blob of them is one bomb, not many.** Dynamite whose blasts
         // would overlap go off as a single, larger one — see
         // [`rule::blast_reach`], where each is worth a constant area — so a
         // hundred of them reach ten times as far as one rather than a hundred
         // small craters in the same place.
         let mut blasts = Vec::new();
-        for group in clusters(&ready, rule::PAYLOAD_REACH) {
+        for group in clusters(&ready, rule::DYNAMITE_REACH) {
             let reach = rule::blast_reach(group.len());
             let owner = ready[group[0]].1;
             // The middle of the blob, which is where a bomb made of all of
@@ -610,7 +610,7 @@ impl World {
             blasts.push((self.blast_centre(at, owner, seed, reach), owner, seed, reach));
         }
 
-        // Every payload that went off is consumed, whichever blast it was
+        // Every dynamite that went off is consumed, whichever blast it was
         // part of — the first blast's seed decides them all, which is one roll
         // per square either way.
         let seed_for = blasts.first().map(|&(_, _, seed, _)| seed).unwrap_or(generation);
@@ -644,19 +644,19 @@ impl World {
         owed
     }
 
-    /// Turn a disc of ground into noise, and light every payload it reaches.
+    /// Turn a disc of ground into noise, and light every dynamite it reaches.
     ///
     /// **The blast decides whose noise it is**, which is the whole of what a
-    /// payload buys. Every square it reaches is re-rolled: the roughly one in
+    /// dynamite buys. Every square it reaches is re-rolled: the roughly one in
     /// three that comes up alive is *yours*, and the rest is reset to
     /// no-man's-land. So a bomb does not merely animate what was already
     /// there — it breaks a country apart and leaves you a third of the pieces.
     ///
     /// It used to leave the owner alone and set only alive or dead, which
     /// meant a blast into somebody's empty ground **manufactured life for
-    /// them**: a disc of theirs at [`rule::PAYLOAD_DENSITY`] where there had
+    /// them**: a disc of theirs at [`rule::DYNAMITE_DENSITY`] where there had
     /// been nothing, on ground they still held. Aimed at an empty frontier a
-    /// payload was a gift.
+    /// dynamite was a gift.
     ///
     /// Two squares are left alone. **Ice**, because a pane stops time over
     /// whatever it covers and that is every rule. And **granted ground** —
@@ -678,12 +678,12 @@ impl World {
                 if cell.is_ice() {
                     continue;
                 }
-                // **The chain, and it cannot recurse.** A payload in the blast
+                // **The chain, and it cannot recurse.** A dynamite in the blast
                 // has its fuse set to full, so it goes off at the top of the
                 // *next* generation — a line of them is a fuse and a cluster
                 // is one ring a generation, rather than one pass re-entering
                 // itself.
-                if cell.kind() == Kind::PAYLOAD && cell.is_alive() {
+                if cell.kind() == Kind::DYNAMITE && cell.is_alive() {
                     chained.push(((row, col), cell.with_age(super::cell::bits::MAX_AGE)));
                     continue;
                 }
@@ -695,7 +695,7 @@ impl World {
         }
     }
 
-    /// What a blast leaves on one square, which is the whole of what a payload
+    /// What a blast leaves on one square, which is the whole of what a dynamite
     /// does to the board.
     ///
     /// One roll, and it decides ownership as well as life: alive is *yours*,
@@ -718,11 +718,11 @@ impl World {
     fn blasted(cell: Cell, owner: PlayerId, seed: u64, row: i32, col: i32) -> Cell {
         // Its own square's own roll, on the blast's own stream, so two
         // overlapping blasts do not decide the same square twice the same way
-        // — and so a peer that never saw the payload placed still lands on the
+        // — and so a peer that never saw the dynamite placed still lands on the
         // same board.
         let square = super::seed::cell_seed(seed, row, col);
-        let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::PAYLOAD_DENSITY);
-        // **The age goes with the kind.** A mine three quarters of the way
+        let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::DYNAMITE_DENSITY);
+        // **The age goes with the kind.** A factory three quarters of the way
         // through its rot, turned into ordinary ground, kept that three — and
         // `Cell::sprite` reads the age as a sheet row, so it drew from a row
         // that only ageing kinds have art in and came out as nothing at all.
@@ -1001,30 +1001,30 @@ impl World {
     /// list of anything, and a turret is found by looking, which costs one
     /// pass over what is held per generation.
     /// **Where a blast is worth setting off**, walking outward from the
-    /// payload until it finds somewhere.
+    /// dynamite until it finds somewhere.
     ///
     /// A blast wasted on its owner's own ground is a blast wasted: a
     /// detonation inside your own country turns your own patterns into your
     /// own noise. So this searches rings at increasing distance for a centre
-    /// whose disc is at least [`rule::PAYLOAD_FOREIGN`] not its owner's, takes
+    /// whose disc is at least [`rule::DYNAMITE_FOREIGN`] not its owner's, takes
     /// the nearest, and breaks a tie with a seeded roll — which is
     /// [`Self::turret_target`] again, in shape: the nearest square answering a
     /// question, with the tie broken so a volley does not always favour one
     /// direction.
     ///
-    /// What that buys is that **a payload does not have to be placed
+    /// What that buys is that **a dynamite does not have to be placed
     /// exactly.** Placing is confined to your own influence, so without it the
-    /// only useful payload is one laid on the exact square of your border
+    /// only useful dynamite is one laid on the exact square of your border
     /// nearest something worth hitting — a precision the interface does not
     /// support, against a frontier that moves every generation.
     ///
-    /// Bounded by [`rule::PAYLOAD_THROW`], and it goes off where it stands if
+    /// Bounded by [`rule::DYNAMITE_THROW`], and it goes off where it stands if
     /// nothing within that is better. Unbounded it would be a homing weapon
     /// with a range of the whole world.
     fn blast_centre(&self, at: (i32, i32), owner: PlayerId, seed: u64, reach: i32) -> (i32, i32) {
-        let throw = rule::PAYLOAD_THROW;
+        let throw = rule::DYNAMITE_THROW;
         // Ring by ring, so the first distance that has any answer is the one
-        // taken and a payload on its own frontier stops at once. The worst
+        // taken and a dynamite on its own frontier stops at once. The worst
         // case — one in the middle of a large country — is what the bound is
         // for.
         for ring in 0..=throw {
@@ -1070,17 +1070,17 @@ impl World {
     /// the reasoning that a blast over no-man's-land does nothing to anybody.
     /// That was true while a blast only disturbed what it reached. It claims
     /// what it reaches now — see [`Self::scramble`] — so open country is worth
-    /// hitting, and refusing to go off over it would leave a payload unable to
+    /// hitting, and refusing to go off over it would leave a dynamite unable to
     /// do the thing it was just given.
     ///
     /// What that re-admits is the crater loop the old rule was written to
     /// stop: the debris of a blast is mostly unowned, so one can be aimed at
-    /// the last one's hole. It costs [`rule::PAYLOAD_COST`] a time and pays a
+    /// the last one's hole. It costs [`rule::DYNAMITE_COST`] a time and pays a
     /// third of a disc, which is a worse rate than any of the ordinary ways to
     /// hold ground, so it is priced out rather than ruled out.
     ///
     /// A count and not a cost, and it stops the moment it has seen enough — so
-    /// a payload on a frontier answers in a handful of reads.
+    /// a dynamite on a frontier answers in a handful of reads.
     fn worth_hitting(&self, centre: (i32, i32), owner: PlayerId, reach: i32) -> bool {
         let mut theirs = 0u64;
         // How many squares of a disc this radius holds, so the threshold is a
@@ -1098,7 +1098,7 @@ impl World {
                     self.cell_at(centre.0 + dr, centre.1 + dc).is_some_and(|c| c.player() != owner);
                 if not_yet_mine {
                     theirs += 1;
-                    if theirs * 64 >= total * rule::PAYLOAD_FOREIGN {
+                    if theirs * 64 >= total * rule::DYNAMITE_FOREIGN {
                         return true;
                     }
                 }
@@ -1107,17 +1107,17 @@ impl World {
         false
     }
 
-    /// Every payload whose fuse has run out, sorted, so two peers set them off
+    /// Every dynamite whose fuse has run out, sorted, so two peers set them off
     /// in the same order.
-    fn payloads_ready(&self) -> Vec<((i32, i32), PlayerId)> {
+    fn dynamite_ready(&self) -> Vec<((i32, i32), PlayerId)> {
         let mut out = Vec::new();
         for ((crow, ccol), chunk) in self.stored() {
             for row in 0..CHUNK_N {
                 for col in 0..CHUNK_N {
                     let cell = chunk[(row, col)];
-                    // A frozen payload does not go off: a pane stops time over
+                    // A frozen dynamite does not go off: a pane stops time over
                     // whatever it covers, and that is every rule.
-                    if cell.kind() != Kind::PAYLOAD || cell.is_ice() {
+                    if cell.kind() != Kind::DYNAMITE || cell.is_ice() {
                         continue;
                     }
                     if !cell.is_alive() || cell.age() < super::cell::bits::MAX_AGE {
@@ -1355,14 +1355,14 @@ fn seed_glider(chunk: &mut Chunk, row: usize, col: usize, player: PlayerId) {
     }
 }
 
-/// Which payloads go off together: the groups whose blasts would overlap.
+/// Which dynamite go off together: the groups whose blasts would overlap.
 ///
 /// **Two whose discs touch are one bomb.** Otherwise a blob of them is a
 /// hundred craters in the same place, each doing again what the last already
 /// did — where what a player built is one charge made of a hundred, and
 /// [`rule::blast_reach`] is what that is worth.
 ///
-/// Connected by distance and transitively, so a line of payloads is one long
+/// Connected by distance and transitively, so a line of dynamite is one long
 /// bomb rather than a chain of pairs. `O(n²)` over the ones that are *ready*,
 /// which is a handful in the generations it is not nought.
 ///
@@ -1378,7 +1378,7 @@ fn clusters(ready: &[((i32, i32), PlayerId)], reach: i32) -> Vec<Vec<usize>> {
         let g = out.len();
         out.push(vec![i]);
         group[i] = Some(g);
-        // Grown rather than scanned once: reaching a payload can bring in
+        // Grown rather than scanned once: reaching a dynamite can bring in
         // others only that one is near, which is what makes a line one bomb.
         let mut k = 0;
         while k < out[g].len() {
@@ -1402,20 +1402,20 @@ fn clusters(ready: &[((i32, i32), PlayerId)], reach: i32) -> Vec<Vec<usize>> {
 #[cfg(test)]
 mod tests {
 
-    /// **A blob of payloads is one bomb, and each is worth an area.** A
+    /// **A blob of dynamite is one bomb, and each is worth an area.** A
     /// hundred of them reach ten times as far as one, not a hundred times —
     /// anything else and clustering is either pointless or the only thing in
     /// the game.
     #[test]
     fn a_cluster_reaches_by_the_root_of_its_size() {
-        assert_eq!(rule::blast_reach(1), rule::PAYLOAD_REACH);
-        assert_eq!(rule::blast_reach(4), rule::PAYLOAD_REACH * 2);
-        assert_eq!(rule::blast_reach(100), rule::PAYLOAD_REACH * 10);
+        assert_eq!(rule::blast_reach(1), rule::DYNAMITE_REACH);
+        assert_eq!(rule::blast_reach(4), rule::DYNAMITE_REACH * 2);
+        assert_eq!(rule::blast_reach(100), rule::DYNAMITE_REACH * 10);
         // Bounded, or a thousand of them rewrite a quarter of a large world in
         // one generation.
-        assert_eq!(rule::blast_reach(100_000), rule::PAYLOAD_MOST_REACH);
+        assert_eq!(rule::blast_reach(100_000), rule::DYNAMITE_MOST_REACH);
         // And nothing is worth less than one on its own.
-        assert_eq!(rule::blast_reach(0), rule::PAYLOAD_REACH);
+        assert_eq!(rule::blast_reach(0), rule::DYNAMITE_REACH);
     }
 
     /// **Whose blasts would overlap go off together**, transitively — so a
@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn payloads_whose_blasts_overlap_are_one_bomb() {
         let me = PlayerId(1);
-        let reach = rule::PAYLOAD_REACH;
+        let reach = rule::DYNAMITE_REACH;
         let ready: Vec<((i32, i32), PlayerId)> =
             [(0, 0), (0, reach - 1), (0, 2 * reach - 2), (0, 900)]
                 .into_iter()
@@ -1439,7 +1439,7 @@ mod tests {
         assert_eq!(alone, vec![vec![0]]);
     }
 
-    /// **A payload placed on the bar reaches the ground**, which is the whole
+    /// **A dynamite placed on the bar reaches the ground**, which is the whole
     /// path: a `Placement` becomes a cell, the fuse burns while it lives, and
     /// the pass turns a disc of ground into noise.
     ///
@@ -1453,24 +1453,24 @@ mod tests {
         crate::net::grant(&mut world, me);
         let home = crate::net::spawn_for(me, &world);
 
-        // A block, so it survives long enough to burn: a payload on its own
+        // A block, so it survives long enough to burn: a dynamite on its own
         // dies of loneliness in a generation, which is the real cost of one.
         let block = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(r, c)| (home.0 + r, home.1 + c));
         for (i, &(row, col)) in block.iter().enumerate() {
             let what =
-                if i == 0 { crate::net::Placement::Payload } else { crate::net::Placement::Life };
+                if i == 0 { crate::net::Placement::Dynamite } else { crate::net::Placement::Life };
             let was = world.cell_at(row, col).unwrap_or(Cell::DEAD);
             world.set_cell_at(row, col, what.apply_to(was, me));
         }
         let at = block[0];
         let is_payload = |w: &World| {
-            w.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::PAYLOAD && c.is_alive())
+            w.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::DYNAMITE && c.is_alive())
         };
-        assert!(is_payload(&world), "the placement did not put a payload down");
+        assert!(is_payload(&world), "the placement did not put a dynamite down");
         assert_eq!(world.cell_at(at.0, at.1).unwrap().age(), 0, "a fresh fuse starts at nought");
 
         // It burns on a chance, so this is bounded rather than exact — and it
-        // has to reach the end, which `PAYLOAD_WARN` makes certain.
+        // has to reach the end, which `DYNAMITE_WARN` makes certain.
         let mut generations = 0;
         while is_payload(&world) && generations < 500 {
             world.step();
@@ -1479,14 +1479,14 @@ mod tests {
         assert!(generations < 500, "the fuse never ran out");
         assert!(
             world.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::NORMAL),
-            "a spent payload should be ordinary ground"
+            "a spent dynamite should be ordinary ground"
         );
     }
 
     /// **A blast takes ground; it does not make life for whoever it lands on.**
     ///
     /// `scramble` set only alive or dead and left the owner alone, so a
-    /// payload thrown into somebody's *empty* country filled a third of it
+    /// dynamite thrown into somebody's *empty* country filled a third of it
     /// with live cells that were still theirs. Aimed at an empty frontier a
     /// bomb was a gift, which is the opposite of what it is for.
     ///
@@ -1522,7 +1522,7 @@ mod tests {
 
         // On the frontier, so the blast has their ground within reach.
         let at = (row, col + patch - 1);
-        let armed = crate::net::Placement::Payload
+        let armed = crate::net::Placement::Dynamite
             .apply_to(world.cell_at(at.0, at.1).unwrap_or(Cell::DEAD), me)
             .with_age(super::super::cell::bits::MAX_AGE);
         world.set_cell_at(at.0, at.1, armed.with_player(me).with_home(false));
@@ -1546,13 +1546,13 @@ mod tests {
         // Clear of the granted patch, which is exempt and would answer for
         // most of the disc from the spawn itself.
         let at = (row, col + crate::net::SPAWN_N + 12);
-        let armed = crate::net::Placement::Payload
+        let armed = crate::net::Placement::Dynamite
             .apply_to(Cell::DEAD, me)
             .with_age(super::super::cell::bits::MAX_AGE);
         world.set_cell_at(at.0, at.1, armed.with_player(me));
         world.detonate();
 
-        let reach = rule::PAYLOAD_REACH;
+        let reach = rule::DYNAMITE_REACH;
         let (mut live, mut empty) = (0, 0);
         for dr in -reach..=reach {
             for dc in -reach..=reach {
@@ -1612,10 +1612,10 @@ mod tests {
             .filter(|&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_alive()))
             .collect();
 
-        // Mine, armed, just outside their patch, so the blast reaches in
+        // Factory, armed, just outside their patch, so the blast reaches in
         // without my having to overwrite one of the squares under test.
         let at = (row - 1, col - 1);
-        let armed = crate::net::Placement::Payload
+        let armed = crate::net::Placement::Dynamite
             .apply_to(Cell::DEAD, me)
             .with_age(super::super::cell::bits::MAX_AGE);
         world.set_cell_at(at.0, at.1, armed.with_player(me));
@@ -1636,7 +1636,7 @@ mod tests {
         }
     }
 
-    /// **The blast is what a payload is for**, and it is noise rather than a
+    /// **The blast is what a dynamite is for**, and it is noise rather than a
     /// hole: every square in the disc takes its own roll, so some come up
     /// alive and some do not.
     #[test]
@@ -1660,7 +1660,7 @@ mod tests {
 
         // Armed and about to go, which is the state the fuse takes a while to
         // reach on its own.
-        let armed = crate::net::Placement::Payload
+        let armed = crate::net::Placement::Dynamite
             .apply_to(world.cell_at(row, col).unwrap_or(Cell::DEAD), me)
             .with_age(super::super::cell::bits::MAX_AGE);
         world.set_cell_at(row, col, armed);
@@ -1670,7 +1670,7 @@ mod tests {
 
         assert!(
             world.cell_at(row, col).is_some_and(|c| c.kind() == Kind::NORMAL),
-            "the payload was not consumed"
+            "the dynamite was not consumed"
         );
         assert!(
             world.live_cells().len() > live_before,
@@ -1678,12 +1678,12 @@ mod tests {
         );
         // Noise and not a slab: a disc brought wholly to life would be one
         // shape rather than something to clean up.
-        // **Reach plus throw**, because the centre is not the payload: a blast
-        // walks outward to somewhere worth hitting, up to `PAYLOAD_THROW`, so
+        // **Reach plus throw**, because the centre is not the dynamite: a blast
+        // walks outward to somewhere worth hitting, up to `DYNAMITE_THROW`, so
         // the disc to look in is wherever it could have landed. Written as the
         // two constants rather than as a number — this measured a fixed radius
         // and went blind the moment the reach shrank.
-        let reach = rule::PAYLOAD_REACH + rule::PAYLOAD_THROW;
+        let reach = rule::DYNAMITE_REACH + rule::DYNAMITE_THROW;
         let disc: Vec<(i32, i32)> = (-reach..=reach)
             .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
             .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
@@ -2028,7 +2028,7 @@ mod tests {
     /// anywhere, or reading fifty years of other people's work is reading it
     /// wrong. It is not obvious from the code that it holds. Three of the four
     /// things this simulation adds to Conway do not touch whether a cell
-    /// lives — territory writes the owner byte of dead squares, a mine is a
+    /// lives — territory writes the owner byte of dead squares, a factory is a
     /// tally, and ice is inert until a pane is laid — but that is an argument,
     /// and this is the measurement.
     ///

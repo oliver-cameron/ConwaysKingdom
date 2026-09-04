@@ -288,11 +288,11 @@ pub enum Placement {
     /// A living cell that pays its owner every time one of its kind is born.
     ///
     /// Bought once and inherited afterwards: a birth copies its parent, so a
-    /// mine's children are mines, and since a birth picks one of three parents
+    /// factory's children are factories, and since a birth picks one of three parents
     /// at random the kind spreads through a mixed population rather than being
     /// handed down whole. What you are paying for is a **lineage**, not a
     /// cell — which is why it costs what ten cells of life cost.
-    Mine,
+    Factory,
     /// A living cell that claims ground at range, and a dead one running that
     /// backwards. Priced by the **emplacement**: a turret is not inherited, so
     /// it is bought once per cell, and one dies of loneliness in a generation —
@@ -304,7 +304,7 @@ pub enum Placement {
     /// reasons: it is not inherited, so it is bought once per cell, and one on
     /// its own dies of loneliness before its fuse burns. What it really costs
     /// is the pattern you have to build to keep it alive that long.
-    Payload,
+    Dynamite,
 }
 
 impl Placement {
@@ -320,15 +320,15 @@ impl Placement {
             // **The age goes with the kind, both ways.**
             //
             // Placed life is ordinary life: without `with_kind`, drawing over a
-            // mine's corpse would hand you a free mine, since the kind is on
+            // factory's corpse would hand you a free factory, since the kind is on
             // the cell and outlives the life that carried it. And without
-            // `with_age` it hands you the *wear* instead — a mine's age is how
+            // `with_age` it hands you the *wear* instead — a factory's age is how
             // depleted its square is, and a plain cell has no such thing, so it
             // arrives as a number nothing will ever clear.
             //
             // It showed as an invisible cell. `Kind::NORMAL` is `Ages::Never`,
             // so the sheet has art for it at age nought and blank rows beneath;
-            // drawing a cell over a worn mine put a live normal cell at age
+            // drawing a cell over a worn factory put a live normal cell at age
             // five, which points at one of those blanks.
             Self::Life => existing
                 .with_alive(true)
@@ -336,14 +336,14 @@ impl Placement {
                 .with_level(crate::sim::bits::MAX_LEVEL)
                 .with_kind(Kind::NORMAL)
                 .with_age(0),
-            // **From nought**, as a payload is. A mine's age only resets when
+            // **From nought**, as a dynamite is. A factory's age only resets when
             // it decays, so laying a fresh one over a corpse that had been
-            // rotting would buy a mine already part way through its own.
-            Self::Mine => existing
+            // rotting would buy a factory already part way through its own.
+            Self::Factory => existing
                 .with_alive(true)
                 .with_player(player)
                 .with_level(crate::sim::bits::MAX_LEVEL)
-                .with_kind(Kind::MINE)
+                .with_kind(Kind::FACTORY)
                 .with_age(0),
             // `Ages::Never` too, so the same reasoning and the same reset.
             Self::Turret => existing
@@ -354,11 +354,11 @@ impl Placement {
                 .with_age(0),
             // The same, and here it is a fuse somebody else's cell had
             // already half burnt.
-            Self::Payload => existing
+            Self::Dynamite => existing
                 .with_alive(true)
                 .with_player(player)
                 .with_level(crate::sim::bits::MAX_LEVEL)
-                .with_kind(Kind::PAYLOAD)
+                .with_kind(Kind::DYNAMITE)
                 .with_age(0),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
@@ -371,17 +371,17 @@ impl Placement {
     /// Whether this is what the square already holds — the question a click
     /// asks to decide whether it places or takes back.
     ///
-    /// **Held, not present.** Life and a mine are taken away by clearing the
-    /// same bit, so "would removing it change anything" made a mine held over
+    /// **Held, not present.** Life and a factory are taken away by clearing the
+    /// same bit, so "would removing it change anything" made a factory held over
     /// your own life read as already there and the click killed the cell
     /// instead of converting it. The owner is no part of it: somebody else's
     /// life is still life, priced at [`RECLAIM`].
     pub fn is_on(self, existing: Cell) -> bool {
         match self {
             Self::Life => existing.is_alive() && existing.kind() == Kind::NORMAL,
-            Self::Mine => existing.is_alive() && existing.kind() == Kind::MINE,
+            Self::Factory => existing.is_alive() && existing.kind() == Kind::FACTORY,
             Self::Turret => existing.is_alive() && existing.kind() == Kind::TURRET,
-            Self::Payload => existing.is_alive() && existing.kind() == Kind::PAYLOAD,
+            Self::Dynamite => existing.is_alive() && existing.kind() == Kind::DYNAMITE,
             Self::Ice => existing.is_ice(),
         }
     }
@@ -396,9 +396,9 @@ impl Placement {
         match self {
             Self::Life => LIFE_COST,
             Self::Ice => ICE_COST,
-            Self::Mine => MINE_COST,
+            Self::Factory => FACTORY_COST,
             Self::Turret => TURRET_COST,
-            Self::Payload => PAYLOAD_COST,
+            Self::Dynamite => DYNAMITE_COST,
         }
     }
 
@@ -411,20 +411,20 @@ impl Placement {
     pub const fn can_be_taken(self) -> bool {
         match self {
             Self::Life => true,
-            // A mine is a live cell like any other, so taking it back is
+            // A factory is a live cell like any other, so taking it back is
             // taking back the life -- and at the reclaim rate, so a misplaced
-            // one costs what it cost minus one. That is the commitment a mine
+            // one costs what it cost minus one. That is the commitment a factory
             // should carry without being a trap.
-            Self::Mine => true,
-            // As with a mine: it is a live cell, so taking it back is taking
+            Self::Factory => true,
+            // As with a factory: it is a live cell, so taking it back is taking
             // back the life. A misplaced turret is dear, and a turret you
             // cannot pick up would make the fourth click of an emplacement a
             // trap rather than a decision.
             Self::Turret => true,
-            // The same again, and it matters more here: a payload is a fuse
+            // The same again, and it matters more here: a dynamite is a fuse
             // you have already lit, so being unable to put one out would make
             // a misplaced one a countdown you can only watch.
-            Self::Payload => true,
+            Self::Dynamite => true,
             Self::Ice => false,
         }
     }
@@ -437,11 +437,11 @@ impl Placement {
         match self {
             // The kind stays on the corpse, as it does when a cell dies of the
             // rule: what is being taken back is the life.
-            Self::Life | Self::Mine | Self::Turret => existing.with_alive(false),
+            Self::Life | Self::Factory | Self::Turret => existing.with_alive(false),
             // And the fuse goes out with it. A corpse that kept its age would
             // be a bomb somebody could bring back to life at one generation
             // from going off.
-            Self::Payload => existing.with_alive(false).with_age(0),
+            Self::Dynamite => existing.with_alive(false).with_age(0),
             Self::Ice => existing.with_ice(false),
         }
     }
@@ -1093,7 +1093,7 @@ pub enum ServerMessage {
         held: Vec<Holding>,
     },
     /// What this player actually has to spend, in reply to a `Checkpoint`.
-    /// Mining made value depend on births anywhere in the world, and a client
+    /// Manufacture made value depend on births anywhere in the world, and a client
     /// holds a viewport — so its figure drifts down for as long as it plays and
     /// nothing else would correct it.
     Purse {
@@ -1294,8 +1294,8 @@ pub fn spawn_for(player: PlayerId, world: &World) -> (i32, i32) {
             // put it last time -- a granted patch keeps its `HOME` marks, and
             // a spawn that moved would hand a returning player a second patch.
             let seats = || (0..SPAWN_SEARCH).map(|k| patch_at(seat(n - 1 + k)));
-            if let Some(mine) = seats().find(|&at| already_granted(world, at, player)) {
-                return mine;
+            if let Some(factory) = seats().find(|&at| already_granted(world, at, player)) {
+                return factory;
             }
 
             // Otherwise the nearest seat that is nobody's, and failing that
@@ -1509,21 +1509,21 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    BLAST_DRAIN, ICE_COST, LIFE_COST, MINE_COST, MINE_DRAIN, MINE_YIELD, PAYLOAD_COST, RECLAIM,
-    TURRET_COST,
+    BLAST_DRAIN, DYNAMITE_COST, FACTORY_COST, FACTORY_DRAIN, FACTORY_YIELD, ICE_COST, LIFE_COST,
+    RECLAIM, TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
 ///
 /// Here rather than in `sim` because it is a price, and the rule should not
 /// know prices — it counts births and deaths and this says what they are worth.
-pub fn earnings(mined: &crate::sim::Mined, player: PlayerId) -> i32 {
+pub fn earnings(earned: &crate::sim::Takings, player: PlayerId) -> i32 {
     let at = player.0 as usize;
-    mined.born[at] as i32 * MINE_YIELD
-        - mined.upkeep[at] as i32 * MINE_DRAIN
+    earned.born[at] as i32 * FACTORY_YIELD
+        - earned.upkeep[at] as i32 * FACTORY_DRAIN
         // Charged when it goes off and by the ground it turned over, so what
         // is bought is the effect rather than the fuse — see `BLAST_DRAIN`.
-        - mined.blasted[at] as i32 * BLAST_DRAIN
+        - earned.blasted[at] as i32 * BLAST_DRAIN
 }
 
 /// What an action is worth to the player who did it.
@@ -1727,7 +1727,7 @@ mod tests {
     #[test]
     fn pricing_an_action_after_applying_it_is_free() {
         let me = PlayerId(1);
-        for placement in [Placement::Life, Placement::Mine, Placement::Turret, Placement::Ice] {
+        for placement in [Placement::Life, Placement::Factory, Placement::Turret, Placement::Ice] {
             let mut world = World::infinite_empty();
             let cells = vec![(0, 0), (0, 1)];
             hold(&mut world, &cells, me);
@@ -1751,7 +1751,7 @@ mod tests {
         }
     }
 
-    /// Life and a mine are different things to hold, so a click holding one
+    /// Life and a factory are different things to hold, so a click holding one
     /// over the other replaces the kind rather than killing the cell — which
     /// is what `is_on` answers and what `remove_from` could not, since both
     /// are taken away by clearing the same bit.
@@ -1759,33 +1759,33 @@ mod tests {
     fn a_mine_held_over_life_is_not_already_there() {
         let me = PlayerId(1);
         let life = Placement::Life.apply_to(Cell::DEAD, me);
-        let mine = Placement::Mine.apply_to(Cell::DEAD, me);
+        let factory = Placement::Factory.apply_to(Cell::DEAD, me);
 
         assert!(Placement::Life.is_on(life), "life is what is on a living cell");
-        assert!(!Placement::Mine.is_on(life), "so a mine held over it places");
-        assert!(Placement::Mine.is_on(mine));
-        assert!(!Placement::Life.is_on(mine), "and life held over a mine places");
+        assert!(!Placement::Factory.is_on(life), "so a factory held over it places");
+        assert!(Placement::Factory.is_on(factory));
+        assert!(!Placement::Life.is_on(factory), "and life held over a factory places");
 
         // And placing is what converts, at the price of what is being laid.
         let mut world = World::infinite_empty();
         apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
         assert_eq!(
-            value_delta(&world, &paint(vec![(0, 0)], Placement::Mine)),
-            -Placement::Mine.cost(),
-            "converting life to a mine costs what a mine costs"
+            value_delta(&world, &paint(vec![(0, 0)], Placement::Factory)),
+            -Placement::Factory.cost(),
+            "converting life to a factory costs what a factory costs"
         );
-        apply(&mut world, &paint(vec![(0, 0)], Placement::Mine));
-        assert_eq!(world.cell_at(0, 0).unwrap().kind(), Kind::MINE);
+        apply(&mut world, &paint(vec![(0, 0)], Placement::Factory));
+        assert_eq!(world.cell_at(0, 0).unwrap().kind(), Kind::FACTORY);
         assert!(world.cell_at(0, 0).unwrap().is_alive(), "and leaves the cell living");
     }
 
-    /// A turret is bought once per cell forever, where a mine is bought once
-    /// per lineage — so it is dearer than a mine, and the price to read is the
+    /// A turret is bought once per cell forever, where a factory is bought once
+    /// per lineage — so it is dearer than a factory, and the price to read is the
     /// **emplacement**: one turret dies of loneliness, and the smallest one
     /// that works is a block of four.
     #[test]
     fn a_turret_is_priced_per_cell_and_placed_in_fours() {
-        assert!(TURRET_COST > MINE_COST, "a turret does not inherit, so it costs more");
+        assert!(TURRET_COST > FACTORY_COST, "a turret does not inherit, so it costs more");
 
         let mut world = World::infinite_empty();
         let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
@@ -1804,21 +1804,21 @@ mod tests {
         }
 
         // And it is a third thing to hold, so life over a turret replaces it
-        // exactly as life over a mine does.
+        // exactly as life over a factory does.
         let placed = world.cell_at(0, 0).unwrap();
         assert!(Placement::Turret.is_on(placed));
         assert!(!Placement::Life.is_on(placed));
-        assert!(!Placement::Mine.is_on(placed));
+        assert!(!Placement::Factory.is_on(placed));
     }
 
     /// A corpse holds no life for either placement to take, whatever kind it
-    /// kept — which is what stops a click over a dead mine handing out a free
+    /// kept — which is what stops a click over a dead factory handing out a free
     /// one instead of charging for it.
     #[test]
     fn a_dead_mine_holds_neither_life_nor_a_mine() {
-        let corpse = Placement::Mine.apply_to(Cell::DEAD, PlayerId(1)).with_alive(false);
-        assert_eq!(corpse.kind(), Kind::MINE);
-        assert!(!Placement::Mine.is_on(corpse));
+        let corpse = Placement::Factory.apply_to(Cell::DEAD, PlayerId(1)).with_alive(false);
+        assert_eq!(corpse.kind(), Kind::FACTORY);
+        assert!(!Placement::Factory.is_on(corpse));
         assert!(!Placement::Life.is_on(corpse));
     }
 
@@ -1957,13 +1957,13 @@ mod tests {
         };
         apply(&mut world, &theirs);
 
-        let mine = Stamped {
+        let ours = Stamped {
             tick: 0,
             player: PlayerId(1),
             seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Ice },
         };
-        assert_eq!(value_delta(&world, &mine), -1);
+        assert_eq!(value_delta(&world, &ours), -1);
     }
 
     /// Life is drawn by the stroke and ice is placed as a wall, so they are
@@ -1985,7 +1985,7 @@ mod tests {
     /// placement's own price wherever that is. Both halves of the other
     /// arrangement went together: a price that rose as influence thinned, and
     /// permission to place anywhere for a multiple. Ten times a cell was no
-    /// obstacle to anybody with a mine running, and a cost that varied across
+    /// obstacle to anybody with a factory running, and a cost that varied across
     /// ground which all looks the same was one nobody could play around.
     #[test]
     fn placing_is_confined_to_ground_you_reach_and_costs_the_same_throughout() {
@@ -2032,13 +2032,13 @@ mod tests {
                 action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Life },
             },
         );
-        let mine = Stamped {
+        let ours = Stamped {
             tick: 0,
             player: PlayerId(1),
             seat: PlayerId(1),
             action: Action::Erase { cells: vec![(0, 0)], placement: Placement::Life },
         };
-        assert_eq!(value_delta(&world, &mine), -RECLAIM);
+        assert_eq!(value_delta(&world, &ours), -RECLAIM);
     }
 
     /// The grant is still what a player starts from — not because it is the
@@ -2132,11 +2132,11 @@ mod tests {
         grant(&mut world, second);
 
         let (row, col) = spawn_for(second, &world);
-        let mine = (row..row + SPAWN_N)
+        let ours = (row..row + SPAWN_N)
             .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
             .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == second)
             .count();
-        assert_eq!(mine, (SPAWN_N * SPAWN_N) as usize, "the whole patch is theirs");
+        assert_eq!(ours, (SPAWN_N * SPAWN_N) as usize, "the whole patch is theirs");
 
         let alive: Vec<(i32, i32)> = (row..row + SPAWN_N)
             .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
@@ -2217,12 +2217,12 @@ mod tests {
 
         for id in 1..=PlayerId::MAX {
             let (row, col) = spawn_for(PlayerId(id), &world);
-            let mine = (row..row + SPAWN_N)
+            let ours = (row..row + SPAWN_N)
                 .flat_map(|r| (col..col + SPAWN_N).map(move |c| (r, c)))
                 .filter(|&(r, c)| world.cell_at(r, c).unwrap().player() == PlayerId(id))
                 .count();
             assert_eq!(
-                mine,
+                ours,
                 (SPAWN_N * SPAWN_N) as usize,
                 "player {id} did not get a whole square"
             );
@@ -2411,19 +2411,19 @@ mod tests {
         // The converse, so this is a test about the owner field rather than
         // about any ground at all: the player's *own* territory does not
         // crowd them out of their own seat.
-        let mut mine = World::infinite_empty();
-        let seat = spawn_for(me, &mine);
+        let mut factory = World::infinite_empty();
+        let seat = spawn_for(me, &world);
         for r in seat.0..seat.0 + SPAWN_N {
             for c in seat.1..seat.1 + SPAWN_N {
-                mine.set_cell_at(
+                factory.set_cell_at(
                     r,
                     c,
                     Cell::DEAD.with_player(me).with_level(crate::sim::bits::MAX_LEVEL),
                 );
             }
         }
-        assert_eq!(crowding(&mine, seat, me), 0, "your own ground is not a crowd");
-        assert_eq!(spawn_for(me, &mine), seat);
+        assert_eq!(crowding(&world, seat, me), 0, "your own ground is not a crowd");
+        assert_eq!(spawn_for(me, &world), seat);
     }
 
     /// The other half of giving a crowded seat up: the cure must not be worse.

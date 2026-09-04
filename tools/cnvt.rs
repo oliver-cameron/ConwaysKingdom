@@ -455,7 +455,7 @@ fn level_at(level: usize) -> (usize, usize, usize) {
 /// level of a tile would contain a quarter of each of its neighbours.
 ///
 /// Generated because the sheet is still a stand-in. The layout is what matters:
-/// the day somebody draws a mine at four texels it goes in the same slot and
+/// the day somebody draws a factory at four texels it goes in the same slot and
 /// this stops running over it. See `docs/planned.md#texels-nothing-samples`.
 ///
 /// **Coverage stays binary at every level.** `sprites_have_hard_edges` means
