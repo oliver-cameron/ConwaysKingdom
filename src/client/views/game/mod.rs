@@ -101,7 +101,7 @@ const VIEW_MARGIN: i32 = CHUNK_N as i32;
 #[derive(Clone, PartialEq, Eq)]
 enum Whose {
     /// Your own, whether or not a server has ever named you.
-    Factory,
+    Ours,
     Somebody(crate::net::PersonId),
 }
 
@@ -1529,7 +1529,7 @@ impl GameApp {
                 self.session.look_up(who);
             }
             menu::Chose::Profile => {
-                self.ui.showing_profile = Some(Whose::Factory);
+                self.ui.showing_profile = Some(Whose::Ours);
                 if let Some(who) = self.session.profile.as_ref().map(|p| p.who.clone()) {
                     self.session.look_up(who);
                 }
@@ -2016,11 +2016,16 @@ impl App for GameApp {
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
         // slow server and a stranger look like the same thing.
+        // **What the last server called us**, which the store keeps between
+        // launches. Read here rather than off the live session alone: on the
+        // menu there is no session, so your own profile answered "no server
+        // has met you" to somebody a server had met all week.
+        let ours =
+            self.session.profile.as_ref().map(|p| p.who.clone()).or_else(crate::net::keep::person);
         let profile_look = self.ui.showing_profile.as_ref().map(|whose| {
             let who = match whose {
                 Whose::Somebody(who) => Some(who),
-                // Your own is whatever the last server called you, if one has.
-                Whose::Factory => self.session.profile.as_ref().map(|p| &p.who),
+                Whose::Ours => ours.as_ref(),
             };
             // Nobody has named you, so there is nothing to have arrived and
             // nothing missing — only what is yours.
@@ -2070,7 +2075,16 @@ impl App for GameApp {
         // the room list does.
         if let Screen::Menu(m) = &mut self.ui.screen {
             m.people = self.session.people.clone();
-            m.whoami = self.session.profile.as_ref().map(|p| p.who.clone());
+            // **Kept when there is nothing newer**, rather than cleared. This
+            // read the live session's profile and nothing else, so on the menu
+            // — before any join this launch — it was `None`, and the home
+            // screen drew the placeholder face and said no server had met you.
+            // It had: `keep::person` has the id the last one issued, which is
+            // what `Menu::new` opens with. A server that has something to say
+            // says it; silence is not a denial.
+            if let Some(who) = self.session.profile.as_ref().map(|p| p.who.clone()) {
+                m.whoami = Some(who);
+            }
         }
         let ui = &mut self.ui;
         let editing = ui.editing_stamp;

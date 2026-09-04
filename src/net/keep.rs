@@ -215,8 +215,14 @@ pub fn remember_games(lines: &str) {
     set("games", lines);
 }
 
-/// What the server last called this client, so the settings screen can say who
-/// you are without waiting for the next join.
+/// What the server last called this client, so a screen can say who you are
+/// without waiting for the next join.
+///
+/// **Every screen that draws a person reads this**, and for a while only the
+/// settings one did — the home screen and your own profile took the id off the
+/// live session, which on the menu is nothing at all. So a client that had
+/// been playing for a week opened on a placeholder face and "no server has met
+/// you yet", which is the store's answer being ignored rather than absent.
 ///
 /// The **server** issues it — see [`crate::net::auth`] — so a client that has
 /// never reached one has none, and one that has visited two servers is showing

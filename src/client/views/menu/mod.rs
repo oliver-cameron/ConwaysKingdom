@@ -344,7 +344,11 @@ impl Menu {
             draft: None,
             finding: String::new(),
             people: None,
-            whoami: None,
+            // **Who the last server said this client is.** The store has it
+            // between launches — see `keep::person` — and the menu is drawn
+            // long before any join, so reading it only off a live session
+            // meant the home screen forgot you every time it opened.
+            whoami: crate::net::keep::person(),
             hidden: crate::net::Hidden::default(),
             patches: tutorial::lessons(),
         }
@@ -731,6 +735,25 @@ mod tests {
                 "the home screen does not reach one of its three"
             );
         }
+    }
+
+    /// **The menu opens knowing who this client is.**
+    ///
+    /// It read the id off the *live session* and nothing else, so before any
+    /// join this launch it was `None` — and the home screen drew the
+    /// placeholder face and told somebody who had been playing for a week that
+    /// no server had met them. The id has been in the store the whole time;
+    /// `keep::person` is where the last server's answer is kept, and the
+    /// settings screen was already reading it, which is how one screen knew
+    /// and the other did not.
+    #[test]
+    fn the_menu_opens_knowing_who_the_last_server_said_this_is() {
+        let _lock = crate::net::keep::lock_store();
+        let me = crate::net::PersonId("3f2a91c4".into());
+        crate::net::keep::remember_person(&me);
+
+        let menu = Menu::new("ws://host:8080/ws".into(), false);
+        assert_eq!(menu.whoami, Some(me), "the menu opened as nobody");
     }
 
     /// **Playing alone is an answer, not a page.** It had a page of its own
