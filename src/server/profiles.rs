@@ -160,7 +160,9 @@ impl Profiles {
                 history.drain(..history.len() - rating::HISTORY);
             }
             let now = Record {
-                name: finisher.name.clone(),
+                // The other door a name comes in by, and clamped for the
+                // reason [`Self::met`] gives: a row is one line.
+                name: crate::net::player_name(&finisher.name),
                 games: was.games + 1,
                 best: was.best.max(finisher.score),
                 rating,
@@ -174,12 +176,6 @@ impl Profiles {
         moved
     }
 
-    /// Take a name from somebody who has joined, so a profile can be looked at
-    /// before they have finished anything.
-    ///
-    /// A name and nothing else: everything else on a [`Record`] is counted
-    /// from results, and taking any of it from a client would be taking a
-    /// player's word for what a server is supposed to vouch for.
     /// **Who else plays here**: the people whose name matches, or the best
     /// rated when nothing is asked.
     ///
@@ -223,10 +219,24 @@ impl Profiles {
         found.into_iter().take(most).map(|(who, _)| who.clone()).collect()
     }
 
+    /// Take a name from somebody who has joined, so a profile can be looked at
+    /// before they have finished anything.
+    ///
+    /// A name and nothing else: everything else on a [`Record`] is counted
+    /// from results, and taking any of it from a client would be taking a
+    /// player's word for what a server is supposed to vouch for.
+    ///
+    /// **Clamped here rather than by the caller**, because a line of this file
+    /// is tab separated and the name is the last field on it. A name with a
+    /// newline in it wrote a *second* line, and a second line naming somebody
+    /// else's id came back on the next start as that person with whatever
+    /// rating it claimed. The store is what the format belongs to, so the
+    /// store is what defends it -- see [`crate::net::player_name`].
     pub fn met(&mut self, who: &PersonId, name: &str) {
+        let name = crate::net::player_name(name);
         let row = self.known.entry(who.clone()).or_default();
         if row.name != name {
-            row.name = name.to_string();
+            row.name = name;
         }
     }
 
@@ -599,6 +609,35 @@ mod tests {
             table.settle(&[solo("a", 1, 40), solo("b", 2, 10)]);
         }
         assert_eq!(table.of(&who("a")).history.len(), rating::HISTORY);
+    }
+
+    /// **A name cannot write a second line.**
+    ///
+    /// A row is tab separated and the name is the last field on it, so a name
+    /// carrying a newline wrote two rows and the second one said whatever it
+    /// liked -- including somebody else's id, which came back on the next
+    /// start as that person with a rating they had not earned. The name a
+    /// client joins under is the only field here it chooses.
+    #[test]
+    fn a_name_cannot_forge_somebody_elses_row() {
+        let (victim, attacker) = (who("victim"), who("zattacker"));
+        let mut table = Profiles::new();
+        table.met(&victim, "victim");
+        table.met(&attacker, "x\n3\tvictim\t9999\t50\t500\t\towned");
+        // And the other door a name comes in by.
+        table.settle(&[Finisher {
+            who: attacker.clone(),
+            name: "y\n3\tvictim\t9999\t50\t500\t\towned".into(),
+            team: 1,
+            score: 1,
+        }]);
+
+        let lines = table.to_lines();
+        assert_eq!(lines.lines().count(), 2, "a name wrote its own row:\n{lines}");
+
+        let back = Profiles::from_lines(&lines);
+        assert_eq!(back.rating_of(&victim), rating::START, "a name handed out a rating");
+        assert_eq!(back.of(&victim).name, "victim", "and took a name with it");
     }
 
     /// A line this build cannot read is skipped rather than fatal. Losing one

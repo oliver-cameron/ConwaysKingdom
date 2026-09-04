@@ -180,6 +180,29 @@ pub fn team_name(raw: &str) -> Result<String, String> {
     Ok(name)
 }
 
+/// The longest a player may call themselves, for the same reason a side's name
+/// is bounded: it has to fit a lobby row, a standings row and a log line.
+pub const PLAYER_NAME_MAX: usize = 24;
+
+/// Clamp a name somebody joined under to something a server can hold.
+///
+/// **Clamped rather than refused**, which is where this differs from
+/// [`room_name`] and [`team_name`]. Those two name a thing that has to be
+/// found again, so a client that gets one wrong is told and asks differently.
+/// A player's name is a label on a row: there is nothing to look it up by,
+/// nobody is helped by being kept out of a game over it, and a `Join` is not a
+/// message anybody retries.
+///
+/// What it must not carry is a **tab or a newline**. `server::people` and
+/// `server::profiles` are one line per person and tab separated, and a name is
+/// the last field of a profile row — so a name of `"x\n3\t<somebody else's
+/// id>\t9999\t50\t500\t\tmine"` wrote a second line that read back as that
+/// person with a rating of 9999. Control characters go for the same reason
+/// they go from a side's name, and this is the one that is not cosmetic.
+pub fn player_name(raw: &str) -> String {
+    raw.trim().chars().filter(|c| !c.is_control()).take(PLAYER_NAME_MAX).collect()
+}
+
 /// A side, as a lobby needs to show it.
 ///
 /// **The id is a [`PlayerId`] because a side is one.** Everybody on it
@@ -1613,6 +1636,19 @@ pub fn apply(world: &mut World, stamped: &Stamped) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A name is a label, so it is clamped rather than refused** — and the
+    /// clamp is not cosmetic: it is what stops a tab or a newline reaching the
+    /// one-line-per-person files under `server::`.
+    #[test]
+    fn a_name_is_clamped_to_something_a_line_can_hold() {
+        assert_eq!(player_name("  alice  "), "alice");
+        assert_eq!(player_name("a\tb\nc"), "abc", "a name wrote its own field");
+        assert_eq!(player_name(&"x".repeat(200)).chars().count(), PLAYER_NAME_MAX);
+        // And nobody is kept out of a game over it, which is the difference
+        // from `room_name` and `team_name`.
+        assert_eq!(player_name(""), "");
+    }
 
     fn paint(cells: Vec<(i32, i32)>, placement: Placement) -> Stamped {
         Stamped {

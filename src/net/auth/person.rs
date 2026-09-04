@@ -76,8 +76,25 @@ impl std::fmt::Display for PersonId {
 /// Sent to the server on a join and nowhere else. It is not in a world, not in
 /// a lobby, and not in a log — see the `Debug` below, which prints the fact of
 /// it and not the thing.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Secret(String);
+
+/// **Everything that arrives goes through [`Secret::read`].**
+///
+/// A derived one accepts any string, and this is the one type on the wire that
+/// a client makes rather than receives: a `Join` carrying `"aa\n3\t<somebody
+/// else's id>\t<a key of my own>"` was a well-formed `Secret` all the way into
+/// `server::people`, whose store is one line per person and tab separated. The
+/// forged line came back on the next start and the second key was that person.
+///
+/// So the hex check is not a nicety about spelling. It is the only thing
+/// between the socket and a file format, and a constructor nothing is obliged
+/// to call is not one.
+impl<'de> Deserialize<'de> for Secret {
+    fn deserialize<D: serde::Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+        Self::read(&String::deserialize(from)?).map_err(serde::de::Error::custom)
+    }
+}
 
 impl Secret {
     /// A new person, from bytes nobody else can guess.
@@ -169,6 +186,25 @@ mod tests {
     fn what_is_not_a_secret_is_refused() {
         for bad in ["", "hello", "zz", &"a".repeat(31), &"a".repeat(33), "not hex here!!!!"] {
             assert!(Secret::read(bad).is_err(), "{bad:?} was accepted");
+        }
+    }
+
+    /// **What arrives over the wire is checked the same as what is pasted.**
+    ///
+    /// This is the one type a client makes rather than receives, and a derived
+    /// `Deserialize` took any string at all — including one with a newline in
+    /// it, which `server::people` then wrote into a tab-separated file as two
+    /// lines. The second said somebody else's id, and on the next start it was
+    /// a second key for that person.
+    #[test]
+    fn a_secret_off_the_wire_is_checked_like_any_other() {
+        let ours = Secret::new().expect("no entropy");
+        let wire = |s: &str| {
+            postcard::from_bytes::<Secret>(&postcard::to_allocvec(&s.to_string()).unwrap())
+        };
+        assert_eq!(wire(&ours.written()).expect("a real secret was refused"), ours);
+        for bad in ["", "hello", &format!("aa\n3\tsomebody\t{}", ours.written())] {
+            assert!(wire(bad).is_err(), "{bad:?} arrived as a secret");
         }
     }
 

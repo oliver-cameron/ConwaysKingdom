@@ -753,7 +753,11 @@ impl Server {
         name: impl Into<String>,
         person: Option<&crate::net::PersonId>,
     ) -> Result<PlayerId, String> {
-        let name = name.into();
+        // **Every seat's name goes through here**, from a room, from the
+        // console and from a test alike, so this is the one place it has to be
+        // clamped -- see `net::player_name`, which says what a tab in a name
+        // did to the profiles file.
+        let name = crate::net::player_name(&name.into());
         if let Some(who) = person {
             match self.players.values_mut().find(|p| p.person.as_deref() == Some(who.as_str())) {
                 // Their seat, and nobody is in it: this is them coming back.
