@@ -210,7 +210,7 @@ A reading of the rest of this file, in the order the things depend on each other
 
 **2. [A level of detail](#zooming-out-without-lying).** Low zoom does not work and it is not the sampling: one chunk is one texture array layer against a guaranteed floor of 256, so a 1080p screen is mostly backdrop below about zoom five and an island in a sea of nothing at the floor. The answer is the cell without its art — one texel a cell, one quad, no sheet lookup — and it is **one piece of work with four uses**: zooming out, a minimap, a world overview, and a spectator following a player. Three of those are separate entries in this file.
 
-**3. `World: Clone`.** One derive, and it is what [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), a bot that chooses rather than follows a book, and an [experiment's](#experiments) pause-step-reset are all waiting on. The step is already a pure function of state and tick, so a copy diverges cleanly; there is simply no way to step a world that is not the world. Nothing else on this list has a ratio like it.
+**3. ~~`World: Clone`.~~** Done — `World` and its `Storage` derive `Clone`, and `a_clone_steps_without_moving_the_original` in `sim::world` pins the two things that has to mean: a copy steps without moving the original, and it is the original's own future. What the derive was for is still to build: [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), a bot that chooses rather than follows a book, and an [experiment's](#experiments) pause-step-reset.
 
 **4. ~~The session comes out of the game view.~~** Done — `client::session` holds the link, the seat and the purse, and nothing in it needs a GPU. What is left of that entry is `lay`, `click` and `stamp_at`, which is smaller and is about wording rather than structure.
 
@@ -1380,11 +1380,9 @@ So there are two versions and they differ by one thing.
 
 ### The missing object all three want
 
-Every one of these needs to step a world without stepping *the* world, and nothing can today.
+Every one of these needs to step a world without stepping *the* world, and now they can: **`World` is `Clone`**. `Storage` is a `HashMap<Coord, Chunk>` or a `Box<[Chunk]>`, `scratch` and `active` are working space, and the step is already pure in state and tick, so a copy diverges cleanly and cannot reach back — `a_clone_steps_without_moving_the_original` in `sim::world` pins it. `Server::step` owns the only world there is, and a rollout must touch neither the pending actions, nor the purses, nor the tick.
 
-`World` is not `Clone`. That is one derive — `Storage` is a `HashMap<Coord, Chunk>` or a `Box<[Chunk]>`, and `scratch` and `active` are working space — and the step is already pure in state and tick, so a copy diverges cleanly and cannot reach back. `Server::step` owns the only world there is, and a rollout must touch neither the pending actions, nor the purses, nor the tick.
-
-So the whole of the machinery is: derive `Clone`, and a rollout is a clone stepped *n* times with `net::standings` read off the end. What that one derive buys:
+So the whole of the machinery is a clone stepped *n* times with `net::standings` read off the end. What that one derive buys:
 
 | | |
 |---|---|

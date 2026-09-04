@@ -25,6 +25,7 @@ fn offset((row, col): Coord, dir: Dir) -> Coord {
 /// Neither variant stores neighbour links: a chunk's neighbours are *computed*
 /// from its coordinate. That is what lets a chunk be its own neighbour on a
 /// small torus, and what makes an unloaded chunk simply an absent key.
+#[derive(Clone)]
 enum Storage {
     /// Unbounded plane. Only non-empty chunks are stored; an absent key is an
     /// empty chunk, which reads as dead and is recreated on demand.
@@ -135,6 +136,7 @@ pub struct Blast {
     pub by: PlayerId,
 }
 
+#[derive(Clone)]
 pub struct World {
     storage: Storage,
     /// **This game's own number**, mixed into every roll — see
@@ -2792,5 +2794,31 @@ mod tests {
         assert!(parse_torus("0x4").is_err());
         assert!(parse_torus("100000x100000").is_err());
         assert_eq!(parse_torus("18x18"), Ok(WorldKind::Toroidal { rows: 18, cols: 18 }));
+    }
+
+    /// **A copy steps on its own.** One derive is what a prediction, a bot
+    /// that searches and an experiment's reset were all waiting on — see
+    /// planned.md — so this pins the two things it has to mean: stepping the
+    /// copy leaves the original where it was, and the copy is the original's
+    /// own future rather than a world that merely started the same.
+    #[test]
+    fn a_clone_steps_without_moving_the_original() {
+        let me = PlayerId(1);
+        let mut world = World::infinite_empty();
+        for &(r, c) in &[(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
+            world.set_cell_at(r, c, Cell::alive(me));
+        }
+        let before = world.digest();
+        let mut copy = world.clone();
+        for _ in 0..8 {
+            copy.step();
+        }
+        assert_eq!(world.digest(), before, "stepping a copy moved the original");
+        assert_eq!(world.generation, 0);
+        for _ in 0..8 {
+            world.step();
+        }
+        assert_eq!(world.digest(), copy.digest(), "the copy is not the original's future");
+        assert_eq!(copy.generation, 8);
     }
 }
