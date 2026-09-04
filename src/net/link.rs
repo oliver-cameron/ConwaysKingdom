@@ -116,7 +116,20 @@ async fn pump(url: String, outbound: Receiver<ClientMessage>, inbound: Sender<Se
                     Ok(msg) => {
                         if inbound.send(msg).is_err() { return; }
                     }
-                    Err(e) => log::warn!("undecodable frame: {e}"),
+                    // **A stale build is told, not dropped.** Both ends logged
+                    // a warning and threw the frame away, so a client speaking
+                    // last week's vocabulary showed a game that half worked
+                    // and said nothing — see `codec::PROTOCOL`. A refusal is
+                    // the one thing here that already reaches the screen.
+                    Err(e) => match e.stale() {
+                        Some(why) => {
+                            log::error!("{why}");
+                            if inbound.send(ServerMessage::Rejected { reason: why }).is_err() {
+                                return;
+                            }
+                        }
+                        None => log::warn!("undecodable frame: {e}"),
+                    },
                 },
                 Some(Ok(Message::Close(_))) | None => {
                     log::info!("server closed the connection");

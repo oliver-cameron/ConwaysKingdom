@@ -966,17 +966,6 @@ pub enum ClientMessage {
     /// It must not become a way to enumerate everybody a server has met, so
     /// the answer is capped at [`PEOPLE_MOST`] either way.
     People { like: String },
-    /// **Here is my locker; keep it.** The patterns and the diary this client
-    /// now holds, replacing whatever the server had — see [`kept`].
-    ///
-    /// Whole rather than a change, because both are small and replacing is one
-    /// meaning with no merge behind it. Clamped by the server before it is
-    /// stored: this is the one message a client uses to write its own words to
-    /// somebody else's disk.
-    ///
-    /// Answerable **without a seat**. A library is edited between games and the
-    /// screen that edits it is not inside a room.
-    Keep(kept::Kept),
     /// Watch a room without taking a seat in it.
     ///
     /// A spectator is a connection with a room and no `PlayerId`, not a player
@@ -1072,6 +1061,21 @@ pub enum ClientMessage {
     /// still at tick nine hundred in — the ground is what is being cleared,
     /// not the clock.
     Wipe,
+    /// **Here is my locker; keep it.**
+    ///
+    /// Last in the list on purpose. Postcard writes a variant as its index, so
+    /// appending is the one change that leaves every other message where it
+    /// was — see [`codec::PROTOCOL`], which is what says so when it does not. The patterns and the diary this client
+    /// now holds, replacing whatever the server had — see [`kept`].
+    ///
+    /// Whole rather than a change, because both are small and replacing is one
+    /// meaning with no merge behind it. Clamped by the server before it is
+    /// stored: this is the one message a client uses to write its own words to
+    /// somebody else's disk.
+    ///
+    /// Answerable **without a seat**. A library is edited between games and the
+    /// screen that edits it is not inside a room.
+    Keep(kept::Kept),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

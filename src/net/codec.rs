@@ -9,10 +9,48 @@
 
 use super::{ClientMessage, ServerMessage};
 
+/// **What vocabulary these bytes are in.** One byte on the front of every
+/// frame, and the whole reason it is there is that nothing detected a
+/// mismatch.
+///
+/// Postcard writes an enum variant as its *index*, so inserting a message in
+/// the middle of [`ClientMessage`] renumbers every one after it, and adding a
+/// field to a struct that rides on one changes that message's shape. Both are
+/// ordinary changes to make. What made them dangerous is that the browser
+/// client is a **generated `pkg/` that a pull does not update** — see
+/// [gotchas.md] — so a page four days old talks to a new server and neither
+/// says anything: the frames decode to *something*, a join half-works, and
+/// what the player sees is a profile that has forgotten them.
+///
+/// So: bump this whenever the vocabulary moves, and a stale client is told it
+/// is stale instead of being quietly wrong.
+///
+/// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
+pub const PROTOCOL: u8 = 1;
+
 #[derive(Debug)]
 pub enum CodecError {
     Encode(postcard::Error),
     Decode(postcard::Error),
+    /// The other end is speaking a different version of the vocabulary.
+    Protocol {
+        theirs: Option<u8>,
+    },
+}
+
+impl CodecError {
+    /// What to put in front of somebody, which for this one is an instruction
+    /// rather than a diagnosis: there is exactly one thing to do about it.
+    pub fn stale(&self) -> Option<String> {
+        match self {
+            CodecError::Protocol { theirs } => Some(format!(
+                "this page speaks version {} and the server speaks {}.                  Reload; if that does not do it, the module needs rebuilding.",
+                theirs.map(|v| v.to_string()).unwrap_or_else(|| "nothing".into()),
+                PROTOCOL,
+            )),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for CodecError {
@@ -20,31 +58,85 @@ impl std::fmt::Display for CodecError {
         match self {
             CodecError::Encode(e) => write!(f, "encoding message: {e}"),
             CodecError::Decode(e) => write!(f, "decoding message: {e}"),
+            CodecError::Protocol { theirs } => {
+                write!(f, "protocol {theirs:?}, and this build speaks {PROTOCOL}")
+            }
         }
     }
 }
 
 impl std::error::Error for CodecError {}
 
+/// Put the version on the front. One byte, on every frame rather than once at
+/// the start, because a socket is not the only way a frame arrives and a
+/// handshake is state both ends have to keep.
+fn framed(mut bytes: Vec<u8>) -> Vec<u8> {
+    bytes.insert(0, PROTOCOL);
+    bytes
+}
+
+/// Take it off, or say the other end is speaking something else.
+fn unframed(bytes: &[u8]) -> Result<&[u8], CodecError> {
+    match bytes.split_first() {
+        Some((&PROTOCOL, rest)) => Ok(rest),
+        Some((&theirs, _)) => Err(CodecError::Protocol { theirs: Some(theirs) }),
+        None => Err(CodecError::Protocol { theirs: None }),
+    }
+}
+
 pub fn encode_client(msg: &ClientMessage) -> Result<Vec<u8>, CodecError> {
-    postcard::to_allocvec(msg).map_err(CodecError::Encode)
+    postcard::to_allocvec(msg).map(framed).map_err(CodecError::Encode)
 }
 
 pub fn decode_client(bytes: &[u8]) -> Result<ClientMessage, CodecError> {
-    postcard::from_bytes(bytes).map_err(CodecError::Decode)
+    postcard::from_bytes(unframed(bytes)?).map_err(CodecError::Decode)
 }
 
 pub fn encode_server(msg: &ServerMessage) -> Result<Vec<u8>, CodecError> {
-    postcard::to_allocvec(msg).map_err(CodecError::Encode)
+    postcard::to_allocvec(msg).map(framed).map_err(CodecError::Encode)
 }
 
 pub fn decode_server(bytes: &[u8]) -> Result<ServerMessage, CodecError> {
-    postcard::from_bytes(bytes).map_err(CodecError::Decode)
+    postcard::from_bytes(unframed(bytes)?).map_err(CodecError::Decode)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A frame from another vocabulary is refused, not misread.**
+    ///
+    /// This is the whole reason the byte is there. Postcard writes a variant
+    /// as its index, so a message inserted in the middle renumbers every one
+    /// after it — and the frames still decode, to the wrong thing. What that
+    /// looked like was a join that half worked and a profile that had
+    /// forgotten somebody, with a warning in a log nobody was reading.
+    #[test]
+    fn a_frame_from_another_version_says_so() {
+        let mut bytes = encode_client(&ClientMessage::Rooms).expect("encode");
+        assert_eq!(bytes[0], PROTOCOL, "the version is not on the front");
+
+        bytes[0] = PROTOCOL.wrapping_add(1);
+        let why = decode_client(&bytes).expect_err("a frame from the future was read");
+        assert!(matches!(why, CodecError::Protocol { theirs: Some(_) }));
+
+        // And it says what to do about it, because there is one thing.
+        let told = why.stale().expect("a mismatch with nothing to tell anybody");
+        assert!(told.contains("Reload"), "{told}");
+
+        // An empty frame is the same answer rather than a panic.
+        assert!(decode_client(&[]).is_err());
+    }
+
+    /// An ordinary frame is unaffected: the byte comes off and what is left is
+    /// what was written.
+    #[test]
+    fn a_frame_of_this_version_round_trips() {
+        let sent = ClientMessage::Leave;
+        let bytes = encode_client(&sent).expect("encode");
+        assert_eq!(decode_client(&bytes).expect("decode"), sent);
+        assert!(decode_client(&bytes).unwrap().eq(&sent));
+    }
     use crate::net::{Action, Placement, Stamped};
     use crate::sim::PlayerId;
 

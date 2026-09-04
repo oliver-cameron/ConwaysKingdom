@@ -134,6 +134,14 @@ It decays every frame rather than only when something arrives, or it would sit a
 
 What reaches the screen is one word beside "connected", which is the claim it qualifies: a link that is open and a link that is keeping up are two facts, and only the first was ever on screen. Silence until there has been something to be silent about — a link that has never slipped says nothing at all, and one that has slipped and settled says so, because a rate back at nought and a link that was never in trouble look identical and are not the same thing.
 
+## Which vocabulary these bytes are in
+
+One byte on the front of every frame — `codec::PROTOCOL` — and it is there because nothing detected a mismatch.
+
+Postcard writes an enum variant as its **index**, so a message inserted in the middle of `ClientMessage` renumbers every one after it, and a field added to a struct that rides on one changes that message's shape. Both are ordinary changes. What made them dangerous is that the browser client is a generated `pkg/` that **a pull does not update** — see [gotchas.md](gotchas.md) — so a page from last week talks to a new server and the frames decode to *something*. A join half works, a profile comes back empty, and the only sign is a warning in a log nobody is reading.
+
+Now a mismatch is a `Rejected` with the reason on it, which is the one thing here that already reaches the screen. Bump `PROTOCOL` whenever the vocabulary moves. Appending a variant is still the safe change and is why `Keep` is last in `ClientMessage`.
+
 ## Coming back
 
 `Welcome` carries the player's **value** as well as their number and ground. A returning player has a value already and the client cannot know it; assuming the starting figure left the two disagreeing from the first frame, with the client offering to spend money the server knew was gone and the server refusing the difference silently.

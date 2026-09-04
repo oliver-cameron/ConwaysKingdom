@@ -369,4 +369,43 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// **A key kept under the old name is moved, not lost.**
+    ///
+    /// It was filed as `id_ed25519`, on the argument that an OpenSSH name is
+    /// one somebody recognises — which stopped being true when the keypair
+    /// went. Losing a key is losing the person and there is no account behind
+    /// it to ask, so the old name is read once and written back under the new
+    /// one.
+    #[test]
+    fn a_key_under_the_old_name_is_moved_rather_than_lost() {
+        let _lock = super::lock_store();
+        let mine = "0123456789abcdef0123456789abcdef";
+        super::set(super::KEY_FIELD, "");
+        super::set(super::KEY_FIELD_WAS, mine);
+
+        let found = super::secret().expect("a key under the old name was not found");
+        assert_eq!(found.written(), mine);
+        assert_eq!(super::get(super::KEY_FIELD).as_deref(), Some(mine), "it was not moved");
+        assert!(super::get(super::KEY_FIELD_WAS).is_none(), "the old name was left behind");
+
+        // And asking again is the same person, off the new name alone.
+        assert_eq!(super::secret().map(|k| k.written()).as_deref(), Some(mine));
+    }
+
+    /// **A key this build cannot read is not a key**, so the client is
+    /// somebody new — once. An OpenSSH key left over from the scheme that was
+    /// removed is exactly this: it is read, refused, and replaced with one
+    /// that will keep working.
+    #[test]
+    fn a_key_that_is_not_one_is_replaced_once() {
+        let _lock = super::lock_store();
+        super::set(super::KEY_FIELD, "-----BEGIN OPENSSH PRIVATE KEY-----");
+        super::set(super::KEY_FIELD_WAS, "");
+        assert!(super::secret().is_none(), "nonsense read as a key");
+
+        let made = super::secret_or_new().expect("no entropy");
+        assert_eq!(super::secret(), Some(made.clone()), "the new key was not kept");
+        assert_eq!(super::secret_or_new(), Some(made), "and it is somebody new every launch");
+    }
 }

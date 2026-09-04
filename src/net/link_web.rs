@@ -78,7 +78,18 @@ impl Link {
                 let bytes = js_sys::Uint8Array::new(&buf).to_vec();
                 match decode_server(&bytes) {
                     Ok(msg) => shared.borrow_mut().inbox.push(msg),
-                    Err(e) => log::warn!("undecodable frame: {e}"),
+                    // **A stale page is told, not dropped.** This is where it
+                    // matters most: `pkg/` is generated and a pull does not
+                    // update it, so the browser is the client most likely to
+                    // be speaking last week's vocabulary — see
+                    // `codec::PROTOCOL`.
+                    Err(e) => match e.stale() {
+                        Some(why) => {
+                            log::error!("{why}");
+                            shared.borrow_mut().inbox.push(ServerMessage::Rejected { reason: why });
+                        }
+                        None => log::warn!("undecodable frame: {e}"),
+                    },
                 }
             })
         };
