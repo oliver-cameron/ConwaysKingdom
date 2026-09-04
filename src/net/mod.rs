@@ -20,6 +20,7 @@ pub mod auth;
 pub mod codec;
 pub mod jsonl;
 pub mod keep;
+pub mod kept;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod link;
 #[cfg(target_arch = "wasm32")]

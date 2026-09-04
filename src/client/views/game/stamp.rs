@@ -17,6 +17,19 @@
 use crate::client::views::icons::Icons;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::w;
+pub use crate::net::kept::Stamp;
+/// How wide the pad you draw a stamp on is, in cells.
+///
+/// Sixteen because that is a chunk, and because a pattern worth drawing by
+/// hand is a small one — anything larger is a thing you build on the board and
+/// capture with Grab. What is kept is trimmed to what was drawn, so using a
+/// corner of the pad costs nothing.
+///
+/// The same number the server refuses a larger pattern by, and it is one
+/// number for that reason: two limits that disagree are one limit and a silent
+/// loss.
+pub use crate::net::kept::STAMP_N as SKETCH_N;
+
 use crate::net::Placement;
 use crate::sim::{Cell, PlayerId, World};
 
@@ -65,30 +78,6 @@ impl Turn {
     pub fn is_default(self) -> bool {
         self == Self::default()
     }
-}
-
-/// One captured pattern.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stamp {
-    pub name: String,
-    /// `(row, col)` from the pattern's top-left. **A shape and not a
-    /// material**: what a stamp is made of is chosen when it is laid, on the
-    /// hotbar's second axis, so one captured glider can go down as life, as
-    /// factories or as ice. A stamp that carried its own kinds made that choice
-    /// twice and let the two disagree.
-    pub cells: Vec<(i32, i32)>,
-    /// Rows and columns the pattern spans, for the preview and the label.
-    pub size: (i32, i32),
-    /// Whether this one is on the hotbar.
-    ///
-    /// **Nothing pinned means the newest ten**, which is what the bar always
-    /// showed and is the right default: somebody who has never thought about
-    /// it gets the stamp they just took, on the key beside their hand. Pin one
-    /// and the bar becomes exactly what is pinned, because half a rule is
-    /// worse than either — a bar that was "your pins, then the newest of the
-    /// rest" would reshuffle itself under your fingers every time you captured
-    /// something.
-    pub on_bar: bool,
 }
 
 /// Whether a swept rectangle is small enough to be a stamp.
@@ -147,23 +136,6 @@ impl Stamp {
         // Trimmed to what was actually caught rather than to what was swept, so
         // a sloppy rectangle round a glider still gives you a glider.
         Some(Self::trimmed(found))
-    }
-
-    /// A pattern out of the cells it is drawn on, moved to its own corner.
-    ///
-    /// Trimmed for the reason a capture is: where on the board, or on the pad,
-    /// somebody happened to draw is not part of the pattern.
-    pub(super) fn trimmed(found: Vec<(i32, i32)>) -> Self {
-        let top = found.iter().map(|&(r, _)| r).min().unwrap_or(0);
-        let left = found.iter().map(|&(_, c)| c).min().unwrap_or(0);
-        let bottom = found.iter().map(|&(r, _)| r).max().unwrap_or(0);
-        let right = found.iter().map(|&(_, c)| c).max().unwrap_or(0);
-        Self {
-            name: format!("{}x{}", bottom - top + 1, right - left + 1),
-            cells: found.into_iter().map(|(r, c)| (r - top, c - left)).collect(),
-            size: (bottom - top + 1, right - left + 1),
-            on_bar: false,
-        }
     }
 
     /// The same pattern, turned.
@@ -410,14 +382,6 @@ fn cell(
     }
 }
 
-/// How wide the pad you draw a stamp on is, in cells.
-///
-/// Sixteen because that is a chunk, and because a pattern worth drawing by
-/// hand is a small one — anything larger is a thing you build on the board and
-/// capture with Grab. What is kept is trimmed to what was drawn, so using a
-/// corner of the pad costs nothing.
-pub const SKETCH_N: i32 = 16;
-
 /// A stamp being drawn by hand rather than taken off the board.
 ///
 /// Capturing needs something already alive and standing where you can reach
@@ -519,10 +483,6 @@ pub struct Library {
     stamps: Vec<Stamp>,
 }
 
-/// The version on a saved library, so a format that changes can say so rather
-/// than being misread. Same shape as `client::record`, and for the same reason.
-const SAVED: &str = "ck-stamps-1";
-
 impl Library {
     /// What was kept last time, or an empty library.
     pub fn remembered() -> Self {
@@ -554,7 +514,12 @@ impl Library {
 
     pub fn rename(&mut self, index: usize, name: &str) {
         if let Some(slot) = self.stamps.get_mut(index) {
-            slot.name = tidy(name);
+            // Clamped by the same function the server clamps by, so a name is
+            // not shortened on arrival somewhere else after being accepted
+            // here -- see `net::kept::Stamp::clamped`.
+            slot.name = name.to_string();
+            let clamped = std::mem::take(slot).clamped();
+            *slot = clamped;
         }
     }
 
@@ -590,59 +555,41 @@ impl Library {
 
     /// Everything kept, as text, for [`crate::net::keep`].
     ///
-    /// One stamp a line, tab separated, with a version on the front: the same
-    /// hand-rolled shape `client::record` uses, and for the same reasons —
-    /// it is a handful of lines, it is readable in a file somebody may want to
-    /// look at, and it costs no dependency.
+    /// One pattern a line — see [`crate::net::jsonl`], which is what the
+    /// server's own store is written in too, so the cache and the store are one
+    /// format and one parser.
     pub fn written(&self) -> String {
-        let mut out = String::from(SAVED);
-        for stamp in &self.stamps {
-            let cells: Vec<String> = stamp.cells.iter().map(|(r, c)| format!("{r},{c}")).collect();
-            out.push('\n');
-            out.push_str(&format!(
-                "{}\t{}\t{}",
-                tidy(&stamp.name),
-                if stamp.on_bar { "bar" } else { "-" },
-                cells.join(" ")
-            ));
-        }
-        out
+        crate::net::jsonl::write(&self.stamps)
     }
 
     /// Read one back. Anything unreadable is skipped rather than fatal: a
     /// library is a convenience, and losing all of it because one line is
     /// malformed is the wrong trade.
+    ///
+    /// Clamped on the way in, which is what stops a hand-edited store
+    /// producing a pattern the pad cannot draw — the same check the server
+    /// makes of the same bytes, because it is the same function.
     pub fn read(text: &str) -> Self {
-        let mut lines = text.lines();
-        if lines.next().map(str::trim) != Some(SAVED) {
-            return Self::default();
+        let stamps = crate::net::kept::Kept {
+            stamps: crate::net::jsonl::read(text, "the stamps this client kept"),
+            games: Vec::new(),
         }
-        let stamps = lines
-            .filter_map(|line| {
-                let mut parts = line.split('\t');
-                let name = parts.next()?.to_string();
-                let pinned = parts.next()? == "bar";
-                let cells: Vec<(i32, i32)> = parts
-                    .next()?
-                    .split_whitespace()
-                    .filter_map(|pair| {
-                        let (r, c) = pair.split_once(',')?;
-                        Some((r.parse().ok()?, c.parse().ok()?))
-                    })
-                    .collect();
-                if cells.is_empty() {
-                    return None;
-                }
-                // Re-trimmed rather than trusted, so a hand-edited file cannot
-                // produce a stamp whose `size` disagrees with its cells and
-                // draws a preview that is the wrong shape.
-                let mut stamp = Stamp::trimmed(cells);
-                stamp.name = name;
-                stamp.on_bar = pinned;
-                Some(stamp)
-            })
-            .collect();
+        .clamped()
+        .stamps;
         Self { stamps }
+    }
+
+    /// What a server holds for this person, as the library.
+    ///
+    /// The server is the authority and this is the cache — see
+    /// [`crate::net::kept`] — so arriving replaces rather than merges.
+    pub fn replace_with(stamps: Vec<Stamp>) -> Self {
+        Self { stamps }
+    }
+
+    /// The patterns themselves, to send up.
+    pub fn stamps(&self) -> &[Stamp] {
+        &self.stamps
     }
 
     pub fn get(&self, index: usize) -> Option<&Stamp> {
@@ -670,18 +617,6 @@ impl Library {
         if index < self.stamps.len() {
             self.stamps.remove(index);
         }
-    }
-}
-
-/// A name with nothing in it that would break the file it is written to, or
-/// the row it is drawn in.
-fn tidy(raw: &str) -> String {
-    let name: String =
-        raw.trim().chars().filter(|c| !c.is_control() && *c != '\t').take(24).collect();
-    if name.is_empty() {
-        "unnamed".into()
-    } else {
-        name
     }
 }
 
@@ -893,15 +828,22 @@ mod tests {
     /// one somebody edited.
     #[test]
     fn an_unreadable_library_is_an_empty_one() {
-        for text in ["", "ck-stamps-99\nglider\t-\t0,0", "nonsense", "ck-stamps-1"] {
+        for text in ["", "nonsense", "{}", r#"{"name":"no cells","cells":[]}"#] {
             assert!(Library::read(text).is_empty(), "{text:?}");
         }
-        // A bad line is skipped and the rest is kept, because losing a whole
+        // A bad row is skipped and the rest is kept, because losing a whole
         // library to one malformed row is the wrong trade.
-        let mixed = "ck-stamps-1\nbad\n-\nfine\tbar\t0,0 1,1";
+        let mixed = concat!(
+            "bad\n",
+            r#"{"name":"huge","cells":[[0,0],[0,99]],"on_bar":false}"#,
+            "\n\n",
+            r#"{"name":"fine","cells":[[0,0],[1,1]],"on_bar":true}"#,
+            "\n",
+        );
         let back = Library::read(mixed);
-        assert_eq!(back.len(), 1);
+        assert_eq!(back.len(), 1, "a bad row took a good one, or a huge one was kept");
         assert_eq!(back.get(0).unwrap().name, "fine");
+        assert_eq!(back.bar(), vec![0], "the pin did not survive");
     }
 
     /// **Nothing pinned is the newest ten**, which is what the bar always
@@ -959,17 +901,22 @@ mod tests {
         assert_eq!(library.len(), 2, "editing added a second copy");
     }
 
-    /// A name reaches a file and a row of a list, so what cannot go in either
-    /// is taken out rather than written and read back differently.
+    /// A name reaches a row of a list and a server's store, so it is clamped
+    /// by the same function in both places — see `net::kept::Stamp::clamped`.
     #[test]
     fn a_name_is_tidied_before_it_is_kept() {
         let mut library = Library::default();
         library.keep(stamp("x", &[(0, 0)]));
         library.rename(0, "  a\tname\nwith\tjunk  ");
-        assert!(!library.get(0).unwrap().name.contains('\t'));
+        let name = &library.get(0).unwrap().name;
+        assert!(!name.contains(['\t', '\n']), "{name:?}");
+
+        // A blank name is the shape, which is what an uncaptured pattern is
+        // called anyway -- a thumbnail always has a label under it.
         library.rename(0, "   ");
-        assert_eq!(library.get(0).unwrap().name, "unnamed", "a blank name is not a name");
-        // And it survives the round trip it was tidied for.
+        assert_eq!(library.get(0).unwrap().name, "1x1", "a blank name is not a name");
+
+        // And it survives the round trip it was clamped for.
         library.rename(0, "glider gun");
         assert_eq!(Library::read(&library.written()).get(0).unwrap().name, "glider gun");
     }

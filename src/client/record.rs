@@ -1,143 +1,30 @@
-//! What this client has played, kept between visits.
+//! What this client has played, and where it is kept.
 //!
-//! A home screen that says only "Conway's Kingdom" and a name field is a home
-//! screen with nothing on it. What belongs there is the one thing the client
-//! knows and the server does not: **what you have done before.** A server
-//! knows who is in it now; only the client remembers the world you left last
-//! week.
+//! **The server keeps it now**, filed against the person rather than the
+//! browser — see [`crate::net::kept`], which holds the shape, and
+//! [`crate::net::ClientMessage::Keep`], which sends it. This module is what
+//! reads it on a home screen and what keeps a copy for playing alone.
+//!
+//! That is a change of premise rather than of plumbing. This used to be "the
+//! one thing the client knows and the server does not", and the cost of that
+//! was in the known-bugs list: a diary was a fact about a machine, so playing
+//! on a phone and a laptop was two records of one person. The server is the
+//! authority and this is the cache.
 //!
 //! Deliberately small. Five numbers a player recognises — worlds played,
 //! matches won, the most ground ever held, generations lived through — and not
 //! a statistics page. A record on a home screen is there to make the last
 //! session feel like it happened, not to be studied.
-//!
-//! ## Why it is text, and why a bad line is skipped
-//!
-//! [`crate::net::keep`] is a store of strings: `localStorage` in a browser and
-//! a file natively. So a record has to become a string, and rather than
-//! postcard behind a hex encoding — which would be opaque in both places and
-//! unreadable when something goes wrong — this is **one line per game, tab
-//! separated, with a version on the front.**
-//!
-//! The version is not ceremony. A record written by a build that knew about
-//! teams, read by one that does not, is exactly the case this has to survive,
-//! and the same worry is already written down for stamps in [planned.md]. A
-//! line this build cannot read is **skipped**, not fatal: losing one game out
-//! of a history is a nuisance, and refusing to show any of them because one is
-//! from the future is not.
-//!
-//! Tab separated because a room name is letters, digits, `-` and `_` — see
-//! [`crate::net::room_name`] — so no field can contain the separator and there
-//! is nothing to escape.
-//!
-//! [planned.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#stamps
+
+pub use crate::net::kept::{Game, Outcome};
 
 use crate::sim::WorldKind;
 
-/// The format of a stored line. Bumped when a field is added, so that a build
-/// which does not understand a line can tell that rather than mis-splitting
-/// one.
-const VERSION: u8 = 1;
-
-/// How many games are kept.
+/// How many games are kept here.
 ///
-/// A cap rather than everything, because this lives in `localStorage` beside
-/// a key that matters more, and a history nobody reads should not be what
-/// fills a quota. Fifty is more than a home screen ever shows and enough that
-/// "most ground ever held" means something.
-pub const KEEP: usize = 50;
-
-/// How a game ended for this player.
-///
-/// Three answers, not two: most rooms have no way to end at all, so "played"
-/// is the ordinary outcome and winning is the special case. A world that never
-/// ends is not a game you lost.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// A world with no way to win, or a match left before it decided.
-    Played,
-    Won,
-    Lost,
-}
-
-impl Outcome {
-    fn tag(self) -> &'static str {
-        match self {
-            Self::Played => "played",
-            Self::Won => "won",
-            Self::Lost => "lost",
-        }
-    }
-
-    fn read(tag: &str) -> Option<Self> {
-        match tag {
-            "played" => Some(Self::Played),
-            "won" => Some(Self::Won),
-            "lost" => Some(Self::Lost),
-            _ => None,
-        }
-    }
-}
-
-/// One game, as it looked when this client left it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Game {
-    pub room: String,
-    pub world: WorldKind,
-    /// Generations this client was present for, not the world's age. A world
-    /// that had been running for a week before you arrived is not a week you
-    /// played.
-    pub generations: u64,
-    /// The most ground held at once, which is a better memory of a game than
-    /// the ground held at the end — a player who built an empire and lost it
-    /// played a more interesting game than one who never held anything, and
-    /// the final figure is the same for both.
-    pub best: u32,
-    pub outcome: Outcome,
-}
-
-impl Game {
-    fn write(&self) -> String {
-        let world = match self.world {
-            WorldKind::Infinite => "inf".to_string(),
-            WorldKind::Toroidal { rows, cols } => format!("{rows}x{cols}"),
-        };
-        format!(
-            "{VERSION}\t{}\t{world}\t{}\t{}\t{}",
-            self.room,
-            self.generations,
-            self.best,
-            self.outcome.tag()
-        )
-    }
-
-    /// `None` for a line this build does not understand, which the caller
-    /// skips. Every field is checked rather than trusted: this is read from a
-    /// store a person can edit, and a panic on the home screen would make a
-    /// stray keystroke in `localStorage` look like the game being broken.
-    fn read(line: &str) -> Option<Self> {
-        let mut parts = line.split('\t');
-        if parts.next()?.parse::<u8>().ok()? != VERSION {
-            return None;
-        }
-        let room = parts.next()?.to_string();
-        let world = match parts.next()? {
-            "inf" => WorldKind::Infinite,
-            size => {
-                let (rows, cols) = size.split_once('x')?;
-                WorldKind::Toroidal { rows: rows.parse().ok()?, cols: cols.parse().ok()? }
-            }
-        };
-        let generations = parts.next()?.parse().ok()?;
-        let best = parts.next()?.parse().ok()?;
-        let outcome = Outcome::read(parts.next()?)?;
-        Some(Self { room, world, generations, best, outcome })
-    }
-
-    fn is_match(&self) -> bool {
-        self.outcome != Outcome::Played
-    }
-}
+/// The server's own cap, so the cache and the store hold the same number and a
+/// game does not appear on one screen and not another.
+pub const KEEP: usize = crate::net::kept::GAMES_MOST;
 
 /// What the home screen shows: the history, folded into numbers.
 ///
@@ -173,18 +60,30 @@ impl Summary {
     }
 }
 
-/// Every game kept, newest first.
+/// Every game this client has a copy of, newest first.
 pub fn games() -> Vec<Game> {
-    crate::net::keep::games().lines().filter_map(Game::read).collect()
+    crate::net::jsonl::read(&crate::net::keep::games(), "the games this client kept")
 }
 
 /// File a finished game, newest first, dropping the oldest past [`KEEP`].
+///
+/// Written here and sent up separately — see `Session::file_game`. The two are
+/// not one call because a client with no link still plays and still remembers.
 pub fn remember(game: &Game) {
     let mut kept = games();
     kept.insert(0, game.clone());
     kept.truncate(KEEP);
-    let text: Vec<String> = kept.iter().map(Game::write).collect();
-    crate::net::keep::remember_games(&text.join("\n"));
+    write(&kept);
+}
+
+/// Replace the copy wholesale, which is what arriving on a server does: the
+/// server is the authority and this is the cache — see [`crate::net::kept`].
+pub fn replace_with(games: &[Game]) {
+    write(games);
+}
+
+fn write(games: &[Game]) {
+    crate::net::keep::remember_games(&crate::net::jsonl::write(games));
 }
 
 /// A game as it is being played, before there is anything to file.
@@ -256,37 +155,40 @@ mod tests {
             for outcome in [Outcome::Played, Outcome::Won, Outcome::Lost] {
                 let g =
                     Game { room: "arena-2".into(), world, generations: 4096, best: 812, outcome };
-                assert_eq!(Game::read(&g.write()), Some(g.clone()), "{g:?}");
+                let text = crate::net::jsonl::write([&g]);
+                assert_eq!(
+                    crate::net::jsonl::read::<Game>(&text, "test"),
+                    vec![g.clone()],
+                    "{g:?}"
+                );
             }
         }
     }
 
-    /// The case this exists for: a line from a build that knew more than this
-    /// one. Skipped, so one unreadable game does not cost the whole history.
-    #[test]
-    fn a_line_this_build_cannot_read_is_skipped_and_not_fatal() {
-        let good = game("hall", 10, Outcome::Played).write();
-        let text = format!("2\tfuture\tinf\t1\t1\tteam-won\n{good}\n\ngarbage\t\t\t");
-        let read: Vec<Game> = text.lines().filter_map(Game::read).collect();
-        assert_eq!(read.len(), 1, "the readable one, and only it");
-        assert_eq!(read[0].room, "hall");
-    }
-
-    /// A store a person can edit is a store that can contain anything.
+    /// **A store a person can edit is a store that can contain anything**, and
+    /// this one is `localStorage`. A row this build cannot read is skipped, so
+    /// one unreadable game does not cost the whole history and no keystroke in
+    /// a browser's inspector can make the home screen panic.
     #[test]
     fn nothing_in_the_store_can_panic_the_home_screen() {
-        for line in [
-            "",
-            "1",
-            "1\t",
-            "1\thall",
-            "1\thall\t6x\t1\t1\tplayed",
-            "1\thall\tinf\tmany\t1\tplayed",
-            "1\thall\tinf\t1\t1\tabandoned",
-            "\0\t\0\t\0",
-        ] {
-            assert!(Game::read(line).is_none(), "{line:?}");
-        }
+        let good = crate::net::jsonl::write([game("hall", 10, Outcome::Played)]);
+        let text = format!(
+            "{good}{}",
+            concat!(
+                r#"{"room":"future","world":"Infinite","generations":1,"best":1,"outcome":"drew"}"#,
+                "\n",
+                r#"{"room":"short"}"#,
+                "\n\n",
+                "garbage\t\t\t\n",
+                "\0\0\0\n",
+                r#"{"room":"hall","world":{"Toroidal":{"rows":"many","cols":1}},"#,
+                r#""generations":1,"best":1,"outcome":"played"}"#,
+                "\n",
+            )
+        );
+        let read = crate::net::jsonl::read::<Game>(&text, "test");
+        assert_eq!(read.len(), 1, "the readable one, and only it: {read:?}");
+        assert_eq!(read[0].room, "hall");
     }
 
     #[test]
