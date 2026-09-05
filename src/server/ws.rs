@@ -701,7 +701,7 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
     let page = dir.join("index.html");
     let index = || ServeFile::new(page.clone());
 
-    let files = Router::<AppState>::new()
+    let page = Router::<AppState>::new()
         .route_service("/", index())
         // The client's own screens. Listed rather than matched by a catch-all,
         // so that `/src/main.rs` is a 404 and not a copy of the page.
@@ -713,11 +713,13 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
         .route_service("/room/{id}", index())
         .route_service("/lobby/{id}", index())
         .route_service("/watch/{id}", index())
+        .layer(axum::middleware::map_response(revalidate));
+    let files = Router::<AppState>::new()
         .nest_service("/pkg", ServeDir::new(dir.join("pkg")))
         .nest_service("/assets", ServeDir::new(dir.join("assets")))
-        .layer(axum::middleware::map_response(revalidate));
+        .layer(axum::middleware::from_fn(cached));
 
-    app.merge(files)
+    app.merge(page).merge(files)
 }
 
 /// **Ask before reusing.** `ServeDir` and `ServeFile` send `Last-Modified` and
@@ -735,15 +737,82 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
 ///
 /// `no-cache` does not mean do not store. It means revalidate before use, so
 /// the conditional request `ServeDir` already answers still comes back 304 and
-/// costs a round trip rather than a download. Nothing here is served from a
-/// CDN and the only client is on the same machine or the same network.
+/// costs a round trip rather than a download. The page is small and is what
+/// a deploy changes; the megabytes behind it are [`cached`].
 ///
 /// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
-async fn revalidate(mut response: axum::response::Response) -> axum::response::Response {
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-cache"),
-    );
+async fn revalidate(mut response: Response) -> Response {
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response
+}
+
+/// What `pkg/` and `assets/` are served with: an hour, then ask. See
+/// [server.md].
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#deploying
+const STATIC_CACHE: &str = "public, max-age=3600, must-revalidate";
+
+/// `Content-Length` again, under a name an edge that compresses leaves alone.
+const X_CONTENT_LENGTH: header::HeaderName = header::HeaderName::from_static("x-content-length");
+
+/// **An hour at the edge and in the browser, then a conditional request**,
+/// for the module and the art. They are the megabytes behind a page that is
+/// `no-cache`, and an edge that could not hold them would fetch the module
+/// from the origin for every visitor; an hour is how long a rebuild can go
+/// unseen without a purge. Nothing here carries a content hash in its name --
+/// wasm-pack names the module after the crate -- so nothing is `immutable`.
+///
+/// `ServeDir` sends `Last-Modified` and no `ETag`, so one is made from what it
+/// does send -- the length and the modification time -- rather than from the
+/// bytes, which for the module would be a pass over 7.5 MB per request. It is
+/// as strong as a filesystem timestamp, which is what nginx sends and for the
+/// same reason, and `If-None-Match` is answered here because `ServeDir` has
+/// never heard of the tag. The hash is this binary's own: a tag that changes
+/// when the server is rebuilt costs one download, and nothing else.
+///
+/// The length goes out twice. The loading bar wants `Content-Length`, and an
+/// edge that compresses the module on the way through takes it; the same
+/// number under a name the edge leaves alone is what the page falls back to.
+async fn cached(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let asked_with = request.headers().get(header::IF_NONE_MATCH).cloned();
+    let mut response = next.run(request).await;
+    let cache = match response.status() {
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => STATIC_CACHE,
+        // A missing file is a build half done or a wrong path, and neither is
+        // worth an edge holding for an hour.
+        _ => "no-store",
+    };
+    // A whole file only: a range's length is the range's, and a 304 or a 404
+    // has nothing to validate.
+    let whole = response.status() == StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    let (Some(length), Some(modified)) =
+        (headers.get(header::CONTENT_LENGTH).cloned(), headers.get(header::LAST_MODIFIED))
+    else {
+        return response;
+    };
+    if !whole {
+        return response;
+    }
+    let tag = {
+        use std::hash::{Hash, Hasher};
+        let mut stamp = std::hash::DefaultHasher::new();
+        modified.as_bytes().hash(&mut stamp);
+        format!("\"{}-{:016x}\"", length.to_str().unwrap_or("?"), stamp.finish())
+    };
+    headers.insert(X_CONTENT_LENGTH, length);
+    if let Ok(tag) = HeaderValue::from_str(&tag) {
+        headers.insert(header::ETAG, tag);
+    }
+    let matched = asked_with
+        .as_ref()
+        .and_then(|w| w.to_str().ok())
+        .is_some_and(|w| w.split(',').any(|t| t.trim() == tag));
+    if matched {
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        *response.body_mut() = axum::body::Body::empty();
+    }
     response
 }
 
@@ -919,12 +988,21 @@ mod tests {
     }
 
     async fn get(addr: SocketAddr, path: &str) -> String {
+        get_with(addr, path, "").await
+    }
+
+    async fn get_with(addr: SocketAddr, path: &str, extra: &str) -> String {
         let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let request = format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n");
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n{extra}\r\n");
         tcp.write_all(request.as_bytes()).await.unwrap();
         let mut text = String::new();
         tcp.read_to_string(&mut text).await.unwrap();
         text
+    }
+
+    fn header<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+        text.lines().find_map(|l| l.strip_prefix(name)).map(|v| v.trim_start_matches(": ").trim())
     }
 
     /// `/healthz` is a 200 and one line whether or not there is a page to
@@ -938,5 +1016,32 @@ mod tests {
             assert!(text.ends_with("\r\n\r\nok: 3 rooms, 0 connections\n"), "{text}");
             assert!(text.contains("cache-control: no-store"), "{text}");
         }
+    }
+
+    /// The page is `no-cache`; a file under `assets/` is held for an hour with
+    /// a tag, the same tag back is a 304, and the length goes out twice.
+    #[tokio::test]
+    async fn the_page_asks_every_time_and_the_files_are_held_for_an_hour() {
+        let addr = listening(Some(PathBuf::from(".")), 1).await;
+
+        let page = get(addr, "/").await;
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        assert_eq!(header(&page, "cache-control"), Some("no-cache"));
+
+        let file = get(addr, "/assets/fonts/LICENSE.txt").await;
+        assert!(file.starts_with("HTTP/1.1 200"), "{file}");
+        assert_eq!(header(&file, "cache-control"), Some(STATIC_CACHE));
+        assert_eq!(header(&file, "x-content-length"), header(&file, "content-length"));
+        let tag = header(&file, "etag").expect("a tag");
+        assert!(tag.starts_with('"') && tag.ends_with('"'), "{tag}");
+
+        let again =
+            get_with(addr, "/assets/fonts/LICENSE.txt", &format!("If-None-Match: {tag}\r\n")).await;
+        assert!(again.starts_with("HTTP/1.1 304"), "{again}");
+        assert_eq!(header(&again, "etag"), Some(tag));
+
+        let missing = get(addr, "/assets/fonts/nope.txt").await;
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+        assert_eq!(header(&missing, "cache-control"), Some("no-store"));
     }
 }
