@@ -156,10 +156,7 @@ impl People {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, self.to_lines())
+        crate::server::persist::replace(path, self.to_lines().as_bytes())
     }
 }
 

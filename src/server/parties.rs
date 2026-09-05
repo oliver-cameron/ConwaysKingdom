@@ -202,6 +202,11 @@ impl Parties {
         self.known.iter().find(|(_, p)| p.rooms.contains(room)).map(|(id, _)| id)
     }
 
+    /// Every room that is some party's.
+    pub fn rooms(&self) -> impl Iterator<Item = &RoomId> {
+        self.known.values().flat_map(|p| p.rooms.iter())
+    }
+
     /// Forget rooms that are not here, which after a restart is every match
     /// and every room since deleted.
     pub fn keep_rooms(&mut self, exists: impl Fn(&RoomId) -> bool) {
@@ -251,10 +256,7 @@ impl Parties {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, self.to_lines())
+        crate::server::persist::replace(path, self.to_lines().as_bytes())
     }
 }
 

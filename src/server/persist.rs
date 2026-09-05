@@ -108,15 +108,30 @@ pub fn save(path: &Path, world: &World, players: &[Player], tick: u64) -> io::Re
         out.extend_from_slice(person);
     }
 
-    // Write beside the target and rename, so a crash mid-write cannot leave a
-    // half-written world where the real one was.
-    let tmp = path.with_extension("tmp");
+    replace(path, &out)
+}
+
+/// Write beside the target and rename into place, so a crash mid-write leaves
+/// the old file where it was rather than half of the new one.
+///
+/// For the tables beside the rooms as much as for a world. A truncated
+/// `rooms.jsonl` is not a lost fact but an open door — a private room whose
+/// row is gone has nothing left saying it is private — and a table is written
+/// on every change, which is often enough for a crash to find one.
+///
+/// The temporary is the target's name with `.tmp` on the end rather than in
+/// place of the extension, so `rooms.jsonl` and a room called `rooms` do not
+/// share one.
+pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             std::fs::create_dir_all(dir)?;
         }
     }
-    std::fs::File::create(&tmp)?.write_all(&out)?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    std::fs::File::create(&tmp)?.write_all(bytes)?;
     std::fs::rename(&tmp, path)
 }
 
@@ -291,6 +306,20 @@ mod tests {
 
         let back = load(&path).unwrap();
         assert!(!back.players[0].online, "and one read off a disk is not");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A write lands whole or not at all: the old file stands until the new
+    /// one is complete, and nothing is left beside it afterwards.
+    #[test]
+    fn a_replaced_file_is_the_new_one_whole_with_nothing_left_beside_it() {
+        let path = scratch("replace").with_extension("jsonl");
+        replace(&path, b"first\n").unwrap();
+        replace(&path, b"second\n").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second\n");
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        assert!(!std::path::Path::new(&tmp).exists(), "the temporary was left behind");
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -325,6 +325,12 @@ pub struct Rooms {
     /// asks, and it is saved, so an invitation given before a restart stands
     /// after it. The maker is not in it; the maker owns the room.
     admitted: BTreeMap<RoomId, BTreeSet<PersonId>>,
+    /// **Rows for rooms this run did not open.** `--fresh` ignores every
+    /// world on disk, a player's worlds among them, and deletes nothing, so
+    /// they are back on the next ordinary run — and a save in between that
+    /// wrote only the rooms in memory left them listed, codeless and
+    /// nobody's. Written back as they were read, in front of nothing.
+    unopened: Vec<MetaRow>,
     /// Groups of people with worlds of their own. Beside `people` and
     /// `profiles` for the reason those are: a party outlives every room in
     /// it. See [`crate::server::parties`].
@@ -398,8 +404,12 @@ impl Rooms {
         let lockers = crate::server::lockers::Lockers::load(&stamps_path(&dir), &games_path(&dir))?;
         let mut parties = crate::server::parties::Parties::load(&parties_path(&dir))?;
         // A party's match is not saved and a room may have been deleted since;
-        // whatever is not here is not the party's any more.
-        parties.keep_rooms(|room| rooms.contains_key(room));
+        // whatever is not here is not the party's any more. Not under `fresh`,
+        // where a party's worlds are not here on purpose and are still its
+        // own next time.
+        if !fresh {
+            parties.keep_rooms(|room| rooms.contains_key(room));
+        }
         if !people.is_empty() {
             log::info!("{} player key(s) known", people.len());
         }
@@ -415,34 +425,62 @@ impl Rooms {
         // that it was private are facts about the map and not the world, so
         // they are in a table beside it. A row for a room that is not here is
         // a match, which is not saved, or a room since deleted -- dropped,
-        // and the next write forgets it.
+        // and the next write forgets it -- unless `fresh` is why it is not
+        // here, in which case it is carried; see `Self::unopened`.
         let mut made = BTreeMap::new();
         let mut owner = BTreeMap::new();
         let mut codes = BTreeMap::new();
         let mut unlisted = BTreeSet::new();
         let mut admitted = BTreeMap::new();
-        if !fresh {
-            for row in load_meta(&meta_path(&dir))? {
-                if !rooms.contains_key(&row.id) {
-                    continue;
+        let mut unopened = Vec::new();
+        for row in load_meta(&meta_path(&dir))? {
+            if !rooms.contains_key(&row.id) {
+                if fresh {
+                    unopened.push(row);
                 }
-                made.insert(row.id.clone(), None);
-                if let Some(who) = row.owner {
-                    owner.insert(row.id.clone(), Owner::Person(who));
-                }
-                if let Some(code) = row.code {
-                    codes.insert(row.id.clone(), code);
-                }
-                if !row.admitted.is_empty() {
-                    admitted.insert(row.id.clone(), row.admitted.into_iter().collect());
-                }
-                if row.unlisted {
-                    unlisted.insert(row.id);
-                }
+                continue;
             }
-            if !made.is_empty() {
-                log::info!("{} room(s) made by players remembered", made.len());
+            made.insert(row.id.clone(), None);
+            if let Some(who) = row.owner {
+                owner.insert(row.id.clone(), Owner::Person(who));
             }
+            if let Some(code) = row.code {
+                codes.insert(row.id.clone(), code);
+            }
+            if !row.admitted.is_empty() {
+                admitted.insert(row.id.clone(), row.admitted.into_iter().collect());
+            }
+            if row.unlisted {
+                unlisted.insert(row.id);
+            }
+        }
+        if !made.is_empty() {
+            log::info!("{} room(s) made by players remembered", made.len());
+        }
+        if !unopened.is_empty() {
+            log::info!("{} room(s) made by players left on disk for next time", unopened.len());
+        }
+
+        // **A room a player made with no row is nobody's and shown to nobody.**
+        // The row is the only thing that says a room is private, so a row
+        // lost -- a line the reader skipped, a version this build does not
+        // read -- has to shut the door rather than open it. Known by the
+        // spelling of its id, which is the one mark a client-made room
+        // carries without its row; and a party's world is unlisted by what it
+        // is, whatever the table says.
+        unlisted.extend(parties.rooms().cloned());
+        let rowless: Vec<RoomId> = rooms
+            .keys()
+            .filter(|id| is_generated(id) && !made.contains_key(*id))
+            .cloned()
+            .collect();
+        for id in rowless {
+            log::error!(
+                "{id} was made by a player and rooms.jsonl has no row for it; kept unlisted, \
+                 with no code and no owner, until somebody looks"
+            );
+            made.insert(id.clone(), None);
+            unlisted.insert(id);
         }
 
         Ok(Self {
@@ -463,6 +501,7 @@ impl Rooms {
             max_made: MAX_MADE_ROOMS,
             unlisted,
             admitted,
+            unopened,
             parties,
         })
     }
@@ -489,6 +528,7 @@ impl Rooms {
             max_made: MAX_MADE_ROOMS,
             unlisted: Default::default(),
             admitted: BTreeMap::new(),
+            unopened: Vec::new(),
             parties: crate::server::parties::Parties::new(),
         }
     }
@@ -1475,20 +1515,26 @@ impl Rooms {
         if self.dir.as_os_str().is_empty() {
             return;
         }
-        let rows = self.made.keys().map(|id| MetaRow {
-            v: META_VERSION,
-            id: id.clone(),
-            owner: self.owned_by(id).cloned(),
-            code: self.codes.get(id).cloned(),
-            unlisted: self.unlisted.contains(id),
-            admitted: self
-                .admitted
-                .get(id)
-                .map(|in_| in_.iter().cloned().collect())
-                .unwrap_or_default(),
-        });
+        let rows = self
+            .made
+            .keys()
+            .map(|id| MetaRow {
+                v: META_VERSION,
+                id: id.clone(),
+                owner: self.owned_by(id).cloned(),
+                code: self.codes.get(id).cloned(),
+                unlisted: self.unlisted.contains(id),
+                admitted: self
+                    .admitted
+                    .get(id)
+                    .map(|in_| in_.iter().cloned().collect())
+                    .unwrap_or_default(),
+            })
+            .chain(self.unopened.iter().cloned());
         let path = meta_path(&self.dir);
-        if let Err(e) = std::fs::write(&path, crate::net::jsonl::write(rows)) {
+        if let Err(e) =
+            crate::server::persist::replace(&path, crate::net::jsonl::write(rows).as_bytes())
+        {
             log::error!("saving the rooms table to {}: {e}", path.display());
         }
     }
@@ -1779,10 +1825,14 @@ impl Rooms {
     /// Spelled `r-` and a code, so a generated id can never collide with a
     /// name somebody chose — `room_name` forbids nothing about a leading `r-`,
     /// but nobody types one, and [`Self::resolve`] tries ids before names.
+    /// Nor one `--fresh` left on disk, whose world a save would then write
+    /// over — see [`Self::unopened`].
     fn free_id(&self) -> Result<RoomId, String> {
         (0..10)
             .map(|_| RoomId(format!("r-{}", code())))
-            .find(|id| !self.rooms.contains_key(id))
+            .find(|id| {
+                !self.rooms.contains_key(id) && !self.unopened.iter().any(|row| row.id == *id)
+            })
             .ok_or_else(|| "could not find a free room id".to_string())
     }
 
@@ -1797,7 +1847,10 @@ impl Rooms {
     fn free_code(&self) -> Result<Code, String> {
         (0..10)
             .map(|_| code())
-            .find(|c| !self.codes.values().any(|used| used == c))
+            .find(|c| {
+                !self.codes.values().any(|used| used == c)
+                    && !self.unopened.iter().any(|row| row.code.as_ref() == Some(c))
+            })
             .ok_or_else(|| "could not find a free code".to_string())
     }
 
@@ -2112,7 +2165,13 @@ const META_VERSION: u8 = 1;
 ///
 /// The owner is a person or nothing. A seat is not written, because a seat
 /// means nothing after a restart.
-#[derive(Serialize, Deserialize)]
+///
+/// **A room with no row is shut, not open.** The row is what says a room is
+/// private, so a world whose row is missing — skipped, truncated, from a
+/// version this build does not read — comes back unlisted with no code and no
+/// owner, and the log says which; see [`Rooms::open`]. The skip-a-row policy
+/// the other tables keep loses a fact here, and here the fact is a door.
+#[derive(Clone, Serialize, Deserialize)]
 struct MetaRow {
     v: u8,
     id: RoomId,
@@ -2128,8 +2187,19 @@ fn meta_path(dir: &Path) -> PathBuf {
     dir.join("rooms.jsonl")
 }
 
+/// Whether an id is spelled the way [`Rooms::free_id`] spells one: `r-` and a
+/// code. It is the one mark a client-made room carries without its row, so it
+/// is what says a room with none is private — and why a name typed in that
+/// shape is a bad idea, though nothing forbids it.
+fn is_generated(id: &RoomId) -> bool {
+    id.as_str().strip_prefix("r-").is_some_and(|rest| {
+        rest.len() == CODE_LEN && rest.bytes().all(|b| CODE_ALPHABET.contains(&b))
+    })
+}
+
 /// Read the rows back. A table that is not there is an empty one, and a row
-/// this build cannot read is skipped, as with every table here.
+/// this build cannot read is skipped, as with every table here — and the room
+/// it was for is then treated as having none, which shuts it.
 fn load_meta(path: &Path) -> std::io::Result<Vec<MetaRow>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(crate::net::jsonl::read::<MetaRow>(&text, "the rooms file")
@@ -3012,11 +3082,13 @@ mod tests {
         assert_eq!(rooms.waiting[&c].len(), MAX_WAITING, "the ceiling gave");
     }
 
+    /// A world of the party's, named apart from `private_room`'s so one test
+    /// can hold both.
     fn party_room(rooms: &mut Rooms, by: &Caller, party: &PartyId) -> Result<Made, String> {
         let out = rooms.handle(
             by,
             ClientMessage::Create {
-                name: "den".into(),
+                name: "lair".into(),
                 shape: WorldKind::Infinite,
                 victory: None,
                 teams: None,
@@ -3222,6 +3294,113 @@ mod tests {
         assert!(
             matches!(&out[..], [ServerMessage::Rejected { .. }]),
             "and let a stranger in: {out:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A room a player made with no row is shown to nobody.** The row is
+    /// what says a room is private, so losing it — a truncated write, a line
+    /// this build cannot read — has to shut the door rather than open it: the
+    /// room comes back unlisted, codeless and nobody's, a party's world is
+    /// still its party's, and the next save writes the rows that were lacking.
+    #[test]
+    fn a_room_with_no_row_is_shown_to_nobody() {
+        let dir = temp_dir("no-row");
+        let kb = Secret::new().unwrap();
+        let (den, lair, code) = {
+            let mut rooms = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
+            let (_, a) = met(&mut rooms, 1);
+            let out = rooms.handle(
+                &Caller::new(2),
+                ClientMessage::Hello { name: "b".into(), person: kb.clone() },
+            );
+            let [ServerMessage::You(theirs)] = &out[..] else { panic!("{out:?}") };
+            let b = theirs.who.clone();
+            let me = Caller::known(1, a.clone());
+            let made = private_room(&mut rooms, &me);
+            let out = rooms.handle(&me, ClientMessage::MakeParty { name: "friday".into() });
+            let party = parties_in(&out)[0].id.clone();
+            rooms
+                .handle(&me, ClientMessage::InviteToParty { party: party.clone(), who: b.clone() });
+            rooms.handle(&Caller::known(2, b), ClientMessage::JoinParty { party: party.clone() });
+            let lair = party_room(&mut rooms, &me, &party).unwrap().id;
+            rooms.save().unwrap();
+            (made.id, lair, made.code.expect("a code"))
+        };
+        std::fs::write(meta_path(&dir), "{not json\n").unwrap();
+
+        let mut back = Rooms::open(&dir, &[], WorldKind::Infinite, false).unwrap();
+        for room in [&den, &lair] {
+            assert!(back.get(room).is_some(), "{room} did not come back");
+            assert!(back.is_unlisted(room), "{room} came back listed");
+            assert!(!back.listing().iter().any(|r| r.id == *room), "{room} is in the listing");
+            assert_eq!(back.code_of(room), None, "{room} has a code from nowhere");
+            assert_eq!(back.owned_by(room), None, "{room} has an owner from nowhere");
+        }
+        assert_eq!(back.made_count().0, 2, "they came back outside the cap");
+        assert!(back.resolve(Some(&code)).is_err(), "the code still opened it");
+        let out = back.handle(&Caller::new(5), join_as(&Secret::new().unwrap(), den.as_str()));
+        assert!(matches!(&out[..], [ServerMessage::Rejected { .. }]), "a stranger got in: {out:?}");
+        // The party's world is still the party's.
+        let out = back.handle(&Caller::new(6), join_as(&kb, lair.as_str()));
+        assert!(
+            matches!(&out[..], [ServerMessage::Welcome { .. }, ..]),
+            "a member was refused: {out:?}"
+        );
+        let out = back.handle(&Caller::new(7), join_as(&Secret::new().unwrap(), lair.as_str()));
+        assert!(matches!(&out[..], [ServerMessage::Rejected { .. }]), "a stranger got in: {out:?}");
+        back.save().unwrap();
+        assert_eq!(load_meta(&meta_path(&dir)).unwrap().len(), 2, "the rows were not written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **`--fresh` ignores a player's worlds and does not lose them.** It
+    /// opens none of them, so a save in between writes only what is in
+    /// memory — and the rows for what it did not open ride through, or the
+    /// next ordinary run found every private world listed, codeless and
+    /// nobody's, and a party's worlds no longer its party's.
+    #[test]
+    fn fresh_leaves_a_players_worlds_as_they_were() {
+        let dir = temp_dir("fresh-keeps");
+        let ka = Secret::new().unwrap();
+        let (den, lair, code, a) = {
+            let mut rooms = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
+            let out = rooms.handle(
+                &Caller::new(1),
+                ClientMessage::Hello { name: "a".into(), person: ka.clone() },
+            );
+            let [ServerMessage::You(profile)] = &out[..] else { panic!("{out:?}") };
+            let a = profile.who.clone();
+            let me = Caller::known(1, a.clone());
+            let made = private_room(&mut rooms, &me);
+            let out = rooms.handle(&me, ClientMessage::MakeParty { name: "friday".into() });
+            let party = parties_in(&out)[0].id.clone();
+            let lair = party_room(&mut rooms, &me, &party).unwrap().id;
+            rooms.save().unwrap();
+            (made.id, lair, made.code.expect("a code"), a)
+        };
+
+        // The diagnostic run: nothing of theirs is open, a room is made, and
+        // it saves.
+        {
+            let mut fresh = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
+            assert!(fresh.get(&den).is_none() && fresh.get(&lair).is_none(), "fresh opened them");
+            assert_eq!(fresh.made_count().0, 0, "fresh counted them");
+            fresh.make(9, "", WorldKind::Infinite, None, None, Reach::Code, false).unwrap();
+            fresh.save().unwrap();
+        }
+
+        let mut back = Rooms::open(&dir, &[], WorldKind::Infinite, false).unwrap();
+        assert!(back.is_unlisted(&den), "den came back listed");
+        assert_eq!(back.code_of(&den), Some(code.as_str()), "den came back codeless");
+        assert_eq!(back.owned_by(&den), Some(&a), "den came back nobody's");
+        assert_eq!(back.made_count().0, 3, "the count is theirs and the one made meanwhile");
+        let mine = parties_in(&back.handle(&Caller::known(2, a), ClientMessage::Parties));
+        assert_eq!(mine.len(), 1, "the party was lost");
+        assert_eq!(
+            mine[0].rooms.iter().map(|r| &r.id).collect::<Vec<_>>(),
+            [&lair],
+            "the party lost its world"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
