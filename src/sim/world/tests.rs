@@ -1,0 +1,1725 @@
+//! Tests for the world and its passes.
+//!
+//! In their own file for the reason [`crate::sim::rule`]'s are: a generation
+//! is a short list of passes, and it cannot be read at all with fourteen
+//! hundred lines of assertion underneath it.
+
+/// **A blob of dynamite is one bomb, and each is worth an area.** A
+/// hundred of them reach ten times as far as one, not a hundred times —
+/// anything else and clustering is either pointless or the only thing in
+/// the game.
+#[test]
+fn a_cluster_reaches_by_the_root_of_its_size() {
+    assert_eq!(rule::blast_reach(1), rule::DYNAMITE_REACH);
+    assert_eq!(rule::blast_reach(4), rule::DYNAMITE_REACH * 2);
+    assert_eq!(rule::blast_reach(100), rule::DYNAMITE_REACH * 10);
+    // Bounded, or a thousand of them rewrite a quarter of a large world in
+    // one generation.
+    assert_eq!(rule::blast_reach(100_000), rule::DYNAMITE_MOST_REACH);
+    // And nothing is worth less than one on its own.
+    assert_eq!(rule::blast_reach(0), rule::DYNAMITE_REACH);
+}
+
+/// **Whose blasts would overlap go off together**, transitively — so a
+/// line of them is one long bomb rather than a chain of pairs.
+#[test]
+fn payloads_whose_blasts_overlap_are_one_bomb() {
+    let me = PlayerId(1);
+    let reach = rule::DYNAMITE_REACH;
+    let ready: Vec<((i32, i32), PlayerId)> = [(0, 0), (0, reach - 1), (0, 2 * reach - 2), (0, 900)]
+        .into_iter()
+        .map(|at| (at, me))
+        .collect();
+    let groups = clusters(&ready, reach);
+    assert_eq!(groups.len(), 2, "a line should be one bomb and the far one another");
+    assert_eq!(groups[0].len(), 3, "the chain of three did not join up");
+    assert_eq!(groups[1], vec![3]);
+
+    // One on its own is one group, and nothing is dropped.
+    let alone = clusters(&ready[3..], reach);
+    assert_eq!(alone, vec![vec![0]]);
+}
+
+/// **A dynamite placed on the bar reaches the ground**, which is the whole
+/// path: a `Placement` becomes a cell, the fuse burns while it lives, and
+/// the pass turns a disc of ground into noise.
+///
+/// End to end because each half of it worked on its own while the thing
+/// did not exist for anybody playing — the kind had no square on the bar,
+/// so nothing could put one down at all.
+#[test]
+fn a_payload_placed_burns_down_and_goes_off() {
+    let mut world = World::infinite();
+    let me = PlayerId(1);
+    crate::net::grant(&mut world, me);
+    let home = crate::net::spawn_for(me, &world);
+
+    // A block, so it survives long enough to burn: a dynamite on its own
+    // dies of loneliness in a generation, which is the real cost of one.
+    let block = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(r, c)| (home.0 + r, home.1 + c));
+    for (i, &(row, col)) in block.iter().enumerate() {
+        let what =
+            if i == 0 { crate::net::Placement::Dynamite } else { crate::net::Placement::Life };
+        let was = world.cell_at(row, col).unwrap_or(Cell::DEAD);
+        world.set_cell_at(row, col, what.apply_to(was, me));
+    }
+    let at = block[0];
+    let is_payload = |w: &World| {
+        w.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::DYNAMITE && c.is_alive())
+    };
+    assert!(is_payload(&world), "the placement did not put a dynamite down");
+    assert_eq!(world.cell_at(at.0, at.1).unwrap().age(), 0, "a fresh fuse starts at nought");
+
+    // It burns on a chance, so this is bounded rather than exact — and it
+    // has to reach the end, which `DYNAMITE_WARN` makes certain.
+    let mut generations = 0;
+    while is_payload(&world) && generations < 500 {
+        world.step();
+        generations += 1;
+    }
+    assert!(generations < 500, "the fuse never ran out");
+    assert!(
+        world.cell_at(at.0, at.1).is_some_and(|c| c.kind() == Kind::NORMAL),
+        "a spent dynamite should be ordinary ground"
+    );
+}
+
+/// **A blast takes ground; it does not make life for whoever it lands on.**
+///
+/// `scramble` set only alive or dead and left the owner alone, so a
+/// dynamite thrown into somebody's *empty* country filled a third of it
+/// with live cells that were still theirs. Aimed at an empty frontier a
+/// bomb was a gift, which is the opposite of what it is for.
+///
+/// Detonated on its own rather than stepped, so the answer is what the
+/// blast left and not what Conway did with it afterwards.
+#[test]
+fn a_blast_leaves_no_life_belonging_to_anybody_else() {
+    let mut world = World::infinite();
+    let me = PlayerId(1);
+    let them = PlayerId(2);
+    crate::net::grant(&mut world, me);
+    let (row, col) = crate::net::spawn_for(me, &world);
+
+    // Their country, clear of my patch: ground they hold with nothing
+    // standing on it, which is what most of anybody's territory looks like
+    // most of the time.
+    let patch = crate::net::SPAWN_N;
+    for dr in -14..=14 {
+        for dc in patch + 2..=patch + 30 {
+            let (r, c) = (row + dr, col + dc);
+            let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+            assert!(!cell.is_home(), "the enemy block overlaps the granted patch");
+            world.set_cell_at(r, c, cell.with_player(them).with_alive(false));
+        }
+    }
+    let live_for = |w: &World, who: PlayerId| {
+        w.live_cells()
+            .into_iter()
+            .filter(|&(r, c)| w.cell_at(r, c).is_some_and(|x| x.player() == who))
+            .count()
+    };
+    assert_eq!(live_for(&world, them), 0, "they start with nothing standing");
+
+    // On the frontier, so the blast has their ground within reach.
+    let at = (row, col + patch - 1);
+    let armed = crate::net::Placement::Dynamite
+        .apply_to(world.cell_at(at.0, at.1).unwrap_or(Cell::DEAD), me)
+        .with_age(super::super::cell::bits::MAX_AGE);
+    world.set_cell_at(at.0, at.1, armed.with_player(me).with_home(false));
+
+    world.detonate();
+
+    assert_eq!(live_for(&world, them), 0, "the blast made life for the player it was aimed at");
+    assert!(live_for(&world, me) > 0, "the blast left the bomber nothing");
+}
+
+/// **What the blast does not roll up is nobody's**, so a crater is
+/// no-man's-land rather than ground that quietly stayed with whoever held
+/// it. Owner and strength move together: an owner at level nought is a
+/// state the rule says cannot exist, and so is the reverse.
+#[test]
+fn a_crater_is_no_mans_land_where_it_is_not_the_bombers() {
+    let mut world = World::infinite();
+    let me = PlayerId(1);
+    crate::net::grant(&mut world, me);
+    let (row, col) = crate::net::spawn_for(me, &world);
+    // Clear of the granted patch, which is exempt and would answer for
+    // most of the disc from the spawn itself.
+    let at = (row, col + crate::net::SPAWN_N + 12);
+    let armed = crate::net::Placement::Dynamite
+        .apply_to(Cell::DEAD, me)
+        .with_age(super::super::cell::bits::MAX_AGE);
+    world.set_cell_at(at.0, at.1, armed.with_player(me));
+    world.detonate();
+
+    let reach = rule::DYNAMITE_REACH;
+    let (mut live, mut empty) = (0, 0);
+    for dr in -reach..=reach {
+        for dc in -reach..=reach {
+            if dr * dr + dc * dc > reach * reach {
+                continue;
+            }
+            let Some(cell) = world.cell_at(at.0 + dr, at.1 + dc) else { continue };
+            if cell.is_home() {
+                continue;
+            }
+            if cell.is_alive() {
+                live += 1;
+                assert_eq!(cell.player(), me, "a live crater square is not the bomber's");
+                assert_eq!(cell.level(), super::super::cell::bits::MAX_LEVEL);
+            } else {
+                empty += 1;
+                assert_eq!(cell.player(), PlayerId::UNOWNED, "a dead crater square kept an owner");
+                assert_eq!(cell.level(), 0, "unowned ground with strength on it");
+            }
+        }
+    }
+    assert!(live > 0 && empty > 0, "not a crater: {live} alive, {empty} empty");
+}
+
+/// **A granted patch is not takeable, and nothing grows one either.**
+///
+/// [`rule::territory`] returns before a home square, so no rule moves one
+/// and `net::already_granted` reads exactly that to know a returning
+/// player still has a seat — a blast that converted one would evict
+/// somebody permanently and hand them a second patch on their next join.
+/// And because the owner cannot move, a square there that came up *alive*
+/// would be alive for them, which is the gift this rule exists to stop. So
+/// a blast may only take life off a patch, never put it there.
+#[test]
+fn a_blast_clears_a_granted_patch_without_taking_or_feeding_it() {
+    let mut world = World::infinite();
+    let me = PlayerId(1);
+    let them = PlayerId(2);
+    crate::net::grant(&mut world, them);
+    let (row, col) = crate::net::spawn_for(them, &world);
+    let home: Vec<(i32, i32)> = (row..row + crate::net::SPAWN_N)
+        .flat_map(|r| (col..col + crate::net::SPAWN_N).map(move |c| (r, c)))
+        .filter(|&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_home()))
+        .collect();
+    assert!(!home.is_empty(), "the grant marked no home ground");
+    // What is standing on their patch before anything goes off. `net::grant`
+    // gives an opening block, so a granted patch is not empty — and the
+    // claim here is that a blast never *adds* life to one, not that it
+    // leaves none.
+    let lit_before: Vec<(i32, i32)> = home
+        .iter()
+        .copied()
+        .filter(|&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_alive()))
+        .collect();
+
+    // Factory, armed, just outside their patch, so the blast reaches in
+    // without my having to overwrite one of the squares under test.
+    let at = (row - 1, col - 1);
+    let armed = crate::net::Placement::Dynamite
+        .apply_to(Cell::DEAD, me)
+        .with_age(super::super::cell::bits::MAX_AGE);
+    world.set_cell_at(at.0, at.1, armed.with_player(me));
+    world.detonate();
+
+    // **Wherever it landed.** Where a blast goes off is `blast_centre`'s to
+    // decide — it walks outward to somewhere worth hitting — so this asks
+    // for what must hold whatever it chose: a granted square is still
+    // theirs, still marked, and carries no life the blast put there.
+    for (r, c) in home {
+        let cell = world.cell_at(r, c).expect("a home square");
+        assert!(cell.is_home(), "the blast cleared the home mark at {r},{c}");
+        assert_eq!(cell.player(), them, "the blast took a granted square at {r},{c}");
+        assert!(
+            !cell.is_alive() || lit_before.contains(&(r, c)),
+            "the blast made life on their patch at {r},{c}"
+        );
+    }
+}
+
+/// **The blast is what a dynamite is for**, and it is noise rather than a
+/// hole: every square in the disc takes its own roll, so some come up
+/// alive and some do not.
+#[test]
+fn a_blast_scrambles_the_ground_it_reaches() {
+    let mut world = World::infinite();
+    let me = PlayerId(1);
+    crate::net::grant(&mut world, me);
+    let spawn = crate::net::spawn_for(me, &world);
+    // **Clear of the granted patch**, which a blast clears rather than
+    // scrambles — see [`World::blasted`]. Centred on the spawn there is
+    // nothing in reach but home ground and unloaded chunks, so the disc
+    // comes back empty and says nothing about the filter under test.
+    let (row, col) = (spawn.0, spawn.1 + crate::net::SPAWN_N + 12);
+    for dr in -12..=12 {
+        for dc in -12..=12 {
+            let (r, c) = (row + dr, col + dc);
+            let cell = world.cell_at(r, c).unwrap_or(Cell::DEAD);
+            world.set_cell_at(r, c, cell.with_player(me));
+        }
+    }
+
+    // Armed and about to go, which is the state the fuse takes a while to
+    // reach on its own.
+    let armed = crate::net::Placement::Dynamite
+        .apply_to(world.cell_at(row, col).unwrap_or(Cell::DEAD), me)
+        .with_age(super::super::cell::bits::MAX_AGE);
+    world.set_cell_at(row, col, armed);
+
+    let live_before = world.live_cells().len();
+    world.step();
+
+    assert!(
+        world.cell_at(row, col).is_some_and(|c| c.kind() == Kind::NORMAL),
+        "the dynamite was not consumed"
+    );
+    assert!(
+        world.live_cells().len() > live_before,
+        "a blast on granted ground should leave life behind: {live_before} before"
+    );
+    // Noise and not a slab: a disc brought wholly to life would be one
+    // shape rather than something to clean up.
+    // **Reach plus throw**, because the centre is not the dynamite: a blast
+    // walks outward to somewhere worth hitting, up to `DYNAMITE_THROW`, so
+    // the disc to look in is wherever it could have landed. Written as the
+    // two constants rather than as a number — this measured a fixed radius
+    // and went blind the moment the reach shrank.
+    let reach = rule::DYNAMITE_REACH + rule::DYNAMITE_THROW;
+    let disc: Vec<(i32, i32)> = (-reach..=reach)
+        .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+        .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+        .map(|(dr, dc)| (row + dr, col + dc))
+        .collect();
+    let alive =
+        disc.iter().filter(|&&(r, c)| world.cell_at(r, c).is_some_and(|x| x.is_alive())).count();
+    assert!(alive > 0 && alive < disc.len(), "{alive} of {} is not noise", disc.len());
+}
+
+/// **A blast lights every stick it reaches, and none it does not.** A
+/// live dynamite in the disc has its fuse set to full rather than being
+/// scrambled, and goes off at the top of the next generation — so a line
+/// of them is a fuse. One further than a thrown disc could reach is not
+/// touched at all.
+///
+/// The first blast is `detonate` on its own and the second is a `step`,
+/// because the pass runs at the top of a generation: what is pinned is
+/// that the chained stick goes off before anything else gets a turn.
+#[test]
+fn a_blast_lights_the_sticks_it_reaches_and_no_further() {
+    let mut world = World::infinite_empty();
+    let me = PlayerId(1);
+    let them = PlayerId(2);
+    // Their ground all round, so the blast goes off where the stick stands
+    // rather than walking to somewhere worth hitting.
+    for r in -40..=40 {
+        for c in -40..=40 {
+            let held = Cell::DEAD.with_player(them).with_level(super::super::cell::bits::MAX_LEVEL);
+            world.set_cell_at(r, c, held);
+        }
+    }
+    let stick = |age| Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(age);
+    // On the rim of the disc, and where no disc thrown its furthest reaches.
+    let near = (0, rule::DYNAMITE_REACH);
+    let far = (0, -(rule::DYNAMITE_REACH + rule::DYNAMITE_THROW + 1));
+    world.set_cell_at(0, 0, stick(super::super::cell::bits::MAX_AGE));
+    world.set_cell_at(near.0, near.1, stick(2));
+    world.set_cell_at(far.0, far.1, stick(2));
+
+    world.detonate();
+    let lit = world.cell_at(near.0, near.1).unwrap();
+    assert!(lit.is_alive() && lit.kind() == Kind::DYNAMITE, "the chained stick was scrambled");
+    assert_eq!(lit.age(), super::super::cell::bits::MAX_AGE, "the chained stick is not full");
+    assert_eq!(world.cell_at(far.0, far.1), Some(stick(2)), "a stick out of reach was touched");
+    assert_eq!(world.blasts.len(), 1);
+
+    world.step();
+    assert!(
+        world.cell_at(near.0, near.1).is_some_and(|c| c.kind() == Kind::NORMAL),
+        "the chained stick did not go off on the next generation"
+    );
+    let blasts = world.take_blasts();
+    assert_eq!(blasts.len(), 2, "one blast should have lit exactly one more");
+    assert_eq!(blasts[1].by, me);
+    let thrown = (blasts[1].at.0 - near.0).abs().max((blasts[1].at.1 - near.1).abs());
+    assert!(thrown <= rule::DYNAMITE_THROW, "the second blast went off at {:?}", blasts[1].at);
+}
+
+/// **A stick under ice is not lit.** A pane stops time over what it
+/// covers and that is every rule, the fuse a blast would have set
+/// included — which is what makes ice the answer to a line of them as
+/// much as to one.
+#[test]
+fn a_blast_does_not_light_a_stick_under_ice() {
+    let mut world = World::infinite_empty();
+    let me = PlayerId(1);
+    let them = PlayerId(2);
+    for r in -40..=40 {
+        for c in -40..=40 {
+            let held = Cell::DEAD.with_player(them).with_level(super::super::cell::bits::MAX_LEVEL);
+            world.set_cell_at(r, c, held);
+        }
+    }
+    let stick = |age| Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(age);
+    let frozen = stick(2).with_ice(true);
+    world.set_cell_at(0, 0, stick(super::super::cell::bits::MAX_AGE));
+    world.set_cell_at(0, 1, frozen);
+
+    world.detonate();
+    assert_eq!(world.cell_at(0, 1), Some(frozen), "the blast reached under the ice");
+    world.step();
+    assert_eq!(world.take_blasts().len(), 1, "the frozen stick went off");
+}
+
+/// **A blast is thrown toward the frontier, and no further than the
+/// throw.** A stick inside its owner's country goes off toward the nearest
+/// ground that is not theirs, wherever that is within `DYNAMITE_THROW`;
+/// a frontier no disc thrown that far can reach leaves it going off where
+/// it stands, rather than homing on it from across the map.
+#[test]
+fn a_blast_is_thrown_toward_the_frontier_and_no_further_than_the_throw() {
+    let me = PlayerId(1);
+    let them = PlayerId(2);
+    let (reach, throw) = (rule::DYNAMITE_REACH, rule::DYNAMITE_THROW);
+    // My country, with theirs beginning this many columns east of a stick
+    // at the origin.
+    let country = |frontier: i32| {
+        let mut world = World::infinite_empty();
+        for r in -40..=40 {
+            for c in -40..=40 {
+                let who = if c >= frontier { them } else { me };
+                let held =
+                    Cell::DEAD.with_player(who).with_level(super::super::cell::bits::MAX_LEVEL);
+                world.set_cell_at(r, c, held);
+            }
+        }
+        world
+    };
+    // Any seed: it only breaks the tie between equally near centres.
+    let seed = 7;
+    for frontier in reach..=throw {
+        let world = country(frontier);
+        let centre = world.blast_centre((0, 0), me, seed, reach);
+        assert!(centre.1 > 0, "frontier {frontier} columns off: the blast stayed at {centre:?}");
+        assert!(world.worth_hitting(centre, me, reach), "frontier {frontier}: {centre:?}");
+    }
+    // Past the throw and the reach together there is nothing a disc can
+    // be brought to, so nothing to walk toward.
+    let world = country(throw + reach + 1);
+    assert_eq!(world.blast_centre((0, 0), me, seed, reach), (0, 0));
+    // And the centre never lands beyond the throw, wherever the frontier is.
+    for frontier in 0..=throw + reach + 1 {
+        let centre = country(frontier).blast_centre((0, 0), me, seed, reach);
+        let thrown = centre.0.abs().max(centre.1.abs());
+        assert!(thrown <= throw, "frontier {frontier}: thrown {thrown} to {centre:?}");
+    }
+}
+
+/// **A disc one square short of `DYNAMITE_FOREIGN` is not worth hitting**,
+/// and the square that makes the fraction is — whether it is somebody
+/// else's or nobody's, since a blast claims what it reaches and open
+/// country counts.
+#[test]
+fn a_disc_one_square_under_the_foreign_threshold_is_not_worth_hitting() {
+    let me = PlayerId(1);
+    let reach = rule::DYNAMITE_REACH;
+    let disc: Vec<(i32, i32)> = (-reach..=reach)
+        .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+        .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+        .collect();
+    // The fewest squares that make the fraction: the sum `worth_hitting`
+    // does, rounded up.
+    let need = (disc.len() as u64 * rule::DYNAMITE_FOREIGN).div_ceil(crate::sim::OUT_OF) as usize;
+    for foreign in [PlayerId(2), PlayerId::UNOWNED] {
+        let mut world = World::infinite_empty();
+        for &(r, c) in &disc {
+            let mine = Cell::DEAD.with_player(me).with_level(super::super::cell::bits::MAX_LEVEL);
+            world.set_cell_at(r, c, mine);
+        }
+        for &(r, c) in &disc[..need - 1] {
+            world.set_cell_at(r, c, Cell::DEAD.with_player(foreign));
+        }
+        assert!(
+            !world.worth_hitting((0, 0), me, reach),
+            "{foreign:?}: {} of {} squares qualified",
+            need - 1,
+            disc.len()
+        );
+        let (r, c) = disc[need - 1];
+        world.set_cell_at(r, c, Cell::DEAD.with_player(foreign));
+        assert!(
+            world.worth_hitting((0, 0), me, reach),
+            "{foreign:?}: {need} of {} squares did not qualify",
+            disc.len()
+        );
+    }
+}
+
+/// **A blast reaches ground nobody has loaded.** An infinite world holds
+/// only the chunks something has touched, so a disc that ran past them
+/// was scrambled on one side and left alone on the other, and the same
+/// stick did half as much at a chunk corner as in the middle of one —
+/// which `examples/blast` found by moving. Absent ground is dead and
+/// nobody's, as it is to a turret.
+#[test]
+fn a_blast_reaches_ground_nobody_has_loaded() {
+    let me = PlayerId(1);
+    let mut world = World::infinite_empty();
+    // On the first column of the only chunk there is: everything west of
+    // the stick is void.
+    let at = (CHUNK_N as i32 / 2, 0);
+    let armed =
+        Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(super::super::cell::bits::MAX_AGE);
+    world.set_cell_at(at.0, at.1, armed);
+    world.detonate();
+
+    let reach = rule::DYNAMITE_REACH;
+    let live_between = |lo: i32, hi: i32| {
+        (-reach..=reach)
+            .flat_map(|dr| (lo..=hi).map(move |dc| (dr, dc)))
+            .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+            .filter(|(dr, dc)| world.cell_at(at.0 + dr, at.1 + dc).is_some_and(|c| c.is_alive()))
+            .count()
+    };
+    let (west, east) = (live_between(-reach, -1), live_between(1, reach));
+    assert!(west > 0, "the blast left the void alone");
+    // Two halves of one disc at one chance, so neither is a fraction of
+    // the other.
+    assert!(west * 3 > east && east * 3 > west, "{west} west of the stick, {east} east");
+}
+
+/// **Open country nobody has loaded is worth hitting**, the same as open
+/// country that is: a stick at the edge of its owner's country walks
+/// toward the void beyond it rather than going off in its own ground.
+#[test]
+fn open_country_nobody_has_loaded_is_worth_hitting() {
+    let me = PlayerId(1);
+    let mut world = World::infinite_empty();
+    let n = CHUNK_N as i32;
+    for r in 0..n {
+        for c in 0..n {
+            let mine = Cell::DEAD.with_player(me).with_level(super::super::cell::bits::MAX_LEVEL);
+            world.set_cell_at(r, c, mine);
+        }
+    }
+    let at = (n / 2, n - 3);
+    assert!(!world.worth_hitting(at, me, rule::DYNAMITE_REACH), "the disc is all mine");
+    let centre = world.blast_centre(at, me, 7, rule::DYNAMITE_REACH);
+    assert!(centre.1 > at.1, "the blast stayed at {centre:?} beside the void");
+}
+
+use super::*;
+
+/// The glider is seeded at chunk-local (6, 6) and travels south-east one
+/// cell every four generations, so after 4k steps its absolute cells are
+/// the seed offset by (k, k) -- true only if life crosses chunk borders
+/// correctly.
+fn expected_after(k: i32) -> Vec<(i32, i32)> {
+    let (r, c) = ((CHUNK_N / 2 - 2) as i32, (CHUNK_N / 2 - 2) as i32);
+    let mut v: Vec<(i32, i32)> = [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)]
+        .iter()
+        .map(|&(dr, dc)| (r + dr + k, c + dc + k))
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// Dead ground held by `player`, so a turret can stand somewhere already
+/// its owner's and the nearest square it wants is out of reach of the
+/// territory rule — which claims everything beside a living cell and would
+/// otherwise be indistinguishable from the turret doing it.
+fn own_ground(w: &mut World, rows: (i32, i32), cols: (i32, i32), player: PlayerId) {
+    for row in rows.0..=rows.1 {
+        for col in cols.0..=cols.1 {
+            let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+            w.set_cell_at(row, col, cell.with_player(player));
+        }
+    }
+}
+
+fn owned_by(w: &World, player: PlayerId) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
+    for ((crow, ccol), chunk) in w.stored() {
+        for row in 0..CHUNK_N {
+            for col in 0..CHUNK_N {
+                if chunk[(row, col)].player() == player {
+                    out.push((
+                        crow * CHUNK_N as i32 + row as i32,
+                        ccol * CHUNK_N as i32 + col as i32,
+                    ));
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+fn turret(player: PlayerId) -> Cell {
+    Cell::alive(player).with_kind(Kind::TURRET)
+}
+
+/// One square a generation, and the nearest one that is not its owner's.
+///
+/// The patch is nine across with the turret in the middle, so the four
+/// squares just outside it tie at five cells and everything else is
+/// further — and all four are far enough from the only living cell that
+/// the territory rule cannot have been what claimed them.
+#[test]
+fn a_turret_claims_the_nearest_square_that_is_not_its_owners() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    own_ground(&mut w, (0, 8), (0, 8), me);
+    w.set_cell_at(4, 4, turret(me));
+
+    let before = owned_by(&w, me);
+    w.fire_turrets();
+    let after = owned_by(&w, me);
+
+    let nearest = [(-1, 4), (9, 4), (4, -1), (4, 9)];
+    assert!(
+        rule::TURRET_POWER <= nearest.len(),
+        "this test's geometry assumes a volley fits in the four squares that tie"
+    );
+    assert_eq!(
+        after.len(),
+        before.len() + rule::TURRET_POWER,
+        "a turret takes TURRET_POWER squares a generation"
+    );
+    for claimed in after.iter().filter(|c| !before.contains(c)) {
+        assert!(nearest.contains(claimed), "{claimed:?} is not one of the nearest four");
+    }
+}
+
+/// A volley aims each shot somewhere new. Without excluding what the last
+/// shot took, every shot in a volley finds the same nearest square — the
+/// world is not written until all the searching is done, so the square is
+/// still there to be found.
+#[test]
+fn a_volley_does_not_aim_twice_at_one_square() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    let r = rule::TURRET_REACH;
+    own_ground(&mut w, (-r, r), (-r, r), me);
+    w.set_cell_at(0, 0, turret(me));
+    // Two gaps in the owner's ground at different distances, so there is
+    // a nearest and a next-nearest and no tie to break.
+    w.set_cell_at(0, 3, Cell::DEAD);
+    w.set_cell_at(0, 5, Cell::DEAD);
+
+    let first = w.turret_target((0, 0), me, Aim::Take, 0, &[]).expect("a gap within reach");
+    assert_eq!(first, (0, 3), "the nearer gap");
+    let second = w.turret_target((0, 0), me, Aim::Take, 0, &[first]).expect("and the one past it");
+    assert_eq!(second, (0, 5), "once the nearer one is spoken for");
+}
+
+/// **A turret in the middle of a country still works.** With nobody to
+/// push on it reinforces instead: it takes nobody's ground, and plants its
+/// owner's thinnest square back up to full, which feeds the frontier
+/// through the sum rather than at it.
+///
+/// Before territory was a level this case could barely arise, because a
+/// player's halo was tight enough that ground which was not theirs sat
+/// within reach of anywhere they would stand one. A country reaches much
+/// further now, and the turret had nothing to do.
+#[test]
+fn a_turret_inside_its_owners_ground_reinforces_it() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    let r = rule::TURRET_REACH;
+    own_ground(&mut w, (-r, r), (-r, r), me);
+    w.set_cell_at(0, 0, turret(me));
+
+    let before = owned_by(&w, me);
+    let thin = |w: &World| {
+        owned_by(w, me)
+            .into_iter()
+            .filter(|&(r, c)| w.cell_at(r, c).is_some_and(|x| x.influence() >= rule::TURRET_PUSH))
+            .count()
+    };
+    let full_before = thin(&w);
+    w.fire_turrets();
+
+    assert_eq!(owned_by(&w, me), before, "nothing within reach was anyone else's to take");
+    assert_eq!(
+        thin(&w),
+        full_before + rule::TURRET_POWER,
+        "a turret with no frontier in reach should have planted on its own thin ground"
+    );
+}
+
+/// Reinforcing is strictly the **fallback**. Making it the only rule was
+/// tried when levels arrived and ruined the piece: from inside a country
+/// the nearest thin square is a step away, so a turret would top up ground
+/// it already held rather than push on anybody.
+#[test]
+fn a_turret_with_a_frontier_in_reach_pushes_rather_than_reinforcing() {
+    let mut w = World::infinite_empty();
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    // The whole disc is its owner's and every square of it is thin --
+    // unowned ground would be takeable, so the box has to cover the reach
+    // -- with one square of somebody else's four cells out, further than
+    // the thin ground going begging right beside it.
+    let r = rule::TURRET_REACH;
+    own_ground(&mut w, (-r, r), (-r, r), me);
+    w.set_cell_at(0, 0, turret(me));
+    w.set_cell_at(0, 4, Cell::DEAD.with_player(them));
+
+    w.fire_turrets();
+
+    assert_eq!(
+        w.cell_at(0, 4).map(|c| c.player()),
+        Some(me),
+        "the frontier is what a turret goes for, thin ground beside it or not"
+    );
+}
+
+/// A turret takes **ground**, so it wants a dead square that is not its
+/// owner's. Not the life standing on one — there is a single owner field,
+/// so claiming a living cell would hand over the cell rather than the
+/// square, and territory has never worked that way.
+#[test]
+fn a_turret_claims_ground_and_not_the_life_standing_on_it() {
+    let mut w = World::infinite_empty();
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    w.set_cell_at(0, 1, Cell::DEAD.with_player(them));
+    w.set_cell_at(0, 2, Cell::alive(them));
+    w.set_cell_at(0, 3, Cell::DEAD.with_player(me));
+    w.set_cell_at(0, 4, Cell::DEAD.with_player(them).with_ice(true));
+
+    assert!(w.turret_wants((0, 1), me, Aim::Take), "their ground is what a turret takes");
+    assert!(!w.turret_wants((0, 2), me, Aim::Take), "their life is not");
+    assert!(!w.turret_wants((0, 3), me, Aim::Take), "nor is what is already theirs");
+    assert!(!w.turret_wants((0, 4), me, Aim::Take), "a pane's cover is not claimed from under it");
+    assert!(w.turret_wants((5, 5), me, Aim::Take), "and ground nobody holds counts");
+}
+
+/// A live cell must have an owner, so taking a square away from its owner
+/// kills whatever was standing on it. The killing is that invariant rather
+/// than a rule of its own.
+#[test]
+fn a_dead_turret_takes_its_owners_ground_back_and_kills_what_stands_on_it() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    w.set_cell_at(0, 0, turret(me).with_alive(false));
+    w.set_cell_at(0, 1, Cell::alive(me));
+
+    w.fire_turrets();
+
+    let hit = w.cell_at(0, 1).unwrap();
+    assert!(!hit.is_alive(), "unowning a living square kills it");
+    assert_eq!(hit.player(), PlayerId::UNOWNED);
+}
+
+/// Granted ground is exempt, for the reason it never decays: it is the
+/// ground its owner still builds on at the base rate, so a machine of
+/// theirs that failed must not be what takes that away.
+#[test]
+fn a_dead_turret_does_not_eat_home_ground() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    w.set_cell_at(0, 0, turret(me).with_alive(false));
+    w.set_cell_at(0, 1, Cell::DEAD.with_player(me).with_home(true));
+    w.set_cell_at(0, 5, Cell::DEAD.with_player(me));
+
+    w.fire_turrets();
+
+    let home = w.cell_at(0, 1).unwrap();
+    assert_eq!(home.player(), me, "home ground is not what a dead turret takes");
+    assert!(home.is_home());
+    assert_eq!(
+        w.cell_at(0, 5).unwrap().player(),
+        PlayerId::UNOWNED,
+        "so it reached past it for the next square that was the owner's"
+    );
+}
+
+/// A pane stops time over whatever it covers, and that is every rule
+/// rather than only the ones inside `rule`.
+#[test]
+fn a_turret_under_ice_does_not_fire() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    w.set_cell_at(0, 0, turret(me).with_ice(true));
+
+    let before = owned_by(&w, me);
+    w.fire_turrets();
+    assert_eq!(owned_by(&w, me), before, "a frozen turret claimed ground");
+}
+
+/// Four turrets in a block: the cheapest thing in Conway that never dies
+/// and never gives birth, which is why a turret is placed in fours. One on
+/// its own has no live neighbours and is gone in a generation.
+#[test]
+fn a_block_of_four_turrets_never_dies_and_never_breeds() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    let block = [(0, 0), (0, 1), (1, 0), (1, 1)];
+    for (row, col) in block {
+        w.set_cell_at(row, col, turret(me));
+    }
+    for _ in 0..50 {
+        w.step();
+    }
+    for (row, col) in block {
+        let cell = w.cell_at(row, col).unwrap();
+        assert!(cell.is_alive(), "({row}, {col}) died");
+        assert_eq!(cell.kind(), Kind::TURRET, "({row}, {col}) stopped being a turret");
+    }
+    assert_eq!(w.live_cells().len(), 4, "a still life gives no births, so it stays four");
+}
+
+#[test]
+fn a_lone_turret_dies_of_loneliness() {
+    let mut w = World::infinite_empty();
+    w.set_cell_at(0, 0, turret(PlayerId(1)));
+    w.step();
+    assert!(!w.cell_at(0, 0).unwrap().is_alive());
+}
+
+/// **A world's number changes its dice and not its life.**
+///
+/// Which is what makes a seed per room safe. The dice decide who owns a
+/// birth, when a square works out what reaches it, and which of several
+/// tied squares a turret takes — none of which is whether a cell lives. So
+/// two rooms holding the same pattern watch it do the same thing and
+/// disagree about whose it is, and a pattern carried in from somewhere
+/// else behaves the way it is written down.
+///
+/// The pair of assertions is the point. Either alone would pass for the
+/// wrong reason: identical liveness with identical ownership means the
+/// seed is doing nothing, and different ownership with different liveness
+/// means it is doing far too much.
+#[test]
+fn a_worlds_own_number_changes_its_dice_and_not_its_life() {
+    let build = |seed: u64| {
+        let mut w = World::infinite_empty();
+        w.set_seed(seed);
+        // Two players growing into each other, so births are contested and
+        // there is something for the dice to decide.
+        for (r, c) in [(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
+            w.set_cell_at(r, c + 6, Cell::alive(PlayerId(2)));
+        }
+        w
+    };
+    let (mut a, mut b) = (build(0), build(0x9E37_79B9_7F4A_7C15));
+    for _ in 0..60 {
+        a.step();
+        b.step();
+    }
+
+    assert_eq!(a.live_cells(), b.live_cells(), "the seed changed which cells are alive");
+
+    // Over the **ground**, not over the life. Whose a live cell is comes
+    // from its parents, and two patterns far enough apart never share one,
+    // so the roll that picks a parent has nothing to pick between. Where
+    // the dice show is territory: `rule::LEVEL_ADJUST` decides *when* a
+    // square works out what reaches it, so the two fields settle along
+    // different paths even where they would settle the same in the end.
+    let held = |w: &World| {
+        (-8..24)
+            .flat_map(|r| (-8..24).map(move |c| (r, c)))
+            .map(|(r, c)| w.cell_at(r, c).unwrap_or(Cell::DEAD).0[0])
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(held(&a), held(&b), "the seed changed nothing about who holds what");
+}
+
+/// **The liveness of this world is plain Conway, exactly.**
+///
+/// Which is the premise of everything Golly-shaped — see
+/// [planned.md](https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#experiments):
+/// a pattern written down by somebody else runs here the way it runs
+/// anywhere, or reading fifty years of other people's work is reading it
+/// wrong. It is not obvious from the code that it holds. Three of the four
+/// things this simulation adds to Conway do not touch whether a cell
+/// lives — territory writes the owner byte of dead squares, a factory is a
+/// tally, and ice is inert until a pane is laid — but that is an argument,
+/// and this is the measurement.
+///
+/// Against a reference stepper written out longhand rather than against a
+/// recorded answer, so it says *which generation* diverged and not merely
+/// that something did.
+///
+/// The two things that **do** touch liveness are turrets and ice, and
+/// neither is on this board. That is the whole of the caveat and it is
+/// worth stating where somebody will find it.
+#[test]
+fn liveness_is_exactly_b3_s23() {
+    // One chunk a side, whatever a chunk is — the point of the test is the
+    // rule, and a size written out here is a size that goes stale the day
+    // `CHUNK_N` changes, which it has.
+    const N: usize = CHUNK_N;
+    let mut soup = [[false; N]; N];
+    let mut w = World::toroidal_empty(1, 1);
+    assert_eq!(w.size_in_cells(), Some((N as i32, N as i32)));
+
+    // A fixed soup, from the dice the simulation already uses, so this
+    // starts from something busy rather than from something chosen.
+    for (r, row) in soup.iter_mut().enumerate() {
+        for (c, square) in row.iter_mut().enumerate() {
+            let seed = super::super::seed::mix(0x5011_5EED, (r as u64) << 32 | c as u64);
+            if Roll::new(seed).chance(0, 24) {
+                *square = true;
+                w.set_cell_at(r as i32, c as i32, Cell::alive(PlayerId(1)));
+            }
+        }
+    }
+
+    let step_reference = |grid: &[[bool; N]; N]| {
+        let mut next = [[false; N]; N];
+        for r in 0..N {
+            for c in 0..N {
+                let mut live = 0;
+                for dr in [N - 1, 0, 1] {
+                    for dc in [N - 1, 0, 1] {
+                        if (dr, dc) == (0, 0) {
+                            continue;
+                        }
+                        if grid[(r + dr) % N][(c + dc) % N] {
+                            live += 1;
+                        }
+                    }
+                }
+                next[r][c] = if grid[r][c] { live == 2 || live == 3 } else { live == 3 };
+            }
+        }
+        next
+    };
+
+    for generation in 1..=200 {
+        w.step();
+        soup = step_reference(&soup);
+
+        let theirs: Vec<(i32, i32)> = (0..N)
+            .flat_map(|r| (0..N).map(move |c| (r, c)))
+            .filter(|&(r, c)| soup[r][c])
+            .map(|(r, c)| (r as i32, c as i32))
+            .collect();
+        assert_eq!(w.live_cells(), theirs, "generation {generation} is not what Conway does");
+    }
+    assert!(!w.live_cells().is_empty(), "the soup died out; test proves nothing");
+}
+
+/// The pass is part of the step, so it is under the same contract: two
+/// worlds given the same start stay byte-identical. The tie-break is a
+/// seeded roll and the turret list is sorted, which is what makes that
+/// true across processes where `stored` walks a `HashMap`.
+#[test]
+fn firing_turrets_is_deterministic() {
+    let build = || {
+        let mut w = World::infinite_empty();
+        for (player, at) in [(1u8, (0, 0)), (2, (7, 9)), (1, (20, 3))] {
+            let me = PlayerId(player);
+            own_ground(&mut w, (at.0, at.0 + 3), (at.1, at.1 + 3), me);
+            w.set_cell_at(at.0 + 1, at.1 + 1, turret(me));
+            w.set_cell_at(at.0 + 2, at.1 + 2, turret(me).with_alive(false));
+        }
+        w
+    };
+    let (mut a, mut b) = (build(), build());
+    for _ in 0..40 {
+        a.step();
+        b.step();
+    }
+    assert_eq!(a.digest(), b.digest());
+}
+
+#[test]
+fn the_glider_crosses_chunk_borders_intact() {
+    let mut w = World::infinite();
+    for _ in 0..400 {
+        w.step();
+    }
+    assert_eq!(w.live_cells(), expected_after(100));
+}
+
+#[test]
+fn an_infinite_world_stores_only_chunks_that_hold_something() {
+    let mut w = World::infinite();
+    for _ in 0..400 {
+        w.step();
+    }
+    // Nothing wholly empty is kept: that is what pruning is for, and
+    // without it the glider's wake grew without bound.
+    for (coord, chunk) in w.stored() {
+        assert!(!chunk.is_empty(), "chunk {coord:?} is empty but stored");
+    }
+
+    // And the wake is bounded, which is what territory decay bought.
+    //
+    // A glider claims the ground it crosses. With no die-off it kept every
+    // square it had ever touched, so a chunk was held for each and the
+    // world grew for as long as anything moved -- twenty-five chunks and
+    // climbing after four hundred generations, for five live cells.
+    // Ground with nothing alive beside it now loses its owner, so the
+    // trail fades behind the glider and only what it is currently over is
+    // held.
+    assert!(
+        w.stored_count() <= 8,
+        "a glider should hold a handful of chunks, not a trail; got {}",
+        w.stored_count()
+    );
+
+    let claimed = w
+        .stored()
+        .iter()
+        .filter(|(_, c)| (0..CHUNK_N).any(|r| (0..CHUNK_N).any(|k| c[(r, k)].player().is_owned())))
+        .count();
+    assert_eq!(claimed, w.stored_count(), "every chunk kept is kept for a reason");
+}
+
+/// Territory has to be able to leave the chunk it started in.
+///
+/// A granted patch lands flush against a chunk's top-left corner, so two of
+/// its edges *are* the boundary. While only life woke a neighbouring chunk,
+/// ground crept right and down — which is interior — and never up or left,
+/// which is exactly what it looked like on screen.
+#[test]
+fn territory_creeps_across_a_chunk_boundary() {
+    let me = PlayerId(1);
+    let mut w = World::infinite_empty();
+    // Claimed ground in the corner of chunk (0, 0), with a block standing
+    // on it so the ground is held rather than fading.
+    for r in 0..6 {
+        for c in 0..6 {
+            w.set_cell_at(r, c, Cell::DEAD.with_player(me));
+        }
+    }
+    for (r, c) in [(1, 1), (1, 2), (2, 1), (2, 2)] {
+        w.set_cell_at(r, c, Cell::alive(me));
+    }
+
+    let (mut north, mut west) = (false, false);
+    for _ in 0..400 {
+        w.step();
+        north |= (-4..0).any(|r| (0..6).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me)));
+        west |= (0..6).any(|r| (-4..0).any(|c| w.cell_at(r, c).is_some_and(|x| x.player() == me)));
+    }
+    assert!(north, "nothing ever crept north out of the chunk");
+    assert!(west, "nothing ever crept west out of the chunk");
+}
+
+/// Ground is lost as well as won, and granted ground is not.
+#[test]
+fn territory_decays_where_nothing_is_alive_but_home_does_not() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+
+    // A patch of plain claimed ground, and a patch of granted ground, both
+    // with nothing alive anywhere near them.
+    for c in 0..8 {
+        w.set_cell_at(0, c, Cell::DEAD.with_player(me));
+        w.set_cell_at(4, c, Cell::DEAD.with_player(me).with_home(true));
+    }
+
+    let owned =
+        |w: &World, row: i32| (0..8).filter(|&c| w.cell_at(row, c).unwrap().player() == me).count();
+    assert_eq!(owned(&w, 0), 8);
+
+    // Long enough that a one-in-sixteen chance has almost certainly come
+    // up for every square.
+    for _ in 0..200 {
+        w.step();
+    }
+
+    assert_eq!(owned(&w, 0), 0, "ground with nothing alive beside it fades");
+    assert_eq!(owned(&w, 4), 8, "granted ground is the floor and stays");
+}
+
+/// Decay only reaches ground that life has left. A pattern holds the
+/// squares around it for as long as it is alive, or a blinker would flicker
+/// its own ground away.
+#[test]
+fn territory_beside_life_is_held() {
+    let mut w = World::infinite_empty();
+    let me = PlayerId(1);
+    // A block: four cells that live forever without moving.
+    for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        w.set_cell_at(r, c, Cell::alive(me));
+    }
+    for _ in 0..200 {
+        w.step();
+    }
+    // The eight squares around it are touching life every generation, so
+    // they are re-claimed as fast as they could ever decay.
+    let ring = [(-1, -1), (-1, 0), (-1, 1), (-1, 2), (0, -1), (0, 2), (2, 0), (2, 1)];
+    for (r, c) in ring {
+        assert_eq!(
+            w.cell_at(r, c).unwrap().player(),
+            me,
+            "({r}, {c}) beside a block should stay claimed"
+        );
+    }
+}
+
+/// Every one of a 1x1 torus's eight neighbours is the chunk itself. A
+/// graph of `Rc<RefCell<Chunk>>` cannot express this: gathering a chunk's
+/// neighbourhood would borrow the same cell twice and panic. Computing
+/// neighbours by coordinate makes it an ordinary repeated read.
+#[test]
+fn a_chunk_can_be_its_own_neighbour() {
+    let mut w = World::toroidal(1, 1);
+    assert_eq!(w.stored_count(), 1);
+    let start = w.live_cells();
+    // A glider crosses a 16-cell torus in 4 * 16 generations.
+    for _ in 0..(4 * CHUNK_N as u32) {
+        w.step();
+    }
+    assert_eq!(w.live_cells(), start, "the glider should return to its start");
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+#[test]
+fn a_torus_wraps_in_both_axes() {
+    for (rows, cols) in [(1, 1), (2, 2), (3, 2), (4, 4)] {
+        let mut w = World::toroidal(rows, cols);
+        let start = w.live_cells();
+        // A glider advances one cell diagonally every four generations, so
+        // it laps a height x width torus after 4 * lcm(height, width).
+        let (h, v) = (rows as u32 * CHUNK_N as u32, cols as u32 * CHUNK_N as u32);
+        let period = 4 * (h / gcd(h, v)) * v;
+        for _ in 0..period {
+            w.step();
+        }
+        assert_eq!(w.live_cells().len(), 5, "{rows}x{cols}: the glider must survive wrapping");
+        assert_eq!(w.live_cells(), start, "{rows}x{cols}: expected one full lap");
+    }
+}
+
+#[test]
+fn a_torus_never_changes_size() {
+    let mut w = World::toroidal(3, 3);
+    for _ in 0..400 {
+        w.step();
+        assert_eq!(w.stored_count(), 9);
+    }
+}
+
+/// Global coordinates map many-to-one onto chunks, which is what makes the
+/// tiling tile. Neighbours must agree across that mapping.
+#[test]
+fn global_coordinates_fold_onto_chunks_consistently() {
+    let w = World::toroidal(3, 2);
+    for row in -7..7 {
+        for col in -7..7 {
+            let canon = w.canonical((row, col));
+            assert!((0..3).contains(&canon.0) && (0..2).contains(&canon.1));
+            // The same chunk, however you address it.
+            assert!(std::ptr::eq(w.chunk_at((row, col)).unwrap(), w.chunk_at(canon).unwrap()));
+            // Stepping to a neighbour and folding gives the same answer as
+            // folding and then stepping.
+            for dir in Dir::ALL {
+                assert_eq!(w.canonical(offset((row, col), dir)), w.canonical(offset(canon, dir)),);
+            }
+        }
+    }
+}
+
+/// A wrapping world repeats for as far as anyone can pan.
+///
+/// The renderer asks every chunk position the viewport covers which chunk
+/// fills it, so this is the whole of it: fold a viewport a hundred worlds
+/// from the origin and every position lands on a real chunk. It used to
+/// draw a fixed number of copies either side of the original instead, and
+/// panning off the last of them fell into blank space forever.
+#[test]
+fn a_torus_repeats_however_far_you_pan() {
+    let w = World::toroidal(2, 3);
+
+    // A viewport far out in both axes, and one far out negative -- the
+    // world has no origin, so east and west must behave alike.
+    for corner in [(200, 300), (-200, -300), (201, -299)] {
+        let covering: Vec<Coord> = (corner.0..corner.0 + 4)
+            .flat_map(|r| (corner.1..corner.1 + 6).map(move |c| (r, c)))
+            .collect();
+        let landed: HashSet<Coord> = covering.iter().map(|&c| w.canonical(c)).collect();
+
+        for &at in &covering {
+            let onto = w.canonical(at);
+            assert!(w.chunk_at(onto).is_some(), "{at:?} folded to {onto:?}, which is not a chunk");
+        }
+        assert_eq!(landed.len(), 6, "a viewport that wide should cover every chunk");
+    }
+
+    // And the many-to-one is what makes it repeat: one chunk fills many
+    // positions, exactly one world apart.
+    assert_eq!(w.canonical((0, 0)), w.canonical((2, 3)));
+    assert_eq!(w.canonical((0, 0)), w.canonical((-200, 300)));
+}
+
+/// Dimensions are chunks, and any size works down to a single chunk.
+#[test]
+fn a_torus_takes_its_dimensions_in_chunks() {
+    for (rows, cols) in [(1, 1), (1, 5), (5, 1), (4, 7)] {
+        let w = World::toroidal(rows, cols);
+        assert_eq!(w.stored_count(), (rows * cols) as usize);
+        assert_eq!(w.kind(), WorldKind::Toroidal { rows, cols });
+    }
+}
+
+/// Client-side prediction rests on this: the same start plus the same
+/// inputs must give byte-identical results, in any process, every time.
+#[test]
+fn stepping_is_deterministic() {
+    let mut a = World::infinite();
+    let mut b = World::infinite();
+    assert_eq!(a.digest(), b.digest());
+    for g in 0..400 {
+        a.step();
+        b.step();
+        assert_eq!(a.digest(), b.digest(), "diverged at generation {g}");
+    }
+    assert_eq!(a.live_cells(), b.live_cells());
+}
+
+/// The digest must notice a difference the live-cell list would miss.
+#[test]
+fn the_digest_covers_more_than_liveness() {
+    let mut a = World::infinite();
+    let mut b = World::infinite();
+    for _ in 0..40 {
+        a.step();
+        b.step();
+    }
+    assert_eq!(a.digest(), b.digest());
+
+    // Same cells alive, different owner. Any chunk will do so long as it
+    // holds life -- most of them now hold only claimed ground, since a
+    // glider's trail is kept for its owner marks.
+    let coord = b
+        .stored()
+        .iter()
+        .find(|(_, c)| (0..CHUNK_N).any(|r| (0..CHUNK_N).any(|k| c[(r, k)].is_alive())))
+        .expect("something should still be alive")
+        .0;
+    let mut edited = *b.chunk_at(coord).unwrap();
+    'outer: for row in 0..CHUNK_N {
+        for col in 0..CHUNK_N {
+            if edited[(row, col)].is_alive() {
+                edited[(row, col)] = edited[(row, col)].with_player(PlayerId(2));
+                break 'outer;
+            }
+        }
+    }
+    let b2 = b.with_chunk_for_test(coord, edited);
+    assert_eq!(a.live_cells(), b2.live_cells(), "liveness is unchanged");
+    assert_ne!(a.digest(), b2.digest(), "but the digest must differ");
+}
+
+/// A pane is one object: touching any of it breaks all of it, however far
+/// it runs and across however many chunks.
+#[test]
+fn touching_a_pane_shatters_the_whole_run() {
+    let mut w = World::infinite_empty();
+    // A run of ice 40 cells long, which spans three chunks at 16 wide.
+    for col in 0..40 {
+        w.set_cell_at(0, col, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
+    }
+    // A block far along it, so the break has to travel back to the start.
+    for (r, c) in [(1, 38), (1, 39), (2, 38), (2, 39)] {
+        w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
+    }
+    assert!(w.cell_at(0, 0).unwrap().is_ice());
+
+    w.step();
+
+    for col in 0..40 {
+        assert!(
+            !w.cell_at(0, col).map(|c| c.is_ice()).unwrap_or(false),
+            "ice at column {col} survived"
+        );
+    }
+}
+
+/// Two panes that meet only at a corner are two panes. Breaking one must
+/// not break the other, or every pane on a diagonal falls together.
+#[test]
+fn a_break_does_not_jump_a_diagonal_join() {
+    let mut w = World::infinite_empty();
+    for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        w.set_cell_at(r, c, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
+    }
+    // Touching only at (1,1)'s corner.
+    for (r, c) in [(2, 2), (2, 3), (3, 2), (3, 3)] {
+        w.set_cell_at(r, c, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
+    }
+    // Life against the first pane only.
+    for (r, c) in [(-1, -1), (-1, 0), (-2, -1), (-2, 0)] {
+        w.set_cell_at(r, c, Cell::alive(PlayerId(1)));
+    }
+
+    w.step();
+
+    assert!(!w.cell_at(0, 0).unwrap().is_ice(), "the touched pane breaks");
+    assert!(w.cell_at(3, 3).unwrap().is_ice(), "the pane it only meets at a corner should stand");
+}
+
+/// Ice with nothing alive beside it is left alone.
+#[test]
+fn an_untouched_pane_stands() {
+    let mut w = World::infinite_empty();
+    for col in 0..8 {
+        w.set_cell_at(0, col, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
+    }
+    for _ in 0..10 {
+        w.step();
+    }
+    for col in 0..8 {
+        assert!(w.cell_at(0, col).unwrap().is_ice(), "column {col} broke");
+    }
+}
+
+/// A pane with a margin round the life it covers is not broken by that
+/// life, and this is why: every cell that could be born from the frozen
+/// pattern lies inside the pane, where the rule returns it unchanged, so
+/// nothing is ever born outside to touch it. Lay the pane tightly instead
+/// and it breaks at once, which is `life_born_beside_a_pane_breaks_it`.
+///
+/// Says nothing about life arriving from elsewhere — see the test below,
+/// which is what actually breaks a pane like this.
+#[test]
+fn a_pane_with_a_margin_is_not_broken_by_what_it_covers() {
+    let mut w = World::infinite_empty();
+    for col in 40..43 {
+        w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
+    }
+    // One cell of margin on every side.
+    for row in 39..42 {
+        for col in 39..44 {
+            let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+            w.set_cell_at(row, col, cell.with_ice(true).with_player(PlayerId(1)));
+        }
+    }
+
+    for _ in 0..40 {
+        w.step();
+    }
+
+    assert!(w.cell_at(39, 39).unwrap().is_ice(), "the pane should still stand");
+    assert_eq!(w.live_cells().len(), 3, "and what it covers should be exactly as it was, frozen");
+}
+
+/// What a pane is for. Shattering clears the ice flag and nothing else,
+/// so a schematic drawn under one — alive here, deliberately dead there,
+/// and whoever owns each cell — starts living exactly as it was drawn the
+/// moment the cover goes. Anything that reset the cells underneath would
+/// make a pane useless for laying a pattern out over several generations,
+/// which is the whole of why it freezes rather than blocks.
+#[test]
+fn shattering_leaves_what_was_under_it_exactly_as_it_was() {
+    let mut w = World::infinite_empty();
+
+    // A schematic: two live cells with different owners, and a gap that
+    // has to stay a gap.
+    w.set_cell_at(11, 11, Cell::alive(PlayerId(1)));
+    w.set_cell_at(11, 13, Cell::alive(PlayerId(2)));
+    for row in 10..=12 {
+        for col in 10..=14 {
+            let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+            w.set_cell_at(row, col, cell.with_ice(true));
+        }
+    }
+    let before: Vec<Cell> = (10..=12)
+        .flat_map(|r| (10..=14).map(move |c| (r, c)))
+        .map(|(r, c)| w.cell_at(r, c).unwrap())
+        .collect();
+
+    // A block against the pane, ice-free and alive, to break it.
+    for (r, c) in [(13, 10), (13, 11), (14, 10), (14, 11)] {
+        w.set_cell_at(r, c, Cell::alive(PlayerId(3)));
+    }
+
+    w.step();
+
+    assert!(!w.cell_at(10, 14).unwrap().is_ice(), "the pane should have gone");
+    let after: Vec<Cell> = (10..=12)
+        .flat_map(|r| (10..=14).map(move |c| (r, c)))
+        .map(|(r, c)| w.cell_at(r, c).unwrap())
+        .collect();
+    for (was, is) in before.iter().zip(&after) {
+        assert_eq!(
+            was.with_ice(false),
+            *is,
+            "the ice flag is the only thing shattering may change"
+        );
+    }
+}
+
+/// A cell against a pane breaks it even if this is the generation it dies
+/// in. It is alive now and it is touching now, and that is the whole of
+/// what breaking means — a cell about to die has still crashed into it.
+///
+/// This is what taking the seeds before the rule buys. Taken after, a cell
+/// that died on the way would already be gone and the pane would stand,
+/// which reads as ice ignoring something that plainly hit it.
+#[test]
+fn a_cell_that_dies_this_generation_still_breaks_the_pane() {
+    let mut w = World::infinite_empty();
+    for col in 0..6 {
+        w.set_cell_at(0, col, Cell::DEAD.with_ice(true).with_player(PlayerId(2)));
+    }
+    // One cell, alone, against the pane: it dies of loneliness on the very
+    // step it would break it.
+    w.set_cell_at(1, 2, Cell::alive(PlayerId(1)));
+
+    w.step();
+
+    assert!(!w.cell_at(1, 2).unwrap().is_alive(), "it should have died");
+    for col in 0..6 {
+        assert!(
+            !w.cell_at(0, col).unwrap().is_ice(),
+            "and taken the pane with it: ice at column {col} survived"
+        );
+    }
+}
+
+/// And what breaks it: anything alive that arrives. A glider is the
+/// cheapest way to reach a pane you cannot get next to, and it shatters
+/// the whole run the moment it touches — sealing a pattern in buys you
+/// time, not safety.
+#[test]
+fn a_glider_shatters_a_pane_it_reaches() {
+    let mut w = World::infinite_empty();
+    for col in 40..43 {
+        w.set_cell_at(40, col, Cell::alive(PlayerId(1)));
+    }
+    for row in 39..42 {
+        for col in 39..44 {
+            let cell = w.cell_at(row, col).unwrap_or(Cell::DEAD);
+            w.set_cell_at(row, col, cell.with_ice(true).with_player(PlayerId(1)));
+        }
+    }
+
+    // A glider up and to the left, travelling down and to the right: one
+    // cell each way every four generations.
+    for (r, c) in [(30, 31), (31, 32), (32, 30), (32, 31), (32, 32)] {
+        w.set_cell_at(r, c, Cell::alive(PlayerId(2)));
+    }
+
+    let mut broke_at = None;
+    for step in 1..=60 {
+        w.step();
+        if !w.cell_at(39, 39).unwrap_or(Cell::DEAD).is_ice() {
+            broke_at = Some(step);
+            break;
+        }
+    }
+    let broke_at = broke_at.expect("the glider should have reached the pane and broken it");
+    assert!(broke_at > 1, "it should have had to travel, not start touching");
+
+    for row in 39..42 {
+        for col in 39..44 {
+            assert!(
+                !w.cell_at(row, col).unwrap_or(Cell::DEAD).is_ice(),
+                "({row}, {col}) survived, so the run did not break as one"
+            );
+        }
+    }
+}
+
+/// `--torus 18x18` has to mean the same thing to the client and the
+/// server, so the parsing is one function and its refusals are pinned.
+#[test]
+fn a_torus_size_is_read_the_same_way_everywhere() {
+    assert_eq!(parse_torus("18x18"), Ok(WorldKind::Toroidal { rows: 18, cols: 18 }));
+    assert_eq!(parse_torus("4X7"), Ok(WorldKind::Toroidal { rows: 4, cols: 7 }));
+    assert_eq!(parse_torus(" 4 x 7 "), Ok(WorldKind::Toroidal { rows: 4, cols: 7 }));
+
+    // A world with no chunks in it is not a world.
+    assert!(parse_torus("0x4").is_err());
+    assert!(parse_torus("-3x4").is_err());
+    assert!(parse_torus("18").is_err());
+    assert!(parse_torus("axb").is_err());
+    assert!(parse_torus("").is_err());
+}
+
+/// The shape is a choice made at startup, and both shapes have to work.
+#[test]
+fn either_shape_builds_and_steps() {
+    for mode in [WorldKind::Infinite, WorldKind::Toroidal { rows: 4, cols: 4 }] {
+        let mut w = mode.build();
+        w.set_cell_at(2, 2, Cell::alive(PlayerId(1)));
+        w.set_cell_at(2, 3, Cell::alive(PlayerId(1)));
+        w.set_cell_at(3, 2, Cell::alive(PlayerId(1)));
+        w.set_cell_at(3, 3, Cell::alive(PlayerId(1)));
+        for _ in 0..5 {
+            w.step();
+        }
+        assert_eq!(w.live_cells().len(), 4, "{mode:?}: a block should hold");
+    }
+}
+
+/// A pane is not broken by what it covers. The cell underneath is frozen,
+/// and frozen is not "alive and ice-free", so it cannot be the seed --
+/// otherwise every pane laid over life would shatter on the next tick.
+#[test]
+fn a_pane_is_not_broken_by_the_cell_it_covers() {
+    let mut w = World::infinite_empty();
+    // Alone, so nothing can be born next to it: a single live cell gives
+    // any neighbour one live neighbour, and a birth needs three.
+    w.set_cell_at(0, 0, Cell::alive(PlayerId(1)).with_ice(true));
+
+    for _ in 0..10 {
+        w.step();
+    }
+
+    let c = w.cell_at(0, 0).unwrap();
+    assert!(c.is_ice(), "the pane broke from the inside");
+    assert!(c.is_alive(), "and what it covers should be frozen, not dead");
+}
+
+/// Frozen cells still count as neighbours, so a pane laid *exactly* on
+/// life makes life immediately outside itself -- and that newborn breaks
+/// the pane. Note the "exactly": see the test below for what one cell of
+/// margin does, which is the opposite.
+#[test]
+fn life_born_beside_a_pane_breaks_it() {
+    let mut w = World::infinite_empty();
+    for col in 0..6 {
+        w.set_cell_at(0, col, Cell::alive(PlayerId(1)).with_ice(true));
+    }
+
+    // Two steps, not one. Seeds are taken before the rule runs, so a cell
+    // born during a generation is against the pane from the *next* one --
+    // it crashes into it a beat after it appears.
+    w.step();
+    assert!(w.cell_at(0, 0).unwrap().is_ice(), "nothing was beside it yet");
+    w.step();
+    assert!(
+        !w.cell_at(0, 0).unwrap().is_ice(),
+        "a cell born beside the pane should have broken it"
+    );
+}
+
+#[test]
+fn an_infinite_world_never_folds_coordinates() {
+    let w = World::infinite();
+    assert_eq!(w.canonical((-5, 12)), (-5, 12));
+}
+
+/// **A shape arrives over a wire**, so two numbers a sender chose freely
+/// have to be refused rather than allocated. Each of these used to take
+/// the whole process down from one `Create` on a connection that had not
+/// joined anything: the first two through the `assert!` in
+/// `toroidal_empty`, the third through the `i32` multiply that sizes it.
+#[test]
+fn a_torus_a_client_asked_for_is_refused_before_it_is_built() {
+    for (rows, cols) in [(0, 4), (-1, -1), (4, 0), (100_000, 100_000), (1, 100_000)] {
+        let asked = WorldKind::Toroidal { rows, cols };
+        assert!(asked.checked().is_err(), "{rows}x{cols} was accepted");
+    }
+    // And the shapes the documentation tells people to run still build.
+    // Shapes inside the cap, which is a count of cells wearing a count of
+    // chunks and so moved when a chunk grew — see `MAX_TORUS_SIDE`.
+    for (rows, cols) in [(1, 1), (8, 8), (MAX_TORUS_SIDE, 8)] {
+        let asked = WorldKind::Toroidal { rows, cols };
+        assert_eq!(asked.checked(), Ok(asked), "{rows}x{cols} was refused");
+    }
+    assert_eq!(WorldKind::Infinite.checked(), Ok(WorldKind::Infinite));
+}
+
+/// The command line and the wire agree about what a torus may be, because
+/// there is one answer and `parse_torus` asks it.
+#[test]
+fn the_command_line_refuses_what_the_wire_refuses() {
+    assert!(parse_torus("0x4").is_err());
+    assert!(parse_torus("100000x100000").is_err());
+    assert_eq!(parse_torus("18x18"), Ok(WorldKind::Toroidal { rows: 18, cols: 18 }));
+}
+
+fn overclocker(player: PlayerId) -> Cell {
+    Cell::alive(player).with_kind(Kind::OVERCLOCK)
+}
+
+/// A block of four overclockers at the origin, and a flat blinker a few
+/// rows under it: inside the disc, and far enough that neither pattern
+/// feeds the other a birth.
+const NEAR: [(i32, i32); 3] = [(5, -1), (5, 0), (5, 1)];
+
+fn overclocked_blinker(machine: Cell, blinker: &[(i32, i32)]) -> World {
+    let me = PlayerId(1);
+    let mut w = World::infinite_empty();
+    for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        w.set_cell_at(r, c, machine);
+    }
+    for &(r, c) in blinker {
+        w.set_cell_at(r, c, Cell::alive(me));
+    }
+    w
+}
+
+/// Everything alive below the machine, which is the blinker.
+fn under(w: &World) -> Vec<(i32, i32)> {
+    w.live_cells().into_iter().filter(|&(r, _)| r >= 3).collect()
+}
+
+/// **Inside a disc a blinker has period one in generations.** The rule
+/// runs twice before the generation is called done, so it is back where
+/// it started every time anybody looks — and the machine, inside its own
+/// disc, is a block and does not care.
+#[test]
+fn a_blinker_inside_a_disc_is_flat_again_every_generation() {
+    let mut w = overclocked_blinker(overclocker(PlayerId(1)), &NEAR);
+    for g in 1..=12 {
+        w.step();
+        assert_eq!(under(&w), NEAR.to_vec(), "generation {g}: the blinker should be flat");
+        assert_eq!(w.live_cells().len(), 7, "generation {g}: the block should stand");
+    }
+}
+
+/// Outside every disc the world is what it always was: a blinker past
+/// the reach has period two, and so does one whose machine is dead or
+/// under a pane, because a corpse and a frozen cell run no pass.
+#[test]
+fn a_blinker_outside_a_disc_or_beside_a_dead_or_frozen_machine_keeps_period_two() {
+    let me = PlayerId(1);
+    let far = [(20, -1), (20, 0), (20, 1)];
+    let upright = vec![(19, 0), (20, 0), (21, 0)];
+    let mut w = overclocked_blinker(overclocker(me), &far);
+    w.step();
+    assert_eq!(under(&w), upright, "past the reach it should be upright");
+    w.step();
+    assert_eq!(under(&w), far.to_vec());
+
+    for (machine, why) in [
+        (overclocker(me).with_alive(false), "a corpse"),
+        (overclocker(me).with_ice(true), "a frozen one"),
+    ] {
+        let mut w = overclocked_blinker(machine, &NEAR);
+        w.step();
+        assert_eq!(under(&w), vec![(4, 0), (5, 0), (6, 0)], "{why} ran a pass");
+        w.step();
+        assert_eq!(under(&w), NEAR.to_vec(), "{why} ran a pass");
+    }
+}
+
+/// The pass is under the same contract as the rest of the step: two
+/// worlds given the same start stay byte-identical, with a pattern
+/// straddling the disc's edge and being torn by it. And the tearing is
+/// real — the same world with no machine goes somewhere else.
+#[test]
+fn a_pattern_straddling_a_disc_is_deterministic_and_is_torn() {
+    let build = |machine: Cell| {
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        let mut w = World::infinite_empty();
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            w.set_cell_at(r, c, machine);
+        }
+        // A glider inside the disc heading out of it, and somebody
+        // else's r-pentomino at the edge, so births are contested and
+        // there is something for the dice to decide.
+        for (r, c) in [(3, 3), (4, 4), (5, 2), (5, 3), (5, 4)] {
+            w.set_cell_at(r, c, Cell::alive(me));
+        }
+        for (r, c) in [(-6, 1), (-6, 2), (-7, 0), (-7, 1), (-5, 1)] {
+            w.set_cell_at(r, c, Cell::alive(them));
+        }
+        w
+    };
+    let (mut a, mut b) = (build(overclocker(PlayerId(1))), build(overclocker(PlayerId(1))));
+    let mut plain = build(Cell::alive(PlayerId(1)));
+    for g in 0..60 {
+        a.step();
+        b.step();
+        plain.step();
+        assert_eq!(a.digest(), b.digest(), "diverged at generation {g}");
+    }
+    assert_ne!(a.live_cells(), plain.live_cells(), "the disc changed nothing");
+}
+
+/// **A cell is stepped once however many discs cover it**, and however
+/// many times a disc wraps onto one chunk of a small torus: the masks
+/// are sets, and their bits add up to exactly the disc.
+#[test]
+fn a_disc_is_masked_once_per_cell_wherever_it_folds() {
+    let reach = rule::OVERCLOCK_REACH;
+    let disc = (-reach..=reach)
+        .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+        .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+        .count();
+    for (w, chunks) in [
+        (World::infinite_empty(), 4),
+        (World::toroidal_empty(2, 2), 4),
+        (World::toroidal_empty(1, 1), 1),
+    ] {
+        let masks = w.overclock_masks(&[(0, 0)]);
+        assert_eq!(masks.len(), chunks, "{:?}", w.kind());
+        let cells: usize = masks.values().map(ChunkMask::count).sum();
+        assert_eq!(cells, disc, "{:?}: a disc at the origin", w.kind());
+    }
+    // Two overlapping discs are their union, not their sum.
+    let w = World::infinite_empty();
+    let both: usize = w.overclock_masks(&[(0, 0), (0, 1)]).values().map(ChunkMask::count).sum();
+    assert!(both > disc && both < 2 * disc, "{both} cells for two discs a cell apart");
+
+    // And the smallest torus there is steps a disc that is its own
+    // neighbour on every side without a cell being run twice.
+    let me = PlayerId(1);
+    let mut w = World::toroidal_empty(1, 1);
+    for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        w.set_cell_at(r, c, overclocker(me));
+    }
+    for (r, c) in NEAR {
+        w.set_cell_at(r, c, Cell::alive(me));
+    }
+    let n = CHUNK_N as i32;
+    let mut flat: Vec<(i32, i32)> =
+        NEAR.iter().map(|&(r, c)| (r.rem_euclid(n), c.rem_euclid(n))).collect();
+    flat.sort_unstable();
+    for _ in 0..8 {
+        w.step();
+        assert_eq!(under(&w), flat, "on a 1x1 torus the blinker should still be flat");
+    }
+}
+
+/// **The second pass is the same rule, and it pays.** A blinker of
+/// factories inside a disc is born twice a generation, so over a few
+/// generations it earns more than the one outside — which is the price of
+/// an overclocked gun, said as a number.
+#[test]
+fn manufacture_inside_a_disc_pays_twice_as_often() {
+    let earn = |blinker: &[(i32, i32)]| {
+        let mut w = overclocked_blinker(overclocker(PlayerId(1)), blinker);
+        for &(r, c) in blinker {
+            w.set_cell_at(r, c, Cell::alive(PlayerId(1)).with_kind(Kind::FACTORY));
+        }
+        let mut earned = Takings::default();
+        for _ in 0..4 {
+            earned.add(&w.step());
+        }
+        earned.born[1]
+    };
+    let inside = earn(&NEAR);
+    let outside = earn(&[(20, -1), (20, 0), (20, 1)]);
+    assert!(inside > outside, "inside the disc paid {inside}, outside {outside}");
+}
+
+/// **A copy steps on its own.** One derive is what a prediction, a bot
+/// that searches and an experiment's reset were all waiting on — see
+/// planned.md — so this pins the two things it has to mean: stepping the
+/// copy leaves the original where it was, and the copy is the original's
+/// own future rather than a world that merely started the same.
+#[test]
+fn a_clone_steps_without_moving_the_original() {
+    let me = PlayerId(1);
+    let mut world = World::infinite_empty();
+    for &(r, c) in &[(0, 1), (1, 2), (2, 0), (2, 1), (2, 2)] {
+        world.set_cell_at(r, c, Cell::alive(me));
+    }
+    let before = world.digest();
+    let mut copy = world.clone();
+    for _ in 0..8 {
+        copy.step();
+    }
+    assert_eq!(world.digest(), before, "stepping a copy moved the original");
+    assert_eq!(world.generation, 0);
+    for _ in 0..8 {
+        world.step();
+    }
+    assert_eq!(world.digest(), copy.digest(), "the copy is not the original's future");
+    assert_eq!(copy.generation, 8);
+}
