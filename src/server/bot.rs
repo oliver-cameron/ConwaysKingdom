@@ -446,8 +446,11 @@ impl Ground<'_> {
 
     /// **Everywhere one of these shapes fits, up to `most`.** What a search
     /// chooses between, and it is the book's own generator rather than a
-    /// second one: the same samples in the same order, each taken instead of
-    /// only the first.
+    /// second one: [`Self::sample`] with the loop left running, so a candidate
+    /// is a square [`Self::fits`] passed exactly as it would have to for the
+    /// book to lay there. It looks at [`SEARCH_SAMPLES`] of them against the
+    /// book's [`SAMPLES`], so these are **not the book's own squares** — what
+    /// is the book's is which of them may be built on at all.
     ///
     /// The budget is **taken a shape at a time round the ring** rather than
     /// spent on the first, so a search picks what to lay as well as where.
