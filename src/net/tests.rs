@@ -172,13 +172,15 @@ fn a_factory_held_over_life_is_not_already_there() {
     assert!(Placement::Factory.is_on(factory));
     assert!(!Placement::Life.is_on(factory), "and life held over a factory places");
 
-    // And placing is what converts, at the price of what is being laid.
+    // And placing is what converts, at the price of what is being laid less
+    // what is being replaced — the same as taking the cell back and laying a
+    // factory on the empty square, which is the two-press way to do it.
     let mut world = World::infinite_empty();
     apply(&mut world, &paint(vec![(0, 0)], Placement::Life));
     assert_eq!(
         value_delta(&world, &paint(vec![(0, 0)], Placement::Factory)),
-        -Placement::Factory.cost(),
-        "converting life to a factory costs what a factory costs"
+        -Placement::Factory.cost() + RECLAIM,
+        "converting your own life to a factory costs a factory, less the cell it replaces"
     );
     apply(&mut world, &paint(vec![(0, 0)], Placement::Factory));
     assert_eq!(world.cell_at(0, 0).unwrap().kind(), Kind::FACTORY);
