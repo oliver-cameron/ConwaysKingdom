@@ -31,6 +31,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::net::{
     ClientMessage, Made, PersonId, RoomId, RoomInfo, RoomName, Secret, ServerMessage, DEFAULT_ROOM,
 };
@@ -250,27 +252,25 @@ pub struct Rooms {
     /// Separate from `rooms` rather than a field on [`Server`], because it is
     /// a fact about how a room came to exist and not about the world in it —
     /// nothing in a save should change because a client rather than an
-    /// operator typed the name, and nothing here survives a restart for the
-    /// same reason a connection does not.
-    ///
-    /// Nothing reads the owner yet. What recording it buys is that "close what
-    /// you opened" and "you have three open already" are both answerable later
-    /// without a migration, and that the log line for a room that appeared
-    /// says who asked for it.
-    made: BTreeMap<RoomId, ConnectionId>,
-    /// Whose match each client-made room is: who may start it and end it.
+    /// operator typed the name. The connection is `None` for a room this
+    /// process did not see made: it came back from `rooms.jsonl`, and a
+    /// connection id means nothing after a restart while the cap still counts
+    /// it.
+    made: BTreeMap<RoomId, Option<ConnectionId>>,
+    /// Whose room each client-made room is: who may start and end its match,
+    /// and close it.
     ///
     /// **The person when this server knows one, and the seat when it does
     /// not.** A seat is a room's number for somebody and comes back on a
     /// rejoin, which is enough for a refresh; a person is who they are on this
-    /// server, which is what "the match you made" means, and is the key that
-    /// can outlive the seat once ownership is saved. The seat stands in for a
-    /// client with no key, which is somebody this server will not remember.
+    /// server, which is what "the room you made" means, and is the key that
+    /// outlives the seat. The seat stands in for a client with no key, which
+    /// is somebody this server will not remember.
     ///
-    /// Set on the **creating connection's first join**, which is the moment
-    /// there is anybody to record. A room whose maker never joined has none,
-    /// and so cannot be started from a client at all. Not saved yet — see
-    /// planned.md on room ownership.
+    /// Recorded at `Create` when the maker has presented a key, and otherwise
+    /// at the **creating connection's first join**, which is the first moment
+    /// there is a seat to record. Saved in `rooms.jsonl` when it is a person;
+    /// a seat is not, because a seat means nothing after a restart.
     owner: BTreeMap<RoomId, Owner>,
     /// The cap on `made`. [`MAX_MADE_ROOMS`] unless a flag says otherwise.
     max_made: usize,
@@ -356,6 +356,37 @@ impl Rooms {
             log::info!("{} locker(s) of patterns and diaries held", lockers.len());
         }
 
+        // **What a client-made room was, put back on it.** The world came
+        // from its `.ckw` like any other; that it was a player's, whose, and
+        // that it was private are facts about the map and not the world, so
+        // they are in a table beside it. A row for a room that is not here is
+        // a match, which is not saved, or a room since deleted -- dropped,
+        // and the next write forgets it.
+        let mut made = BTreeMap::new();
+        let mut owner = BTreeMap::new();
+        let mut codes = BTreeMap::new();
+        let mut unlisted = std::collections::BTreeSet::new();
+        if !fresh {
+            for row in load_meta(&meta_path(&dir))? {
+                if !rooms.contains_key(&row.id) {
+                    continue;
+                }
+                made.insert(row.id.clone(), None);
+                if let Some(who) = row.owner {
+                    owner.insert(row.id.clone(), Owner::Person(who));
+                }
+                if let Some(code) = row.code {
+                    codes.insert(row.id.clone(), code);
+                }
+                if row.unlisted {
+                    unlisted.insert(row.id);
+                }
+            }
+            if !made.is_empty() {
+                log::info!("{} room(s) made by players remembered", made.len());
+            }
+        }
+
         Ok(Self {
             rooms,
             dir,
@@ -368,11 +399,11 @@ impl Rooms {
             default_bpm: crate::net::DEFAULT_BPM,
             waiting: BTreeMap::new(),
             challenges: BTreeMap::new(),
-            codes: BTreeMap::new(),
-            made: BTreeMap::new(),
-            owner: BTreeMap::new(),
+            codes,
+            made,
+            owner,
             max_made: MAX_MADE_ROOMS,
-            unlisted: Default::default(),
+            unlisted,
         })
     }
 
@@ -542,15 +573,12 @@ impl Rooms {
         // names a room that does not exist, so there is nowhere to have been
         // standing when it was sent.
         if let ClientMessage::Create { name, shape, victory, teams, private, laboratory } = msg {
-            return vec![ServerMessage::Made(self.make(
-                caller.connection,
-                &name,
-                shape,
-                victory,
-                teams,
-                private,
-                laboratory,
-            ))];
+            let made =
+                self.make(caller.connection, &name, shape, victory, teams, private, laboratory);
+            if let Ok(made) = &made {
+                self.claim(&made.id, caller);
+            }
+            return vec![ServerMessage::Made(made)];
         }
         // Answered without a seat for the same reason `Rooms` is: a profile is
         // looked at from a lobby, from a standings bar and from a menu, and
@@ -720,18 +748,20 @@ impl Rooms {
                         .get_mut(&name)
                         .expect("resolve only returns rooms that are here")
                         .handle(None, who.as_ref(), msg);
-                    // The creator's first join is where a room's owner is
-                    // recorded: it is the first moment there is anybody to
-                    // record. By person where there is one -- see `Owner`.
-                    if self.made.get(&name) == Some(&caller.connection) {
+                    // A maker who presented no key at `Create` is recorded at
+                    // their first join, which is the first moment there is a
+                    // seat to record. By person if they have one now -- see
+                    // `Owner`.
+                    if self.made.get(&name) == Some(&Some(caller.connection)) {
                         if let Some(ServerMessage::Welcome { you, .. }) =
                             out.iter().find(|m| matches!(m, ServerMessage::Welcome { .. }))
                         {
-                            let owner = match &who {
-                                Some(person) => Owner::Person(person.clone()),
-                                None => Owner::Seat(*you),
-                            };
-                            self.owner.entry(name.clone()).or_insert(owner);
+                            match &who {
+                                Some(person) => self.claim_for(&name, person),
+                                None => {
+                                    self.owner.entry(name.clone()).or_insert(Owner::Seat(*you));
+                                }
+                            }
                         }
                     }
                     let owner = self.owner_seat(&name);
@@ -940,6 +970,8 @@ impl Rooms {
             Err(why) => return refuse(&why),
         };
 
+        self.claim_for(&made.id, &from);
+
         let Some(theirs) = self.profile_of(&from) else {
             return refuse("this server has nothing to say about you yet");
         };
@@ -1034,6 +1066,26 @@ impl Rooms {
         }
     }
 
+    /// Write what is known about the client-made rooms, and say so if it will
+    /// not go. Not fatal, for the reason the tables are not; loud, because the
+    /// symptom otherwise is a private world coming back listed and codeless.
+    fn save_meta(&self) {
+        if self.dir.as_os_str().is_empty() {
+            return;
+        }
+        let rows = self.made.keys().map(|id| MetaRow {
+            v: META_VERSION,
+            id: id.clone(),
+            owner: self.owned_by(id).cloned(),
+            code: self.codes.get(id).cloned(),
+            unlisted: self.unlisted.contains(id),
+        });
+        let path = meta_path(&self.dir);
+        if let Err(e) = std::fs::write(&path, crate::net::jsonl::write(rows)) {
+            log::error!("saving the rooms table to {}: {e}", path.display());
+        }
+    }
+
     /// Write the people table, and say so if it will not go.
     ///
     /// Not fatal, deliberately: a server that cannot write its table is a
@@ -1113,6 +1165,7 @@ impl Rooms {
         self.save_people();
         self.save_profiles();
         self.save_lockers();
+        self.save_meta();
         let mut first_error = None;
         for (id, server) in &self.rooms {
             // A match is an event rather than a world to keep: it has an end,
@@ -1291,7 +1344,8 @@ impl Rooms {
         } else {
             None
         };
-        self.made.insert(id.clone(), by);
+        self.made.insert(id.clone(), Some(by));
+        self.save_meta();
         log::info!(
             "connection {by} made {} room \"{name}\" ({id}){}",
             if private { "a private" } else { "an open" },
@@ -1361,9 +1415,39 @@ impl Rooms {
         self.rooms.keys().map(|id| (id.clone(), self.owner_seat(id))).collect()
     }
 
-    /// Which connection asked for this room, if a client did.
+    /// Which connection asked for this room, if a client did and this process
+    /// saw it.
     pub fn made_by(&self, id: &RoomId) -> Option<ConnectionId> {
-        self.made.get(id).copied()
+        self.made.get(id).copied().flatten()
+    }
+
+    /// Whose room this is, by key, if a keyed person made it.
+    pub fn owned_by(&self, id: &RoomId) -> Option<&PersonId> {
+        match self.owner.get(id)? {
+            Owner::Person(who) => Some(who),
+            Owner::Seat(_) => None,
+        }
+    }
+
+    /// Record the maker of a room they have just made, if they have a key.
+    ///
+    /// At `Create` rather than at the first join, because with a `Hello` the
+    /// person is known before there is a seat -- and a maker who makes a room
+    /// and then closes the tab has still made it.
+    fn claim(&mut self, id: &RoomId, caller: &Caller) {
+        if let Some(who) = &caller.person {
+            self.claim_for(id, who);
+        }
+    }
+
+    /// The same, for a person named directly. Written to disk at once: a room
+    /// whose owner is lost on a restart is a room nobody can close.
+    fn claim_for(&mut self, id: &RoomId, who: &PersonId) {
+        if self.owner.contains_key(id) {
+            return;
+        }
+        self.owner.insert(id.clone(), Owner::Person(who.clone()));
+        self.save_meta();
     }
 
     /// How many rooms clients have made, and how many they may.
@@ -1447,6 +1531,7 @@ impl Rooms {
         self.unlisted.remove(&id);
         self.codes.remove(&id);
         self.names.remove(&id);
+        self.save_meta();
         log::info!("deleted room \"{name}\"");
         Ok(id)
     }
@@ -1587,6 +1672,46 @@ fn code() -> Code {
             CODE_ALPHABET[n as usize] as char
         })
         .collect()
+}
+
+/// The format of a row in `rooms.jsonl`.
+const META_VERSION: u8 = 1;
+
+/// **What is known about a client-made room that its world does not hold.**
+///
+/// One row per room in [`Rooms::made`], beside the `.ckw` files and in the
+/// shape of the other tables -- see [`crate::net::jsonl`]. Whose it is, what
+/// code reaches it and whether the listing mentions it are facts about the
+/// map a room sits in, not about the world, so a save of the world could not
+/// carry them; without this a private world came back from a restart listed,
+/// codeless and nobody's.
+///
+/// The owner is a person or nothing. A seat is not written, because a seat
+/// means nothing after a restart.
+#[derive(Serialize, Deserialize)]
+struct MetaRow {
+    v: u8,
+    id: RoomId,
+    owner: Option<PersonId>,
+    code: Option<Code>,
+    unlisted: bool,
+}
+
+fn meta_path(dir: &Path) -> PathBuf {
+    dir.join("rooms.jsonl")
+}
+
+/// Read the rows back. A table that is not there is an empty one, and a row
+/// this build cannot read is skipped, as with every table here.
+fn load_meta(path: &Path) -> std::io::Result<Vec<MetaRow>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(crate::net::jsonl::read::<MetaRow>(&text, "the rooms file")
+            .into_iter()
+            .filter(|row| row.v == META_VERSION)
+            .collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Where the people table lives: beside the rooms rather than inside one,
@@ -2121,6 +2246,86 @@ mod tests {
         assert!(refused.contains("hall"));
         assert!(!refused.contains(&code), "the refusal leaked a code: {refused}");
         assert!(!refused.contains(made.id.as_str()), "or an id: {refused}");
+    }
+
+    /// **A restart keeps what a client-made room was.** The world came back
+    /// from its file already; the code, the unlisting and the owner did not,
+    /// so a private world reopened listed, codeless and nobody's.
+    #[test]
+    fn a_restart_keeps_a_private_rooms_code_unlisting_and_owner() {
+        let dir = temp_dir("meta");
+        let key = Secret::new().unwrap();
+        let (id, code, who) = {
+            let mut rooms = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
+            let out = rooms.handle(
+                &Caller::new(1),
+                ClientMessage::Hello { name: "maker".into(), person: key.clone() },
+            );
+            let [ServerMessage::You(profile)] = &out[..] else { panic!("{out:?}") };
+            let who = profile.who.clone();
+            let out = rooms.handle(
+                &Caller::known(1, who.clone()),
+                ClientMessage::Create {
+                    name: "den".into(),
+                    shape: WorldKind::Infinite,
+                    victory: None,
+                    teams: None,
+                    private: true,
+                    laboratory: false,
+                },
+            );
+            let [ServerMessage::Made(Ok(made))] = &out[..] else { panic!("{out:?}") };
+            // Owned at `Create`, before anybody has joined: the hello named
+            // the maker, so there was somebody to record.
+            assert_eq!(rooms.owned_by(&made.id), Some(&who), "a keyed maker owns it at once");
+            rooms.save().unwrap();
+            (made.id.clone(), made.code.clone().expect("a code"), who)
+        };
+
+        let back = Rooms::open(&dir, &[], WorldKind::Infinite, false).unwrap();
+        assert!(back.get(&id).is_some(), "the world did not come back");
+        assert!(back.is_unlisted(&id), "it came back listed");
+        assert_eq!(back.code_of(&id), Some(code.as_str()), "it came back codeless");
+        assert_eq!(back.owned_by(&id), Some(&who), "it came back nobody's");
+        assert_eq!(back.made_count().0, 1, "it came back outside the cap");
+        assert_eq!(back.made_by(&id), None, "a connection outlived the process");
+        assert_eq!(back.resolve(Some(&code)).unwrap(), id, "the code stopped working");
+        let refused = back.resolve(Some("nowhere")).unwrap_err();
+        assert!(!refused.contains(&code) && !refused.contains(id.as_str()), "{refused}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A keyless maker's room keeps its code and its unlisting and has no
+    /// owner to keep, because a seat means nothing after a restart — and a
+    /// room deleted before the restart leaves no row to count against the cap.
+    #[test]
+    fn a_seat_owner_is_not_saved_and_a_deleted_room_leaves_no_row() {
+        let dir = temp_dir("meta-seat");
+        let id = {
+            let mut rooms = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
+            let made = rooms.make(4, "den", WorldKind::Infinite, None, None, true, false).unwrap();
+            let out = rooms.handle(
+                &Caller::new(4),
+                ClientMessage::Join {
+                    name: "maker".into(),
+                    room: Some(made.id.clone()),
+                    person: None,
+                },
+            );
+            let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+            assert_eq!(rooms.owner.get(&made.id), Some(&Owner::Seat(*you)), "owned by seat");
+            let gone =
+                rooms.make(4, "gone", WorldKind::Infinite, None, None, false, false).unwrap();
+            rooms.delete(gone.id.as_str()).unwrap();
+            rooms.save().unwrap();
+            made.id
+        };
+
+        let back = Rooms::open(&dir, &[], WorldKind::Infinite, false).unwrap();
+        assert!(back.is_unlisted(&id) && back.code_of(&id).is_some(), "privacy was lost");
+        assert_eq!(back.owner.get(&id), None, "a seat outlived the process");
+        assert_eq!(back.made_count().0, 1, "a deleted room was counted");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Whoever is running the server can read the save directory anyway, and
