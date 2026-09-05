@@ -60,6 +60,22 @@ pub const fn generation_seed(world: u64, generation: u64) -> u64 {
     mix(world, generation)
 }
 
+/// The seed for one pass over a generation.
+///
+/// **Pass nought is the generation itself**, so nothing that runs once a
+/// generation rolls any differently for this existing. A later pass — see
+/// [`crate::sim::World::overclock_pass`] — rolls its own: handed the same seed
+/// it would give every cell the identical dice, and territory's timing, the
+/// parent pick and the factory's yield would all come out the same way twice.
+#[inline]
+pub const fn pass_seed(generation: u64, pass: u64) -> u64 {
+    if pass == 0 {
+        generation
+    } else {
+        mix(generation, pass)
+    }
+}
+
 /// One cell's seed, from where it is and nothing else.
 ///
 /// **Absolute cell coordinates**, not a chunk and an offset inside it. The
@@ -165,6 +181,27 @@ mod tests {
 
         assert!((0..20_000).all(|s| !Roll::new(s).chance(0, 0)), "0 in 64 is never");
         assert!((0..20_000).all(|s| Roll::new(s).chance(0, OUT_OF)), "64 in 64 is always");
+    }
+
+    /// The first pass over a generation rolls the generation's own dice, and
+    /// a second pass rolls different ones for every cell — or it would repeat
+    /// the first pass's territory, parents and yield exactly.
+    #[test]
+    fn a_later_pass_rolls_its_own_dice_and_the_first_rolls_the_generations() {
+        for g in 0..64u64 {
+            let generation = generation_seed(0x5011_5EED, g);
+            assert_eq!(pass_seed(generation, 0), generation, "pass nought moved the dice");
+            assert_ne!(pass_seed(generation, 1), generation);
+            assert_eq!(pass_seed(generation, 1), pass_seed(generation, 1), "not a function");
+            assert_ne!(pass_seed(generation, 1), pass_seed(generation, 2));
+            for (row, col) in [(0, 0), (3, -7), (1000, 1000), (-1, 64)] {
+                assert_ne!(
+                    cell_seed(pass_seed(generation, 1), row, col),
+                    cell_seed(generation, row, col),
+                    "({row}, {col}) rolled the same dice twice in generation {g}"
+                );
+            }
+        }
     }
 
     /// Every choice must be reachable, or "at random" is a lie and one parent
