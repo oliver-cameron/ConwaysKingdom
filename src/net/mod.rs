@@ -1648,8 +1648,8 @@ pub fn sane_world(kind: crate::sim::WorldKind, room: &RoomId) -> World {
 /// Every chunk a grant at this position touches, folded onto the chunks the
 /// world actually has.
 ///
-/// A patch is [`SPAWN_N`] cells and a chunk is sixteen, so a grant spans one
-/// chunk at best and four at worst — and on a torus it may span four that are
+/// A patch is [`SPAWN_N`] cells and a chunk is [`CHUNK_N`], so a grant spans
+/// one chunk at best and four at worst — and on a torus it may span four that are
 /// nowhere near each other, which is why the folding is not optional.
 pub fn grant_chunks(world: &World, (row, col): (i32, i32)) -> Vec<ChunkId> {
     let mut out: Vec<ChunkId> =

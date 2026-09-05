@@ -106,7 +106,7 @@ The drain is bounded by territory decay rather than by a timer: a corpse with no
 
 ## Chunks
 
-A chunk is 16×16 cells. Neighbours are **computed** from a coordinate, never stored:
+A chunk is 64×64 cells, `CHUNK_N` a side. Neighbours are **computed** from a coordinate, never stored:
 
 - infinite: coordinate arithmetic, and an absent chunk reads as dead;
 - toroidal: `rem_euclid`, so global coordinates fold onto chunks many-to-one.
@@ -115,7 +115,7 @@ Computing rather than storing is what lets a chunk be its own neighbour, which h
 
 ### The halo
 
-Stepping copies a chunk and the facing strip of each of its eight neighbours into a flat padded grid, `(16+2)²`. That gives the inner loop one array with no bounds checks and no knowledge of topology, and an absent or empty neighbour simply contributes nothing.
+Stepping copies a chunk and the facing strip of each of its eight neighbours into a flat padded grid, `(64+2)²`. That gives the inner loop one array with no bounds checks and no knowledge of topology, and an absent or empty neighbour simply contributes nothing.
 
 It also solves a borrow problem: stepping chunk *i* needs `&mut` on it while reading `&` from its neighbours in the same collection. The halo is owned data built from shared borrows before anything is mutated.
 
@@ -201,7 +201,7 @@ A turret claims ground at range. Every generation it takes the nearest square th
 
 ### Why it is a pass and not a rule
 
-Every rule in `sim::rule` is a pure function of a cell and its eight neighbours. That is what lets a generation run out of a `Halo` — one flat 18×18 grid per chunk, no bounds checks and no knowledge of topology — and "the nearest square that is not mine" is a search no halo can answer.
+Every rule in `sim::rule` is a pure function of a cell and its eight neighbours. That is what lets a generation run out of a `Halo` — one flat 66×66 grid per chunk, no bounds checks and no knowledge of topology — and "the nearest square that is not mine" is a search no halo can answer.
 
 So `World::fire_turrets` runs after the rules in absolute coordinates, beside `break_ice_from` and for the same reason: a pane spans chunks, so shattering cannot happen inside `next_cell` either. Turrets fire after the ice and before the prune.
 

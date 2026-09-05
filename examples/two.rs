@@ -10,8 +10,15 @@
 //! What it measures is not that they never disagree. A client predicts, and
 //! the server applies whenever the message lands, so a disagreement of one
 //! generation is possible by design. What must hold is that a disagreement is
-//! **found and put right**: so this reports the first generation they differ
-//! at, and the generation by which they agree again.
+//! **found and put right**: so this reports every generation they come to
+//! differ at, and the generation by which they agree again.
+//!
+//! Three switches in the environment. `LIE=1` has one peer invent a block
+//! nobody sent it, so the safety net is tested rather than assumed. `DIFF=1`
+//! prints what a refetched chunk actually changed, cell by cell, which is how
+//! a resync that is not a rules bug gets told apart from one that is.
+//! `SNAP_ON_CHUNK=1` adopts a chunk's tick on arrival, the way the client
+//! once did, for comparing the two behaviours.
 
 use conwayskingdom::net::link::Link;
 use conwayskingdom::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
@@ -50,6 +57,11 @@ impl Peer {
                     // was really a misunderstanding.
                     let mut world = shape.build();
                     world.set_generation(tick);
+                    // And rolling the room's dice, as the client does. Left at
+                    // nought, both peers rolled the same wrong number: they
+                    // agreed with each other about every contested square and
+                    // the server put them both right at every checkpoint.
+                    world.set_seed(conwayskingdom::net::world_seed(&room));
                     println!(
                         "{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}"
                     );
@@ -77,6 +89,29 @@ impl Peer {
                         // behaviours can be compared rather than argued about.
                         if std::env::var_os("SNAP_ON_CHUNK").is_some() {
                             self.world.set_generation(tick);
+                        }
+                        if std::env::var_os("DIFF").is_some() {
+                            if let Some(old) = self.world.chunk_at(chunk) {
+                                let mut n = 0;
+                                for r in 0..conwayskingdom::sim::CHUNK_N {
+                                    for k in 0..conwayskingdom::sim::CHUNK_N {
+                                        if old[(r, k)] != c[(r, k)] {
+                                            if n < 6 {
+                                                println!(
+                                                    "{}: {chunk:?} ({r},{k}) {:?} -> {:?}",
+                                                    self.name,
+                                                    old[(r, k)],
+                                                    c[(r, k)]
+                                                );
+                                            }
+                                            n += 1;
+                                        }
+                                    }
+                                }
+                                println!("{}: {chunk:?} at {tick}: {n} cells differ", self.name);
+                            } else {
+                                println!("{}: {chunk:?} at {tick}: not held before", self.name);
+                            }
                         }
                         self.world.put_chunk(chunk, *c);
                     }
@@ -110,8 +145,10 @@ impl Peer {
                     }
                 }
                 ServerMessage::Resync { tick, chunks } => {
+                    // A grant is announced this way too, so the first of these
+                    // after joining is news rather than a correction.
                     println!(
-                        "{}: server says {} chunks are wrong at {tick}; refetching",
+                        "{}: server names {} chunks to refetch at {tick}: {chunks:?}",
                         self.name,
                         chunks.len()
                     );
@@ -135,15 +172,20 @@ fn main() {
     let mut b = Peer::join(&url, "bob", room);
     assert_ne!(a.me, b.me);
 
-    // Both look at both grants, so neither is missing ground the other has.
-    let chunks: Vec<(i32, i32)> = [a.spawn, b.spawn]
+    // Both look at both grants and the ring of chunks round each, so neither
+    // is missing ground the other has -- a grant's influence has already crept
+    // a chunk out by the time anybody joins, and a chunk the server holds and a
+    // peer never asked for is a resync that says nothing about the rules.
+    // Through `grant_chunks` rather than arithmetic of its own: this divided by
+    // a chunk size of sixteen for four days after a chunk became sixty-four.
+    let mut chunks: Vec<(i32, i32)> = [a.spawn, b.spawn]
         .iter()
-        .flat_map(|&(r, c)| {
-            (-1..=1).flat_map(move |dr| {
-                (-1..=1).map(move |dc| (r.div_euclid(16) + dr, c.div_euclid(16) + dc))
-            })
-        })
+        .flat_map(|&spawn| conwayskingdom::net::grant_chunks(&a.world, spawn))
+        .flat_map(|(r, c)| (-1..=1).flat_map(move |dr| (-1..=1).map(move |dc| (r + dr, c + dc))))
+        .map(|coord| a.world.canonical(coord))
         .collect();
+    chunks.sort_unstable();
+    chunks.dedup();
     for p in [&mut a, &mut b] {
         p.link.send(ClientMessage::Subscribe { chunks: chunks.clone() });
     }
@@ -176,8 +218,11 @@ fn main() {
     let mut lied = false;
 
     let (mut checked, mut disagreed) = (0, 0);
-    let mut first_split: Option<u64> = None;
-    let mut healed_at: Option<u64> = None;
+    // Every run of disagreement, as (split at, healed at). A prediction that
+    // missed a server step is a run of one or two generations ending at the
+    // next checkpoint; anything longer, or anything that never closes, is
+    // the rules disagreeing.
+    let mut runs: Vec<(u64, Option<u64>)> = Vec::new();
     for _ in 0..400 {
         std::thread::sleep(Duration::from_millis(50));
         a.pump();
@@ -200,26 +245,33 @@ fn main() {
             lied = true;
             continue;
         }
+        let now = a.world.generation;
+        let open = matches!(runs.last(), Some((_, None)));
         if a.world.digest() == b.world.digest() {
-            if first_split.is_some() && healed_at.is_none() {
-                healed_at = Some(a.world.generation);
+            if open {
+                runs.last_mut().unwrap().1 = Some(now);
+                println!("agreed again at generation {now}");
             }
         } else {
             disagreed += 1;
-            if first_split.is_none() {
-                println!("first disagreement at generation {}", a.world.generation);
-                first_split = Some(a.world.generation);
+            if !open {
+                println!("disagreement at generation {now}");
+                runs.push((now, None));
             }
         }
     }
 
-    println!("compared {checked} shared generations, {disagreed} of them disagreeing");
+    println!("compared {checked} times at shared generations, {disagreed} of them disagreeing");
     println!("resyncs: alice {}, bob {}", a.resyncs, b.resyncs);
-    match (first_split, healed_at) {
-        (None, _) => println!("they never disagreed"),
-        (Some(at), Some(back)) => {
-            println!("disagreed at {at}, agreed again by {back} -- {} generations", back - at)
+    if runs.is_empty() {
+        println!("they never disagreed");
+    }
+    for (at, back) in runs {
+        match back {
+            Some(back) => {
+                println!("disagreed at {at}, agreed again by {back} -- {} generations", back - at)
+            }
+            None => println!("DISAGREED at {at} AND NEVER RECOVERED"),
         }
-        (Some(at), None) => println!("DISAGREED at {at} AND NEVER RECOVERED"),
     }
 }
