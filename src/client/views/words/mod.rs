@@ -203,6 +203,8 @@ pub struct MenuCode {
 pub struct MenuWatch {
     pub watch: &'static str,
     pub join: &'static str,
+    /// On a row that is yours, once everybody has left it.
+    pub close: &'static str,
     /// Blowing the whistle, in the lobby, for whoever made the match.
     pub start: &'static str,
     pub start_note: &'static str,

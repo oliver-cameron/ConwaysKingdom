@@ -298,6 +298,9 @@ pub enum Chose {
     },
     /// Watch this room without taking a seat in it.
     Watch(RoomId),
+    /// Close a room this client made. Offered only on a row whose owner is
+    /// this client, which the listing says; the server checks again.
+    Close(RoomId),
     /// Show me my own profile.
     ///
     /// **The only way to it that does not need other people.** It was
@@ -1248,6 +1251,7 @@ mod tests {
             players: 0,
             world: WorldKind::Infinite,
             rules: crate::net::Rules::default(),
+            owner: None,
         }
     }
 

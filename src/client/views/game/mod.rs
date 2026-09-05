@@ -1236,6 +1236,18 @@ impl GameApp {
         crate::client::route::show(&self.here());
     }
 
+    /// Put a sentence where the player is looking: the HUD's corner in a
+    /// world, and beside the room list on the menu, which is the line that
+    /// already says why you are looking at a list rather than at a world.
+    fn say(&mut self, what: String) {
+        match &mut self.ui.screen {
+            Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { note, .. }, .. }) => {
+                *note = Some(what);
+            }
+            _ => self.notice = Some(what),
+        }
+    }
+
     fn show_menu(&mut self, stage: menu::Stage) {
         match &mut self.ui.screen {
             Screen::Menu(m) => {
@@ -1448,6 +1460,14 @@ impl GameApp {
                     draft.note = Some(why);
                 }
             }
+            // Gone from the list, or still in it with the reason beside it.
+            // Asked for again at once rather than waited out: a room you have
+            // just closed and can still see is a press that appears to have
+            // done nothing.
+            Effect::RoomClosed(closed) => match closed {
+                Ok(_) => self.session.refresh_now(self.elapsed),
+                Err(why) => self.say(why),
+            },
             Effect::Rooms(rooms) => {
                 if let Screen::Menu(m) = &mut self.ui.screen {
                     // A refusal already on screen is carried over rather than
@@ -1613,6 +1633,10 @@ impl GameApp {
                 if !self.session.watch(room) {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
                 }
+            }
+            menu::Chose::Close(room) => {
+                log::info!("closing room \"{room}\"");
+                self.session.close(room);
             }
             menu::Chose::Join(room) => {
                 if !self.session.connected() {

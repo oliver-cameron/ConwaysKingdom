@@ -224,6 +224,7 @@ mod tests {
                 name: "alice".into(),
                 person: crate::net::Secret::read(&"a1".repeat(16)).expect("a secret"),
             },
+            ClientMessage::Close { room: "r-abc234".into() },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -391,6 +392,9 @@ mod tests {
                         victory: Some(crate::net::Victory::Territory { squares: 500 }),
                         world: crate::sim::WorldKind::Toroidal { rows: 6, cols: 6 },
                         rules: crate::net::Rules::default(),
+                        // Made by a player with a key, so a menu can offer them
+                        // the door out.
+                        owner: Some(crate::net::PersonId("3f2a91c4".into())),
                     },
                     crate::net::RoomInfo {
                         id: "lobby".into(),
@@ -400,6 +404,7 @@ mod tests {
                         victory: None,
                         world: crate::sim::WorldKind::Infinite,
                         rules: crate::net::Rules::default(),
+                        owner: None,
                     },
                     // A laboratory, which the list tells apart from a world by
                     // these and nothing else.
@@ -417,6 +422,7 @@ mod tests {
                             bpm: 60,
                             laboratory: true,
                         },
+                        owner: None,
                     },
                 ],
                 hidden: crate::net::Hidden { howto: true },
@@ -431,6 +437,9 @@ mod tests {
                 history: Vec::new(),
                 best: 0,
             }),
+            // Both arms, since the refusal is the one somebody reads.
+            ServerMessage::Closed(Ok("r-abc234".into())),
+            ServerMessage::Closed(Err("2 still in \"den\"".into())),
         ];
         for msg in cases {
             let bytes = encode_server(&msg).unwrap();

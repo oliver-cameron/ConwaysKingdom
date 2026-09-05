@@ -131,6 +131,9 @@ pub enum Effect {
     Made { id: RoomId, code: Option<String> },
     /// It would not make one, and this is why. Belongs in the form that asked.
     NotMade(String),
+    /// A room was closed, or would not be and this is why. The list is stale
+    /// either way: gone from it, or still in it with a reason beside it.
+    RoomClosed(Result<RoomId, String>),
     /// The room list arrived.
     Rooms(Vec<RoomInfo>),
     /// The link closed. What that means depends on which screen is up, which
@@ -1019,6 +1022,13 @@ impl Session {
                         effects.push(Effect::NotMade(why));
                     }
                 },
+                ServerMessage::Closed(closed) => {
+                    match &closed {
+                        Ok(room) => log::info!("closed {room}"),
+                        Err(why) => log::info!("the server would not close that room: {why}"),
+                    }
+                    effects.push(Effect::RoomClosed(closed));
+                }
                 ServerMessage::Rooms { rooms, hidden } => {
                     log::debug!("the server has {} room(s)", rooms.len());
                     self.asked_at = None;
@@ -1462,6 +1472,11 @@ impl Session {
     /// **Play me.** A match for two, made by the server and held for them.
     pub fn challenge(&mut self, who: crate::net::PersonId) {
         self.tell(ClientMessage::Challenge { who });
+    }
+
+    /// Close a room this client made. The answer is an [`Effect::RoomClosed`].
+    pub fn close(&mut self, room: RoomId) {
+        self.tell(ClientMessage::Close { room });
     }
 
     /// Yes or no, to whoever asked.

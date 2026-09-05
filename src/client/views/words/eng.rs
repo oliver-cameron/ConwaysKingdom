@@ -186,6 +186,7 @@ pub static WORDS: super::Words = super::Words {
         watch: super::MenuWatch {
             watch: "Watch",
             join: "Join",
+            close: "Close",
             start: "Start the match",
             start_note: "Everybody spawns together when you do.",
             not_yours: "Waiting for whoever made this match to start it.",

@@ -619,6 +619,11 @@ impl Rooms {
             }
             return Vec::new();
         }
+        // Answered without a seat, and it has to be: a room will not close
+        // while anybody is in it, so whoever closes one is on the menu.
+        if let ClientMessage::Close { room } = &msg {
+            return vec![ServerMessage::Closed(self.close(caller, room))];
+        }
         // Admitted at any generation, and that is the point rather than an
         // oversight: **no late joining is a rule about players.** Somebody
         // turning up at generation four hundred is exactly what watching is
@@ -1536,6 +1541,28 @@ impl Rooms {
         Ok(id)
     }
 
+    /// **Close a room from a client**, behind the owner check.
+    ///
+    /// Routed to [`Self::delete`], which refuses while anybody is in it and
+    /// refuses the default room, so this is something done from the menu once
+    /// everybody has left. A room the console made is the operator's and
+    /// closes there. A seat-keyed owner can never pass, and the arm is here
+    /// so the refusal is the true one: the seat is theirs only while they sit
+    /// in it, and a room with them in it will not close — so closing needs a
+    /// key.
+    fn close(&mut self, caller: &Caller, room: &RoomId) -> Result<RoomId, String> {
+        let id = self.resolve(Some(room.as_str()))?;
+        match self.owner.get(&id) {
+            Some(Owner::Person(who)) if caller.person.as_ref() == Some(who) => {}
+            Some(Owner::Seat(seat)) if caller.seat.as_ref() == Some(&(id.clone(), *seat)) => {}
+            Some(_) => return Err("only whoever made this room can close it".into()),
+            None => return Err("this room is the server's; it closes at the console".into()),
+        }
+        let closed = self.delete(id.as_str())?;
+        log::info!("connection {} closed room {closed}", caller.connection);
+        Ok(closed)
+    }
+
     /// Stop or start a world.
     pub fn set_asleep(&mut self, name: &str, asleep: bool) -> Result<RoomId, String> {
         let id = self.resolve(Some(name))?;
@@ -1602,6 +1629,7 @@ impl Rooms {
                         players: server.players().filter(|p| p.online).count() as u32,
                         world: server.world().kind(),
                         rules: server.rules(),
+                        owner: self.owned_by(id).cloned(),
                     },
                     self.unlisted.contains(id),
                 )
@@ -1621,6 +1649,7 @@ impl Rooms {
                 players: server.players().filter(|p| p.online).count() as u32,
                 world: server.world().kind(),
                 rules: server.rules(),
+                owner: self.owned_by(id).cloned(),
             })
             .collect()
     }
@@ -2326,6 +2355,63 @@ mod tests {
         assert_eq!(back.owner.get(&id), None, "a seat outlived the process");
         assert_eq!(back.made_count().0, 1, "a deleted room was counted");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Whoever made a room can close it from the menu, and nobody else can.**
+    /// Not while anybody is in it, the maker included; not a room the console
+    /// made; and the listing says whose each room is, so a menu offers the
+    /// door only on your own.
+    #[test]
+    fn only_whoever_made_a_room_can_close_it_and_only_once_it_is_empty() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (a_id, b_id) = two_people(&mut rooms);
+        let out = rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Create {
+                name: "den".into(),
+                shape: WorldKind::Infinite,
+                victory: None,
+                teams: None,
+                private: false,
+                laboratory: false,
+            },
+        );
+        let [ServerMessage::Made(Ok(made))] = &out[..] else { panic!("{out:?}") };
+        let den = made.id.clone();
+        let close = |room: &RoomId| ClientMessage::Close { room: room.clone() };
+
+        // The listing says whose it is, which is how a menu knows to offer it.
+        let mine = rooms.listing().into_iter().find(|r| r.id == den).expect("listed");
+        assert_eq!(mine.owner, Some(a_id.clone()));
+
+        // Somebody else, and a room nobody made.
+        let out = rooms.handle(&Caller::known(2, b_id), close(&den));
+        let [ServerMessage::Closed(Err(why))] = &out[..] else { panic!("{out:?}") };
+        assert!(why.contains("whoever made"), "{why}");
+        let out = rooms.handle(&Caller::known(1, a_id.clone()), close(&RoomId::from("hall")));
+        let [ServerMessage::Closed(Err(why))] = &out[..] else { panic!("{out:?}") };
+        assert!(why.contains("console"), "{why}");
+
+        // The maker, from inside: refused, and the reason is the room being
+        // occupied rather than the key being wrong.
+        let out = rooms.handle(
+            &Caller::new(1),
+            ClientMessage::Join { name: "maker".into(), room: Some(den.clone()), person: None },
+        );
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let mut inside = Caller::sitting(1, (den.clone(), *you));
+        inside.person = Some(a_id.clone());
+        let out = rooms.handle(&inside, close(&den));
+        let [ServerMessage::Closed(Err(why))] = &out[..] else { panic!("{out:?}") };
+        assert!(why.contains("still in"), "{why}");
+        assert!(rooms.get(&den).is_some(), "an occupied room was closed");
+
+        // And once they have left, it goes.
+        rooms.handle(&inside, ClientMessage::Leave);
+        let out = rooms.handle(&Caller::known(1, a_id), close(&den));
+        assert!(matches!(&out[..], [ServerMessage::Closed(Ok(id))] if *id == den), "{out:?}");
+        assert!(rooms.get(&den).is_none(), "the room is still here");
+        assert_eq!(rooms.made_count().0, 0, "and it still counts against the cap");
     }
 
     /// Whoever is running the server can read the save directory anyway, and

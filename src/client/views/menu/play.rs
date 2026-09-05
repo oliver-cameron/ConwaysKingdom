@@ -317,7 +317,11 @@ fn rooms_column(
 
         for room in rooms {
             let selected = menu.selected.as_ref() == Some(&room.id);
-            match room_row(ui, theme, room, selected) {
+            // Yours by key, which the listing says. A room made with no key is
+            // nobody's to close from here, and a seat could not be: the room
+            // will not close with its maker in it.
+            let mine = room.owner.is_some() && room.owner == menu.whoami;
+            match room_row(ui, theme, room, selected, mine) {
                 Picked::Nothing => {}
                 // Selecting the one already selected puts it away, so a press
                 // has somewhere to go back to.
@@ -328,6 +332,7 @@ fn rooms_column(
                 // alike and only one of them was pressed.
                 Picked::Join => chose = Some(Chose::Join(room.id.clone())),
                 Picked::Watch => chose = Some(Chose::Watch(room.id.clone())),
+                Picked::Close => chose = Some(Chose::Close(room.id.clone())),
             }
         }
         ui.colored_label(
@@ -392,14 +397,16 @@ pub(super) fn make_column(
     made
 }
 
-/// What a room row was clicked for. Two things can be done with a room, so a
-/// bool would have to be a bool about which.
+/// What a room row was clicked for. Three things can be done with a room, so
+/// a bool would have to be a bool about which.
 enum Picked {
     Nothing,
     /// Point at this room, so its actions appear inside it.
     Select,
     Join,
     Watch,
+    /// Only on a row that is this client's.
+    Close,
 }
 
 fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool) -> Option<Chose> {
@@ -807,8 +814,15 @@ fn toggles<T: Copy + PartialEq>(
 ///
 /// Watching is offered on **every** room and not only on matches, because
 /// no late joining is a rule about players: a match already running is exactly
-/// the room whose only way in is to watch.
-fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -> Picked {
+/// the room whose only way in is to watch. Closing is offered on a room that
+/// is `mine`, and the server refuses it while anybody is inside.
+fn room_row(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    room: &RoomInfo,
+    selected: bool,
+    mine: bool,
+) -> Picked {
     let p = theme.palette;
     let m = theme.metrics;
     let mut picked = Picked::Nothing;
@@ -880,7 +894,8 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                 ui.add_space(m.item_spacing);
                 ui.horizontal_top(|ui| {
                     ui.set_min_height(m.button_height);
-                    let each = (ui.available_width() - m.item_spacing) / 2.0;
+                    let across = if mine { 3.0 } else { 2.0 };
+                    let each = (ui.available_width() - m.item_spacing * (across - 1.0)) / across;
                     if ui
                         .add_sized(
                             [each, m.button_height],
@@ -905,6 +920,18 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                         .clicked()
                     {
                         picked = Picked::Watch;
+                    }
+                    if mine
+                        && ui
+                            .add_sized(
+                                [each, m.button_height],
+                                egui::Button::new(
+                                    egui::RichText::new(w().menu.watch.close).size(m.text_small),
+                                ),
+                            )
+                            .clicked()
+                    {
+                        picked = Picked::Close;
                     }
                 });
             }

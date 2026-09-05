@@ -922,6 +922,11 @@ pub struct RoomInfo {
     /// choose a room by.
     pub players: u32,
     pub world: WorldKind,
+    /// Whose it is, by key, when a keyed player made it. As public as the id
+    /// a lobby shows beside a name, and what lets a menu offer to close your
+    /// own rooms and nobody else's. `None` for a room the console made and
+    /// for one whose maker had no key.
+    pub owner: Option<PersonId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1116,6 +1121,13 @@ pub enum ClientMessage {
     /// where it was — see [`codec::PROTOCOL`], which is what says so when it
     /// does not.
     Hello { name: String, person: Secret },
+    /// **Close a room you made.** Answered with [`ServerMessage::Closed`].
+    ///
+    /// Names the room, because it is sent from the menu and not from inside:
+    /// a room is refused closing while anybody is in it, the one closing it
+    /// included, so it is something you do after everybody has left. Refused
+    /// unless the key presented is the one that made it.
+    Close { room: RoomId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1334,6 +1346,9 @@ pub enum ServerMessage {
     /// carries before a `Welcome` has, and a profile you *looked up* must not
     /// be mistaken for that. Anything queued for this person rides out with it.
     You(Profile),
+    /// The answer to [`ClientMessage::Close`]: the room that is gone, or why
+    /// it is not. A refusal leaves you where you were, with a reason to read.
+    Closed(Result<RoomId, String>),
 }
 
 /// Screens this server asks a client not to offer.
