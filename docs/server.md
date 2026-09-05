@@ -215,6 +215,8 @@ A bot is added and removed while the room admits anybody — from the lobby by a
 
 **The candidates are the book's own.** `Ground::offers` is `Ground::place` with the loop left running — the same sampled squares in the same order, each one taken rather than only the first, and walked over every shape the intent allows so the search picks what to lay as well as where. A search can therefore lay nothing the book would not have offered, and everything the book refuses — a square nothing of theirs reaches, a shape with something living in its margin, a price the purse will not cover — never reaches the thing that chooses. What the search replaces is the **ordering**: the book takes the first affordable placement from the first intent the dice picked, and the search takes the best of what all of its intents offer.
 
+Two details of that generator earn their place, because both were measured to matter and neither is obvious. It samples 192 squares a shape where the book samples 48 — a book stops at the first that fits and a search wants the ones that do, and a sample costs a walk of a shape's span against a rollout's several thousand cells, so this is the cheap dial. And the budget goes **round the shapes rather than into the first**: every shape samples the same squares in the same order, so a cap pooled across them is one the first shape fills every time, and a search that can only choose a square is half a search. Together they took the search from level with the book to ahead of it — see below.
+
 **A rollout runs on a crop, because a world is too big to copy per candidate.** `examples/frametime` puts one step of the default twelve-by-twelve-chunk world at about 25 ms against a 250 ms tick, so ten candidates at eight generations would be two seconds. The game is local, so `World::crop` builds an infinite world holding one square neighbourhood and nothing else, at **the same coordinates** — which is not tidiness: a cell's dice are its position and nothing else, so a box moved to the origin would roll a different number for every square in it.
 
 What a crop costs is exactness at its edge. Outside the box there is nothing, and an absent chunk reads as dead and unowned, so the edge eats inwards at whatever rate the rules move: Conway and the territory rule reach the eight neighbours, a turret takes ground `TURRET_REACH` away, an overclocked cell moves twice a generation, and a blast is not a light cone at all — it arrives once, from as far as `DYNAMITE_MOST_REACH`. So a crop stepped *n* generations is the real world's future inside `radius - n - DYNAMITE_MOST_REACH` of the centre, **and the score is read from that and from nothing else**. A compile-time assertion holds the one case that would make that sentence false: past a horizon of ten a turret's cone is longer than a blast's reach, and the constant standing in for "the furthest anything reaches" would have stopped being it.
@@ -253,6 +255,26 @@ A living cell is worth half a square **on top of** the square it stands on, sinc
 The corpse is the weight that keeps this in step with `examples/balance`, and it is the one a first draft leaves out. A dead factory is **a bill that has not fallen due** — `FACTORY_UPKEEP` is sixteen in sixty-four — so without it the score would reward the pattern that leaves the most corpses behind, which is exactly the sprawl balance measured as the thing that bleeds. With it, a block of factories scores its ground, a blinker of them scores its ground and its manufacture, and an r-pentomino of them is punished for the mess.
 
 Nothing here is fitted; they are hand-written on the reasoning above. What they cannot see is **the purse**, and that is the known hole in them: a judge is shown a world, and a world holds cells and not money, so the search values the biggest shape it can afford and has no way to know that ten coins spent now is a placement it cannot make four generations later. See what the duel measured, below.
+
+### What it costs, and what it wins
+
+Both figures come from `examples/duel` — two seats in one `Server`, no socket and no clock, the same `add_bot` the console calls and the same `act` a client's placement goes through, so what it measures is a bot and not a harness. A run is seeded and repeats, and `--record DIR` writes the board at a cadence in exactly the window a judge is shown, which is the corpus the learned one will be trained on.
+
+**It beats the book at all three levels**, over games of six hundred generations, half of every set with the search in the first seat and half in the second:
+
+| level | games | search | book | drawn | of the decided | mean score |
+|---|---|---|---|---|---|---|
+| easy | 200 | 122 | 75 | 3 | 62% | 896 against 666 |
+| normal | 400 | 229 | 169 | 2 | 57% | 908 against 791 |
+| hard | 200 | 122 | 78 | 0 | 61% | 963 against 722 |
+
+The seats are swapped because a seat might be worth something, and the control says it is worth little: a book bot against a book bot over the same two hundred seeds is 104 to 95 with one drawn. Normal is the weakest of the three and it is also the one with four times the games behind it, so read easy and hard as the wider intervals they are.
+
+**One act costs two to four milliseconds against a tick of 250.** A book's act is 0.3 ms of that, measured the same way, and two searching seats put four to seven milliseconds on the generation they share — one to two per cent of a tick each, which is what leaves room for several rooms of them. The crop is why: a rollout steps only the chunks the crop actually holds something in, so an act is priced by how much country is near the bot rather than by how large the world is.
+
+Which is the caveat as much as the reason. **The budget is a count of rollouts and not a bound on time**, and the same measurement over longer games says so — two searching seats at normal cost 4.0 ms of a generation over six hundred, 5.0 over two thousand and 9.3 over six thousand, so an act roughly doubles as the board fills. The ceiling above that is arithmetic rather than measurement, and it is a long way past anything a game here has reached: a crop is 281 cells across, which is eight chunks a side once the ring of neighbours a step touches is counted, and 262,144 cells at `frametime`'s 41.5 nanoseconds each is 11 ms a step, 87 ms for a rollout of eight and 435 ms for the five a normal bot may run. No measured game has come near a neighbourhood that full, and nothing in the code stops one.
+
+**What decides how many rollouts an act runs is usually the purse and not the budget.** Every candidate is priced before it is rolled out and a bot at any level ends a game with nothing in hand, so doubling the cap from five to ten at hard bought a quarter to a half more work per act rather than twice as much. That is the hole in the weights seen from the other side: the judge cannot see money, and money is what binds.
 
 ## The API
 

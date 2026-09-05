@@ -46,7 +46,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Antialias always](#antialias-always) | Built | one rule at every zoom, a box filter one pixel wide |
 | [Texels nothing samples](#texels-nothing-samples) | **Open** | between zoom 5 and 16 the art is drawn from a subset of itself |
 | [Something to see when it goes off](#something-to-see-when-it-goes-off) | Designed | a blast is a frame of noise and nothing else says it happened |
-| [Bots](#bots) | Built | a player the server plays, from a book, and an API an engine plays through; a search on `World: Clone` is what is left |
+| [Bots](#bots) | Built | a player the server plays, from a book or from a rollout on a crop that takes about three decided games in five off the book at every level; what is left is a learned judge behind the one the search already asks |
 | [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
 | [A leaderboard](#a-leaderboard) | Part built | per server it is built; across servers it waits on identity |
 | [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Built | what is left is the gesture-to-cells half |
@@ -245,7 +245,7 @@ A reading of the rest of this file, in the order the things depend on each other
 
 **2. ~~[A level of detail](#zooming-out-without-lying).~~** Done — `render::chunks::CoarseTexture` is the cell without its art, one texel a cell, and the entry says what it changed. What is left of it is the two things the entry lists: the coarse window re-fills rather than scrolls on a boundless world, and there is no second coarse level below a quarter of a pixel a cell. The other three uses it was meant to serve — a minimap, a world overview, a spectator following a player — are still their own entries.
 
-**3. ~~`World: Clone`.~~** Done — `World` and its `Storage` derive `Clone`, and `a_clone_steps_without_moving_the_original` in `sim::world` pins the two things that has to mean: a copy steps without moving the original, and it is the original's own future. What the derive was for is still to build: [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), a bot that chooses rather than follows a book, and an [experiment's](#experiments) pause-step-reset.
+**3. ~~`World: Clone`.~~** Done — `World` and its `Storage` derive `Clone`, and `a_clone_steps_without_moving_the_original` in `sim::world` pins the two things that has to mean: a copy steps without moving the original, and it is the original's own future. The bot that chooses rather than follows a book is built on it — `World::crop` is one neighbourhood of a world stepped on its own, and `server::bot::Driver::Search` tries the book's placements on one and keeps the best. What the derive was for and is still to build: [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) and an [experiment's](#experiments) pause-step-reset.
 
 **4. ~~The session comes out of the game view.~~** Done — `client::session` holds the link, the seat and the purse, and nothing in it needs a GPU. What is left of that entry is `lay`, `click` and `stamp_at`, which is smaller and is about wording rather than structure.
 
@@ -1424,7 +1424,7 @@ So the whole of the machinery is a clone stepped *n* times with `net::standings`
 | | |
 |---|---|
 | a prediction | a clone stepped to the deadline |
-| a bot that searches rather than follows a book | a clone per candidate placement, scored |
+| a bot that searches rather than follows a book | built: a copy per candidate placement, scored — of one neighbourhood rather than the world, because ten whole ones stepped eight generations is two seconds against a quarter-second tick |
 | an experiment's **reset** | keep the clone, put it back |
 | an experiment's **step one generation** | built, as `Server::step_once`; the clone is what makes it undoable |
 
