@@ -189,8 +189,6 @@ fn a_factory_held_over_life_is_not_already_there() {
 /// it is put down, recognised and taken back the way a turret is.
 #[test]
 fn an_overclocker_is_placed_and_taken_back_like_a_turret() {
-    assert!(OVERCLOCK_COST > FACTORY_COST, "an overclocker does not inherit, so it costs more");
-
     let mut world = World::infinite_empty();
     let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
     hold(&mut world, &block, PlayerId(1));
@@ -216,8 +214,6 @@ fn an_overclocker_is_placed_and_taken_back_like_a_turret() {
 /// that works is a block of four.
 #[test]
 fn a_turret_is_priced_per_cell_and_placed_in_fours() {
-    assert!(TURRET_COST > FACTORY_COST, "a turret does not inherit, so it costs more");
-
     let mut world = World::infinite_empty();
     let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
     hold(&mut world, &block, PlayerId(1));

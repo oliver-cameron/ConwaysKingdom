@@ -145,6 +145,18 @@ fn look_at<'a>(
     }
 }
 
+/// What the keyboard prints on the digit row, which only the keyboard knows.
+///
+/// Two lists rather than one, because the shifted row is nine long and the
+/// plain row is ten: a hotbar has nine tools and ten stamp slots.
+#[derive(Clone, Default)]
+struct Keycaps {
+    /// What shift and 1 to 9 type, in order.
+    shifted: Vec<Option<String>>,
+    /// What 0 to 9 type on their own, in order.
+    bare: Vec<Option<String>>,
+}
+
 /// A finished gesture waiting to be resolved to cells. Input callbacks are not
 /// handed the `GpuState`, and the screen-to-world mapping needs the viewport,
 /// so it waits for the next `update` rather than guessing here.
@@ -280,10 +292,10 @@ pub struct GameApp {
     /// this a click that lands on empty ground is indistinguishable from a
     /// click that never arrived.
     last_action: Option<String>,
-    /// What each digit key prints, plain and with shift, as the hotbar wants
-    /// it. Cached because it is nineteen strings that change once a session —
-    /// see where it is filled in `update`.
-    typed_digits: Option<(Vec<Option<String>>, Vec<Option<String>>)>,
+    /// What each digit key prints, as the hotbar wants it. Cached because it
+    /// is nineteen strings that change once a session — see where it is
+    /// filled in `update`.
+    typed_digits: Option<Keycaps>,
     /// A finished gesture waiting to be resolved to cells.
     pending: Option<Pending>,
     /// What the hotbar is holding.
@@ -526,6 +538,25 @@ impl GameApp {
         self.session.quote(&self.world, cells, taking, placement)
     }
 
+    /// Whether this client has no seat to act from, saying so in the corner.
+    ///
+    /// **The one place the two silences are told apart.** Watching and waiting
+    /// for the whistle mean the same thing to everything that lays anything —
+    /// there is nobody to lay it as — and differ only in the words, so the
+    /// words are here rather than at each of the three places something goes
+    /// down.
+    fn refused_to_act(&mut self) -> bool {
+        if self.session.may_act() {
+            return false;
+        }
+        self.notice = Some(if self.session.watching {
+            w().menu.watch.no_seat.into()
+        } else {
+            words::refused::not_started().to_string()
+        });
+        true
+    }
+
     /// Lay what a drag drew, whatever shape it is.
     ///
     /// Always places, never takes: a drag across occupied ground is far more
@@ -533,12 +564,7 @@ impl GameApp {
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
     fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
-        if !self.session.may_act() {
-            self.notice = Some(if self.session.watching {
-                w().menu.watch.no_seat.into()
-            } else {
-                words::refused::not_started().to_string()
-            });
+        if self.refused_to_act() {
             return;
         }
         let count = cells.len();
@@ -791,12 +817,7 @@ impl GameApp {
         let player = self.session.player();
         let name = self.holding().to_string();
 
-        if !self.session.may_act() {
-            self.notice = Some(if self.session.watching {
-                w().menu.watch.no_seat.into()
-            } else {
-                words::refused::not_started().to_string()
-            });
+        if self.refused_to_act() {
             return;
         }
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
@@ -962,16 +983,12 @@ impl GameApp {
 
     /// Lay a stamp with its middle under the pointer.
     ///
-    /// One action per placement it holds, because a `Paint` lays one kind and
-    /// a stamp may have caught two. All or nothing across both: half a pattern
-    /// is not the pattern, so it is priced whole before any of it is sent.
+    /// One action for the whole of it, and all or nothing: half a pattern is
+    /// not the pattern, so it is priced whole before any of it is sent. What
+    /// it is made of comes off the hotbar rather than out of the stamp, which
+    /// is why one quote covers a pattern of any size.
     fn stamp_at(&mut self, index: usize, at: (i32, i32)) {
-        if !self.session.may_act() {
-            self.notice = Some(if self.session.watching {
-                w().menu.watch.no_seat.into()
-            } else {
-                words::refused::not_started().to_string()
-            });
+        if self.refused_to_act() {
             return;
         }
         let Some(stamp) = self.stamps.get(index).map(|s| s.turned(self.held.turn)) else {
@@ -980,12 +997,9 @@ impl GameApp {
         };
         let corner = stamp.centred_on(at);
 
-        // **One kind, so one quote.** A stamp used to carry a placement per
-        // cell and went down as several actions; it is a shape now and what it
-        // is made of comes off the hotbar, so it is one.
         let Some(what) = self.held.placement() else { return };
         let laid = stamp.at(corner);
-        let quotes = [self.quote_as(laid.clone(), false, what)];
+        let (stamped, delta) = self.quote_as(laid.clone(), false, what);
 
         let cells: usize = stamp.cells.len();
         let stray =
@@ -995,7 +1009,6 @@ impl GameApp {
             return;
         }
 
-        let delta: i32 = quotes.iter().map(|(_, d)| d).sum();
         if self.session.value + delta < 0 {
             self.notice = Some(words::refused::cannot_afford(cells, -delta, self.session.value));
             return;
@@ -1003,9 +1016,7 @@ impl GameApp {
 
         self.notice = None;
         self.session.spend(delta);
-        for (stamped, _) in &quotes {
-            self.session.commit(&mut self.world, stamped);
-        }
+        self.session.commit(&mut self.world, &stamped);
         self.last_action = Some(words::stamps::placed(&stamp.name, cells, delta));
     }
 
@@ -2040,10 +2051,10 @@ impl App for GameApp {
         let relearned = self.views.borrow_mut().take_what_the_browser_said();
         if relearned || self.typed_digits.is_none() {
             let views = self.views.borrow();
-            self.typed_digits = Some((
-                (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect(),
-                (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect(),
-            ));
+            self.typed_digits = Some(Keycaps {
+                shifted: (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect(),
+                bare: (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect(),
+            });
         }
         let help_keys = {
             use winit::keyboard::KeyCode as K;
@@ -2080,7 +2091,7 @@ impl App for GameApp {
                 tools: row(&DIGITS[..tools], true),
             }
         };
-        let (shifted, bare) = self.typed_digits.clone().unwrap_or_default();
+        let Keycaps { shifted, bare } = self.typed_digits.clone().unwrap_or_default();
         let (held, theme) = (self.held, self.views.borrow().theme);
         // Registered before the frame rather than inside it: loading a texture
         // needs the context, and the context is borrowed for the whole build.

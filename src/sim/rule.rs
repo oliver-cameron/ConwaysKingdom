@@ -203,6 +203,7 @@ pub const LIFE_COST: i32 = 1;
 pub const FACTORY_COST: i32 = 10;
 /// One turret. Read per emplacement: the smallest that works is four.
 pub const TURRET_COST: i32 = 15;
+const _: () = assert!(TURRET_COST > FACTORY_COST, "a turret does not inherit, so it costs more");
 /// What a dynamite costs, and it is **the whole of what it costs**.
 ///
 /// A blast used to be billed twice: forty when the stick was laid, and one a
@@ -240,6 +241,8 @@ pub const TURRET_COST: i32 = 15;
 pub const DYNAMITE_COST: i32 = 153;
 /// One overclocker. Read per emplacement, as a turret is.
 pub const OVERCLOCK_COST: i32 = 15;
+const _: () =
+    assert!(OVERCLOCK_COST > FACTORY_COST, "an overclocker does not inherit, so it costs more");
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.

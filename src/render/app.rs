@@ -297,11 +297,14 @@ struct Running<A> {
     dropped: u32,
 }
 
+/// A window and the device drawing into it, once both exist.
+type Started = (Arc<Window>, GpuState);
+
 struct Harness<A> {
     running: Option<Running<A>>,
-    /// Where the device lands when it is built off-thread, which is the only
+    /// Where the two land when they are built off-thread, which is the only
     /// option in a browser.
-    pending: Rc<RefCell<Option<(Arc<Window>, GpuState)>>>,
+    pending: Rc<RefCell<Option<Started>>>,
     /// Set once the window exists, so a second `resumed` does not build another.
     started: bool,
 }
