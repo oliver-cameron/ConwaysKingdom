@@ -128,15 +128,20 @@ fn flat_fade(zoom: f32) -> f32 {
 /// path's own texel instead of the coarse texture — which is what lets the two
 /// meet exactly rather than within a shade of each other.
 fn flat_colour(owner: u32, tile: u32) -> vec3<f32> {
+    let alive = (tile & ALIVE) != 0u;
     var light = COARSE_DEAD;
-    if (tile & ALIVE) != 0u {
+    if alive {
         light = COARSE_ALIVE;
     }
     if (tile & ICE) != 0u {
         light = light + COARSE_ICE;
     }
     let player = owner >> PLAYER_SHIFT;
-    return shade(player_lightness(light, player), player_chroma(player), player_hue(player));
+    return shade(
+        player_lightness(light, player, alive),
+        player_chroma(player),
+        player_hue(player),
+    );
 }
 
 /// **The tile for ground nobody holds.** MUST MATCH `sim::cell::bits::NOBODY`.
@@ -215,6 +220,9 @@ const TAU: f32 = 6.283185307;
 // The lightness a swatch is drawn at, and the one at which a full-saturation
 // texel lands exactly on its row. MUST MATCH `client::views::hue::L_SWATCH`.
 const L_SWATCH: f32 = 0.62;
+// The least of the sheet's lightness held ground is drawn at. MUST MATCH
+// `client::views::hue::HELD_FLOOR`.
+const HELD_FLOOR: f32 = 0.85;
 
 fn oklab_to_linear_srgb(lab: vec3<f32>) -> vec3<f32> {
     let l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
@@ -295,9 +303,23 @@ fn player_hue(player: u32) -> f32 {
 /// room for one. Nobody's row sits at `L_SWATCH`, so unclaimed ground keeps
 /// the sheet's own lightness.
 ///
+/// **A live cell takes the row in full and held ground does not.** Five rows
+/// sit at 0.45, which below the reference is 0.73 of the sheet: above the two
+/// thirds under which a cell stops reading as its own art, and wanted on a
+/// live cell, where the separation the table was chosen for is needed. A dead
+/// tile is a dark texel already and reads against the grey backdrop by hue and
+/// chroma rather than by shading, and at 0.73 a dark player's territory sinks
+/// into it. So held ground's reference is floored at `HELD_FLOOR` of the
+/// swatch lightness -- a floor of `HELD_FLOOR` on the multiplier, with the
+/// row's hue and chroma untouched -- and the player's live cells still carry
+/// the whole of the darkness.
+///
 /// MUST MATCH `client::views::hue::player_lightness`.
-fn player_lightness(lightness: f32, player: u32) -> f32 {
-    let l_ref = cam.lightness[player / 4u][player % 4u];
+fn player_lightness(lightness: f32, player: u32, alive: bool) -> f32 {
+    var l_ref = cam.lightness[player / 4u][player % 4u];
+    if !alive {
+        l_ref = max(l_ref, L_SWATCH * HELD_FLOOR);
+    }
     if lightness < L_SWATCH {
         return lightness * l_ref / L_SWATCH;
     }
@@ -403,15 +425,20 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
     // The two state bits, which are where they always were and are the only
     // part of the byte a cell without its art needs.
     let tile = texel.g;
+    let alive = (tile & ALIVE) != 0u;
     var light = COARSE_DEAD;
-    if (tile & ALIVE) != 0u {
+    if alive {
         light = COARSE_ALIVE;
     }
     if (tile & ICE) != 0u {
         light = light + COARSE_ICE;
     }
     let player = texel.r >> PLAYER_SHIFT;
-    return shade(player_lightness(light, player), player_chroma(player), player_hue(player));
+    return shade(
+        player_lightness(light, player, alive),
+        player_chroma(player),
+        player_hue(player),
+    );
 }
 
 /// The colour of one point, in texels across a chunk.
@@ -553,7 +580,7 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     colour = mix(
         colour,
         shade(
-            player_lightness(sprite.g, player),
+            player_lightness(sprite.g, player, (texel.g & ALIVE) != 0u),
             sprite.r * player_chroma(player),
             player_hue(player),
         ),
