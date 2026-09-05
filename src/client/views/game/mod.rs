@@ -343,7 +343,7 @@ impl GameApp {
         // sixteen players is nothing beside the buffer write it rides on.
         let uniform = camera.uniform(
             !gpu.config.format.is_srgb(),
-            &crate::client::views::hue::table(),
+            &crate::client::views::hue::PALETTE,
             // Where the coarse texture is looking, so the shader can turn a
             // world position into one of its texels. A window of nothing when
             // the fine path is drawing, which the shader never reads.
@@ -2981,7 +2981,7 @@ mod tests {
             assert!(!seen.contains(&c), "players {p} and an earlier one share {c:?}");
             seen.push(c);
         }
-        // Player 1 is the saturated tier, player 2 the muted one.
+        // Two rows of the palette, not one row read twice.
         let (a, b) = (player_colour(PlayerId(1)), player_colour(PlayerId(2)));
         assert_ne!(a, b);
     }

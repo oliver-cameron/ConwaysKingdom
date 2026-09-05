@@ -14,8 +14,8 @@
 //! Rebuilt when the player number changes, which happens once — on `Welcome` —
 //! so "once" is the honest cost.
 
-use crate::render::atlas::{SHEET_H, SHEET_W, TILE_N};
-use crate::sim::PlayerId;
+use crate::render::atlas::{LEVELS, LEVEL_ORIGIN, LEVEL_TILE_N, SHEET_H, SHEET_W, TILE_N};
+use crate::sim::{bits, PlayerId};
 
 /// The sheet, tinted for one player, as an egui texture.
 #[derive(Default)]
@@ -81,6 +81,30 @@ mod tests {
         let last = Icons::uv(255);
         assert!(last.max.x <= 1.0 && last.max.y <= (SHEET_W as f32 / SHEET_H as f32) + 0.001);
     }
+
+    /// The column says whose tile a texel is in at every level, against
+    /// `Cell::sprite`, which is the arithmetic it has to agree with.
+    #[test]
+    fn a_texels_column_says_whether_its_cell_is_alive() {
+        use crate::sim::{Cell, Kind};
+        for kind in Kind::ALL {
+            for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                let tile = Cell::DEAD.with_kind(kind).with_alive(alive).with_ice(ice).sprite();
+                let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
+                for level in 0..LEVELS {
+                    let (ox, oy) = LEVEL_ORIGIN[level];
+                    let side = LEVEL_TILE_N[level];
+                    for (dx, dy) in [(0, 0), (side - 1, side - 1)] {
+                        assert_eq!(
+                            alive_at(ox + tx * side + dx, oy + ty * side + dy),
+                            alive,
+                            "tile {tile} at level {level}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The whole sheet, converted from saturation-lightness-coverage into this
@@ -88,11 +112,13 @@ mod tests {
 fn tint(player: PlayerId) -> Option<egui::ColorImage> {
     let sheet = crate::render::atlas::decoded()?;
     let mut pixels = Vec::with_capacity((SHEET_W * SHEET_H) as usize);
-    for texel in sheet.chunks_exact(4) {
+    for (i, texel) in sheet.chunks_exact(4).enumerate() {
+        let (x, y) = (i as u32 % SHEET_W, i as u32 / SHEET_W);
         let (r, g, b) = crate::client::views::hue::shade(
             texel[1] as f32 / 255.0,
             texel[0] as f32 / 255.0,
             player,
+            alive_at(x, y),
         );
         pixels.push(egui::Color32::from_rgba_unmultiplied(r, g, b, texel[3]));
     }
@@ -101,6 +127,20 @@ fn tint(player: PlayerId) -> Option<egui::ColorImage> {
         pixels,
         source_size: egui::vec2(SHEET_W as f32, SHEET_H as f32),
     })
+}
+
+/// Whether a texel is part of a live cell's tile, which decides how dark the
+/// player's row may draw it — see `hue::player_lightness`. So the hotbar's
+/// picture of held ground is the board's.
+///
+/// Read off the column, because the tile byte's low bit is alive and its low
+/// nibble is the column. True at every level: the strip packs the reduced
+/// levels left to right, each from its own origin at its own tile side.
+fn alive_at(x: u32, y: u32) -> bool {
+    let level =
+        (0..LEVELS).rev().find(|&l| x >= LEVEL_ORIGIN[l].0 && y >= LEVEL_ORIGIN[l].1).unwrap_or(0);
+    let column = (x - LEVEL_ORIGIN[level].0) / LEVEL_TILE_N[level];
+    column as u8 & bits::ALIVE != 0
 }
 
 /// A left-pointing arrow, drawn rather than typed.

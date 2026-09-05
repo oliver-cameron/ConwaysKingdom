@@ -128,15 +128,20 @@ fn flat_fade(zoom: f32) -> f32 {
 /// path's own texel instead of the coarse texture — which is what lets the two
 /// meet exactly rather than within a shade of each other.
 fn flat_colour(owner: u32, tile: u32) -> vec3<f32> {
+    let alive = (tile & ALIVE) != 0u;
     var light = COARSE_DEAD;
-    if (tile & ALIVE) != 0u {
+    if alive {
         light = COARSE_ALIVE;
     }
     if (tile & ICE) != 0u {
         light = light + COARSE_ICE;
     }
     let player = owner >> PLAYER_SHIFT;
-    return shade(light * player_lightness(player), player_saturation(player), player_hue(player));
+    return shade(
+        player_lightness(light, player, alive),
+        player_chroma(player),
+        player_hue(player),
+    );
 }
 
 /// **The tile for ground nobody holds.** MUST MATCH `sim::cell::bits::NOBODY`.
@@ -162,11 +167,13 @@ struct Camera {
     chunk_n:  f32,         // cells per chunk edge
     encode:   f32,         // non-zero when this shader must encode sRGB itself
     wraps:    f32,         // non-zero when the coarse window *is* the world
-    // A hue per player, as a turn, worked out on the client -- see
-    // client::views::hue. Packed four to a vec4 because a uniform array of
-    // scalars has a 16-byte stride in WGSL, so `array<f32, 16>` would be 256
-    // bytes to carry 64.
-    hues:     array<vec4<f32>, 4>,
+    // The palette, a column per table: every player's colour at the swatch
+    // lightness, as OKLCH -- see client::views::hue::PALETTE. Packed four to a
+    // vec4 because a uniform array of scalars has a 16-byte stride in WGSL,
+    // so `array<f32, 16>` would be 256 bytes to carry 64.
+    hues:      array<vec4<f32>, 4>,   // as a turn
+    lightness: array<vec4<f32>, 4>,
+    chroma:    array<vec4<f32>, 4>,
     // The world rect the coarse texture holds -- x, y, width, height, in
     // cells -- and `encode`'s neighbour says whether it wraps.
     coarse:   vec4<f32>,
@@ -177,9 +184,9 @@ struct Camera {
     // screen, because it has to meet `render::chunks::COARSE_BELOW`.
     over:     f32,
     // No pad field. WGSL rounds a uniform struct up to a multiple of sixteen
-    // on its own, so `over` at 112 makes it 128 — and a `vec3<f32>` written
-    // here would *align* to 16 and land at 128 itself, making the struct 144
-    // against Rust's 128. `the_camera_uniform_matches_the_shader` caught that,
+    // on its own, so `over` at 240 makes it 256 — and a `vec3<f32>` written
+    // here would *align* to 16 and land at 256 itself, making the struct 272
+    // against Rust's 256. `the_camera_uniform_matches_the_shader` caught that,
     // which is the whole reason it reads the struct rather than trusting it.
 };
 
@@ -192,9 +199,13 @@ struct Camera {
 
 // --- colour -----------------------------------------------------------------
 //
-// The atlas carries no hue: R is saturation, G lightness, A coverage. Hue comes
-// from the cell's player, so one sheet serves every player and two players'
-// cells are the same shape in different colours.
+// The atlas carries no hue: R is saturation, G lightness, A coverage. The
+// colour comes from the cell's player -- one row of a fixed table, chosen for
+// separation and measured in OKLab, see `client::views::hue::PALETTE` -- so
+// one sheet serves every player and two players' cells are the same shape in
+// different colours. A row is what a full-saturation texel at `L_SWATCH`
+// draws as; the sheet's saturation scales the row's chroma and its lightness
+// is placed around the row's by `player_lightness`.
 //
 // OKLab rather than HSV, because HSV's hues are not evenly spaced perceptually:
 // its yellows and cyans read far brighter than its blues at equal "value", so
@@ -206,9 +217,12 @@ struct Camera {
 // `fs_main` does it instead. See `linear_to_srgb` at the bottom.
 
 const TAU: f32 = 6.283185307;
-// Golden ratio: consecutive player numbers land far apart on the hue circle,
-// so neighbouring players never share a colour.
-const HUE_STEP: f32 = 0.6180339887;
+// The lightness a swatch is drawn at, and the one at which a full-saturation
+// texel lands exactly on its row. MUST MATCH `client::views::hue::L_SWATCH`.
+const L_SWATCH: f32 = 0.62;
+// The least of the sheet's lightness held ground is drawn at. MUST MATCH
+// `client::views::hue::HELD_FLOOR`.
+const HELD_FLOOR: f32 = 0.85;
 
 fn oklab_to_linear_srgb(lab: vec3<f32>) -> vec3<f32> {
     let l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
@@ -228,19 +242,19 @@ fn in_gamut(rgb: vec3<f32>) -> bool {
     return all(rgb >= vec3<f32>(-0.0005)) && all(rgb <= vec3<f32>(1.0005));
 }
 
-/// Lightness, saturation and a hue angle to linear RGB.
+/// Lightness, chroma and a hue angle to linear RGB.
 ///
 /// Asking for more chroma than sRGB can show is the normal case, not an edge
-/// one: at this chroma most hues leave the gamut at some lightness. Clamping
-/// the result would fix the range but bend the hue -- red clips before blue,
-/// so two players drift towards each other. Instead the chroma is bisected
-/// down until it fits, which keeps hue and lightness exactly and gives up only
-/// the saturation that could not be shown. That is what OKHSL does, and the
-/// part worth having here.
-fn shade(lightness: f32, saturation: f32, hue: f32) -> vec3<f32> {
+/// one: a row's chroma fits at the swatch lightness and most hues leave the
+/// gamut somewhere above or below it. Clamping the result would fix the range
+/// but bend the hue -- red clips before blue, so two players drift towards
+/// each other. Instead the chroma is bisected down until it fits, which keeps
+/// hue and lightness exactly and gives up only the saturation that could not
+/// be shown. That is what OKHSL does, and the part worth having here.
+///
+/// MUST MATCH `client::views::hue::shade_at`.
+fn shade(lightness: f32, chroma: f32, hue: f32) -> vec3<f32> {
     let dir = vec2<f32>(cos(hue), sin(hue));
-    // Taper towards black and white, where no hue has any chroma to spare.
-    let chroma = 0.30 * saturation * (1.0 - abs(2.0 * lightness - 1.0));
 
     var rgb = oklab_to_linear_srgb(vec3<f32>(lightness, chroma * dir.x, chroma * dir.y));
     if in_gamut(rgb) {
@@ -265,75 +279,62 @@ fn shade(lightness: f32, saturation: f32, hue: f32) -> vec3<f32> {
 
 /// A player's hue, looked up rather than worked out.
 ///
-/// It used to be `fract(player * HUE_STEP)`, which is right for a free-for-all
 /// A table rather than arithmetic here because the client draws the same
 /// swatch beside a name in the lobby, and two derivations of one number are two
 /// chances for the board and the lobby to disagree about who is who. Teams need
-/// nothing extra: a team is a player, so it is one number and one hue.
+/// nothing extra: a team is a player, so it is one number and one row.
 ///
-/// Nothing else about a cell changes with the player. The sprite, its
-/// lightness and its coverage all come from the sheet; the player contributes
-/// a hue and a saturation tier and nothing more.
+/// Nothing else about a cell changes with the player. The sprite, its shading
+/// and its coverage all come from the sheet; the player contributes a row of
+/// the palette and nothing more.
 fn player_hue(player: u32) -> f32 {
     return cam.hues[player / 4u][player % 4u] * TAU;
 }
 
-/// A player's lightness, as a multiplier on the sheet's own — **the third
-/// axis**, and the one that does the most work.
+/// The sheet's lightness, placed around the player's.
 ///
-/// Hue is stepped by the golden ratio, which spreads a prefix about as well as
-/// a prefix can be and still wraps: by fifteen players two of them are nearer
-/// each other than the eye separates at the size a cell is drawn.
+/// **Remapped rather than scaled.** A multiplier lands `L_SWATCH` on the
+/// row's lightness only by pushing everything above it the same way, and the
+/// sheet's brightest live texel is at 0.84: the palest rows would carry it
+/// past white, where no chroma survives and `shade` has nothing left to give
+/// up. So the map is linear from black to the reference and linear again from
+/// the reference to white -- a multiplier below, where the art's shading lives
+/// and an offset would crush it, and a compression above, where there is no
+/// room for one. Nobody's row sits at `L_SWATCH`, so unclaimed ground keeps
+/// the sheet's own lightness.
 ///
-/// Five tiers cycling on five, against saturation's three — the smallest pair
-/// of periods for which every one of the fifteen live players gets its own
-/// combination, since their least common multiple is fifteen. Multiplied into
-/// the sheet's lightness exactly the way saturation is multiplied into its
-/// saturation, so the art keeps its shading and the whole cell moves together
-/// rather than only its colour.
+/// **A live cell takes the row in full and held ground does not.** Five rows
+/// sit at 0.45, which below the reference is 0.73 of the sheet: above the two
+/// thirds under which a cell stops reading as its own art, and wanted on a
+/// live cell, where the separation the table was chosen for is needed. A dead
+/// tile is a dark texel already and reads against the grey backdrop by hue and
+/// chroma rather than by shading, and at 0.73 a dark player's territory sinks
+/// into it. So held ground's reference is floored at `HELD_FLOOR` of the
+/// swatch lightness -- a floor of `HELD_FLOOR` on the multiplier, with the
+/// row's hue and chroma untouched -- and the player's live cells still carry
+/// the whole of the darkness.
 ///
-/// The range is narrow on purpose: below about two thirds a cell stops reading
-/// as its own art and starts reading as a dark patch, which is worse than two
-/// players looking alike.
-///
-/// MUST MATCH `client::views::hue::lightness_tier`.
-fn player_lightness(player: u32) -> f32 {
-    // Nobody's ground keeps the sheet's own lightness. It is grey either way,
-    // and dimming it would make unclaimed ground a shade nothing else is.
-    if player == 0u {
-        return 1.0;
+/// MUST MATCH `client::views::hue::player_lightness`.
+fn player_lightness(lightness: f32, player: u32, alive: bool) -> f32 {
+    var l_ref = cam.lightness[player / 4u][player % 4u];
+    if !alive {
+        l_ref = max(l_ref, L_SWATCH * HELD_FLOOR);
     }
-    let tier = player % 5u;
-    if tier == 0u { return 1.0; }
-    if tier == 1u { return 0.91; }
-    if tier == 2u { return 0.83; }
-    if tier == 3u { return 0.75; }
-    return 0.68;
+    if lightness < L_SWATCH {
+        return lightness * l_ref / L_SWATCH;
+    }
+    return l_ref + (lightness - L_SWATCH) * (1.0 - l_ref) / (1.0 - L_SWATCH);
 }
 
-/// A player's saturation, as a multiplier on the sheet's own — the second
-/// axis, because hue alone crowds.
+/// The chroma a full-saturation texel reaches for this player; the sheet's
+/// own saturation scales it.
 ///
-/// **Three tiers, cycling on three**, and the three is the point. It
-/// alternated, which is the one period that could not help: hues step by the
-/// golden ratio, so the pairs it brings closest are a Fibonacci number apart,
-/// and eight is even — players 1 and 9 got the same strength on top of nearly
-/// the same hue. Three against lightness's five repeats every fifteen, which
-/// is every live player.
-///
-/// MUST MATCH `client::views::hue::saturation_tier`.
-fn player_saturation(player: u32) -> f32 {
-    // Player zero is nobody. Unclaimed ground has no colour of its own, so it
-    // is grey, and territory reads as colour against it -- which is the whole
-    // of how a player sees what is theirs. Without this, unowned cells take
-    // hue zero at the muted tier and unclaimed ground is a dull red field.
-    if player == 0u {
-        return 0.0;
-    }
-    let tier = player % 3u;
-    if tier == 0u { return 1.0; }
-    if tier == 1u { return 0.78; }
-    return 0.58;
+/// Nought for player zero, which is nobody. Unclaimed ground has no colour of
+/// its own, so it is grey, and territory reads as colour against it -- which
+/// is the whole of how a player sees what is theirs. The table's first row
+/// says so; nothing here has to.
+fn player_chroma(player: u32) -> f32 {
+    return cam.chroma[player / 4u][player % 4u];
 }
 
 struct VsOut {
@@ -382,9 +383,9 @@ fn vs_main(
 /// lightness and the hue arrives from the player — so a coarse cell is that
 /// with the sheet's variation dropped rather than a different colour scheme.
 ///
-/// Player zero is unowned, and `player_saturation` already answers nought for
-/// it, so unheld ground comes out grey at the dead lightness with no arm
-/// saying so. Which is what the backdrop is: **an infinite world's coarse
+/// Player zero is unowned, and `player_chroma` already answers nought for it,
+/// so unheld ground comes out grey at the dead lightness with no arm saying
+/// so. Which is what the backdrop is: **an infinite world's coarse
 /// texture holds only the chunks it has**, and everywhere else reads as a dead
 /// unowned cell, so unloaded ground draws as unloaded ground for free.
 const COARSE_DEAD: f32 = 0.16;
@@ -424,15 +425,20 @@ fn coarse_colour(at: vec2<f32>) -> vec3<f32> {
     // The two state bits, which are where they always were and are the only
     // part of the byte a cell without its art needs.
     let tile = texel.g;
+    let alive = (tile & ALIVE) != 0u;
     var light = COARSE_DEAD;
-    if (tile & ALIVE) != 0u {
+    if alive {
         light = COARSE_ALIVE;
     }
     if (tile & ICE) != 0u {
         light = light + COARSE_ICE;
     }
     let player = texel.r >> PLAYER_SHIFT;
-    return shade(light * player_lightness(player), player_saturation(player), player_hue(player));
+    return shade(
+        player_lightness(light, player, alive),
+        player_chroma(player),
+        player_hue(player),
+    );
 }
 
 /// The colour of one point, in texels across a chunk.
@@ -541,8 +547,8 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     let texel = textureLoad(chunks, cell_coord, i32(layer), 0);
     let player = texel.r >> PLAYER_SHIFT;
     // **Ground nobody holds has a picture of its own**, rather than a player's
-    // dead cell drawn grey. `player_saturation` answers nought for player
-    // zero, so the two used to differ only in that the colour drained out of
+    // dead cell drawn grey. `player_chroma` answers nought for player zero,
+    // so the two used to differ only in that the colour drained out of
     // one of them — and a field of unclaimed ground read as a grid of
     // somebody's empty squares rather than as open country.
     //
@@ -574,8 +580,8 @@ fn texel_colour(at: vec2<f32>, layer: u32, n: f32) -> vec3<f32> {
     colour = mix(
         colour,
         shade(
-            sprite.g * player_lightness(player),
-            sprite.r * player_saturation(player),
+            player_lightness(sprite.g, player, (texel.g & ALIVE) != 0u),
+            sprite.r * player_chroma(player),
             player_hue(player),
         ),
         sprite.a,

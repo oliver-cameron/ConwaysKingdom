@@ -621,7 +621,7 @@ Three decisions worth keeping:
 
 ### What is left
 
-**The colour needed nothing** — see [game.md](game.md#teams). A team is a player, so its cells carry one number and are drawn in one colour, and the hue table went back to what it was before teams existed: a player's number stepped around the wheel by the golden ratio, a constant the client hands to the shader in the camera uniform.
+**The colour needed nothing** — see [game.md](game.md#teams). A team is a player, so its cells carry one number and are drawn in one colour, and the colour table went back to one row per number, a constant the client hands to the shader in the camera uniform — a golden-ratio step at the time, and since then a fixed palette chosen for separation; see [rendering.md](rendering.md#colour).
 
 There was a real design here and it is worth recording what it cost, because the measurement it was waiting on is exactly the measurement that says the design was unnecessary. A team took a golden-ratio step and its **members** spread over a narrow arc around it, a twelfth of the circle, so that allies read as one colour across a screen of cells and were still told apart when looked at. The arc was fixed rather than widening with the team, on the reasoning that mistaking your own two colours costs nothing and mistaking an enemy for an ally costs the game. All of it was 165 lines of arithmetic keeping two numbers *look* like one number — and the thing it never established, whether two allies a twelfth apart are distinguishable at four pixels a cell, stopped mattering the moment they were one number.
 

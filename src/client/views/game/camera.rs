@@ -250,8 +250,9 @@ impl Camera {
     /// camera is arithmetic and has never known there is a GPU — so it is a
     /// parameter rather than a field. It rides here because the camera
     /// uniform is the only thing bound to the fragment stage that has room
-    /// for it. `hues` rides here for the same reason and is nobody's business
-    /// either: it is who is on whose team, which is the client's.
+    /// for it. `palette` rides here for the same reason and is nobody's
+    /// business either: it is what colour each player is, which is the
+    /// client's — see [`crate::client::views::hue::PALETTE`].
     /// `over` is how many times larger than the screen the world is being
     /// drawn — see [`crate::render::context::Offscreen::SUPERSAMPLE`].
     ///
@@ -264,13 +265,18 @@ impl Camera {
     pub fn uniform(
         &self,
         encode_srgb: bool,
-        hues: &[f32; crate::sim::PlayerId::COUNT],
+        palette: &[(f32, f32, f32); crate::sim::PlayerId::COUNT],
         coarse: ((i32, i32), (i32, i32)),
         coarse_wraps: bool,
         over: f32,
     ) -> CameraUniform {
         let (ox, oy) = self.origin();
         let ((row, col), (rows, cols)) = coarse;
+        // Four to a row, which is what the shader indexes and what a uniform
+        // array's stride costs if it is not.
+        let column = |pick: fn(&(f32, f32, f32)) -> f32| -> [[f32; 4]; 4] {
+            std::array::from_fn(|row| std::array::from_fn(|col| pick(&palette[row * 4 + col])))
+        };
         CameraUniform {
             origin: [ox, oy],
             viewport: [self.viewport.0 * over, self.viewport.1 * over],
@@ -281,9 +287,9 @@ impl Camera {
             coarse: [col as f32, row as f32, cols as f32, rows as f32],
             over,
             pad: [0.0; 3],
-            // Four to a row, which is what the shader indexes and what a
-            // uniform array's stride costs if it is not.
-            hues: std::array::from_fn(|row| std::array::from_fn(|col| hues[row * 4 + col])),
+            lightness: column(|row| row.0),
+            chroma: column(|row| row.1),
+            hues: column(|row| row.2),
         }
     }
 }
