@@ -1884,9 +1884,9 @@ fn a_bot_on_a_team_plays_as_the_team() {
     assert_eq!(s.player_count(), 4, "a refused side cost a number");
 
     s.start_match(None).unwrap();
-    s.credit(bot, 200);
-    assert_eq!(first_act_of(&mut s, bot, 3 * 4), Some(PlayerId(2)), "not the team's number");
-    assert!(s.value_of(bot).unwrap() < 200, "the team's purse did not pay");
+    // No hand-out. A match opens every purse at nought, and a bot that needed
+    // one to move was this test standing in for the fault below.
+    assert_eq!(first_act_of(&mut s, bot, 8 * 4), Some(PlayerId(2)), "not the team's number");
 }
 
 /// **In a world a removed bot's seat stays spent**, as a person's who left
@@ -2031,4 +2031,81 @@ fn a_seated_player_adds_and_removes_bots_from_the_lobby() {
     let refused = s.handle(Some(me), None, ClientMessage::RemoveBot { seat });
     assert!(matches!(&refused[..], [ServerMessage::NotStarted { .. }]), "{refused:?}");
     assert!(s.is_bot(seat), "a running match let a bot go");
+}
+
+/// **A block heals, so one cell a generation is a coin that never runs out.**
+/// A match hands out no value, and what makes nought recoverable rather than
+/// stuck is that a grant is a block: take a corner out and the three that are
+/// left give the empty corner exactly three neighbours, so it is born again on
+/// the next generation. Mine one, wait one, mine again.
+#[test]
+fn a_mined_block_heals_itself_the_next_generation() {
+    let me = PlayerId(1);
+    let mut world = World::infinite_empty();
+    crate::net::grant(&mut world, me);
+    let mine = |w: &World| {
+        w.live_cells().into_iter().find(|&(r, c)| {
+            w.cell_at(r, c).is_some_and(|cell| cell.is_alive() && cell.player() == me)
+        })
+    };
+    let before = world.live_cells().len();
+    let at = mine(&world).expect("a grant stands somebody up");
+    world.set_cell_at(at.0, at.1, crate::sim::Cell::DEAD.with_player(me));
+    assert_eq!(world.live_cells().len(), before - 1, "one taken");
+    world.step();
+    assert_eq!(world.live_cells().len(), before, "the block did not heal");
+}
+
+/// **A bot that runs dry mines rather than stopping**, which is what a person
+/// does with a purse at nought; and one with money never pulls up its own
+/// cells, because mining is what happens when nothing can be afforded rather
+/// than one move among the others.
+#[test]
+fn a_bot_mines_only_when_it_can_afford_nothing() {
+    use crate::server::bot::Bot;
+    let mut world = World::infinite_empty();
+    let me = PlayerId(1);
+    crate::net::grant(&mut world, me);
+    let rules = crate::net::Rules::default();
+
+    let mut rich = Bot::new(Level::Hard, Driver::Book, 7, me, 0);
+    let mined = (0..200)
+        .filter_map(|tick| rich.choose(&world, &rules, me, 1_000, tick))
+        .filter(|a| matches!(a, crate::net::Action::Erase { .. }))
+        .count();
+    assert_eq!(mined, 0, "a bot with a purse took its own cells back {mined} times");
+
+    let mut broke = Bot::new(Level::Hard, Driver::Book, 7, me, 0);
+    let took: Vec<_> = (0..200)
+        .filter_map(|tick| broke.choose(&world, &rules, me, 0, tick))
+        .filter_map(|a| match a {
+            crate::net::Action::Erase { cells, .. } => Some(cells.len()),
+            _ => None,
+        })
+        .collect();
+    assert!(!took.is_empty(), "a bot with nothing never tried to mine");
+    assert!(took.iter().all(|&n| n == 1), "it took more than the block can heal: {took:?}");
+}
+
+/// **And a broke bot in a match digs itself out.** One coin a generation from
+/// a block that heals is enough to reach a factory, which is what turns the
+/// opening from a grind into a game.
+#[test]
+fn a_broke_bot_in_a_match_mines_its_way_to_something_standing() {
+    let mut s = Server::named("arena", World::infinite_empty());
+    s.make_match(Victory::Timer { generations: 4000 });
+    let bot = s.add_bot("hard bot", Level::Hard, Driver::Book, None).unwrap();
+    assert_eq!(s.value_of(bot), Some(0), "a match opens broke, which is the premise");
+    s.start_match(None).unwrap();
+    for _ in 0..600 {
+        s.step();
+    }
+    assert!(s.value_of(bot).unwrap() > 0, "it never earned a coin");
+    let standing = s
+        .world()
+        .live_cells()
+        .iter()
+        .filter(|&&(r, c)| s.world().cell_at(r, c).is_some_and(|cell| cell.player() == bot))
+        .count();
+    assert!(standing > 0, "it mined itself down to nothing");
 }

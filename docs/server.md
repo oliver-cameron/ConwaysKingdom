@@ -221,6 +221,10 @@ A bot is added and removed while the room admits anybody — from the lobby by a
 
 A bot that *chooses* — tries a placement on a copy of the world and scores what happened — is the second version, and `World: Clone` is there for it; see [planned.md](planned.md#bots).
 
+**A bot that runs dry mines, one cell at a time.** A match hands out no value — an opening bought while the tick stands still would be bought in wall-clock time — so everybody starts a match broke, standing on a granted block. What makes nought recoverable rather than stuck is that a block *heals*: take one corner out and the three that are left give the empty corner exactly three neighbours, so it is born again on the next generation. One cell an act is therefore a coin that never runs out, and taking the whole block instead leaves nothing to heal and no way back.
+
+So the bot reclaims a single cell of its own whenever it can afford nothing at all, and never otherwise: mining is what happens when the purse is empty rather than one move among the others, and a bot with money that pulled up its own cells would be dismantling itself. Until this, a bot in a match sat at nought for the length of it and looked like a bot that was not running.
+
 ## The API
 
 An outside program plays through HTTP, and the one thing it needs is a token:

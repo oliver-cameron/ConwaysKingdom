@@ -49,6 +49,19 @@ const NEAR: i32 = crate::net::SPAWN_N / 2;
 /// costs the same on a full torus as on an empty plane.
 const SAMPLES: usize = 48;
 
+/// How many of its own cells a bot takes back in one act, when it is mining
+/// for its first coin.
+///
+/// **One**, and the one is the whole trick. A grant is a block, and a block
+/// with a corner taken out is three cells in an L — whose missing corner has
+/// exactly three neighbours, so it is born again on the very next generation.
+/// So a block heals itself for nothing and one cell a generation is a coin
+/// that never runs out, which is how a match's empty opening is played.
+///
+/// Four was tried and is a different game: it takes the whole block, nothing
+/// is left to heal, and the bot mines itself down to no cells at all and
+/// stops. The renewable move is the small one.
+const MINED: usize = 1;
 /// How near somebody else's ground makes a square the frontier, in cells.
 const FRONTIER: i32 = 6;
 
@@ -141,6 +154,10 @@ impl Level {
         }
     }
 
+    /// What it will spend on, in no order: `choose` starts at one of these at
+    /// random and walks round. Mining is not among them — it is what happens
+    /// when none of them can be afforded, which is a different question from
+    /// what a bot would like to do.
     fn intents(self) -> &'static [Intent] {
         match self {
             Self::Easy => &[Intent::Earn],
@@ -205,7 +222,24 @@ impl Bot {
             }
             return Some(stamped.action);
         }
-        None
+        // **It cannot afford anything at all, so take some of its own back.**
+        // A match hands out no value, so everybody opens one broke on a
+        // granted block and the first coin has to be mined out of it — a
+        // person works that out at once, and a bot whose whole book costs
+        // money sat at nought for the length of a match instead, which looked
+        // like a bot that was not running.
+        //
+        // On the purse and not on having found nowhere to build: a bot with
+        // money and no room is a bot with nothing to do, and one that pulled
+        // up its own cells for something to do would be dismantling itself.
+        if purse >= crate::net::LIFE_COST {
+            return None;
+        }
+        let (action, _) = ground.mine(&roll)?;
+        let stamped = Stamped { tick, player: plays_as, seat: plays_as, action };
+        // Earned rather than spent, so this cannot be what empties a purse;
+        // asked anyway, because one answer to "may I" is better than two.
+        (purse + crate::net::price_under(world, &stamped, rules) >= 0).then_some(stamped.action)
     }
 
     /// Ice round the oldest factory that is still standing and not yet iced.
@@ -250,6 +284,31 @@ impl Ground<'_> {
         let (row, col) = crate::net::spawn_for(me, world);
         let half = crate::net::SPAWN_N / 2;
         Ground { world, rules, me, home: (row + half, col + half) }
+    }
+
+    /// **Cells of its own to take back**, which is where a purse with nothing
+    /// in it gets its first coin.
+    ///
+    /// Its own and living, since a dead one reclaims nothing, and sampled the
+    /// way a placement is so mining costs what placing costs to look for.
+    /// [`MINED`] at a time, which is one, and says why.
+    fn mine(&self, roll: &Roll) -> Option<(Action, Note)> {
+        let mut cells = Vec::new();
+        for k in 0..SAMPLES as u64 {
+            let at = (
+                self.home.0 - NEAR + roll.pick(400 + k, (2 * NEAR) as usize) as i32,
+                self.home.1 - NEAR + roll.pick(600 + k, (2 * NEAR) as usize) as i32,
+            );
+            let Some(cell) = self.world.cell_at(at.0, at.1) else { continue };
+            if cell.is_alive() && cell.player() == self.me && !cells.contains(&at) {
+                cells.push(at);
+            }
+            if cells.len() == MINED {
+                break;
+            }
+        }
+        (!cells.is_empty())
+            .then_some((Action::Erase { cells, placement: Placement::Life }, Note::Nothing))
     }
 
     /// Somewhere one of these shapes fits, as a paint: every cell placeable
