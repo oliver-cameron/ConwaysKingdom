@@ -16,15 +16,15 @@
 //! senders that connections and the simulation task would both have to lock —
 //! a lock, to avoid a string compare, on the one path that must not have one.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::extract::{ConnectInfo, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -35,7 +35,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::net::codec::{decode_client, encode_server};
 use crate::net::{ClientMessage, RoomId, ServerMessage};
 use crate::server::rooms::{Caller, ConnectionId, Rooms, Seat};
-use crate::server::{api, console};
+use crate::server::{api, console, unjoined};
 use crate::sim::WorldKind;
 
 /// What a connection sends to the simulation task.
@@ -88,27 +88,49 @@ struct AppState {
     connections: Arc<Connections>,
 }
 
-/// Every socket that is open, counted for `/healthz`.
+/// Every socket that is open, counted for `/healthz`, and the ones in no room
+/// by address, for the cap.
 #[derive(Default)]
 struct Connections {
     open: AtomicUsize,
+    unjoined: Mutex<unjoined::PerAddress>,
 }
 
 impl Connections {
-    fn opened(self: &Arc<Self>) -> Counted {
+    /// A place for one more socket from `from`, or `None` because that address
+    /// already holds [`MOST_UNJOINED_PER_ADDRESS`] that have joined nothing.
+    fn admit(self: &Arc<Self>, from: IpAddr) -> Option<Counted> {
+        let mut unjoined = self.unjoined.lock().unwrap_or_else(PoisonError::into_inner);
+        if !unjoined.admit(from, MOST_UNJOINED_PER_ADDRESS) {
+            return None;
+        }
         self.open.fetch_add(1, Ordering::Relaxed);
-        Counted { of: self.clone() }
+        Some(Counted { of: self.clone(), from, unjoined: true })
     }
 }
 
-/// One socket's place in the count, given back when the socket's task ends
-/// however it ends.
+/// One socket's place in the counts: against its address's cap until it joins
+/// a room, and in the total until its task ends, however it ends.
 struct Counted {
     of: Arc<Connections>,
+    from: IpAddr,
+    unjoined: bool,
+}
+
+impl Counted {
+    /// Seated or watching, so no longer one of the address's unjoined. A
+    /// `Leave` later does not put it back: a socket that has been somebody
+    /// is not the stranger the cap is for.
+    fn joined(&mut self) {
+        if std::mem::take(&mut self.unjoined) {
+            self.of.unjoined.lock().unwrap_or_else(PoisonError::into_inner).release(self.from);
+        }
+    }
 }
 
 impl Drop for Counted {
     fn drop(&mut self) {
+        self.joined();
         self.of.open.fetch_sub(1, Ordering::Relaxed);
     }
 }
@@ -568,7 +590,8 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     log::info!("console: type `help` for commands, `stop` to shut down");
 
     let mut http_stop = stop_rx_for_http;
-    let served = axum::serve(listener, app)
+    // With the peer's address, which the cap on unjoined connections is per.
+    let served = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             // Any of the three: a signal, `stop` typed at the console, or the
             // simulation task ending of its own accord. One place to wait
@@ -675,10 +698,39 @@ async fn healthz(State(state): State<AppState>) -> Response {
 /// [`MOST_CHUNKS_AT_ONCE`]: crate::server::MOST_CHUNKS_AT_ONCE
 const MOST_BYTES_AT_ONCE: usize = 1 << 20;
 
-async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+/// How long a connection in no room may say nothing before it is closed.
+/// Chosen, not measured -- see [known-bugs.md].
+///
+/// [known-bugs.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/known-bugs.md#fixed
+const MOST_UNJOINED_SILENCE: Duration = Duration::from_secs(120);
+
+/// How many connections in no room one address may hold at once. Chosen, not
+/// measured -- see [known-bugs.md].
+///
+/// [known-bugs.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/known-bugs.md#fixed
+const MOST_UNJOINED_PER_ADDRESS: usize = 8;
+
+async fn upgrade(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    let named = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok());
+    let from = unjoined::remote(named, peer.ip());
+    // Refused before the upgrade, so it costs a handshake and not a task.
+    let Some(counted) = state.connections.admit(from) else {
+        log::warn!(
+            "{from} holds {MOST_UNJOINED_PER_ADDRESS} connections that have joined nothing; \
+             refusing another"
+        );
+        let why = "too many connections from this address have joined nothing\n";
+        return (StatusCode::TOO_MANY_REQUESTS, why).into_response();
+    };
     ws.max_message_size(MOST_BYTES_AT_ONCE)
         .max_frame_size(MOST_BYTES_AT_ONCE)
-        .on_upgrade(|socket| connection(socket, state))
+        .on_upgrade(move |socket| connection(socket, state, from, counted))
+        .into_response()
 }
 
 /// What the browser client is served from, and nothing else.
@@ -816,10 +868,9 @@ async fn cached(request: axum::extract::Request, next: axum::middleware::Next) -
     response
 }
 
-async fn connection(socket: WebSocket, state: AppState) {
+async fn connection(socket: WebSocket, state: AppState, from: IpAddr, mut counted: Counted) {
     let id = next_connection();
-    let _counted = state.connections.opened();
-    log::info!("connection {id} opened");
+    log::info!("connection {id} opened from {from}");
     let (mut sink, mut stream) = socket.split();
 
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
@@ -838,9 +889,26 @@ async fn connection(socket: WebSocket, state: AppState) {
     // without a key has no profile and so is nobody here, which is right --
     // there is nowhere to file anything against.
     let mut who: Option<crate::net::PersonId> = None;
+    // When this connection last said anything. It is under a deadline for as
+    // long as it is in no room, because nothing else would ever notice it had
+    // gone -- see `unjoined::deadline`.
+    let mut last_heard = Instant::now();
 
     loop {
         tokio::select! {
+            _ = async {
+                let in_room = me.is_some() || watching.is_some();
+                match unjoined::deadline(last_heard, in_room, MOST_UNJOINED_SILENCE) {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                log::info!(
+                    "connection {id} from {from} said nothing for {}s in no room; closing",
+                    MOST_UNJOINED_SILENCE.as_secs()
+                );
+                break;
+            }
             // Replies addressed to this connection.
             Some(msg) = reply_rx.recv() => {
                 match &msg {
@@ -850,6 +918,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                         if let Some(profile) = profile {
                             who = Some(profile.who.clone());
                         }
+                        counted.joined();
                     }
                     // A watcher hears the room's broadcast and holds no seat,
                     // so leaving is a socket closing and nothing more -- there
@@ -857,6 +926,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                     ServerMessage::Watching { room, .. } => {
                         me = None;
                         watching = Some(room.clone());
+                        counted.joined();
                     }
                     _ => {}
                 }
@@ -890,6 +960,7 @@ async fn connection(socket: WebSocket, state: AppState) {
             }
             incoming = stream.next() => {
                 let Some(Ok(frame)) = incoming else { break };
+                last_heard = Instant::now();
                 match frame {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
@@ -934,7 +1005,7 @@ async fn connection(socket: WebSocket, state: AppState) {
         Some(seat) => {
             let _ = state.to_sim.send(ToSim::Left(seat));
         }
-        None => log::info!("connection {id} closed before joining"),
+        None => log::info!("connection {id} from {from} closed before joining"),
     }
 }
 
@@ -983,6 +1054,7 @@ mod tests {
         let app = router(state, &config);
         let listener = tokio::net::TcpListener::bind(config.addr).await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let app = app.into_make_service_with_connect_info::<SocketAddr>();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         addr
     }

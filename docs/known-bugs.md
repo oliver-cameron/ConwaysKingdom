@@ -4,17 +4,9 @@ Things that are wrong, or are probably wrong, and are not fixed. Written down be
 
 Each entry says **what it is**, **what you would see**, and **why it is still here**. A few were found by reading and never reproduced; those say so, because "I think this is broken" and "I made this break" are different claims and only one of them is evidence.
 
-For bugs that *were* fixed, the reasoning lives in [gotchas.md](gotchas.md) — that file is the record of what a symptom turned out to mean, and it is the one to read when something looks familiar.
+For bugs that *were* fixed, the reasoning lives in [gotchas.md](gotchas.md) — that file is the record of what a symptom turned out to mean, and it is the one to read when something looks familiar. [Fixed](#fixed) at the bottom holds the few that were closed by a decision rather than by a chase, where there is a number to explain and no symptom to recognise.
 
 ## Confirmed
-
-### A connection that never joins is never reaped
-
-Neither side sends a ping. A joined client is written to four times a second by the `Step` broadcast, so a peer that has gone away is discovered when a write eventually fails — but a connection that has **not** joined is in no room, hears nothing, and is written to only when it asks something. The server never finds out it is gone.
-
-*You would see:* nothing, until a server that has been up for weeks is holding a few hundred sockets belonging to browser tabs closed long ago. Each holds a task and a broadcast receiver.
-
-*Still here because* the fix is a periodic `Ping` and an idle deadline, and both want a decision about how long is too long for a client sitting on the menu. It is also the natural place to add the message the server owes a lagging client — `server::ws` logs `connection lagged n messages` and does not tell it, so the client only finds out on the next `Step` it manages to receive. See [networking.md](networking.md#the-server-is-the-clock).
 
 ### A player who was away at the whistle plays a team match on no team
 
@@ -86,6 +78,8 @@ Not a bug so much as a shape: the outbound half wants a `tokio::sync::mpsc` the 
 
 Either they belong in `tunnel/` here or they belong in a repository of their own. What they should not be is untracked files next to a tracked project that documents them. `design-notes/` had the same problem and is now in the repository, which is the shape of the answer.
 
+**Superseded, and the answer turned out to be neither.** `cloudflared` is what makes the server reachable now — one outbound connection to Cloudflare, TLS at the edge, no port forwarded and nothing listening on the open internet — so the two scripts have no job left. What is in the repository is the ingress rule that replaces them, [deploy/cloudflared.yml](../deploy/cloudflared.yml), and [server.md](server.md#deploying) says how it is run. The pool bug is still worth reading: **anything that pools connections for this game has to be sized in connections and not in people**, and an edge in front of a home connection has not changed that.
+
 ## Not bugs, but the next thing to go wrong
 
 ### A match is never saved, and now the teams go with it
@@ -106,8 +100,22 @@ That is the price of a team being a player, and it is the right price: what it b
 
 That is better than refusing somebody a world with visible space in it, and it is worth saying out loud rather than leaving as a warning nobody reads: the honest fix is for the server to refuse a `Create` whose shape cannot seat a full room, which is a decision about what a small world is *for*.
 
+## Fixed
+
+Closed by a decision rather than by a chase, which is why they are here and not in [gotchas.md](gotchas.md): nobody debugged either of them, and what happened is that a number was picked. Both are about what a connection may do before it is anybody, which is the half of this server that a public address makes interesting — see [server.md](server.md#deploying).
+
+### A connection that never joins is never reaped
+
+*Was:* neither side sends a ping, and a connection that has not joined is in no room, hears nothing, and is written to only when it asks something — so a peer that went away without closing its socket was never found. *You would have seen:* nothing, until a server up for weeks was holding a few hundred sockets belonging to browser tabs closed long ago, each with a task and a broadcast receiver.
+
+A connection in no room is now closed after **two minutes** of saying nothing. One with a seat, or a room it is watching, is exempt: it is written to four times a second and a dead one is found by the write. `server::unjoined::deadline` is the decision, and `MOST_UNJOINED_SILENCE` beside `MOST_BYTES_AT_ONCE` is the number — **chosen, not measured**, being far longer than any exchange the menu makes and short enough that the leak is bounded by the minute rather than by the week.
+
+What it costs is the menu. The room list refreshes itself every three seconds while it is on screen, so browsing rooms holds the socket open; a player who leaves the menu on another page for two minutes has the socket closed under them, and sees the menu say the server did not answer. Connecting again works, and the periodic `Ping` this entry used to ask for is what would remove the fault — along with the message the server owes a lagging client, which is still owed.
+
 ### Nothing rate-limits an unjoined connection
 
-`Rooms`, `Join` and `Create` are answerable without a seat, which they have to be. `Create` is capped at `--max-rooms` and the shape is checked; `Rooms` is a small message answered with a small message. Neither is limited in how often it may be asked, and a connection costs a task.
+*Was:* `Rooms`, `Join` and `Create` are answerable without a seat, which they have to be, and nothing bounded how many connections one address could hold open asking them. *You would have seen:* a server holding as many tasks as somebody cared to open sockets, and the game still working for whoever got in first, until it did not.
 
-The defence today is that the game is served to people who were sent a link. That is a fine defence for what this is and a bad one to forget about.
+One address may now hold **eight** connections that have joined nothing. `server::unjoined::PerAddress` is the table and `MOST_UNJOINED_PER_ADDRESS` is the number; a ninth is refused with a 429 before the upgrade, so it costs a handshake rather than a task. A connection gives its place back the moment it is welcomed or starts watching and never takes one again, because a socket that has been somebody is not the stranger the cap is for. **Chosen, not measured**, and counted in connections rather than in people for the reason the pool bug above gives.
+
+What is bounded is connections and not messages: one socket may still ask `Rooms` as fast as it can write, and the answer is small but not free. The frame cap and `--max-rooms` are the whole of the rest, and a rate per connection is the next piece if a server ever needs one.

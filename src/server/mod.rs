@@ -22,6 +22,7 @@ pub mod persist;
 pub mod profiles;
 pub mod rating;
 pub mod rooms;
+pub mod unjoined;
 #[cfg(feature = "server")]
 pub mod ws;
 
