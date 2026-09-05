@@ -5,7 +5,7 @@
 //! The step is the server's whole per-generation cost and the client pays it
 //! too, so it is the one number both sides share. `--span 250` is four a
 //! second, so the budget is 250 ms; a client drawing at 60 fps has 16.7.
-use conwayskingdom::sim::{PlayerId, World, CHUNK_CELLS, CHUNK_N};
+use conwayskingdom::sim::{PlayerId, World, WorldKind, CHUNK_CELLS, CHUNK_N};
 use std::time::Instant;
 
 fn seeded(rows: i32, cols: i32, fill: u64) -> World {
@@ -26,7 +26,17 @@ fn seeded(rows: i32, cols: i32, fill: u64) -> World {
 
 fn main() {
     println!("{:>10} {:>8} {:>10} {:>10} {:>9}", "world", "chunks", "cells", "ms/step", "of 250ms");
-    for &(rows, cols) in &[(4, 4), (8, 8), (12, 12), (24, 24), (48, 48)] {
+    // **Asked of the same authority the server asks**, rather than a list of
+    // sizes written down once. A chunk grew from sixteen cells a side to
+    // sixty-four and the cap moved with it; this swept 48x48 for a while
+    // after that, which is 2304 chunks against a ceiling of 1024, and the
+    // example that measures what a server can run panicked before it printed
+    // the row that says so.
+    for &(rows, cols) in &[(4, 4), (8, 8), (12, 12), (24, 24), (32, 32), (48, 48)] {
+        if let Err(why) = (WorldKind::Toroidal { rows, cols }).checked() {
+            println!("{:>10} {why}", format!("{rows}x{cols}"));
+            continue;
+        }
         let mut w = seeded(rows, cols, 30);
         for _ in 0..20 {
             w.step();
