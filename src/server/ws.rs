@@ -819,8 +819,9 @@ const X_CONTENT_LENGTH: header::HeaderName = header::HeaderName::from_static("x-
 /// bytes, which for the module would be a pass over 7.5 MB per request. It is
 /// as strong as a filesystem timestamp, which is what nginx sends and for the
 /// same reason, and `If-None-Match` is answered here because `ServeDir` has
-/// never heard of the tag. The hash is this binary's own: a tag that changes
-/// when the server is rebuilt costs one download, and nothing else.
+/// never heard of the tag. `DefaultHasher::new` has fixed keys, so the tag is
+/// the same on both sides of a restart -- one that changed would cost every
+/// visitor a download for a file nobody had touched.
 ///
 /// The length goes out twice. The loading bar wants `Content-Length`, and an
 /// edge that compresses the module on the way through takes it; the same

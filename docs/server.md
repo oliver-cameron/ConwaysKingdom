@@ -312,7 +312,7 @@ The room count is **asked of the simulation task**, on a oneshot with a second's
 
 Nothing is `immutable`, because nothing carries a content hash: wasm-pack names the module after the crate, so one URL means different bytes after every build and an hour is how long a rebuild may go unseen without a purge. **So purge the edge after a deploy**, or wait the hour out.
 
-`ServeDir` sends `Last-Modified` and no `ETag`, so the tag is made from what it does send — the length and the modification time, with this binary's own hash mixed in — rather than from the bytes, which for the module would be a pass over 7.5 MB per request. It is as strong as a filesystem timestamp, which is what nginx sends and for the same reason. `If-None-Match` is answered in the same layer, because `ServeDir` has never heard of the tag it is being asked about.
+`ServeDir` sends `Last-Modified` and no `ETag`, so the tag is made from what it does send — the length and the modification time — rather than from the bytes, which for the module would be a pass over 7.5 MB per request. It is as strong as a filesystem timestamp, which is what nginx sends and for the same reason, and it is the same tag on both sides of a restart: one that changed would cost every visitor a download for a file nobody had touched. `If-None-Match` is answered in the same layer, because `ServeDir` has never heard of the tag it is being asked about.
 
 ### The loading bar wants a length
 

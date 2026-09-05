@@ -21,7 +21,7 @@ sudo mkdir -p /opt/conwayskingdom && sudo chown "$USER" /opt/conwayskingdom
 git clone https://github.com/oliver-cameron/ConwaysKingdom /opt/conwayskingdom
 ```
 
-Owned by whoever builds rather than by `conway`, because building is not something the service does: it runs a binary and reads three directories, all of which it only has to read.
+Owned by whoever builds rather than by `conway`, because building is not something the service does: it runs a binary and reads a checkout, and reading is all it ever needs.
 
 **Rust and wasm-pack.** [rustup](https://rustup.rs), because the toolchain a distribution ships is usually older than the 1.87 `Cargo.toml` asks for, and a version too old is refused by name rather than by a parse error in the middle of the crate:
 
@@ -47,7 +47,7 @@ openssl rand -hex 32                  # the token
 sudoedit /etc/conwayskingdom/env      # paste it in after CK_API_TOKEN=
 ```
 
-**The unit.** Read it before installing it: the two paths at the top are the checkout, and everything else is explained where it stands.
+**The unit.** Read it before installing it: the paths in it are the checkout and the state directory, and everything else is explained where it stands.
 
 ```
 sudo cp deploy/conwayskingdom.service /etc/systemd/system/
