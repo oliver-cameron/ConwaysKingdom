@@ -44,6 +44,7 @@ pub use eng::{
     help,
     hotbar,
     hud,
+    invite,
     lobby,
     menu,
     phase,
@@ -91,6 +92,29 @@ pub struct MenuPeople {
     /// server has met nobody it is sure about yet, which is a fact about
     /// the server rather than about what was typed.
     pub nobody_yet: &'static str,
+}
+
+/// The groups you are in, and their worlds.
+pub struct MenuParties {
+    pub title: &'static str,
+    /// What a party is, in a sentence, and where inviting lives: on a
+    /// person's profile, because it names a person.
+    pub note: &'static str,
+    /// Before a server has answered.
+    pub asking: &'static str,
+    /// A real answer: you are in none.
+    pub none_yet: &'static str,
+    pub name_hint: &'static str,
+    pub make: &'static str,
+    pub members: &'static str,
+    pub worlds: &'static str,
+    /// A party with people and no world yet.
+    pub no_worlds: &'static str,
+    /// Into the make-a-world form, with this party as the answer to who.
+    pub new_world: &'static str,
+    pub leave: &'static str,
+    /// Beside a member who is in a room here now.
+    pub online: &'static str,
 }
 
 /// You, as a page: the name, the rating, the record and the key.
@@ -179,6 +203,8 @@ pub struct MenuHome {
     pub record: &'static str,
     pub profile: &'static str,
     pub people: &'static str,
+    /// The groups you are in, from the account page.
+    pub parties: &'static str,
     pub account: &'static str,
     pub howto: &'static str,
     pub settings_label: &'static str,
@@ -203,6 +229,8 @@ pub struct MenuCode {
 pub struct MenuWatch {
     pub watch: &'static str,
     pub join: &'static str,
+    /// On a row that is yours, once everybody has left it.
+    pub close: &'static str,
     /// Blowing the whistle, in the lobby, for whoever made the match.
     pub start: &'static str,
     pub start_note: &'static str,
@@ -304,6 +332,9 @@ pub struct MenuMake {
     /// A match does not start on its own, so somebody about to make one
     /// should know that before they make it rather than after.
     pub match_waits: &'static str,
+    /// On the row that would ask who can reach a world, when a party has
+    /// already answered: the way back to the toggles.
+    pub not_for_party: &'static str,
 }
 
 /// The screen before the game.
@@ -354,6 +385,8 @@ pub struct Menu {
     /// Who else plays here, and the leaderboard, which is the same list with
     /// nothing typed into the box.
     pub people: MenuPeople,
+    /// The groups you are in, and their worlds.
+    pub parties: MenuParties,
     /// You, as a page: the name, the rating, the record and the key.
     pub account: MenuAccount,
     /// What somebody who has just arrived cannot work out by clicking. Every
@@ -503,6 +536,15 @@ pub struct Challenge {
     pub ask: &'static str,
     /// Said when one goes out, because a press with no visible answer reads as
     /// a button that does nothing — and the answer may be a while.
+    pub asked_them: &'static str,
+}
+
+/// Somebody holding a door open.
+pub struct Invite {
+    pub title: &'static str,
+    pub accept: &'static str,
+    pub decline: &'static str,
+    /// Said when one goes out, for the reason a challenge's is.
     pub asked_them: &'static str,
 }
 
@@ -751,6 +793,8 @@ pub struct Words {
     pub clock: Clock,
     /// What a server says about somebody.
     pub challenge: Challenge,
+    /// Somebody holding a door open.
+    pub invite: Invite,
     pub profile: Profile,
     /// The screen before a match starts.
     pub lobby: Lobby,

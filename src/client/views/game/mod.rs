@@ -1239,6 +1239,18 @@ impl GameApp {
         crate::client::route::show(&self.here());
     }
 
+    /// Put a sentence where the player is looking: the HUD's corner in a
+    /// world, and beside the room list on the menu, which is the line that
+    /// already says why you are looking at a list rather than at a world.
+    fn say(&mut self, what: String) {
+        match &mut self.ui.screen {
+            Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { note, .. }, .. }) => {
+                *note = Some(what);
+            }
+            _ => self.notice = Some(what),
+        }
+    }
+
     fn show_menu(&mut self, stage: menu::Stage) {
         match &mut self.ui.screen {
             Screen::Menu(m) => {
@@ -1395,6 +1407,20 @@ impl GameApp {
                     self.notice = Some(words::challenge::answered(&who.label(), room.is_some()));
                 }
             }
+            // A door held open, said out loud for the reason a challenge is.
+            Effect::Invited => {
+                if let Some((from, _, name)) = &self.session.invited {
+                    self.say(words::invite::asked(&from.label(), name));
+                }
+            }
+            Effect::NotDone(why) => self.say(why),
+            Effect::PartyInvited => {
+                if let Some((from, _, name)) = &self.session.party_invite {
+                    self.say(words::invite::party_asked(&from.label(), name));
+                }
+            }
+            // Lands on `session`, which the menu is handed each frame.
+            Effect::Parties => {}
             // **The server's copy is the copy, except when there isn't one.**
             // A locker with anything in it replaces what this client was
             // carrying; an empty one from a server that has met us is the
@@ -1416,7 +1442,7 @@ impl GameApp {
                 self.ui.editing_stamp = None;
                 self.ui.naming_stamp = None;
             }
-            Effect::Rated => {
+            Effect::Rated | Effect::Recognised => {
                 let now = self.session.rating();
                 if let Screen::Menu(m) = &mut self.ui.screen {
                     m.rating = now;
@@ -1451,6 +1477,14 @@ impl GameApp {
                     draft.note = Some(why);
                 }
             }
+            // Gone from the list, or still in it with the reason beside it.
+            // Asked for again at once rather than waited out: a room you have
+            // just closed and can still see is a press that appears to have
+            // done nothing.
+            Effect::RoomClosed(closed) => match closed {
+                Ok(_) => self.session.refresh_now(self.elapsed),
+                Err(why) => self.say(why),
+            },
             Effect::Rooms(rooms) => {
                 if let Screen::Menu(m) = &mut self.ui.screen {
                     // A refusal already on screen is carried over rather than
@@ -1515,7 +1549,8 @@ impl GameApp {
                 }
                 crate::net::keep::remember_server(&address);
                 log::info!("asking {address} what rooms it has");
-                if self.session.connect(dial(&address), self.elapsed) {
+                let name = self.my_name();
+                if self.session.connect(dial(&address), &name, self.elapsed) {
                     self.show_menu(menu::Stage::Asking);
                 } else {
                     self.show_menu(menu::Stage::Failed(words::menu::not_an_address(&address)));
@@ -1571,7 +1606,7 @@ impl GameApp {
             // Made, then joined -- in two steps, because `Made` only names the
             // room. Joining is the same message the room list sends, so there
             // is one way into a world rather than two.
-            menu::Chose::Create { name, shape, victory, teams, private, laboratory } => {
+            menu::Chose::Create { name, shape, victory, teams, private, laboratory, party } => {
                 log::info!("asking for a room called \"{name}\"");
                 let asked = self.session.create(ClientMessage::Create {
                     name,
@@ -1580,6 +1615,7 @@ impl GameApp {
                     teams,
                     private,
                     laboratory,
+                    party,
                 });
                 if !asked {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
@@ -1616,6 +1652,14 @@ impl GameApp {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
                 }
             }
+            menu::Chose::Close(room) => {
+                log::info!("closing room \"{room}\"");
+                self.session.close(room);
+            }
+            menu::Chose::Parties => self.session.ask_for_parties(),
+            menu::Chose::MakeParty(name) => self.session.make_party(name),
+            menu::Chose::JoinParty(party) => self.session.join_party(party),
+            menu::Chose::LeaveParty(party) => self.session.leave_party(party),
             menu::Chose::Join(room) => {
                 if !self.session.connected() {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
@@ -2105,7 +2149,21 @@ impl App for GameApp {
         let challenge = self.session.challenge.clone();
         let mut challenging = challenge.is_some();
         let mut answered_challenge = social::challenge::Did::Nothing;
+        let invited = self.session.invited.clone();
+        let mut inviting = invited.is_some();
+        let mut answered_invite = social::invite::Did::Nothing;
+        let party_invite = self.session.party_invite.clone();
+        let mut party_inviting = party_invite.is_some();
+        let mut answered_party_invite = social::invite::Did::Nothing;
         let mut asked_for_a_game = profile::Did::Nothing;
+        // **The door this client could hold open**: the private room it is
+        // sitting in, by name. A code is what makes a room private and the
+        // lobby carries it, so a room with one is a room somebody can be
+        // invited into; a watcher holds no door, being in no seat.
+        let inviting_into = (!self.session.watching
+            && self.session.lobby.as_ref().is_some_and(|l| l.code.is_some()))
+        .then(|| self.session.room_name.as_deref())
+        .flatten();
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
         // slow server and a stranger look like the same thing.
@@ -2141,6 +2199,17 @@ impl App for GameApp {
                     // every game this client has played anywhere.
                     yours: (self.session.profile.as_ref().map(|p| &p.who) == Some(who))
                         .then_some(&self.record),
+                    into: inviting_into,
+                    // The parties this client is in that they are not: one
+                    // button each, because this is where a person is named.
+                    parties: self
+                        .session
+                        .parties
+                        .iter()
+                        .flatten()
+                        .filter(|party| !party.members.iter().any(|m| m.who == *who))
+                        .map(|party| (party.id.clone(), party.name.clone()))
+                        .collect(),
                     it,
                 },
             }
@@ -2168,6 +2237,7 @@ impl App for GameApp {
         // the room list does.
         if let Screen::Menu(m) = &mut self.ui.screen {
             m.people = self.session.people.clone();
+            m.parties = self.session.parties.clone();
             // **Kept when there is nothing newer**, rather than cleared. This
             // read the live session's profile and nothing else, so on the menu
             // — before any join this launch — it was `None`, and the home
@@ -2335,6 +2405,20 @@ impl App for GameApp {
                 answered_challenge = shown.did;
                 rects.extend(shown.rect);
             }
+            // And a door held open, which is the same shape with a different
+            // sentence on it.
+            if let Some((from, _, name)) = &invited {
+                let terms = words::invite::into_room(name);
+                let shown = social::invite::show(ctx, &theme, from, &terms, &mut inviting);
+                answered_invite = shown.did;
+                rects.extend(shown.rect);
+            }
+            if let Some((from, _, name)) = &party_invite {
+                let terms = words::invite::into_party(name);
+                let shown = social::invite::show(ctx, &theme, from, &terms, &mut party_inviting);
+                answered_party_invite = shown.did;
+                rects.extend(shown.rect);
+            }
             rects
         });
 
@@ -2342,10 +2426,58 @@ impl App for GameApp {
         // you want to play somebody: the panel is opened from a lobby row, a
         // standings bar or a list of who plays here, and all three are places
         // you got to by wondering about a person.
-        if let profile::Did::Challenge(who) = asked_for_a_game {
-            self.session.challenge(who);
-            self.ui.showing_profile = None;
-            self.notice = Some(w().challenge.asked_them.into());
+        match asked_for_a_game {
+            profile::Did::Nothing => {}
+            profile::Did::Challenge(who) => {
+                self.session.challenge(who);
+                self.ui.showing_profile = None;
+                self.notice = Some(w().challenge.asked_them.into());
+            }
+            // Into the room this client is in, which the session knows.
+            profile::Did::Invite(who) => {
+                self.session.invite(who);
+                self.ui.showing_profile = None;
+                self.notice = Some(w().invite.asked_them.into());
+            }
+            profile::Did::InviteToParty(party, who) => {
+                self.session.invite_to_party(party, who);
+                self.ui.showing_profile = None;
+                self.say(w().invite.asked_them.into());
+            }
+        }
+
+        // **Taking a party invitation is joining the party**, which the
+        // server answers with the listing; the panel is otherwise the room
+        // invitation's, and so is the shutting. Through `chose`, as a room
+        // invitation's join is, so a panel and a page reach the server by
+        // one road.
+        if let Some((_, party, _)) = party_invite {
+            match answered_party_invite {
+                social::invite::Did::Nothing if party_inviting => {}
+                social::invite::Did::Nothing | social::invite::Did::Decline => {
+                    self.session.party_invite = None;
+                }
+                social::invite::Did::Accept => {
+                    self.session.party_invite = None;
+                    self.chose(menu::Chose::JoinParty(party));
+                }
+            }
+        }
+
+        // **Going in is the join, and not going in is nothing.** An
+        // invitation is an offer rather than a question, so a decline is
+        // shutting the panel; the door stays open on the server either way.
+        if let Some((_, room, _)) = invited {
+            match answered_invite {
+                social::invite::Did::Nothing if inviting => {}
+                social::invite::Did::Nothing | social::invite::Did::Decline => {
+                    self.session.invited = None;
+                }
+                social::invite::Did::Accept => {
+                    self.session.invited = None;
+                    self.chose(menu::Chose::Join(room));
+                }
+            }
         }
 
         // The two answers, and both are sent: a decline reaches the person who
@@ -2688,9 +2820,10 @@ impl App for GameApp {
                 // The form is a column rather than something opened, so there
                 // is no rung for it: a field lets go of the keyboard (handled
                 // in `menu::show`, before the app sees the key at all), then
-                // the page goes back.
-                if m.page == menu::Page::Play {
-                    m.page = menu::Page::Home;
+                // the page goes back -- to where its back button goes, which
+                // is one answer for both. Home has nothing above it.
+                if m.page != menu::Page::Home {
+                    m.page = m.page.back();
                     return;
                 }
             }

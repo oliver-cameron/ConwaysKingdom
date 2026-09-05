@@ -170,11 +170,8 @@ impl Lockers {
     }
 
     pub fn save(&self, stamps: &Path, games: &Path) -> io::Result<()> {
-        if let Some(dir) = stamps.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(stamps, self.stamps_to_lines())?;
-        std::fs::write(games, self.games_to_lines())
+        crate::server::persist::replace(stamps, self.stamps_to_lines().as_bytes())?;
+        crate::server::persist::replace(games, self.games_to_lines().as_bytes())
     }
 }
 

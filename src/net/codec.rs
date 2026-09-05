@@ -25,14 +25,18 @@ use super::{ClientMessage, ServerMessage};
 /// So: bump this whenever the vocabulary moves, and a stale client is told it
 /// is stale instead of being quietly wrong.
 ///
-/// **2**: [`Seat`] gained `bot`, which changes the shape of every `Match`
-/// a lobby is built from — a page from before it would read the flag as the
-/// start of the next seat. `AddBot` and `RemoveBot` joined the end of
-/// [`ClientMessage`] at the same time, which is the safe kind of change and
-/// would not have needed this on its own.
+/// **2**: three structs on the wire changed shape, and any one of them would
+/// have needed this. [`Seat`] gained `bot`, so a page from before reads the
+/// flag as the start of the next seat; [`RoomInfo`] gained `owner`, so a room
+/// list is misread the same way; and `Create` gained `party`. The nine
+/// messages that arrived beside them — `AddBot` and `RemoveBot`, `Hello`,
+/// `Close`, `Invite`, and the four party verbs — joined the *end* of
+/// [`ClientMessage`], which is the safe kind of change and would not have
+/// needed a bump on its own.
 ///
 /// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
 /// [`Seat`]: crate::net::Seat
+/// [`RoomInfo`]: crate::net::RoomInfo
 pub const PROTOCOL: u8 = 2;
 
 #[derive(Debug)]
@@ -190,6 +194,7 @@ mod tests {
                 teams: None,
                 private: false,
                 laboratory: false,
+                party: None,
             },
             ClientMessage::Create {
                 name: "cup".into(),
@@ -198,6 +203,7 @@ mod tests {
                 teams: Some(2),
                 private: true,
                 laboratory: false,
+                party: None,
             },
             // A laboratory, which is the third thing the form can ask for.
             ClientMessage::Create {
@@ -207,6 +213,17 @@ mod tests {
                 teams: None,
                 private: false,
                 laboratory: true,
+                party: None,
+            },
+            // A party's world, which is the fourth.
+            ClientMessage::Create {
+                name: "den".into(),
+                shape: crate::sim::WorldKind::Infinite,
+                victory: None,
+                teams: None,
+                private: false,
+                laboratory: false,
+                party: Some(crate::net::PartyId("p-3f2a91c4".into())),
             },
             ClientMessage::Leave,
             ClientMessage::Start,
@@ -229,6 +246,24 @@ mod tests {
             ClientMessage::AddBot { team: Some(PlayerId(2)), level: crate::net::Level::Hard },
             ClientMessage::AddBot { team: None, level: crate::net::Level::Easy },
             ClientMessage::RemoveBot { seat: PlayerId(5) },
+            // Who I am, before any room is named.
+            ClientMessage::Hello {
+                name: "alice".into(),
+                person: crate::net::Secret::read(&"a1".repeat(16)).expect("a secret"),
+            },
+            ClientMessage::Close { room: "r-abc234".into() },
+            ClientMessage::Invite {
+                who: crate::net::PersonId("3f2a91c4".into()),
+                room: "r-abc234".into(),
+            },
+            ClientMessage::Parties,
+            ClientMessage::MakeParty { name: "friday".into() },
+            ClientMessage::InviteToParty {
+                party: crate::net::PartyId("p-3f2a91c4".into()),
+                who: crate::net::PersonId("3f2a91c4".into()),
+            },
+            ClientMessage::JoinParty { party: crate::net::PartyId("p-3f2a91c4".into()) },
+            ClientMessage::LeaveParty { party: crate::net::PartyId("p-3f2a91c4".into()) },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -404,6 +439,9 @@ mod tests {
                         victory: Some(crate::net::Victory::Territory { squares: 500 }),
                         world: crate::sim::WorldKind::Toroidal { rows: 6, cols: 6 },
                         rules: crate::net::Rules::default(),
+                        // Made by a player with a key, so a menu can offer them
+                        // the door out.
+                        owner: Some(crate::net::PersonId("3f2a91c4".into())),
                     },
                     crate::net::RoomInfo {
                         id: "lobby".into(),
@@ -413,6 +451,7 @@ mod tests {
                         victory: None,
                         world: crate::sim::WorldKind::Infinite,
                         rules: crate::net::Rules::default(),
+                        owner: None,
                     },
                     // A laboratory, which the list tells apart from a world by
                     // these and nothing else.
@@ -430,9 +469,88 @@ mod tests {
                             bpm: 60,
                             laboratory: true,
                         },
+                        owner: None,
                     },
                 ],
                 hidden: crate::net::Hidden { howto: true },
+            },
+            // The answer to a `Hello`, which the socket reads as well as the client.
+            ServerMessage::You(crate::net::Profile {
+                who: crate::net::PersonId("3f2a91c4".into()),
+                name: "alice".into(),
+                rating: 1200,
+                provisional: true,
+                games: 0,
+                history: Vec::new(),
+                best: 0,
+            }),
+            // Both arms, since the refusal is the one somebody reads.
+            ServerMessage::Closed(Ok("r-abc234".into())),
+            ServerMessage::Closed(Err("2 still in \"den\"".into())),
+            ServerMessage::Invited {
+                from: crate::net::Profile {
+                    who: crate::net::PersonId("3f2a91c4".into()),
+                    name: "alice".into(),
+                    rating: 1240,
+                    provisional: false,
+                    games: 9,
+                    history: vec![1200, 1220, 1240],
+                    best: 512,
+                },
+                room: "r-xyz789".into(),
+                name: "den".into(),
+            },
+            ServerMessage::NotDone { reason: "this server has never met them".into() },
+            // A party with a world in it, and one with nothing but people.
+            ServerMessage::Parties {
+                parties: vec![
+                    crate::net::PartyInfo {
+                        id: crate::net::PartyId("p-3f2a91c4".into()),
+                        name: "friday".into(),
+                        members: vec![
+                            crate::net::Member {
+                                who: crate::net::PersonId("3f2a91c4".into()),
+                                name: "alice".into(),
+                                online: true,
+                            },
+                            crate::net::Member {
+                                who: crate::net::PersonId("9b1c0d2e".into()),
+                                name: "bob".into(),
+                                online: false,
+                            },
+                        ],
+                        rooms: vec![crate::net::RoomInfo {
+                            id: "r-den123".into(),
+                            name: "den".into(),
+                            players: 1,
+                            phase: crate::net::MatchPhase::Open,
+                            victory: None,
+                            world: crate::sim::WorldKind::Infinite,
+                            rules: crate::net::Rules::default(),
+                            owner: Some(crate::net::PersonId("3f2a91c4".into())),
+                        }],
+                    },
+                    crate::net::PartyInfo {
+                        id: crate::net::PartyId("p-77777777".into()),
+                        name: "the others".into(),
+                        members: Vec::new(),
+                        rooms: Vec::new(),
+                    },
+                ],
+            },
+            ServerMessage::Parties { parties: Vec::new() },
+            ServerMessage::PartyInvite {
+                from: crate::net::Profile {
+                    who: crate::net::PersonId("3f2a91c4".into()),
+                    name: "alice".into(),
+                    rating: 1240,
+                    provisional: false,
+                    games: 9,
+                    history: vec![1200, 1220, 1240],
+                    best: 512,
+                },
+                party: crate::net::PartyId("p-3f2a91c4".into()),
+                name: "friday".into(),
             },
         ];
         for msg in cases {

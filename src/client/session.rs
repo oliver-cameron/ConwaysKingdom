@@ -100,6 +100,10 @@ pub enum Effect {
     LookAt((i32, i32)),
     /// This client's rating moved, and a home screen showing one should say so.
     Rated,
+    /// **A server said who we are**, before any join — the answer to a
+    /// `Hello`, into [`Session::profile`]. The same screens read it as read a
+    /// rating, because a rating is part of it.
+    Recognised,
     /// Somebody's profile arrived, into whatever asked for it.
     LookedUp,
     /// **The locker this server holds for us arrived**, into
@@ -109,6 +113,17 @@ pub enum Effect {
     /// **Somebody wants a game.** Into [`Session::challenge`], for whatever
     /// puts an invitation on screen.
     Challenged,
+    /// **Somebody holds a door open** — into [`Session::invited`].
+    Invited,
+    /// **Somebody asks you into their party** — into
+    /// [`Session::party_invite`].
+    PartyInvited,
+    /// The parties this client is in arrived, into [`Session::parties`], which
+    /// is what the menu reads them from.
+    Parties,
+    /// The server would not do what was asked of it, and this is why. Left
+    /// where the player is looking rather than sending them to the menu.
+    NotDone(String),
     /// They said yes or no — [`Session::answered`].
     Answered,
     /// A list of who else plays here arrived, into whatever asked for it.
@@ -127,6 +142,9 @@ pub enum Effect {
     Made { id: RoomId, code: Option<String> },
     /// It would not make one, and this is why. Belongs in the form that asked.
     NotMade(String),
+    /// A room was closed, or would not be and this is why. The list is stale
+    /// either way: gone from it, or still in it with a reason beside it.
+    RoomClosed(Result<RoomId, String>),
     /// The room list arrived.
     Rooms(Vec<RoomInfo>),
     /// The link closed. What that means depends on which screen is up, which
@@ -276,6 +294,16 @@ pub struct Session {
     /// `views::game::overlay`, which owns how many generations one lasts.
     pub blasts: Vec<(crate::sim::Blast, u64)>,
     pub challenge: Option<(crate::net::Profile, RoomId)>,
+    /// **An invitation into a private room**, and what the room is called —
+    /// which the listing never said, the room being private. Held the way a
+    /// challenge is, and taken by the answer.
+    pub invited: Option<(crate::net::Profile, RoomId, String)>,
+    /// **An invitation into a party**, and what it is called. Held and taken
+    /// the way a room's is.
+    pub party_invite: Option<(crate::net::Profile, crate::net::PartyId, String)>,
+    /// The parties this client is in, as the server last said. `None` until
+    /// asked; empty is a real answer.
+    pub parties: Option<Vec<crate::net::PartyInfo>>,
     /// What somebody said to one of ours. `None` in the second half is a
     /// decline.
     pub answered: Option<(crate::net::Profile, Option<RoomId>)>,
@@ -373,6 +401,9 @@ impl Session {
             hidden: crate::net::Hidden::default(),
             blasts: Vec::new(),
             challenge: None,
+            invited: None,
+            party_invite: None,
+            parties: None,
             answered: None,
             filed_a_game: false,
             people: None,
@@ -842,6 +873,15 @@ impl Session {
                         log::info!("{who} is now rated {rating} ({change:+})");
                     }
                 }
+                // **Who this server says we are**, with no room named yet.
+                // Written down for the reason a `Welcome`'s profile is: the
+                // server issues the id, and this is the earliest it can.
+                ServerMessage::You(profile) => {
+                    log::info!("this server knows us as {}", profile.label());
+                    crate::net::keep::remember_person(&profile.who);
+                    self.profile = Some(profile);
+                    effects.push(Effect::Recognised);
+                }
                 // What this server says about somebody else, asked for from a
                 // lobby or a standings bar.
                 ServerMessage::Profile(found) => {
@@ -888,6 +928,27 @@ impl Session {
                     log::info!("{} challenged us in {room}", from.label());
                     self.challenge = Some((from, room));
                     effects.push(Effect::Challenged);
+                }
+                // **Somebody holds a door open.** Held, like a challenge:
+                // going through it is the player's to decide.
+                ServerMessage::Invited { from, room, name } => {
+                    log::info!("{} invited us into \"{name}\" ({room})", from.label());
+                    self.invited = Some((from, room, name));
+                    effects.push(Effect::Invited);
+                }
+                ServerMessage::NotDone { reason } => {
+                    log::info!("the server would not: {reason}");
+                    effects.push(Effect::NotDone(reason));
+                }
+                ServerMessage::Parties { parties } => {
+                    log::debug!("in {} part(ies) here", parties.len());
+                    self.parties = Some(parties);
+                    effects.push(Effect::Parties);
+                }
+                ServerMessage::PartyInvite { from, party, name } => {
+                    log::info!("{} asked us into party \"{name}\" ({party})", from.label());
+                    self.party_invite = Some((from, party, name));
+                    effects.push(Effect::PartyInvited);
                 }
                 // And the answer, either way. A decline reaches the person who
                 // asked instead of looking like a server that lost it.
@@ -1006,6 +1067,13 @@ impl Session {
                         effects.push(Effect::NotMade(why));
                     }
                 },
+                ServerMessage::Closed(closed) => {
+                    match &closed {
+                        Ok(room) => log::info!("closed {room}"),
+                        Err(why) => log::info!("the server would not close that room: {why}"),
+                    }
+                    effects.push(Effect::RoomClosed(closed));
+                }
                 ServerMessage::Rooms { rooms, hidden } => {
                     log::debug!("the server has {} room(s)", rooms.len());
                     self.asked_at = None;
@@ -1283,16 +1351,30 @@ impl Session {
 
     // ---- going places ------------------------------------------------------
 
-    /// Reach a server and ask what rooms it has.
+    /// Reach a server, say who we are, and ask what rooms it has.
     ///
     /// Any previous socket goes first. Two links would both be draining into
     /// one client, and the second `Welcome` would arrive into a world built
     /// for the first. `false` is an address a socket cannot be built for,
     /// which in a browser is the one way dialling fails.
-    pub fn connect(&mut self, link: Option<Link>, now: f64) -> bool {
+    pub fn connect(&mut self, link: Option<Link>, name: &str, now: f64) -> bool {
         self.link = link;
+        self.hello(name);
         self.ask_for_rooms(now);
         self.link.is_some()
+    }
+
+    /// **Say who we are before saying anything else.**
+    ///
+    /// A `Join` carries the secret, so a seat always came with a person; a
+    /// client on the menu had sent no `Join` and was nobody — a challenge
+    /// queued for it waited until it joined something, and a listing filed
+    /// against a person had nobody to be answered to. A client with no secret
+    /// sends nothing, and is somebody new wherever it goes.
+    fn hello(&mut self, name: &str) {
+        if let Some(person) = crate::net::keep::secret_or_new() {
+            self.tell(ClientMessage::Hello { name: name.to_string(), person });
+        }
     }
 
     /// **Where the client was told to go**, before the first frame.
@@ -1320,6 +1402,9 @@ impl Session {
         if self.link.is_none() {
             return false;
         }
+        // Who first, so a watcher is somebody too: a `Watch` carries no key,
+        // and a spectator who had been challenged would otherwise never hear.
+        self.hello(&name);
         // A link that says watch is answered by `Watch`, which takes no name
         // and no key: there is no player to be remembered as.
         match (room, watch) {
@@ -1432,6 +1517,41 @@ impl Session {
     /// **Play me.** A match for two, made by the server and held for them.
     pub fn challenge(&mut self, who: crate::net::PersonId) {
         self.tell(ClientMessage::Challenge { who });
+    }
+
+    /// Close a room this client made. The answer is an [`Effect::RoomClosed`].
+    pub fn close(&mut self, room: RoomId) {
+        self.tell(ClientMessage::Close { room });
+    }
+
+    /// **Bring somebody into the private room this client is in.** Nothing
+    /// comes back unless it would not go, which is an [`Effect::NotDone`].
+    pub fn invite(&mut self, who: crate::net::PersonId) {
+        if let Some(room) = self.room.clone() {
+            self.tell(ClientMessage::Invite { who, room });
+        }
+    }
+
+    /// Which parties am I in. The answer is an [`Effect::Parties`], as is the
+    /// answer to making, joining or leaving one.
+    pub fn ask_for_parties(&mut self) {
+        self.tell(ClientMessage::Parties);
+    }
+
+    pub fn make_party(&mut self, name: String) {
+        self.tell(ClientMessage::MakeParty { name });
+    }
+
+    pub fn invite_to_party(&mut self, party: crate::net::PartyId, who: crate::net::PersonId) {
+        self.tell(ClientMessage::InviteToParty { party, who });
+    }
+
+    pub fn join_party(&mut self, party: crate::net::PartyId) {
+        self.tell(ClientMessage::JoinParty { party });
+    }
+
+    pub fn leave_party(&mut self, party: crate::net::PartyId) {
+        self.tell(ClientMessage::LeaveParty { party });
     }
 
     /// Yes or no, to whoever asked.

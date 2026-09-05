@@ -693,11 +693,11 @@ async fn connection(socket: WebSocket, state: AppState) {
     // `Watching` and cleared by a `Welcome`, because joining a room you were
     // watching makes you a player in it rather than both at once.
     let mut watching: Option<RoomId> = None;
-    // **Who this connection is**, learned from the `Welcome`'s profile and
-    // never cleared: a person outlives a seat, so going back to the menu and
-    // editing a library is still that person doing it. A client that joined
-    // without a key has no profile and so is nobody here, which is right --
-    // there is nowhere to file anything against.
+    // **Who this connection is**, learned from a `You` or from the `Welcome`'s
+    // profile and never cleared: a person outlives a seat, so going back to
+    // the menu and editing a library is still that person doing it. A client
+    // that joined without a key has no profile and so is nobody here, which is
+    // right -- there is nowhere to file anything against.
     let mut who: Option<crate::net::PersonId> = None;
 
     loop {
@@ -712,6 +712,8 @@ async fn connection(socket: WebSocket, state: AppState) {
                             who = Some(profile.who.clone());
                         }
                     }
+                    // A person with no seat yet: the answer to a `Hello`.
+                    ServerMessage::You(profile) => who = Some(profile.who.clone()),
                     // A watcher hears the room's broadcast and holds no seat,
                     // so leaving is a socket closing and nothing more -- there
                     // is no player to mark offline and no ground to keep.

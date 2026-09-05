@@ -15,7 +15,7 @@
 //!
 //! [game.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/game.md
 
-use super::{Chose, Menu, Page, Where};
+use super::{Chose, Menu, Where};
 use crate::client::views::icons::Icons;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::w;
@@ -101,7 +101,7 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
 
     ui.horizontal(|ui| {
         if ui.small_button(w().menu.back).clicked() {
-            menu.page = Page::Home;
+            menu.page = menu.page.back();
         }
         ui.heading(w().menu.howto.title);
     });

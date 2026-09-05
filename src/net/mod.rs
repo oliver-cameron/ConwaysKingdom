@@ -111,6 +111,23 @@ pub fn world_seed(room: &RoomId) -> u64 {
 /// what anything durable keys off — see [`RoomId`].
 pub type RoomName = String;
 
+/// **A party**, for as long as anybody is in it. Issued by the server like a
+/// [`RoomId`] and never shown; the name beside it is what people read.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PartyId(pub String);
+
+impl PartyId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PartyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The room a client that names none is put in.
 pub const DEFAULT_ROOM: &str = "main";
 
@@ -983,6 +1000,39 @@ pub struct RoomInfo {
     /// choose a room by.
     pub players: u32,
     pub world: WorldKind,
+    /// Whose it is, by key, when a keyed player made it. As public as the id
+    /// a lobby shows beside a name, and what lets a menu offer to close your
+    /// own rooms and nobody else's. `None` for a room the console made and
+    /// for one whose maker had no key.
+    pub owner: Option<PersonId>,
+}
+
+/// One person in a party, as its other members are told.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub who: PersonId,
+    /// What they last joined under here.
+    pub name: String,
+    /// Whether they are in a room on this server right now. One server
+    /// answering its own members about each other; nothing is reported
+    /// anywhere else, which is the line [presence] draws.
+    ///
+    /// [presence]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#friends-searching-and-inviting-somebody-in-particular
+    pub online: bool,
+}
+
+/// **A party, as one of its members sees it**: who is in it, and which worlds
+/// are its own. Answered only to a member, which is the first thing on the
+/// wire whose answer depends on who is asking — and why it is not the room
+/// list, which stays one answer for everybody.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyInfo {
+    pub id: PartyId,
+    pub name: String,
+    pub members: Vec<Member>,
+    /// Its worlds, in the shape the room list uses, so a row here joins the
+    /// way a row there does. Unlisted everywhere else.
+    pub rooms: Vec<RoomInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1112,6 +1162,12 @@ pub enum ClientMessage {
         /// [`RoomKind`] the form asked for — a match has a way to win, an
         /// experiment has this, and a world has neither.
         laboratory: bool,
+        /// **A party's world.** Unlisted, with no code, and open to that
+        /// party's members and nobody else; it appears in their
+        /// [`ServerMessage::Parties`] and nowhere else. Refused from anybody
+        /// not in the party, and `private` is beside the point when this is
+        /// set.
+        party: Option<PartyId>,
     },
     /// Change what the game is doing in this room. Refused unless the room is
     /// a laboratory, because everywhere else these are the rules of the game.
@@ -1153,8 +1209,8 @@ pub enum ClientMessage {
     Answer { from: PersonId, yes: bool },
     /// **Here is my locker; keep it.**
     ///
-    /// After everything that was here before it, on purpose, and the two bot
-    /// messages after it for the same reason. Postcard writes a variant as its
+    /// After everything that was here before it, on purpose, and everything
+    /// after it is there for the same reason. Postcard writes a variant as its
     /// index, so appending is the one change that leaves every other message
     /// where it was — see [`codec::PROTOCOL`], which is what says so when it
     /// does not. The patterns and the diary this client
@@ -1179,6 +1235,57 @@ pub enum ClientMessage {
     AddBot { team: Option<PlayerId>, level: Level },
     /// Take one out again, by seat, under the same rules.
     RemoveBot { seat: PlayerId },
+    /// **This is who I am**, said before any room is named.
+    ///
+    /// A `Join` carries the secret and so a seat has always come with a person;
+    /// nothing else did, so a client sitting on the menu was nobody — it heard
+    /// no challenge queued for it, and could not be answered anything filed
+    /// against a person. This presents the secret on its own, and the answer is
+    /// [`ServerMessage::You`]. The name rides with it for the reason it rides on
+    /// a `Join`: it is the one thing a profile takes a client's word for, and a
+    /// person met here and nowhere else would otherwise have none.
+    Hello { name: String, person: Secret },
+    /// **Close a room you made.** Answered with [`ServerMessage::Closed`].
+    ///
+    /// Names the room, because it is sent from the menu and not from inside:
+    /// a room is refused closing while anybody is in it, the one closing it
+    /// included, so it is something you do after everybody has left. Refused
+    /// unless the key presented is the one that made it.
+    Close { room: RoomId },
+    /// **Bring somebody in by name**, to the private room this connection is
+    /// sitting in.
+    ///
+    /// Anybody seated there may. What it changes on the room is that the
+    /// person named may join it by its id with no code, from now on — an
+    /// invitation names a person where a code names nobody, which is the
+    /// whole of what it adds. Delivered as [`ServerMessage::Invited`] the way
+    /// a challenge is, the next time they are heard from. It does not expire;
+    /// what would carry an "until" is a signed invitation, which is not
+    /// built.
+    Invite { who: PersonId, room: RoomId },
+    /// **Which parties am I in**, and what is in them. Answered with
+    /// [`ServerMessage::Parties`], and answered empty to a connection that has
+    /// presented no key: a party is a list of people, and nobody is on no
+    /// list.
+    ///
+    /// A second message beside [`Self::Rooms`] rather than a filter on it,
+    /// because a party listing wants different *contents* — who is in it, who
+    /// is online, which of its worlds are running — and because the room list
+    /// is the one message a client sends before it is anybody, and stays so.
+    Parties,
+    /// Make a party, with the asker as its first member.
+    MakeParty { name: String },
+    /// Ask somebody into a party this connection is in. Delivered as
+    /// [`ServerMessage::PartyInvite`], the way a challenge is, and stands until
+    /// they take it or the party is gone.
+    InviteToParty { party: PartyId, who: PersonId },
+    /// Take a standing invitation. Refused without one: a party is not a room
+    /// with a code, and its id admits nobody.
+    JoinParty { party: PartyId },
+    /// Leave, and with it lose the way into its worlds — which is the thing a
+    /// code could never express and the reason a party is a list of people.
+    /// The last one out takes the party with them.
+    LeaveParty { party: PartyId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1390,6 +1497,46 @@ pub enum ServerMessage {
     /// because "empty" and "emptied" look the same from here. A tombstone would
     /// tell them apart and is more machinery than the mistake is worth.
     Yours(kept::Kept),
+    /// **Who this server says you are**, in answer to [`ClientMessage::Hello`].
+    ///
+    /// Its own message rather than a [`Self::Profile`], because the socket
+    /// reads it: this is the one reply that tells a connection which person it
+    /// carries before a `Welcome` has, and a profile you *looked up* must not
+    /// be mistaken for that. Anything queued for this person rides out with it.
+    You(Profile),
+    /// The answer to [`ClientMessage::Close`]: the room that is gone, or why
+    /// it is not. A refusal leaves you where you were, with a reason to read.
+    Closed(Result<RoomId, String>),
+    /// **Somebody holds a door open for you**: a private room you may now
+    /// join by its id. Who, so the panel can show a face rather than a
+    /// fingerprint; the name, because a room you were never listed has no name
+    /// on your screen yet.
+    Invited {
+        from: Profile,
+        room: RoomId,
+        name: RoomName,
+    },
+    /// **It would not do that, and here is why.** For an invitation and the
+    /// party verbs, where [`Self::Rejected`] would be wrong: that one closes a
+    /// door on a connection, and this leaves you exactly where you were with a
+    /// sentence to read, the way [`Self::NotStarted`] does for a whistle. A
+    /// challenge still refuses with `Rejected`.
+    NotDone {
+        reason: String,
+    },
+    /// The parties this connection's person is in, each with its people and
+    /// its worlds. The answer to [`ClientMessage::Parties`], and to making,
+    /// joining or leaving one, since what changed is the listing.
+    Parties {
+        parties: Vec<PartyInfo>,
+    },
+    /// **Somebody asks you into their party.** Who, the party, and what it is
+    /// called, since a party you are not in is one you have never been shown.
+    PartyInvite {
+        from: Profile,
+        party: PartyId,
+        name: String,
+    },
 }
 
 /// Screens this server asks a client not to offer.

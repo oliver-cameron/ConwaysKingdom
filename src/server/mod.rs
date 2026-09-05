@@ -17,6 +17,7 @@ pub mod bot;
 pub mod console;
 pub mod lockers;
 pub mod matches;
+pub mod parties;
 pub mod people;
 pub mod persist;
 pub mod profiles;
@@ -1292,7 +1293,18 @@ impl Server {
             // of no others — both are `Rooms`' business, like everything else
             // that outlives one world.
             | ClientMessage::Challenge { .. }
-            | ClientMessage::Answer { .. } => Vec::new(),
+            | ClientMessage::Answer { .. }
+            // And who somebody is, which is the first of those, and closing a
+            // room, which a room cannot do to itself.
+            | ClientMessage::Hello { .. }
+            | ClientMessage::Close { .. }
+            | ClientMessage::Invite { .. }
+            // And parties, which outlive every room here.
+            | ClientMessage::Parties
+            | ClientMessage::MakeParty { .. }
+            | ClientMessage::InviteToParty { .. }
+            | ClientMessage::JoinParty { .. }
+            | ClientMessage::LeaveParty { .. } => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::JoinTeam { team } => {

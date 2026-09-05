@@ -58,15 +58,28 @@ pub enum Look<'a> {
         /// is fine and readable — one is "what I have played" and the other is
         /// "what I have played *here*".
         yours: Option<&'a crate::client::record::Summary>,
+        /// **The private room the viewer is sitting in**, by name, if they are
+        /// in one: the somewhere this person could be invited into. `None`
+        /// from a listed room or from the menu, where there is no door to hold.
+        into: Option<&'a str>,
+        /// The parties the viewer is in and this person is not, by name: one
+        /// button each, because an invitation names a person and the place a
+        /// person is named is here.
+        parties: Vec<(crate::net::PartyId, String)>,
     },
 }
 
-/// What the player did with it, which is one thing: ask them for a game.
+/// What the player did with it: ask them for a game, or hold a door open.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub enum Did {
     #[default]
     Nothing,
     Challenge(crate::net::PersonId),
+    /// Into the room the viewer is in, which the caller knows and the panel
+    /// only names.
+    Invite(crate::net::PersonId),
+    /// Into one of the viewer's parties.
+    InviteToParty(crate::net::PartyId, crate::net::PersonId),
 }
 
 pub fn show(ctx: &egui::Context, theme: &Theme, look: &Look, open: &mut bool) -> Shown<Did> {
@@ -92,7 +105,7 @@ fn body_of(ui: &mut egui::Ui, theme: &Theme, look: &Look) -> Did {
             Look::Unknown => {
                 ui.colored_label(p.text_dim, w().profile.unknown);
             }
-            Look::Found { it, hue, yours } => {
+            Look::Found { it, hue, yours, into, parties } => {
                 body(ui, theme, it, *hue, *yours);
                 // **Only somebody else's**, because a challenge is an
                 // invitation and there is nobody else in one of your own.
@@ -110,6 +123,42 @@ fn body_of(ui: &mut egui::Ui, theme: &Theme, look: &Look) -> Did {
                     .clicked()
                     {
                         did = Did::Challenge(it.who.clone());
+                    }
+                    // And the door, when there is one to hold: the accent is
+                    // the challenge's, because that is the panel's one press.
+                    if let Some(room) = into {
+                        ui.add_space(theme.metrics.item_spacing);
+                        if crate::client::views::wide(
+                            ui,
+                            egui::RichText::new(crate::client::views::words::invite::ask_into(
+                                room,
+                            ))
+                            .size(theme.metrics.text_body)
+                            .color(p.text),
+                            theme.metrics.button_height,
+                            p.surface_lift,
+                        )
+                        .clicked()
+                        {
+                            did = Did::Invite(it.who.clone());
+                        }
+                    }
+                    for (party, name) in parties {
+                        ui.add_space(theme.metrics.item_spacing);
+                        if crate::client::views::wide(
+                            ui,
+                            egui::RichText::new(
+                                crate::client::views::words::invite::ask_into_party(name),
+                            )
+                            .size(theme.metrics.text_body)
+                            .color(p.text),
+                            theme.metrics.button_height,
+                            p.surface_lift,
+                        )
+                        .clicked()
+                        {
+                            did = Did::InviteToParty(party.clone(), it.who.clone());
+                        }
                     }
                 }
             }

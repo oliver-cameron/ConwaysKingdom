@@ -100,7 +100,33 @@ Answerable **without a seat**, which makes it the third such message after `Join
 
 **Making a room does not put you in it.** The client sends `Join` with the name that came back, which is the same `Join` the room list sends, so there is one path into a world rather than two. The name has to come back rather than be assumed because `net::room_name` trims and lowercases: what was typed and what the room is called are not always the same string, and only the second one joins.
 
-Two things hold the line on a server anybody can ask for worlds. **A cap**, `rooms::MAX_MADE_ROOMS` and `--max-rooms`, counted over rooms made this way and not over rooms an operator declared — thirty-two by default. And **an owner**. The connection that asked is recorded in `Rooms::made`, for the cap and for the log line that says who asked; who may *start and end* the match is recorded at the maker's first join, in `Rooms::owner`, as the person their key names — or their seat, when they have no key and are therefore somebody this server will not remember. `Start` and `EndMatch` answer to that: the maker's key on any socket and in any seat is the maker, and a seat without the key is not. The lobby is told the owner's *seat*, which is how a client knows the whistle is its own to show. Not saved yet: a restart forgets who made a room, and the match is then the console's — see [planned.md](planned.md#room-ownership-should-be-keyed-by-person).
+Two things hold the line on a server anybody can ask for worlds. **A cap**, `rooms::MAX_MADE_ROOMS` and `--max-rooms`, counted over rooms made this way and not over rooms an operator declared — thirty-two by default. And **an owner**. The connection that asked is recorded in `Rooms::made`, for the cap and for the log line that says who asked; who may *start and end* the match, and close the room, is recorded in `Rooms::owner` as the person their key names — at `Create`, since a `Hello` has said who is asking — or as their seat at their first join, when they have no key and are therefore somebody this server will not remember. `Start` and `EndMatch` answer to that: the maker's key on any socket and in any seat is the maker, and a seat without the key is not. The lobby is told the owner's *seat*, which is how a client knows the whistle is its own to show.
+
+**All of it survives a restart**, in `rooms.jsonl` beside the other tables — see [the tables](#the-tables-beside-the-rooms). Whose a room is, what code reaches it, whether the listing mentions it and who has been let in are facts about the map a room sits in rather than about the world, so the world's own save could not carry them, and until they had a file of their own a private world came back from a restart listed, codeless and nobody's. A seat-keyed owner is not written, because a seat means nothing after a restart, and `Rooms::made` holds `Option<ConnectionId>` for the same reason: a remembered room counts against the cap without pretending to know which socket asked for it.
+
+### Closing one
+
+`ClientMessage::Close { room }` is `Rooms::delete` behind the owner check, answered with `Closed` — the room that is gone, or the reason it is not. It names the room and is sent from the menu, because a room is **refused closing while anybody is in it**, the one closing it included: the difference between "nobody is in it" and "nobody was a moment ago" is still a question the server cannot answer, so closing is something you do once everybody has left. A room the console made is the operator's and closes at the console. A seat-keyed owner is told the true thing, which is that the room is occupied — the seat is theirs only while they sit in it — so closing needs a key.
+
+For an unlisted room, `Close` first asks `may_enter`, the door below, and somebody it would not let in is told what a mistyped name is told — the same words for a room that exists and one that does not. The ownership refusal was different from the not-here refusal, which made `Close` the one message that would confirm a forwarded id or a guessed one named a live room, after `Join` and `Watch` had been made not to.
+
+### A private room's door
+
+**The id of an unlisted room is not a way in on its own.** It used to be: `resolve` takes an id, a name or a code, and took an id for a private room from anybody who had it, so a private room was exactly as private as its id was unguessable — which is very, and is also what every client that has been in the room has in its address bar. `Rooms::may_enter` is the door now, asked on `Join` and `Watch` after `resolve` has said which room. A listed room opens for anybody. An unlisted one opens by its **code**, for the connection that made it in this process, which is a keyless maker's only way in, and for a key that owns it or is in `Rooms::admitted`. Everybody else is told what a mistyped name is told, and no more. `resolve` itself is unchanged: the console still finds a room by any of the three.
+
+A client with **no key** that came in by the code is refused on a refresh and types the code again: nothing identifies it across sockets, so there is nothing for `admitted` to hold. That is the one regression the door cost, and the smallest one available. The client already has the code from the lobby stamp, so carrying it in the address — `?code=`, left in [planned.md](planned.md#games-and-matches-by-code) — is what removes it.
+
+`admitted` is who may walk in by the id: whoever was **invited**, whoever was **challenged**, and whoever once came in **by the code** — because the address bar says the id after a join by code and a refresh rejoins by it, so a door that shut behind them would make a refresh a refusal. It is written to `rooms.jsonl` beside the code, so an invitation given before a restart stands after it.
+
+### Invitations
+
+`ClientMessage::Invite { who, room }` is how anybody seated in a private room brings somebody in by name. It puts them in `admitted` and queues an `Invited { from, room, name }` in the same outbox a challenge waits in, so it reaches them the next time they are heard from — with the room's name, which they have never been listed. An invitation **names a person where a code names nobody**, and that is the whole of what it adds: forwarding an invitation achieves nothing, because the far end is somebody else. Codes stay, for reading six characters to somebody sitting beside you.
+
+It does not expire. What would carry an "until" is a signed invitation, which is the shape [planned.md](planned.md#friends-searching-and-inviting-somebody-in-particular) describes and which waits on identity being a key; today the server is the verifier rather than a signature, and the person is the one it issued. A party's world takes no invitations — that would be a way round the party — and the refusal says to ask them into the party instead.
+
+**It is given once.** A second invitation to the same person into the same room, or into the same party, is refused the way a second challenge is: the door is already open for them, and the message is what a repeat would add. The outbox that carries them holds `rooms::MAX_WAITING` messages for one person and refuses beyond that, because what waits there is memory held for somebody who may never come back, filled by whoever asks — and before the two rules it was the one thing a client could grow without bound.
+
+Refusals here are `NotDone { reason }` rather than `Rejected`: a `Rejected` sends the client back to the menu, and an invitation refused from inside a room has to leave you in it.
 
 A connection id is not a player. A room is made before anybody has joined it, so there is no `PlayerId` to record — `rooms::Caller` carries the connection, which exists from the moment the socket opens, alongside the seat, which appears only with a `Welcome`. Ids are never reused, so a room's owner cannot become somebody else by a counter filling a gap.
 
@@ -248,6 +274,8 @@ The server reads its own terminal. `help` lists what it takes:
   bot add ROOM [LEVEL] [TEAM]              a player the server plays: easy|normal|hard
   bot remove ROOM SEAT                     take it out again
   bot                                      what bots there are, and where
+  party delete ID                          remove it, whoever is in it; its worlds stay
+  party                                    what parties there are, and how many are in each
   rooms                                    everything, worlds and matches together
   stop                                     save every room and shut down
   help                                     this
@@ -299,7 +327,9 @@ They meet at one `tokio::sync::watch` channel — a `watch` rather than a `Notif
 
 ## Saving
 
-Every 30 seconds and on a clean shutdown, every room at once. Writes go to a temporary beside the target and are renamed into place, so a crash mid-write cannot leave a half-written world where the real one was.
+Every 30 seconds and on a clean shutdown, every room at once. Writes go to a temporary beside the target and are renamed into place, so a crash mid-write cannot leave a half-written world where the real one was. [The tables](#the-tables-beside-the-rooms) are written the same way, and `rooms.jsonl` is why it matters there: a truncated row in it is not a lost fact but an open door.
+
+**`--fresh` opens no world on disk and deletes none**, so a player's worlds are back on the next ordinary run — and the rows in `rooms.jsonl` for what it did not open ride through its saves untouched, and a party keeps the worlds it cannot see that run. Without that, one diagnostic restart left every private world on the server listed, codeless and nobody's the next time it started normally. What `--fresh` does write over is the declared rooms, which is what starting over means.
 
 **One file per room**, `<name>.ckw` in the rooms directory. The format holds one world and its players, which is exactly one room, so the file is unchanged and the directory is what grew. The room's name is the file's name and is not written inside it: two places to keep one fact is one too many, and the one a person can rename is the one that has to win. Renaming `lobby.ckw` renames the room.
 
@@ -321,6 +351,20 @@ What is *waiting* and what is *standing* are two tables, and briefly were one. A
 
 One challenge to a person at a time, so it cannot be a way to fill somebody's screen and so the room a decline names is the room they were shown. A decline is sent rather than dropped: the point of asking is finding out, and silence is the one answer that cannot be told from not having seen it.
 
+### Parties
+
+A party is **a list of people with a private set of worlds**, and it outlives every room in it — see `server::parties`. A private room is reached by a code, which is a bearer credential, and a group that persists needs the thing a code cannot express: somebody who left should not be able to come back. So a party is a set of `PersonId`s, its worlds are unlisted with no code, and `may_enter` opens them for members and nobody else — the same door an invitation opens, so members-only is one rule rather than a special case.
+
+`ClientMessage::Parties` is answered with the parties the asker is in, each with its people, whether each is in a room here right now, and its worlds as `RoomInfo`. It is a second message beside `Rooms` rather than a filter on it, because a party listing wants different *contents* and because the room list is the one message a client sends before it is anybody, and stays so. A connection that has presented no key is answered an empty list, which is true rather than a refusal. `MakeParty` makes one with the asker as its first member; `InviteToParty` queues a `PartyInvite` the way a challenge is queued and records the invitation as standing; `JoinParty` takes a standing invitation and nothing else gets anybody in; `LeaveParty` leaves, and the last one out takes the party with them. A party's worlds stay when it goes — unlisted, their maker's, and closed the way any room closes. `Create` with `party` set makes a world of the party's, refused from anybody not in it.
+
+**Leaving shuts the door and does not pull the chair.** Somebody sitting in a party's world when they leave the party stays seated until they leave the room; it is their next `Join` that is refused. Nothing is sent to a seat from anywhere but the room it is in, and unseating somebody mid-game for a decision they made on the menu would be a `Rejected` from nowhere. And at `may_enter` ownership outranks membership: the maker of a party's world keeps its door after leaving the party, because the world is theirs — which is the same sentence as "its worlds stay their maker's" read from the other side.
+
+A member's *online* flag is one server answering its own members about each other. The line [planned.md](planned.md#friends-searching-and-inviting-somebody-in-particular) draws about presence is about a game server reporting to a directory, and nothing here is reported anywhere.
+
+**Two caps, and a way out for the operator.** A server holds `parties::MAX_PARTIES`, and one person may be in `MAX_PARTIES_EACH` and still make another — asked first, because with the server's cap alone one client could found every party it would hold and nobody else could make any, and only a member can take a party away, by leaving it. That is also why the console has `party` and `party delete ID`: a party nobody comes back to would otherwise stand until somebody stopped the server and edited `parties.jsonl`. Deleting one leaves its worlds as leaving does, unlisted and their maker's.
+
+**Keyed by today's per-server person**, deliberately, on the pattern `Rooms::challenges` already used. The doc said parties wait on identity being a keypair; they are built on the `PersonId` a secret is exchanged for, at the price the leaderboard already pays — when a person becomes a key fingerprint every row in `parties.jsonl` resets, or is claimed under whatever migration ratings get. See [planned.md](planned.md#parties).
+
 ### Screens a server would rather not be offered
 
 `--hide NAME` puts a name in `net::Hidden`, which rides on the room list — the first thing a menu asks any server, so the answer is known before the menu draws anything. Today the only name is `howto`, and `--hide howtoo` is refused with the list of names rather than starting a server that quietly ignores the flag.
@@ -329,9 +373,9 @@ One challenge to a person at a time, so it cannot be a way to fill somebody's sc
 
 A struct rather than a `bool` on the wire, so the next screen with unfinished words on it is a field rather than a second message.
 
-### The four tables beside the rooms
+### The tables beside the rooms
 
-Not everything a server keeps is a world. Four files sit in the rooms directory alongside the `.ckw` files, and none is per room, because none is about a room:
+Not everything a server keeps is a world. Six files sit in the rooms directory alongside the `.ckw` files, and none is a world's own save, because none is about the world in a room:
 
 | file | what is in it | written when |
 |---|---|---|
@@ -339,8 +383,14 @@ Not everything a server keeps is a world. Four files sit in the rooms directory 
 | `profiles.jsonl` | a person's name, rating, the ratings behind it, matches settled and most ground ever held | a match settles, and on the ordinary save |
 | `stamps.jsonl` | the patterns that person has saved | they change, and on the ordinary save |
 | `games.jsonl` | the games that person has finished | the same |
+| `rooms.jsonl` | one row per client-made room: whose it is by key, its code, whether it is listed, who has been let in | any of those changes, and on the ordinary save |
+| `parties.jsonl` | one row per party: its name, members, standing invitations and worlds | any of those changes, and on the ordinary save |
 
-The first two are what the server **vouches for** and the last two are what it merely **holds**. That line is the whole design of a profile: anything another player is shown has to be the server's, because client state is self-asserted — but a library and a diary are shown to nobody, so the server is a locker rather than a witness. It stores a pattern; it does not read one, and it will not show one to anybody else. See `server::lockers`.
+The first two are what the server **vouches for** and the next two are what it merely **holds**. The last two are about the map rather than about a person — a room's row is read back only while its world is still there, so a match, which is not saved, and a room since deleted leave no trace, and a party's rooms are trimmed to the ones that exist.
+
+**The rooms table fails shut.** Every table skips a row it cannot read, and for the others that loses one fact; here the fact is whether a door is open, so a world whose id is spelled the way a client-made one is — `r-` and a code — and that has no row comes back **unlisted, with no code and no owner**, counted against the cap, and the log says which at error level. A party's world is unlisted whatever the table says. The operator sees such a room in `rooms` as private and can delete it; nobody else can reach it until they look. Before this a skipped row was an access decision: the world loaded from its `.ckw`, nothing said it was private, and it was listed.
+
+That line is the whole design of a profile: anything another player is shown has to be the server's, because client state is self-asserted — but a library and a diary are shown to nobody, so the server is a locker rather than a witness. It stores a pattern; it does not read one, and it will not show one to anybody else. See `server::lockers`.
 
 They moved off the client because a library kept by a browser is a fact about a browser: somebody playing on a phone and a laptop had two libraries and two diaries, which was on the known-bugs list. A locker is **replaced whole** rather than merged — the server is the authority and the client is the cache — so there is no rule about whose edit wins. A `Welcome` hands back what the server holds, and an **empty** locker is what tells a client to offer what it is carrying, which is how a library reaches a server nobody has played on without any two servers talking to each other. The honest cost is one edge: somebody who throws their last pattern away and then joins from a second machine gets it back, because "empty" and "emptied" look the same from here.
 

@@ -21,7 +21,7 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Cho
 
     ui.horizontal(|ui| {
         if ui.small_button(w().menu.back).clicked() {
-            menu.page = Page::Home;
+            menu.page = menu.page.back();
         }
     });
     ui.add_space(m.item_spacing);
@@ -135,6 +135,12 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Cho
         // Asked on the way in, so the board is up before anybody types. An
         // empty query is the leaderboard.
         chose = Chose::FindPeople(String::new());
+    }
+    // And the groups you are in, which are yours and so are here rather than
+    // on the play screen. Asked for on the way in, like the board.
+    if at.reached && flat(ui, w().menu.home.parties) {
+        menu.page = Page::Parties;
+        chose = Chose::Parties;
     }
     ui.add_space(m.item_spacing);
 

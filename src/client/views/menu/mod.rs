@@ -50,7 +50,7 @@ use play::play;
 use crate::client::views::theme::Theme;
 use crate::client::views::words::menu as words;
 use crate::client::views::words::w;
-use crate::net::{RoomId, RoomInfo, RoomName, Victory};
+use crate::net::{PartyId, RoomId, RoomInfo, RoomName, Victory};
 use crate::sim::WorldKind;
 
 /// How long the typing has to stop before the address is taken as finished.
@@ -98,7 +98,7 @@ pub enum Stage {
 /// more than one level down and disguises it where it does, which is the whole
 /// argument for this being a page rather than a stack: home is who you are and
 /// what you have done, play is where you go, and there is nothing under either.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     /// Your name, your record, and the way in.
     Home,
@@ -111,8 +111,25 @@ pub enum Page {
     People,
     /// You: the name, the rating, the record, who else is here, and the key.
     Account,
+    /// The groups you are in, and their worlds. Reached from the account
+    /// page, since a party is a fact about you rather than about a server.
+    Parties,
     /// What the board does not tell somebody who has just arrived.
     HowToPlay,
+}
+
+impl Page {
+    /// Where leaving this page goes: the page it is reached from. **One
+    /// answer for the back button and for escape**, so the two cannot
+    /// disagree — and People and Parties are both the account page's, so two
+    /// pages reached from the same button go back to the same place. Home has
+    /// nothing above it and stays.
+    pub fn back(self) -> Self {
+        match self {
+            Page::People | Page::Parties => Page::Account,
+            Page::Play | Page::Account | Page::HowToPlay | Page::Home => Page::Home,
+        }
+    }
 }
 
 pub struct Menu {
@@ -206,6 +223,14 @@ pub struct Menu {
     /// sockets and asks no questions; it holds what it was told and returns
     /// what was chosen.
     pub people: Option<(String, Vec<crate::net::Profile>)>,
+    /// The parties you are in, put here from the session the way the people
+    /// are. `None` until a server has answered.
+    pub parties: Option<Vec<crate::net::PartyInfo>>,
+    /// The name typed for a party not made yet.
+    pub party_name: String,
+    /// Which party is picked out, so its people and worlds appear inside it
+    /// — the room list's selection, for the same reason.
+    pub selected_party: Option<PartyId>,
     /// Who the last server said you are, once one has. Put here by the client
     /// the way the room list and the player list are; the menu asks nothing.
     ///
@@ -295,9 +320,22 @@ pub enum Chose {
         /// placing rules can be switched off inside it. Never true beside a
         /// `victory` — a match with the rules off is not a match.
         laboratory: bool,
+        /// A party's world, reached only by its members. `private` is beside
+        /// the point when this is set.
+        party: Option<PartyId>,
     },
     /// Watch this room without taking a seat in it.
     Watch(RoomId),
+    /// Close a room this client made. Offered only on a row whose owner is
+    /// this client, which the listing says; the server checks again.
+    Close(RoomId),
+    /// Which parties am I in. Asked on the way into the page, and the answer
+    /// is the page.
+    Parties,
+    MakeParty(String),
+    /// Take a standing invitation, from the panel that carried it.
+    JoinParty(PartyId),
+    LeaveParty(PartyId),
     /// Show me my own profile.
     ///
     /// **The only way to it that does not need other people.** It was
@@ -344,6 +382,9 @@ impl Menu {
             draft: None,
             finding: String::new(),
             people: None,
+            parties: None,
+            party_name: String::new(),
+            selected_party: None,
             // **Who the last server said this client is.** The store has it
             // between launches — see `keep::person` — and the menu is drawn
             // long before any join, so reading it only off a live session
@@ -376,6 +417,14 @@ impl Menu {
     pub fn describe_access(&mut self, access: draft::Access) {
         self.page = Page::Play;
         self.draft.get_or_insert_with(Default::default).access = access;
+    }
+
+    /// The same, for a world that will be **a party's**: the form with the
+    /// last question answered by the party, which is the one answer that is
+    /// not a toggle.
+    pub fn describe_for_party(&mut self, party: PartyId, name: String) {
+        self.page = Page::Play;
+        self.draft.get_or_insert_with(Default::default).party = Some((party, name));
     }
 
     /// The menu, opened on a sentence saying why the client is looking at it.
@@ -599,6 +648,10 @@ pub fn show(ctx: &egui::Context, theme: &Theme, menu: &mut Menu, at: Where) -> s
                                                     ui, theme, menu, at,
                                                 )
                                             }
+                                            Page::Parties => {
+                                                chose =
+                                                    super::social::parties::show(ui, theme, menu)
+                                            }
                                             Page::HowToPlay => {
                                                 chose = howto::show(ui, theme, menu, at)
                                             }
@@ -646,7 +699,7 @@ pub fn describe(world: WorldKind) -> String {
 
 /// Players connected now. "1 player" rather than "1 players", because the menu
 /// is the first thing anybody reads.
-pub(super) fn players(n: u32) -> String {
+pub(crate) fn players(n: u32) -> String {
     match n {
         0 => w().menu.empty_room.to_string(),
         1 => words::one_player(),
@@ -684,6 +737,47 @@ mod tests {
                     && matches!(chose, Chose::FindPeople(like) if like.is_empty())
             }),
             "opening the list did not ask for the board"
+        );
+    }
+
+    /// **The parties are asked for on the way in**, like the board: a page
+    /// that showed nothing until somebody pressed something would read as a
+    /// server with nothing to say.
+    #[test]
+    fn opening_the_parties_page_asks_for_the_listing() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Account;
+        assert!(
+            probe(&mut menu, at(1.0, false), |m, chose| {
+                m.page == Page::Parties && matches!(chose, Chose::Parties)
+            }),
+            "opening the page did not ask for the parties"
+        );
+    }
+
+    /// **A party's world is joined by the row's id**, the way a room in the
+    /// room list is: one way into a world rather than two.
+    #[test]
+    fn a_partys_world_joins_by_its_id() {
+        let mut menu = Menu::new("ws://host:8080/ws".into(), false);
+        menu.page = Page::Parties;
+        let party = PartyId("p-friday".into());
+        menu.parties = Some(vec![crate::net::PartyInfo {
+            id: party.clone(),
+            name: "friday".into(),
+            members: vec![crate::net::Member {
+                who: crate::net::PersonId("aaaa1111".into()),
+                name: "alice".into(),
+                online: true,
+            }],
+            rooms: vec![a_room("r-den123")],
+        }]);
+        menu.selected_party = Some(party);
+        assert!(
+            probe(&mut menu, at(1.0, false), |_, chose| {
+                matches!(chose, Chose::Join(id) if id.as_str() == "r-den123")
+            }),
+            "no row joined the party's world"
         );
     }
 
@@ -767,6 +861,25 @@ mod tests {
                 "the home screen does not reach one of its three"
             );
         }
+    }
+
+    /// **And every page has a way back**, which the back button and escape
+    /// both take from `Page::back`, so a page cannot be left by one and not
+    /// the other. Two pages reached from the account page go back to it, and
+    /// nothing is more than two steps from home.
+    #[test]
+    fn every_page_leads_back_to_home() {
+        for page in [Page::Play, Page::People, Page::Account, Page::Parties, Page::HowToPlay] {
+            let mut at = page;
+            let mut steps = 0;
+            while at != Page::Home {
+                at = at.back();
+                steps += 1;
+                assert!(steps <= 2, "{page:?} does not lead home");
+            }
+        }
+        assert_eq!(Page::People.back(), Page::Parties.back(), "siblings disagree about back");
+        assert_eq!(Page::Home.back(), Page::Home);
     }
 
     /// **The menu opens knowing who this client is.**
@@ -1248,6 +1361,7 @@ mod tests {
             players: 0,
             world: WorldKind::Infinite,
             rules: crate::net::Rules::default(),
+            owner: None,
         }
     }
 

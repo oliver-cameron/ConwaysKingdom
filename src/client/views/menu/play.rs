@@ -5,7 +5,7 @@
 //! worlds on it, and home is about the person in front of the screen.
 
 use super::draft::{Access, Draft, Ends, Kind, Shape};
-use super::{describe, players, words, Chose, Menu, Page, Stage, Where, RETRY_EVERY, SETTLE};
+use super::{describe, players, words, Chose, Menu, Stage, Where, RETRY_EVERY, SETTLE};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::w;
 use crate::net::{RoomId, RoomInfo};
@@ -51,9 +51,10 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         egui::vec2(full, 0.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            // Every screen has a way out, by pointer as well as by escape.
+            // Every screen has a way out, by pointer as well as by escape,
+            // and the two agree because both ask `Page::back`.
             if ui.small_button(w().menu.back).clicked() {
-                menu.page = Page::Home;
+                menu.page = menu.page.back();
             }
             ui.heading(w().menu.home.play);
             reach = server_field(ui, theme, menu, at, reached);
@@ -317,7 +318,11 @@ fn rooms_column(
 
         for room in rooms {
             let selected = menu.selected.as_ref() == Some(&room.id);
-            match room_row(ui, theme, room, selected) {
+            // Yours by key, which the listing says. A room made with no key is
+            // nobody's to close from here, and a seat could not be: the room
+            // will not close with its maker in it.
+            let mine = room.owner.is_some() && room.owner == menu.whoami;
+            match room_row(ui, theme, room, selected, mine) {
                 Picked::Nothing => {}
                 // Selecting the one already selected puts it away, so a press
                 // has somewhere to go back to.
@@ -328,6 +333,7 @@ fn rooms_column(
                 // alike and only one of them was pressed.
                 Picked::Join => chose = Some(Chose::Join(room.id.clone())),
                 Picked::Watch => chose = Some(Chose::Watch(room.id.clone())),
+                Picked::Close => chose = Some(Chose::Close(room.id.clone())),
             }
         }
         ui.colored_label(
@@ -392,14 +398,16 @@ pub(super) fn make_column(
     made
 }
 
-/// What a room row was clicked for. Two things can be done with a room, so a
-/// bool would have to be a bool about which.
+/// What a room row was clicked for. Three things can be done with a room, so
+/// a bool would have to be a bool about which.
 enum Picked {
     Nothing,
     /// Point at this room, so its actions appear inside it.
     Select,
     Join,
     Watch,
+    /// Only on a row that is this client's.
+    Close,
 }
 
 fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool) -> Option<Chose> {
@@ -424,7 +432,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // sides: there is one player. Hidden rather than disabled, because
             // a field that cannot be wrong is a field that should not be
             // asked about.
-            if reached && draft.access == Access::Listed {
+            if reached && (draft.access == Access::Listed || draft.party.is_some()) {
                 ui.label(egui::RichText::new(w().menu.make.name).size(m.text_small));
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.name)
@@ -528,23 +536,39 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // "Just me" for exactly that reason.
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(w().menu.make.private).size(m.text_small));
-            let mut access = draft.access;
-            let listed = [
-                (Access::Listed, w().menu.make.listed),
-                (Access::ByCode, w().menu.make.unlisted),
-                (Access::Solo, w().menu.make.solo_access),
-            ];
-            toggles(ui, theme, &mut access, if reached { &listed } else { &listed[2..] });
-            draft.access = if reached { access } else { Access::Solo };
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(match draft.access {
-                    Access::Listed => w().menu.make.listed_note,
-                    Access::ByCode => w().menu.make.unlisted_note,
-                    Access::Solo => w().menu.make.solo_note,
-                })
-                .size(m.text_small),
-            );
+            // **A party's world answers this question itself.** Which party is
+            // not something the form can ask -- it does not know which you are
+            // in -- so the parties page answers it on the way here, and the
+            // row says so and offers the way back to the toggles.
+            if let Some((_, party)) = draft.party.clone() {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(words::parties::for_party(&party)).size(m.text_small),
+                    );
+                    if ui.small_button(w().menu.make.not_for_party).clicked() {
+                        draft.party = None;
+                    }
+                });
+            } else {
+                let mut access = draft.access;
+                let listed = [
+                    (Access::Listed, w().menu.make.listed),
+                    (Access::ByCode, w().menu.make.unlisted),
+                    (Access::Solo, w().menu.make.solo_access),
+                ];
+                toggles(ui, theme, &mut access, if reached { &listed } else { &listed[2..] });
+                draft.access = if reached { access } else { Access::Solo };
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(match draft.access {
+                        Access::Listed => w().menu.make.listed_note,
+                        Access::ByCode => w().menu.make.unlisted_note,
+                        Access::Solo => w().menu.make.solo_note,
+                    })
+                    .size(m.text_small),
+                );
+            }
 
             if draft.kind == Kind::Match {
                 ui.add_space(m.item_spacing);
@@ -807,8 +831,15 @@ fn toggles<T: Copy + PartialEq>(
 ///
 /// Watching is offered on **every** room and not only on matches, because
 /// no late joining is a rule about players: a match already running is exactly
-/// the room whose only way in is to watch.
-fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -> Picked {
+/// the room whose only way in is to watch. Closing is offered on a room that
+/// is `mine`, and the server refuses it while anybody is inside.
+fn room_row(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    room: &RoomInfo,
+    selected: bool,
+    mine: bool,
+) -> Picked {
     let p = theme.palette;
     let m = theme.metrics;
     let mut picked = Picked::Nothing;
@@ -880,7 +911,8 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                 ui.add_space(m.item_spacing);
                 ui.horizontal_top(|ui| {
                     ui.set_min_height(m.button_height);
-                    let each = (ui.available_width() - m.item_spacing) / 2.0;
+                    let across = if mine { 3.0 } else { 2.0 };
+                    let each = (ui.available_width() - m.item_spacing * (across - 1.0)) / across;
                     if ui
                         .add_sized(
                             [each, m.button_height],
@@ -905,6 +937,18 @@ fn room_row(ui: &mut egui::Ui, theme: &Theme, room: &RoomInfo, selected: bool) -
                         .clicked()
                     {
                         picked = Picked::Watch;
+                    }
+                    if mine
+                        && ui
+                            .add_sized(
+                                [each, m.button_height],
+                                egui::Button::new(
+                                    egui::RichText::new(w().menu.watch.close).size(m.text_small),
+                                ),
+                            )
+                            .clicked()
+                    {
+                        picked = Picked::Close;
                     }
                 });
             }
