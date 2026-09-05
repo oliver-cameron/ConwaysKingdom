@@ -145,8 +145,9 @@ pub fn blast_reach_from(one: i32, n: usize) -> i32 {
 /// How many squares in sixty-four a detonation brings to life.
 ///
 /// Conway's classic soup is a half, which mostly burns down; a third is where
-/// a random field goes on happening longest. This wants playing with rather
-/// than deriving, and `examples/blast` sweeps it.
+/// a random field goes on happening longest. **Swept, and it stands**:
+/// `examples/blast` tries a sixth, a third and a half, and planned.md says
+/// what each held a hundred generations on.
 pub const DYNAMITE_DENSITY: u64 = 24;
 /// The furthest a blast's centre may be thrown from the dynamite, in cells.
 ///
@@ -224,6 +225,10 @@ pub const TURRET_COST: i32 = 15;
 /// a hundred and thirteen. It is also more than [`crate::sim::Player`] starts
 /// with, so a first blast is something to earn rather than something to open
 /// with.
+///
+/// What that buys beside a turret and beside plain life is measured in
+/// `examples/blast` and argued in planned.md: dearer a square than a turret
+/// where a turret works, and the only tool that works where one does not.
 pub const DYNAMITE_COST: i32 = 153;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
