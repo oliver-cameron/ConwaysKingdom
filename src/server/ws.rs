@@ -18,11 +18,14 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::IntoResponse;
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
@@ -53,6 +56,12 @@ enum ToSim {
         req: api::Request,
         reply: tokio::sync::oneshot::Sender<api::Reply>,
     },
+    /// `/healthz` asking how many rooms there are. Asked of this task rather
+    /// than read off a counter, so a server whose one task has stalled fails
+    /// its health check instead of passing it.
+    Health {
+        reply: tokio::sync::oneshot::Sender<usize>,
+    },
 }
 
 /// Hands out one id per socket, never reusing one.
@@ -76,6 +85,32 @@ type Broadcast = (RoomId, ServerMessage);
 struct AppState {
     to_sim: mpsc::UnboundedSender<ToSim>,
     broadcast: broadcast::Sender<Broadcast>,
+    connections: Arc<Connections>,
+}
+
+/// Every socket that is open, counted for `/healthz`.
+#[derive(Default)]
+struct Connections {
+    open: AtomicUsize,
+}
+
+impl Connections {
+    fn opened(self: &Arc<Self>) -> Counted {
+        self.open.fetch_add(1, Ordering::Relaxed);
+        Counted { of: self.clone() }
+    }
+}
+
+/// One socket's place in the count, given back when the socket's task ends
+/// however it ends.
+struct Counted {
+    of: Arc<Connections>,
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.of.open.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub struct Config {
@@ -465,6 +500,9 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                                 let _ = sim_broadcast.send(labelled);
                             }
                         }
+                        Some(ToSim::Health { reply }) => {
+                            let _ = reply.send(rooms.len());
+                        }
                     }
                 }
             }
@@ -475,22 +513,8 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
         }
     });
 
-    let for_api = to_sim.clone();
-    let state = AppState { to_sim, broadcast: broadcast_tx };
-    let mut app = Router::new().route("/ws", get(upgrade));
-    if let Some(dir) = &config.static_dir {
-        app = serve_client(app, dir);
-    }
-    let mut app = app.with_state(state);
-    // Only with a token, and the routes are absent rather than refusing:
-    // there is nothing to guess at on a server that was not asked for one.
-    if let Some(token) = &config.api_token {
-        app = app.merge(api::http::router(token.clone(), move |req| {
-            let (reply, answer) = tokio::sync::oneshot::channel();
-            let _ = for_api.send(ToSim::Api { req, reply });
-            answer
-        }));
-    }
+    let state = AppState { to_sim, broadcast: broadcast_tx, connections: Default::default() };
+    let app = router(state, &config);
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
 
@@ -593,6 +617,51 @@ fn outward_address(port: u16) -> Option<SocketAddr> {
     (!addr.ip().is_loopback()).then_some(addr)
 }
 
+/// Every route: the socket and the health line always, the page and its files
+/// given a directory, and the API only with a token.
+fn router(state: AppState, config: &Config) -> Router {
+    let for_api = state.to_sim.clone();
+    let mut app = Router::new().route("/ws", get(upgrade)).route("/healthz", get(healthz));
+    if let Some(dir) = &config.static_dir {
+        app = serve_client(app, dir);
+    }
+    let mut app = app.with_state(state);
+    // Only with a token, and the routes are absent rather than refusing:
+    // there is nothing to guess at on a server that was not asked for one.
+    if let Some(token) = &config.api_token {
+        app = app.merge(api::http::router(token.clone(), move |req| {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            let _ = for_api.send(ToSim::Api { req, reply });
+            answer
+        }));
+    }
+    app
+}
+
+/// How long `/healthz` gives the simulation task to say how many rooms there
+/// are before calling the server unwell.
+const HEALTH_WAIT: Duration = Duration::from_secs(1);
+
+/// `200 ok` and one line -- how many rooms, how many connections -- for an
+/// uptime check. Unauthenticated, and served with or without a page, because
+/// it says nothing the room list does not. See [server.md].
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#deploying
+async fn healthz(State(state): State<AppState>) -> Response {
+    let no_store = [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))];
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    let _ = state.to_sim.send(ToSim::Health { reply });
+    let rooms = match tokio::time::timeout(HEALTH_WAIT, answer).await {
+        Ok(Ok(rooms)) => rooms,
+        _ => {
+            let why = "the simulation is not answering\n";
+            return (StatusCode::SERVICE_UNAVAILABLE, no_store, why).into_response();
+        }
+    };
+    let open = state.connections.open.load(Ordering::Relaxed);
+    (StatusCode::OK, no_store, format!("ok: {rooms} rooms, {open} connections\n")).into_response()
+}
+
 /// The largest frame this server will read.
 ///
 /// The default is tens of megabytes, which is the transport being generous
@@ -680,6 +749,7 @@ async fn revalidate(mut response: axum::response::Response) -> axum::response::R
 
 async fn connection(socket: WebSocket, state: AppState) {
     let id = next_connection();
+    let _counted = state.connections.opened();
     log::info!("connection {id} opened");
     let (mut sink, mut stream) = socket.split();
 
@@ -808,6 +878,65 @@ async fn send(
         Err(e) => {
             log::error!("encoding outbound message: {e}");
             true
+        }
+    }
+}
+
+/// Over a real socket, because there is no `tower` here to drive a router
+/// without one. Reached by `cargo test --features server` and by nothing
+/// else -- see docs/README.md.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A router with a stand-in for the simulation task that answers every
+    /// `Health` with `rooms`, listening on a port of the system's choosing.
+    async fn listening(static_dir: Option<PathBuf>, rooms: usize) -> SocketAddr {
+        let (to_sim, mut from_conns) = mpsc::unbounded_channel::<ToSim>();
+        tokio::spawn(async move {
+            while let Some(asked) = from_conns.recv().await {
+                if let ToSim::Health { reply } = asked {
+                    let _ = reply.send(rooms);
+                }
+            }
+        });
+        let (broadcast, _) = broadcast::channel(8);
+        let state = AppState { to_sim, broadcast, connections: Default::default() };
+        let config = Config {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            static_dir,
+            save_every: Duration::from_secs(30),
+            bpm: crate::net::DEFAULT_BPM,
+            shape: WorldKind::Infinite,
+            api_token: None,
+        };
+        let app = router(state, &config);
+        let listener = tokio::net::TcpListener::bind(config.addr).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    async fn get(addr: SocketAddr, path: &str) -> String {
+        let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n");
+        tcp.write_all(request.as_bytes()).await.unwrap();
+        let mut text = String::new();
+        tcp.read_to_string(&mut text).await.unwrap();
+        text
+    }
+
+    /// `/healthz` is a 200 and one line whether or not there is a page to
+    /// serve, and the line counts what the simulation task said.
+    #[tokio::test]
+    async fn healthz_answers_with_and_without_a_page() {
+        for static_dir in [None, Some(PathBuf::from("."))] {
+            let addr = listening(static_dir, 3).await;
+            let text = get(addr, "/healthz").await;
+            assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+            assert!(text.ends_with("\r\n\r\nok: 3 rooms, 0 connections\n"), "{text}");
+            assert!(text.contains("cache-control: no-store"), "{text}");
         }
     }
 }

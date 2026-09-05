@@ -116,6 +116,7 @@ Keep comments concise: replace five lines of comment with well-labelled code and
 ```
 cargo test                                             # every test there is
 cargo check --features server --bins                   # and the one file they miss
+cargo test --features server                           # the one test in it, over a real socket
 cargo test --no-default-features                       # without the renderer
 cargo build --target wasm32-unknown-unknown --lib      # the browser client
 wasm-pack test --headless --firefox                    # GPU setup, in a browser
@@ -127,6 +128,6 @@ cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving th
 cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```
 
-`server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, everything else under `src/server/` compiles by default, and there is no test that opens a socket. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it.
+`server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, and everything else under `src/server/` compiles by default. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it. The one test the file does have — `/healthz` answering over a real socket, with and without a page to serve — runs only under `cargo test --features server`, because there is no `tower` in the tree to drive a router without a socket.
 
 [planned.md](planned.md) holds everything not built yet, with a status on each entry — built, being built, designed, or decided and not costed. [inspiration.md](inspiration.md) says where a design was borrowed from and for what.
