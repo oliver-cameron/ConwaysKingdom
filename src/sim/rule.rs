@@ -134,8 +134,13 @@ pub const DYNAMITE_MOST_REACH: i32 = DYNAMITE_REACH * 10;
 /// It is also the honest reading of what a cluster *is*: one bomb made of n
 /// charges, rather than n bombs that happen to be adjacent.
 pub fn blast_reach(n: usize) -> i32 {
-    let reach = (DYNAMITE_REACH as f64 * (n as f64).sqrt()).round() as i32;
-    reach.clamp(DYNAMITE_REACH, DYNAMITE_MOST_REACH)
+    blast_reach_from(DYNAMITE_REACH, n)
+}
+/// [`blast_reach`] for a stick that reaches `one` on its own, which is what
+/// `examples/blast` sweeps through `World::detonate_with`.
+pub fn blast_reach_from(one: i32, n: usize) -> i32 {
+    let reach = (one as f64 * (n as f64).sqrt()).round() as i32;
+    reach.clamp(one, DYNAMITE_MOST_REACH.max(one))
 }
 /// How many squares in sixty-four a detonation brings to life.
 ///

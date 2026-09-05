@@ -627,12 +627,21 @@ impl World {
     /// That is the warning: a fuse reaches full during one generation's rule,
     /// is drawn full for that whole generation, and goes off at the start of
     /// the next.
+    fn detonate(&mut self) {
+        self.detonate_with(rule::DYNAMITE_DENSITY, rule::DYNAMITE_REACH);
+    }
+
     /// Take what went off, leaving nothing behind: a blast is drawn once.
     pub fn take_blasts(&mut self) -> Vec<Blast> {
         std::mem::take(&mut self.blasts)
     }
 
-    fn detonate(&mut self) {
+    /// [`Self::detonate`] with the two numbers `examples/blast` sweeps — what
+    /// a disc comes up alive at, out of sixty-four, and how far one stick
+    /// reaches — so a density or a reach can be measured without editing
+    /// `rule.rs` between runs. The game never calls it: [`Self::step`] goes
+    /// through the constants.
+    pub fn detonate_with(&mut self, density: u64, reach: i32) {
         let ready = self.dynamite_ready();
         if ready.is_empty() {
             return;
@@ -650,8 +659,8 @@ impl World {
         // hundred of them reach ten times as far as one rather than a hundred
         // small craters in the same place.
         let mut blasts = Vec::new();
-        for group in clusters(&ready, rule::DYNAMITE_REACH) {
-            let reach = rule::blast_reach(group.len());
+        for group in clusters(&ready, reach) {
+            let reach = rule::blast_reach_from(reach, group.len());
             let owner = ready[group[0]].1;
             // The middle of the blob, which is where a bomb made of all of
             // them is. Integer division, so it lands on a square.
@@ -677,7 +686,7 @@ impl World {
             self.set_cell_at(
                 *row,
                 *col,
-                Self::blasted(cell, *owner, seed_for, *row, *col).with_age(0),
+                Self::blasted(cell, *owner, seed_for, density, *row, *col).with_age(0),
             );
         }
 
@@ -688,7 +697,7 @@ impl World {
             // the largest thing a player can do reads as the board having
             // glitched. Whoever is drawing takes these; the rule does not care.
             self.blasts.push(Blast { at: centre, reach, by: owner });
-            self.scramble(centre, owner, seed, reach);
+            self.scramble(centre, owner, seed, density, reach);
         }
     }
 
@@ -714,7 +723,14 @@ impl World {
     /// player's seat. A blast that took one would evict somebody from their
     /// spawn permanently and hand them a second patch on their next join. Life
     /// standing on it is still scrambled; the owner is not.
-    fn scramble(&mut self, centre: (i32, i32), owner: PlayerId, seed: u64, reach: i32) {
+    fn scramble(
+        &mut self,
+        centre: (i32, i32),
+        owner: PlayerId,
+        seed: u64,
+        density: u64,
+        reach: i32,
+    ) {
         let mut chained = Vec::new();
         for dr in -reach..=reach {
             for dc in -reach..=reach {
@@ -735,7 +751,7 @@ impl World {
                     chained.push(((row, col), cell.with_age(super::cell::bits::MAX_AGE)));
                     continue;
                 }
-                self.set_cell_at(row, col, Self::blasted(cell, owner, seed, row, col));
+                self.set_cell_at(row, col, Self::blasted(cell, owner, seed, density, row, col));
             }
         }
         for ((row, col), cell) in chained {
@@ -763,13 +779,13 @@ impl World {
     ///
     /// Granted ground keeps its owner whatever the roll says — see
     /// [`Self::scramble`] for why nothing may move one.
-    fn blasted(cell: Cell, owner: PlayerId, seed: u64, row: i32, col: i32) -> Cell {
+    fn blasted(cell: Cell, owner: PlayerId, seed: u64, density: u64, row: i32, col: i32) -> Cell {
         // Its own square's own roll, on the blast's own stream, so two
         // overlapping blasts do not decide the same square twice the same way
         // — and so a peer that never saw the dynamite placed still lands on the
         // same board.
         let square = super::seed::cell_seed(seed, row, col);
-        let alive = Roll::new(square).chance(rule::BLAST_STREAM, rule::DYNAMITE_DENSITY);
+        let alive = Roll::new(square).chance(rule::BLAST_STREAM, density);
         // **The age goes with the kind.** A factory three quarters of the way
         // through its rot, turned into ordinary ground, kept that three — and
         // `Cell::sprite` reads the age as a sheet row, so it drew from a row
