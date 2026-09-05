@@ -133,6 +133,19 @@ cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving th
 cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```
 
+### Where the time goes
+
+`cargo test` is about a minute and a half and two thirds of that is in two places, measured with `--test-threads=1`:
+
+| | |
+|---|---|
+| `client::views::menu::tests` | 29 tests, over half the total |
+| `sim::world::tests::a_torus_wraps_in_both_axes` | the single slowest test there is |
+
+Both are **expensive for a reason that is written down where they are**, so neither is a sweep to trim. The menu tests go through `probe`, which presses a lane every 24 points across the whole screen rather than a fixed number of them; the comment on it names the three separate times a fixed count silently stopped finding the button it was meant to press. And a glider laps a torus in `4 * lcm(height, width)` generations, so a test that a glider *does* lap one has to run that many — the four shapes it sweeps are the degenerate one-chunk case, two square ones and a rectangular one, and only the rectangle proves the two axes wrap independently.
+
+Next after those are `stepping_is_deterministic`, `a_peer_built_from_steps_agrees_with_the_server_with_a_bot_in_the_room` and `territory_creeps_across_a_chunk_boundary`, each a few seconds and each stepping a world a few hundred times in a debug build.
+
 `server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, and everything else under `src/server/` compiles by default. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it. The one test the file does have — `/healthz` answering over a real socket, with and without a page to serve — runs only under `cargo test --features server`, because there is no `tower` in the tree to drive a router without a socket.
 
 [planned.md](planned.md) holds everything not built yet, with a status on each entry — built, being built, designed, or decided and not costed. [inspiration.md](inspiration.md) says where a design was borrowed from and for what.
