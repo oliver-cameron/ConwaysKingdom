@@ -1745,6 +1745,172 @@ mod tests {
         assert!(alive > 0 && alive < disc.len(), "{alive} of {} is not noise", disc.len());
     }
 
+    /// **A blast lights every stick it reaches, and none it does not.** A
+    /// live dynamite in the disc has its fuse set to full rather than being
+    /// scrambled, and goes off at the top of the next generation — so a line
+    /// of them is a fuse. One further than a thrown disc could reach is not
+    /// touched at all.
+    ///
+    /// The first blast is `detonate` on its own and the second is a `step`,
+    /// because the pass runs at the top of a generation: what is pinned is
+    /// that the chained stick goes off before anything else gets a turn.
+    #[test]
+    fn a_blast_lights_the_sticks_it_reaches_and_no_further() {
+        let mut world = World::infinite_empty();
+        let me = PlayerId(1);
+        let them = PlayerId(2);
+        // Their ground all round, so the blast goes off where the stick stands
+        // rather than walking to somewhere worth hitting.
+        for r in -40..=40 {
+            for c in -40..=40 {
+                let held =
+                    Cell::DEAD.with_player(them).with_level(super::super::cell::bits::MAX_LEVEL);
+                world.set_cell_at(r, c, held);
+            }
+        }
+        let stick = |age| Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(age);
+        // On the rim of the disc, and where no disc thrown its furthest reaches.
+        let near = (0, rule::DYNAMITE_REACH);
+        let far = (0, -(rule::DYNAMITE_REACH + rule::DYNAMITE_THROW + 1));
+        world.set_cell_at(0, 0, stick(super::super::cell::bits::MAX_AGE));
+        world.set_cell_at(near.0, near.1, stick(2));
+        world.set_cell_at(far.0, far.1, stick(2));
+
+        world.detonate();
+        let lit = world.cell_at(near.0, near.1).unwrap();
+        assert!(lit.is_alive() && lit.kind() == Kind::DYNAMITE, "the chained stick was scrambled");
+        assert_eq!(lit.age(), super::super::cell::bits::MAX_AGE, "the chained stick is not full");
+        assert_eq!(world.cell_at(far.0, far.1), Some(stick(2)), "a stick out of reach was touched");
+        assert_eq!(world.blasts.len(), 1);
+
+        world.step();
+        assert!(
+            world.cell_at(near.0, near.1).is_some_and(|c| c.kind() == Kind::NORMAL),
+            "the chained stick did not go off on the next generation"
+        );
+        let blasts = world.take_blasts();
+        assert_eq!(blasts.len(), 2, "one blast should have lit exactly one more");
+        assert_eq!(blasts[1].by, me);
+        let thrown = (blasts[1].at.0 - near.0).abs().max((blasts[1].at.1 - near.1).abs());
+        assert!(thrown <= rule::DYNAMITE_THROW, "the second blast went off at {:?}", blasts[1].at);
+    }
+
+    /// **A stick under ice is not lit.** A pane stops time over what it
+    /// covers and that is every rule, the fuse a blast would have set
+    /// included — which is what makes ice the answer to a line of them as
+    /// much as to one.
+    #[test]
+    fn a_blast_does_not_light_a_stick_under_ice() {
+        let mut world = World::infinite_empty();
+        let me = PlayerId(1);
+        let them = PlayerId(2);
+        for r in -40..=40 {
+            for c in -40..=40 {
+                let held =
+                    Cell::DEAD.with_player(them).with_level(super::super::cell::bits::MAX_LEVEL);
+                world.set_cell_at(r, c, held);
+            }
+        }
+        let stick = |age| Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(age);
+        let frozen = stick(2).with_ice(true);
+        world.set_cell_at(0, 0, stick(super::super::cell::bits::MAX_AGE));
+        world.set_cell_at(0, 1, frozen);
+
+        world.detonate();
+        assert_eq!(world.cell_at(0, 1), Some(frozen), "the blast reached under the ice");
+        world.step();
+        assert_eq!(world.take_blasts().len(), 1, "the frozen stick went off");
+    }
+
+    /// **A blast is thrown toward the frontier, and no further than the
+    /// throw.** A stick inside its owner's country goes off toward the nearest
+    /// ground that is not theirs, wherever that is within `DYNAMITE_THROW`;
+    /// a frontier no disc thrown that far can reach leaves it going off where
+    /// it stands, rather than homing on it from across the map.
+    #[test]
+    fn a_blast_is_thrown_toward_the_frontier_and_no_further_than_the_throw() {
+        let me = PlayerId(1);
+        let them = PlayerId(2);
+        let (reach, throw) = (rule::DYNAMITE_REACH, rule::DYNAMITE_THROW);
+        // My country, with theirs beginning this many columns east of a stick
+        // at the origin.
+        let country = |frontier: i32| {
+            let mut world = World::infinite_empty();
+            for r in -40..=40 {
+                for c in -40..=40 {
+                    let who = if c >= frontier { them } else { me };
+                    let held =
+                        Cell::DEAD.with_player(who).with_level(super::super::cell::bits::MAX_LEVEL);
+                    world.set_cell_at(r, c, held);
+                }
+            }
+            world
+        };
+        // Any seed: it only breaks the tie between equally near centres.
+        let seed = 7;
+        for frontier in reach..=throw {
+            let world = country(frontier);
+            let centre = world.blast_centre((0, 0), me, seed, reach);
+            assert!(
+                centre.1 > 0,
+                "frontier {frontier} columns off: the blast stayed at {centre:?}"
+            );
+            assert!(world.worth_hitting(centre, me, reach), "frontier {frontier}: {centre:?}");
+        }
+        // Past the throw and the reach together there is nothing a disc can
+        // be brought to, so nothing to walk toward.
+        let world = country(throw + reach + 1);
+        assert_eq!(world.blast_centre((0, 0), me, seed, reach), (0, 0));
+        // And the centre never lands beyond the throw, wherever the frontier is.
+        for frontier in 0..=throw + reach + 1 {
+            let centre = country(frontier).blast_centre((0, 0), me, seed, reach);
+            let thrown = centre.0.abs().max(centre.1.abs());
+            assert!(thrown <= throw, "frontier {frontier}: thrown {thrown} to {centre:?}");
+        }
+    }
+
+    /// **A disc one square short of `DYNAMITE_FOREIGN` is not worth hitting**,
+    /// and the square that makes the fraction is — whether it is somebody
+    /// else's or nobody's, since a blast claims what it reaches and open
+    /// country counts.
+    #[test]
+    fn a_disc_one_square_under_the_foreign_threshold_is_not_worth_hitting() {
+        let me = PlayerId(1);
+        let reach = rule::DYNAMITE_REACH;
+        let disc: Vec<(i32, i32)> = (-reach..=reach)
+            .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+            .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+            .collect();
+        // The fewest squares that make the fraction: the sum `worth_hitting`
+        // does, rounded up.
+        let need =
+            (disc.len() as u64 * rule::DYNAMITE_FOREIGN).div_ceil(crate::sim::OUT_OF) as usize;
+        for foreign in [PlayerId(2), PlayerId::UNOWNED] {
+            let mut world = World::infinite_empty();
+            for &(r, c) in &disc {
+                let mine =
+                    Cell::DEAD.with_player(me).with_level(super::super::cell::bits::MAX_LEVEL);
+                world.set_cell_at(r, c, mine);
+            }
+            for &(r, c) in &disc[..need - 1] {
+                world.set_cell_at(r, c, Cell::DEAD.with_player(foreign));
+            }
+            assert!(
+                !world.worth_hitting((0, 0), me, reach),
+                "{foreign:?}: {} of {} squares qualified",
+                need - 1,
+                disc.len()
+            );
+            let (r, c) = disc[need - 1];
+            world.set_cell_at(r, c, Cell::DEAD.with_player(foreign));
+            assert!(
+                world.worth_hitting((0, 0), me, reach),
+                "{foreign:?}: {need} of {} squares did not qualify",
+                disc.len()
+            );
+        }
+    }
+
     use super::*;
 
     /// The glider is seeded at chunk-local (6, 6) and travels south-east one
