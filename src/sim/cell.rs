@@ -565,6 +565,20 @@ kinds! {
     /// output goes off near the factory, and that a dynamite is a live cell
     /// like any other — kill the pattern and there is nothing to inherit.
     DYNAMITE = 3, inherited: true, ages: Ages::Fuse(super::rule::DYNAMITE_FUSE), corpse: false,
+    /// A cell that makes the ground around it step twice a generation.
+    ///
+    /// The disc of [`super::rule::OVERCLOCK_REACH`] round a live one runs the
+    /// rule again after the whole world has run it once — a pass, not a
+    /// rule, because the disc is not a question eight neighbours can answer;
+    /// see [`super::World::overclock_pass`], and [docs/simulation.md] for what
+    /// its edge looks like.
+    ///
+    /// It does not inherit, for a turret's reason: a birth that copied it
+    /// would let any gun claim the map's clock. And nothing reads its corpse,
+    /// so a dead one is ordinary ground at once — what it does, it does alive.
+    ///
+    /// [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md#overclockers
+    OVERCLOCK = 4, inherited: false, ages: Ages::Never, corpse: false,
 }
 
 /// What each player's factories did in one generation, indexed by the number the
@@ -1041,11 +1055,12 @@ mod tests {
             if !matches!(kind.ages(), Ages::Never) {
                 continue;
             }
-            for placement in [Kind::NORMAL, Kind::FACTORY, Kind::TURRET, Kind::DYNAMITE]
-                .into_iter()
-                .map(|over| {
-                    Cell::DEAD.with_kind(over).with_age(bits::MAX_AGE).with_player(PlayerId(1))
-                })
+            for placement in
+                [Kind::NORMAL, Kind::FACTORY, Kind::TURRET, Kind::DYNAMITE, Kind::OVERCLOCK]
+                    .into_iter()
+                    .map(|over| {
+                        Cell::DEAD.with_kind(over).with_age(bits::MAX_AGE).with_player(PlayerId(1))
+                    })
             {
                 let after = placement.with_kind(kind).with_age(0);
                 assert_eq!(after.age(), 0, "{kind:?} kept an age it can never advance");
