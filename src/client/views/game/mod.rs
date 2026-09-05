@@ -122,12 +122,17 @@ enum Screen {
 /// colour, so nothing about it depends on who else is in the room.
 fn look_at<'a>(
     lobby: &'a crate::net::Lobby,
-    me: PlayerId,
+    session: &Session,
     hues: &'a [f32; PlayerId::COUNT],
     refused: Option<&'a str>,
 ) -> lobby_view::Look<'a> {
     lobby_view::Look {
-        me,
+        // **The seat, not the side.** A lobby is a list of seats -- whose
+        // match it is, which row is yours, which side you sit on -- and in a
+        // team match `Session::player` is the side's number, which is on no
+        // row. Handing it that compared the owner's seat with a side, so
+        // nobody in a team match was ever shown the whistle.
+        me: session.me.unwrap_or_else(|| session.player()),
         refused,
         phase: &lobby.phase,
         victory: lobby.victory,
@@ -2203,7 +2208,7 @@ impl App for GameApp {
                                         &theme,
                                         &look_at(
                                             l,
-                                            me,
+                                            &self.session,
                                             &crate::client::views::hue::table(),
                                             ui.refused_start.as_deref(),
                                         ),
@@ -2263,7 +2268,7 @@ impl App for GameApp {
                                 &theme,
                                 &look_at(
                                     l,
-                                    me,
+                                    &self.session,
                                     &crate::client::views::hue::table(),
                                     ui.refused_start.as_deref(),
                                 ),

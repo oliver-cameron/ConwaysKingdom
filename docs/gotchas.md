@@ -359,3 +359,25 @@ so. What it wanted was a lower **lightness** in the G channel at full coverage,
 which reaches the same place — `shade` builds the colour from lightness and
 composites at coverage, so the two are not interchangeable but they overlap
 across most of the range.
+
+## A pass that reads a disc reads the void
+
+An infinite world holds only the chunks something has touched, and
+`World::cell_at` answers `None` past them. Every pass that walks a region has
+to decide what that means, and two of them had decided differently:
+`turret_wants` reads an absent chunk as dead and unowned, which is what it is,
+and the blast pass took it as a square to skip — so a disc that ran past the
+stored chunks was scrambled on one side and left alone on the other, and
+`worth_hitting` counted the open country beyond the edge for nothing.
+
+*Symptom:* the same stick, on the same seeds, left twenty-odd live cells on one
+square of the map and forty on another, and the two squares differed only in
+whether the disc crossed into a chunk nothing had written yet. It came out of
+`examples/blast` moving its scene from a chunk corner to the middle of one to
+run faster, and it read as the dice being biased near the origin, which sent
+an hour into `sim::seed`.
+
+`unwrap_or(Cell::DEAD)` is the read, and `set_cell_at` loads what it writes
+to. The general shape: **`cell_at` returning `None` is a fact about storage,
+not about the ground**, and a `let Some(..) else { continue }` over it is a
+rule about the edge of the loaded world that nobody wrote down.

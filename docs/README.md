@@ -119,7 +119,7 @@ wasm-pack test --headless --firefox                    # GPU setup, in a browser
 cargo run --example headless -- 400 infinite           # the simulation, no GPU
 cargo run --no-default-features --example balance      # what manufacture pays, per pattern
 cargo run --no-default-features --example territory    # what ground does, in numbers and shapes
-cargo run --no-default-features --example blast        # what a stick turns over, which is what it costs
+cargo run --no-default-features --example blast        # what a stick turns over, and what that is worth against turrets and life
 cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving the socket, over a real one
 cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```

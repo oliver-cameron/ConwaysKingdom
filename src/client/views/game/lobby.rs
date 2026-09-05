@@ -59,6 +59,9 @@ pub enum Did {
 /// which the order of them is the thing most likely to be got wrong — and
 /// every one of these is read by name at the other end anyway.
 pub struct Look<'a> {
+    /// Your own **seat** -- the number on your row -- and never the side you
+    /// place as. Everything in here is compared against seats: whose match it
+    /// is, which row is yours, which side you are on.
     pub me: PlayerId,
     /// Why the last whistle was refused, if it was. Shown beside the button
     /// that produced it — a refusal in the HUD's corner is a refusal nobody

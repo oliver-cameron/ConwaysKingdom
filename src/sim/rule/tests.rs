@@ -6,7 +6,7 @@
 //! underneath it.
 
 use super::*;
-use crate::sim::{bits, Kind, PlayerId};
+use crate::sim::{bits, Chunk, Kind, PlayerId};
 fn neighbours(live: &[usize], player: u8) -> Neighbours {
     let mut n = [Cell::DEAD; 8];
     for &i in live {
@@ -476,4 +476,99 @@ fn wear_outlives_the_mine_and_goes_with_the_corpse() {
     let next = super::next_cell(corpse, &alone, 3);
     assert_eq!(next.age(), 6, "a corpse forgot how worn its square was");
     assert_eq!(next.kind(), Kind::FACTORY, "and stopped being a factory too early");
+}
+
+/// **A fuse burns on the roll**, about [`DYNAMITE_FUSE`] in sixty-four of the
+/// generations it lives through, and one step at a time. The chance is what
+/// scatters four laid in one gesture.
+#[test]
+fn a_fuse_burns_on_a_chance_and_the_chance_is_the_rate() {
+    let stick = Cell::alive(PlayerId(1)).with_kind(Kind::DYNAMITE);
+    // Two neighbours, so it lives to burn.
+    let n = neighbours(&[0, 4], 1);
+    let mut burnt = 0usize;
+    for seed in 0..640 {
+        let out = next_cell(stick, &n, seed);
+        assert!(out.is_alive() && out.kind() == Kind::DYNAMITE, "seed {seed}: not a live dynamite");
+        assert!(out.age() <= 1, "seed {seed}: burnt {} steps in one generation", out.age());
+        burnt += out.age() as usize;
+    }
+    let expected = 640 * DYNAMITE_FUSE as usize / crate::sim::seed::OUT_OF as usize;
+    assert!(burnt.abs_diff(expected) < 40, "{burnt} of 640 burnt, expected about {expected}");
+}
+
+/// **The last step is certain**, so the sprite for "about to go" is on screen
+/// for exactly one generation, always. A weapon with a random warning is a
+/// weapon with no warning.
+#[test]
+fn the_last_step_of_a_fuse_is_certain() {
+    let warned = Cell::alive(PlayerId(1)).with_kind(Kind::DYNAMITE).with_age(DYNAMITE_WARN);
+    let n = neighbours(&[0, 4], 1);
+    for seed in 0..640 {
+        assert_eq!(next_cell(warned, &n, seed).age(), bits::MAX_AGE, "seed {seed}");
+    }
+}
+
+/// **A fuse that has run out is left exactly as it is.** Going off is the
+/// pass's business — see [`crate::sim::World`] — and the rule leaves a full
+/// fuse alive, a dynamite and full for the generation its last sprite shows.
+#[test]
+fn a_fuse_that_has_run_out_is_left_for_the_pass() {
+    let full = Cell::alive(PlayerId(1)).with_kind(Kind::DYNAMITE).with_age(bits::MAX_AGE);
+    let n = neighbours(&[0, 4], 1);
+    for seed in 0..640 {
+        assert_eq!(next_cell(full, &n, seed), full, "seed {seed}");
+    }
+}
+
+/// **Ice stops a fuse**, at every age including the certain step. A pane stops
+/// time over what it covers and that is every rule, which is what makes ice
+/// the counter to a dynamite.
+#[test]
+fn a_fuse_does_not_burn_under_ice() {
+    let n = neighbours(&[0, 4], 1);
+    for age in 0..bits::MAX_AGE {
+        let iced = Cell::alive(PlayerId(1)).with_kind(Kind::DYNAMITE).with_age(age).with_ice(true);
+        for seed in 0..64 {
+            assert_eq!(next_cell(iced, &n, seed), iced, "age {age} seed {seed}");
+        }
+    }
+}
+
+/// **A dead dynamite is ordinary ground at once**, whether it died this
+/// generation or was already lying there: [`Kind::leaves_a_corpse`] says no
+/// for it, so the step sweeps it to `NORMAL` at age nought. An armed corpse
+/// would take away the one answer that needs no ice, which is that a dynamite
+/// has to be kept alive.
+#[test]
+fn a_dead_dynamite_is_ordinary_ground_at_age_nought() {
+    let me = PlayerId(1);
+    let mut chunk = Chunk::dead();
+    // Alone, so it dies this generation; and a corpse, part burnt.
+    chunk[(8, 8)] = Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(5);
+    chunk[(20, 20)] = Cell::DEAD.with_player(me).with_kind(Kind::DYNAMITE).with_age(3);
+    let mut next = Chunk::dead();
+    chunk.step(&mut next);
+    for at in [(8, 8), (20, 20)] {
+        let cell = next[at];
+        assert!(!cell.is_alive(), "{at:?} is alive");
+        assert_eq!(cell.kind(), Kind::NORMAL, "{at:?} is still a dynamite");
+        assert_eq!(cell.age(), 0, "{at:?} kept its fuse");
+    }
+}
+
+/// **A birth from a dynamite arrives with a fresh fuse.** The kind travels
+/// and the age does not, so a glider that picks one up arms itself from
+/// nought rather than arriving about to go off.
+#[test]
+fn a_birth_from_a_dynamite_arrives_with_a_fresh_fuse() {
+    let mut n = [Cell::DEAD; 8];
+    for i in [0, 3, 6] {
+        n[i] = Cell::alive(PlayerId(1)).with_kind(Kind::DYNAMITE).with_age(DYNAMITE_WARN);
+    }
+    for seed in 0..64 {
+        let born = next_cell(Cell::DEAD, &n, seed);
+        assert!(born.is_alive() && born.kind() == Kind::DYNAMITE, "seed {seed}: no dynamite born");
+        assert_eq!(born.age(), 0, "seed {seed}: the fuse travelled with the kind");
+    }
 }

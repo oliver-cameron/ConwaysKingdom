@@ -848,6 +848,12 @@ impl Server {
         Ok(id)
     }
 
+    /// The seat this person holds here, online or not. `None` for somebody
+    /// the room has not met.
+    pub fn seat_of(&self, who: &crate::net::PersonId) -> Option<PlayerId> {
+        self.players.values().find(|p| p.person.as_deref() == Some(who.as_str())).map(|p| p.id)
+    }
+
     /// Whether this person has a seat here to come back to.
     ///
     /// **The same rule [`Self::join_with`] uses, and it has to be**: a gate
