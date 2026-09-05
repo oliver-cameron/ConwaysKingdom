@@ -10,6 +10,7 @@ src/
     spawn.rs  where a player starts, and the ground they are granted
   server/   the authoritative side    server only
     rooms.rs  several worlds behind one address
+    matches.rs  the sides, the whistle, and how a match is decided
   render/   GPU and windowing         client only
   client/   what a player sees        client only
     views/  screens, and the egui they are drawn with
