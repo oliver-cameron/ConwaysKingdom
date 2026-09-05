@@ -14,6 +14,7 @@
 | [simplifying.md](simplifying.md) | How to cut this tree back, and what not to cut |
 | [../design-notes/](../design-notes/) | The working behind the decisions: cell layout, residency, topology, compute |
 | [known-bugs.md](known-bugs.md) | What is wrong and not fixed, with what you would see |
+| [../deploy/](../deploy/) | Bringing a host up: the build, the unit, the tunnel, and what to back up |
 
 ## Running it
 
@@ -35,6 +36,8 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--torus RxC` | a world that wraps, sized in chunks | infinite |
 | `--hide NAME` | a screen clients are asked not to offer; repeatable | none |
 | `--api-token TOKEN` | mount the HTTP API at `/api`, for whoever sends this as a bearer token; `CK_API_TOKEN` in the environment is the same setting | not mounted |
+
+That is the command for a machine somebody is sitting at. A host answering on a domain is one origin behind a Cloudflare tunnel, a systemd unit and a state directory to back up: [deploy/README.md](../deploy/README.md) brings one up from nothing, and [server.md](server.md#deploying) says what the server does differently there — `/healthz`, the cache headers, the token in the environment, and the header it reads to find out who a connection is from.
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.
 
