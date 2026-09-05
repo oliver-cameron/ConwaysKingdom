@@ -27,8 +27,12 @@ enum ClientMessage {
     Subscribe { chunks },                      // send me these; a fetch, not a standing order
     Checkpoint { tick, chunks: Vec<(ChunkId, u64)> },
     Rooms,                                     // what worlds are here?
-    Create { name, shape, victory, teams, private },
+    Create { name, shape, victory, teams, private, laboratory, party: Option<PartyId> },
     JoinTeam { team }, NameTeam { team, name },
+    Hello { name, person: Secret },            // who I am, before any room
+    Close { room },                            // a room I made, once it is empty
+    Invite { who, room },                      // hold this private room's door open for them
+    Parties, MakeParty { name }, InviteToParty { party, who }, JoinParty { party }, LeaveParty { party },
 }
 
 enum ServerMessage {
@@ -37,8 +41,14 @@ enum ServerMessage {
     Step { tick, actions },
     ChunkData { tick, chunk, cells },
     Resync { tick, chunks },
-    Rooms { rooms: Vec<RoomInfo> },            // name, players online, shape
+    Rooms { rooms: Vec<RoomInfo> },            // name, players online, shape, owner
     Purse { value },                           // what you actually have
+    You(Profile),                              // who this server says you are
+    Closed(Result<RoomId, String>),
+    Invited { from: Profile, room, name },
+    NotDone { reason },                        // it would not, and you are where you were
+    Parties { parties: Vec<PartyInfo> },       // yours: people, who is online, its worlds
+    PartyInvite { from: Profile, party, name },
 }
 ```
 
@@ -58,9 +68,17 @@ The condition for applying one is **being caught up**, not the tick the action n
 
 **A shape off the wire is checked before anything is built out of it.** `Create` carries a `WorldKind`, and a torus is allocated whole — so `rows: 0` reached an `assert!` and `100000x100000` overflowed the `i32` multiply that sizes the allocation, either one killing the simulation task and with it every room in the process, from one message on a connection that had not joined anything. `WorldKind::checked` is the single answer to what a torus may be, and every path from a client to `build` goes through it, including `net::sane_world` for a client being told the shape by a server it should trust about the shape and not about the size.
 
-`Rooms`, `Join` and `Create` are the messages a connection with **no seat** may send, and for the same reason: neither names a world. A room is a world, so a player has to see the rooms before picking one, and asking from inside one is asking too late. Everything else from an unjoined connection is dropped rather than answered out of the default room.
+`Rooms`, `Join` and `Create` are the messages a connection with **no seat** may send, and for the same reason: neither names a world. A room is a world, so a player has to see the rooms before picking one, and asking from inside one is asking too late. So are `Profile`, `People`, `Challenge`, `Close` and everything about a party, which are about people rather than worlds. Everything else from an unjoined connection is dropped rather than answered out of the default room.
 
-A `RoomInfo` is enough to choose by and no more — the name, how many players are connected *now*, and whether the world ends. Not the tick and not the chunk count: neither says anything about what it is like to be in there. The order is the server's, so two players looking at the same menu see the same list in the same order.
+A `RoomInfo` is enough to choose by and no more — the name, how many players are connected *now*, whether the world ends, and whose it is by key when a keyed player made it. Not the tick and not the chunk count: neither says anything about what it is like to be in there. The owner is there so a menu can offer to close your own rooms and nobody else's, and it is as public as the fingerprint a lobby already shows beside a name. The order is the server's, so two players looking at the same menu see the same list in the same order.
+
+## Before a seat
+
+**A client on the menu is somebody.** `Join` carries the secret, so a seat has always come with a person; nothing else did, and a connection that had opened the page and joined nothing was nobody to the server — a challenge queued for it sat in the outbox until it joined a room, and nothing filed against a person could be answered to it. `Hello { name, person }` is the meeting a `Join` does with the room left off. It is answered with `You(Profile)`, which is the one reply the **socket reads as well as the client**: it tells the connection which person it carries before a `Welcome` has, and a `Profile` somebody looked up must not be taken for it. Whatever was waiting for that person rides out with the answer rather than with the next room list. The client says it on every connect, before its first `Rooms`, and on a link straight into a room, so a spectator is somebody too.
+
+The name rides with it for the reason it rides on a `Join`: it is the one thing a profile takes a client's word for, and a person met by hello and nowhere else would otherwise have none. This is the pre-seat state the keypair handshake will need — see [planned.md](planned.md#what-doing-it-actually-costs-in-order) — arrived at without a signature: a `Hello` is where the signed presentation goes when there is one.
+
+`NotDone { reason }` is the refusal for anything asked of a person rather than of a world. `Rejected` closes a door on a connection — the client shows the menu — and an invitation refused from inside a room has to leave you in it, the way `NotStarted` leaves you in a lobby.
 
 A chunk is identified by **where it is** — `type ChunkId = Coord`. There is no id to allocate, keep unique, or reconcile after a reconnect; two peers naming the same coordinate mean the same chunk. On a torus, fold with `World::canonical` before comparing.
 
@@ -140,7 +158,7 @@ One byte on the front of every frame — `codec::PROTOCOL` — and it is there b
 
 Postcard writes an enum variant as its **index**, so a message inserted in the middle of `ClientMessage` renumbers every one after it, and a field added to a struct that rides on one changes that message's shape. Both are ordinary changes. What made them dangerous is that the browser client is a generated `pkg/` that **a pull does not update** — see [gotchas.md](gotchas.md) — so a page from last week talks to a new server and the frames decode to *something*. A join half works, a profile comes back empty, and the only sign is a warning in a log nobody is reading.
 
-Now a mismatch is a `Rejected` with the reason on it, which is the one thing here that already reaches the screen. Bump `PROTOCOL` whenever the vocabulary moves. Appending a variant is still the safe change and is why `Keep` is last in `ClientMessage`.
+Now a mismatch is a `Rejected` with the reason on it, which is the one thing here that already reaches the screen. Bump `PROTOCOL` whenever the vocabulary moves. Appending a variant is still the safe change, and everything from `Hello` down in `ClientMessage` and from `You` down in `ServerMessage` was appended; `PROTOCOL` is 2, moved once for all of them, because `Create` and `RoomInfo` each gained a field and a field changes the shape of every frame that carries it.
 
 ## Coming back
 

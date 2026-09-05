@@ -359,6 +359,8 @@ The **evenness is checked at the whistle**, not in the lobby: a match will not s
 
 **A private match shows its code in the lobby**, where somebody waiting for their friends can read it off and send it. It appears once in the menu when the room is made and is gone the moment they leave that screen, which is a minute before they want it.
 
+**A room you made has a Close inside its selection**, beside Join and Watch, and only on your own: the listing says whose each room is by key, and the server checks again. It works once everybody has left — a room will not close with anybody in it, you included — and a refusal lands beside the list, on the line that already says why you are looking at one rather than at a world. A room made with no key is nobody's to close from here.
+
 **A match is started by whoever made it.** A gathering match has a Start on its lobby panel, and only for the player whose room it is — anybody may join a gathering match, and if anybody could also start it the person who set it up could not wait for their friends. Everybody else is told what it is waiting for. Ownership is a `PlayerId` and not the connection that asked, so it survives a refresh: coming back as the same person brings you back to the same number, which is exactly when losing your own match would be most annoying. A match the server made stays the server's and starts at the console. Who blew the whistle is remembered and shown with the result.
 
 **The room list is a selection.** Clicking a room picks it out and its actions appear inside it — Join, and Watch. Beside every row they made the list twice as tall and twice as busy to read, and most of those buttons belonged to rooms nobody was looking at. Arrow keys walk the list and wrap at both ends, enter joins what is picked, and tab moves between the controls on the screen; a focused control wears the accent, like a selected one.
@@ -368,6 +370,12 @@ The **evenness is checked at the whistle**, not in the lobby: a match will not s
 **Going back gives the seat up**, with `ClientMessage::Leave`. It used to send nothing, on the reasoning that the seat is held until another join takes its place — which is true of somebody rejoining the same room and false of everything else: the player stayed marked online, so the room went on counting them, and the way back — which only returns you to a player who is **not** online — found them online and made a new player instead. Leave and come back three times and a room with one person in it said three. Nothing is given up but the seat, so coming back is still coming back to the same player, the same value and the same ground.
 
 On the web the server is shown but not editable: the socket is derived from the page's origin, so a typed address would be a promise the client cannot keep. Natively it is a field, because there is no page to have come from.
+
+### Parties, and asking somebody in
+
+**A party is a group with worlds only it can see or join.** The page is reached from the account page, since a party is a fact about you rather than about a server, and it is the room list's shape: a list of the parties you are in, and inside the one picked out its people — with who is in a room here now — and its worlds, each with a Join that is the same join a room in the list sends. "New world here" is the make-a-world form with its last question, who can reach it, answered by the party; the form says so in the row where the toggles would be and offers the way back to them. Leaving loses the worlds, and the last one out takes the party with them.
+
+**Asking somebody in is not on that page.** An invitation names a person, and the place a person is named is their profile — a row on the people page, a name in a lobby — so that is where the buttons are: one per party you are in that they are not, and one more for the private room you are sitting in, if you are in one with a code. What arrives on their side is the challenge panel's shape with a different sentence on it, and **going in is the join**; not going in is closing the panel, because an offer is not a question and the door stays open on the server either way. A person invited into a room joins it by its id with no code from then on, which is what makes an invitation better than a code — forwarding one achieves nothing.
 
 ## Where you are, in the address bar
 

@@ -19,7 +19,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
 | [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
 | [A minimap](#a-minimap) | Noted | a picture of where the territory is, drawn on the server, not from a client's own screen |
-| [Parties](#parties) | Thought about | a private set of worlds for one group of players |
+| [Parties](#parties) | Built | a private set of worlds for one group of players, keyed by today's person; what is left is signed invitations |
 | [Buttons on a narrow screen](#buttons-on-a-screen-narrower-than-the-hotbar) | Thought about | shrink, wrap, or stop being full width |
 | [Better interfaces](#better-interfaces) | Part built | the home screen is three buttons; the in-game views are still a desktop |
 | [Player profiles](#player-profiles) | Part built | a person rather than a seat; what is left is devices and the name field |
@@ -30,9 +30,9 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted factories](#depleted-factories) | Built | a factory's age is its wear; the numbers have not been through `balance` |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
-| [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
+| [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu, and closed from it; what is left is the whistle and auto-sleep |
 | [Spectating](#spectating) | Built | a room with no seat in it |
-| [Games and matches by code](#games-and-matches-by-code) | Built | private rooms, and what is left of the idea |
+| [Games and matches by code](#games-and-matches-by-code) | Built | private rooms with a door that knows who was let in; what is left is `?code=` |
 | [Ice anywhere, at a price](#ice-anywhere-at-a-price) | Decided | a wall you can build on somebody else's doorstep |
 | [The mercy rule](#the-mercy-rule) | Designed | a player who cannot act becomes a spectator |
 | [Teams](#teams) | Built | one seat, one platform and one purse to a side |
@@ -251,7 +251,7 @@ A reading of the rest of this file, in the order the things depend on each other
 
 **5. ~~[Depleted factories](#depleted-factories).~~** Done — a factory's age is its wear, `Ages::Depletes` on the kind's row and `rule::factory_chance` a parabola over it, so a lineage pays best in its prime and almost nothing when spent. What is left is the numbers: `FACTORY_PRIME`, `FACTORY_BEST` and `FACTORY_SPENT` have not been through `examples/balance.rs`, which does not yet run a pattern long enough to show the fall.
 
-Worth saying what is **closer than this file implies**, and what has since arrived. [A leaderboard](#a-leaderboard) per server is built — `ClientMessage::People` with an empty search is the leaderboard, answered without a seat, and the home screen shows it — because `server::ratings` was already keyed by `PersonId` and saved. Only a leaderboard that spans servers needs item 1. The same reading applies to [parties](#parties): a membership keyed by today's per-server person is buildable on the pattern a challenge already uses, at the price that the rows reset when a person becomes a key, which is the price the leaderboard already pays.
+Worth saying what is **closer than this file implies**, and what has since arrived. [A leaderboard](#a-leaderboard) per server is built — `ClientMessage::People` with an empty search is the leaderboard, answered without a seat, and the home screen shows it — because `server::ratings` was already keyed by `PersonId` and saved. Only a leaderboard that spans servers needs item 1. The same reading was applied to [parties](#parties), which are built: a membership keyed by today's per-server person, on the pattern a challenge already used, at the price that the rows reset when a person becomes a key, which is the price the leaderboard already pays.
 
 And what is not next. [The simulation on the GPU](#the-simulation-on-the-gpu) is a large piece of work whose benefit begins at a world size nobody has run, and the level of detail above removes the one argument that was pulling it forward. [Mobile](#mobile) is a layout problem that wants the interface to stop moving first.
 
@@ -543,9 +543,9 @@ the cell — but the thing to *design* first is the storage, not the shader.
 
 **Built** — see [game.md](game.md#the-menu) for the form and [server.md](server.md#made-by-a-client) for the wire, the cap and the owner. A world, a match or a private game, from the menu, on a phone.
 
-What is left:
+**Closing a room from the client is built** — see [server.md](server.md#closing-one). `ClientMessage::Close` is `Rooms::delete` behind the owner check, the owner is the maker's key and is saved, and the answer for a room somebody is standing in is a refusal that says so: it closes once everybody has left, from the menu, which is where you are once you have.
 
-**No way to close a room from the client.** The owner is recorded in `Rooms::made` and nothing reads it. `Rooms::delete` exists and is at the console; putting it on the wire wants the owner check to be real, and wants an answer for a room somebody is standing in.
+What is left:
 
 **Nothing starts a match but `match dispatch`.** A client can make a match and cannot blow the whistle on it, so a client-made match still needs the operator for its one remaining verb. `ClientMessage::Start` is the same shape as `Create` and wants the same owner check.
 
@@ -566,6 +566,8 @@ What is left: a watcher cannot follow a particular player's ground, which is wha
 **Built** — see [server.md](server.md#made-by-a-client). A private room is kept out of the listing and reached by a six-character code. The code is a **credential and not an identity**: separate from the room's id, which never changes, and separate from its name, so a private game can still be called something its owner chose and a code could be rotated later.
 
 The alphabet leaves out `0`, `o`, `1`, `i` and `l` — 31⁶ is 887 million codes, or 29.7 bits, against 36⁶ and 31.0 bits for the full alphanumeric set. That trade is deliberate: those five characters are the whole of why a code gets mistyped when it is read off one screen and typed into another, and the keyspace is not what protects a private room anyway. With the room cap where it is a random guess finds one in about twenty-eight million, so the defence is that guessing is not worth anybody's time — and if it ever became worth somebody's time the answer is a limit on how fast a connection may guess, not a longer code.
+
+**The id alone no longer admits anybody.** `resolve` takes an id, a name or a code, and took a private room's id from whoever had it — which is everybody who has ever been in the room, since the address bar says it. `Rooms::may_enter` is the door now, and an unlisted room opens by its code, for its maker, and for a key that has been let in: invited, challenged, or once in by the code. See [server.md](server.md#a-private-rooms-door).
 
 What is left: **`?code=` in a URL**, which is the whole point of a code being short. `?room=` already skips the menu and `resolve` already takes a code wherever it takes a name, so this is a query-string parameter and nothing else.
 
@@ -734,13 +736,17 @@ that the last time this existed it was removed for costing "a signature scheme,
 an OpenSSH key parser, a round trip before every join, and a dependency" — three
 of those four come back, and the OpenSSH parser does not.
 
-**3. The handshake gains a round trip, and `Join` stops being first.** Today a
-connection's first word is `Join` and everything else is answered from the seat
-it made. A challenge means the *server* speaks first, so `server::rooms::handle`
-grows a state before "has a seat" — and `Rooms`, `Profile` and `People` are all
-answered without a seat today, which is right and must keep working for a
-connection that has not signed anything. That is the part most likely to go
-subtly wrong.
+**3. The handshake gains a round trip, and `Join` stops being first.** A
+connection's first word used to be `Join` and everything else was answered
+from the seat it made. A challenge means the *server* speaks first, so
+`server::rooms::handle` grows a state before "has a seat" — and `Rooms`,
+`Profile` and `People` are all answered without a seat today, which is right
+and must keep working for a connection that has not signed anything. That is
+the part most likely to go subtly wrong. Half of it exists now:
+`ClientMessage::Hello` presents the secret with no room named and `Caller`
+carries the person before any seat — see
+[networking.md](networking.md#before-a-seat) — so what the handshake adds is a
+nonce in front of that and a signature on it, not a new state.
 
 **4. Then the mechanical part.** `Secret` becomes a signing key; `PersonId::new`
 becomes a fingerprint of the verifying key; `people.jsonl` loses its secret field
@@ -798,13 +804,13 @@ What it must never hold: a private key, or a rating. A rating that travels betwe
 
 **An invite names a key, and that is what makes it better than a code.** A private room today is reached by a six-character code, which is a *bearer* credential: whoever it is forwarded to gets in, and the room cannot tell. An invite is a signed statement — *this key admits that key to this room on this server until this time* — so forwarding it achieves nothing, because the far end signs as somebody else.
 
-The room side is small: `Rooms` gains a set of admitted keys per private room, and `Join` already carries a signature, so the check is a set lookup. Delivery is through the directory when both are connected and a link when they are not — and the link is then not a bearer token, because it names you.
+The room side is built, with the server as the verifier rather than a signature: `Rooms::admitted` is the set of people let into each private room, `ClientMessage::Invite` puts a named person in it and queues an `Invited` the way a challenge is queued, and `may_enter` is the set lookup on `Join` — see [server.md](server.md#invitations). What a signed invitation adds when identity is a key is the "until", delivery through a directory when both are connected, and a link that names you rather than a bearer token.
 
 **Codes stay.** They are good at the thing they are good at, which is reading six characters out loud to somebody sitting next to you, and that case wants no directory and no account.
 
 ### Room ownership should be keyed by person
 
-**Keyed by person now, in memory.** `Rooms::owner` records the maker's `PersonId` at their first join — or their seat, for a client with no key — and `Start` and `EndMatch` answer to the key wherever it is presented from, while the lobby is told the seat that key holds so a client can show the whistle. It used to be the seat alone, which survives a reconnect and is enough for a refresh, but meant a lobby comparing the owner's seat with the viewer's *side* in a team match, and nobody could start one. What it still does not survive is a restart, because ownership is not saved, and it cannot mean anything on a second server until identity is a keypair. Saving it — with the code and the unlisting, which are lost the same way — is what "close the room you opened" and "hand this room to somebody else" both need, and belongs with [parties](#parties).
+**Keyed by person, and saved.** `Rooms::owner` records the maker's `PersonId` at `Create`, now that a `Hello` says who is asking — or their seat at their first join, for a client with no key — and `Start`, `EndMatch` and `Close` answer to the key wherever it is presented from, while the lobby is told the seat that key holds so a client can show the whistle. It used to be the seat alone, which survives a reconnect and is enough for a refresh, but meant a lobby comparing the owner's seat with the viewer's *side* in a team match, and nobody could start one. It survives a restart in `rooms.jsonl` beside the code, the unlisting and who has been let in — see [server.md](server.md#made-by-a-client) — which is what "close the room you opened" needed and now has. What it cannot yet mean anything on is a second server, until identity is a keypair; and "hand this room to somebody else" is still not built.
 
 ### Multi-homing the client
 
@@ -1747,56 +1753,87 @@ to be worth a port.
 
 ## Parties
 
-**Thought about.** What follows is the shape and the three things it collides
-with; the numbers and the screens are not decided.
+**Built** — see [server.md](server.md#parties) for the wire and the tables and
+[game.md](game.md#parties-and-asking-somebody-in) for the page. A party is a
+group of people with a **private set of worlds only they can see or join**.
+Not one room — a set — so it is somewhere a group *lives* rather than a game
+they are currently in: a room is a world and is over when it is over, and a
+party outlives every room in it.
 
-A party is a group of people with a **private set of worlds only they can see
-or join**. Not one room — a set — so it is somewhere a group *lives* rather
-than a game they are currently in. That distinction is the whole entry: a room
-is a world and is over when it is over, and a party outlives every room in it.
+### It is a membership, which is why it is a list of people
 
-### It is a membership, and the server has nothing that holds one
+A private room is reached by a six-character code, which is a **bearer
+credential**: whoever it is forwarded to gets in, and the room cannot tell.
+That is right for reading six characters to somebody sitting next to you and
+wrong for a group that persists — a party somebody left should stop being a
+party they can rejoin, and a code cannot express that. So a party is a set of
+`PersonId`s in `server::parties`, its worlds have no code, and the door into
+one — `Rooms::may_enter`, the same door an invitation opens — asks whether you
+are on the list. Leaving takes the worlds with it, which is the sentence a
+code could never say.
 
-A private room today is reached by a six-character code, which is a **bearer
-credential**: whoever it is forwarded to gets in, and the room cannot tell. That
-is right for reading six characters to somebody sitting next to you and wrong
-for a group that persists — a party somebody left should stop being a party they
-can rejoin, and a code cannot express that.
+### Built on today's person, on purpose
 
-So a party is a **list of people**, which means `PersonId` and not `PlayerId`.
-A seat is per room and comes back on a reconnect; it means nothing across two
-rooms and nothing at all across a restart. `Rooms::owner` has the same problem
-and the same fix — see
-[room ownership](#room-ownership-should-be-keyed-by-person) — and doing the two
-together is most of the work of either.
+This entry said parties wait on [identity being a keypair](#identity-is-a-keypair-and-today-it-is-not),
+because "invite Alice" needs a durable name for Alice. It is built on the
+per-server `PersonId` a secret is exchanged for, on exactly the pattern
+`Rooms::challenges` already used — a `PersonId`-keyed table, saved in a
+`.jsonl` beside the others — and the reasoning is the one
+[what to do next](#what-to-do-next) gives for the leaderboard. A `PersonId` is
+already durable per server: it keys ratings, lockers, seats in every `.ckw`,
+challenges and the outbox. What a key adds is that the *same* person is the
+same on a second server, and there is one server. The price is the doc's own
+cost item 1: when a person becomes a key fingerprint, every row in
+`parties.jsonl` and `rooms.jsonl` resets, or is claimed under whatever
+time-limited migration ratings get. That is one line in a release note, and
+the leaderboard already pays it.
 
-### The room list stops being one answer
+Two things that looked like identity problems were not. Room metadata was
+in-memory, so a private world came back from a restart listed, codeless and
+nobody's, and ownership could not be checked — fixed on its own first, since it
+was a standing wrong on its own. And a client on the menu was nobody, because
+`Caller.person` was set by a `Welcome` and by nothing else — fixed by
+`ClientMessage::Hello`, which is the pre-seat state the keypair handshake will
+need and is where a signed presentation goes when there is one.
 
-`ClientMessage::Rooms` is answered **without a seat**, deliberately: you have to
-see the rooms before you can pick one. A party listing cannot be — it is
-answered differently depending on who is asking, which is the first thing on the
-wire that has been. Two ways to take that:
+### The room list stays one answer
 
-- **A second message.** `Parties` beside `Rooms`, answered only for a
-  connection that has presented a secret. Keeps `Rooms` exactly as it is, which
-  is worth something: it is the one message a client sends before it is anybody.
-- **`Rooms` learns who is asking.** One listing, filtered. Fewer concepts and it
-  makes the seatless answer conditional, which is the property that made it
-  simple.
+`ClientMessage::Rooms` is answered without a seat and is the same list for
+everybody, and stays so. A party listing is the first thing on the wire whose
+answer depends on who is asking, and it is a **second message**, `Parties`,
+rather than a filter on the room list — because it wants different *contents*
+(who is in the party, who is online, which of its worlds are running), and
+because the room list is the one message a client sends before it is anybody.
+A connection that has presented no key is answered an empty list, which is
+true rather than a refusal.
 
-The first is probably right, and the reason is that a party listing wants
-different *contents* rather than a subset — who is in the party, who is online,
-which of its worlds are running — so it is a different answer and not a filtered
-one.
+A member's *online* flag is one server answering its own members about each
+other. The line drawn under [presence](#friends-searching-and-inviting-somebody-in-particular)
+is about a game server reporting to a directory, and nothing here is reported
+anywhere.
 
-### What it must not become
+### What it must not become, and has not
 
-An account system. There are no accounts here on purpose — no email, no
-password, no way to contact anybody — and a party is the first feature that
-would want one, because "invite Alice" needs a durable name for Alice.
-[Identity is a keypair](#identity-is-a-keypair-and-today-it-is-not) is the
-honest way to get that and it is the entry this waits on; anything else invents
-a login.
+An account system. There are still no accounts — no email, no password, no way
+to contact anybody outside the game — and a party is a list of ids a server
+issued, which is the same thing a lobby already shows. Inviting somebody names
+a person the server has met and nobody else.
+
+### What is left
+
+**Signed invitations.** An invitation into a room or a party is a row the
+server keeps and does not expire. When identity is a key it becomes a signed
+statement — *this key admits that key until this time* — and gains the
+"until", delivery through a directory when both are connected, and a link that
+names you rather than a bearer token. The room side is already the set lookup
+that design asked for.
+
+**Re-keying.** The migration in cost item 1 has to cover `parties.jsonl` and
+`rooms.jsonl` as well as `profiles.jsonl`, or say plainly that it does not.
+
+**Handing a room on.** A party's world stays its maker's when the party goes,
+and there is no way to give a room to somebody else; that wants ownership to be
+transferable, which is the same signed statement as an invitation.
 
 ## A minimap
 
