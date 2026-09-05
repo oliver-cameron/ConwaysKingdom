@@ -31,8 +31,8 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::net::codec::{decode_client, encode_server};
 use crate::net::{ClientMessage, RoomId, ServerMessage};
-use crate::server::console;
 use crate::server::rooms::{Caller, ConnectionId, Rooms, Seat};
+use crate::server::{api, console};
 use crate::sim::WorldKind;
 
 /// What a connection sends to the simulation task.
@@ -47,6 +47,12 @@ enum ToSim {
         reply: mpsc::UnboundedSender<ServerMessage>,
     },
     Left(Seat),
+    /// One request from the HTTP API, answered on the same task everything
+    /// else is — see [`api::handle`].
+    Api {
+        req: api::Request,
+        reply: tokio::sync::oneshot::Sender<api::Reply>,
+    },
 }
 
 /// Hands out one id per socket, never reusing one.
@@ -87,6 +93,10 @@ pub struct Config {
     /// The same shape the command line asked for, so `new arena` means what
     /// `--room arena` would have meant.
     pub shape: WorldKind,
+    /// The bearer token the HTTP API answers to, and **without one the routes
+    /// are not mounted** — see [`api`]. An API with no token would be every
+    /// room's lobby open to anybody who could reach the port.
+    pub api_token: Option<String>,
 }
 
 /// Where log lines go while somebody is typing.
@@ -446,6 +456,15 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                                 let _ = sim_broadcast.send(labelled);
                             }
                         }
+                        // And the same again for a request off the API: an
+                        // engine's action is an action, and the room hears
+                        // about it now.
+                        Some(ToSim::Api { req, reply }) => {
+                            let _ = reply.send(api::handle(&mut rooms, req));
+                            for labelled in rooms.take_announcements() {
+                                let _ = sim_broadcast.send(labelled);
+                            }
+                        }
                     }
                 }
             }
@@ -456,12 +475,22 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
         }
     });
 
+    let for_api = to_sim.clone();
     let state = AppState { to_sim, broadcast: broadcast_tx };
     let mut app = Router::new().route("/ws", get(upgrade));
     if let Some(dir) = &config.static_dir {
         app = serve_client(app, dir);
     }
-    let app = app.with_state(state);
+    let mut app = app.with_state(state);
+    // Only with a token, and the routes are absent rather than refusing:
+    // there is nothing to guess at on a server that was not asked for one.
+    if let Some(token) = &config.api_token {
+        app = app.merge(api::http::router(token.clone(), move |req| {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            let _ = for_api.send(ToSim::Api { req, reply });
+            answer
+        }));
+    }
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
 
@@ -488,6 +517,10 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
         None => log::warn!("no --serve DIR, so http://{host}/ will 404; only the socket is up"),
     }
     log::info!("ws://{host}/ws  websocket");
+    match &config.api_token {
+        Some(_) => log::info!("http://{host}/api  the API, to whoever has the token"),
+        None => log::info!("no --api-token, so /api is not mounted"),
+    }
     if config.addr.ip().is_unspecified() {
         // Not "reachable from other machines". Binding to an unspecified
         // address means the socket accepts on every interface; whether a

@@ -822,8 +822,11 @@ impl Seat {
 ///
 /// Two dials rather than an algorithm — how often it acts, and what it will
 /// do — and both are the server's; see `server::bot`. This is the word a
-/// lobby picks and the wire carries.
+/// lobby picks and the wire carries. Spelled in lowercase where it is text —
+/// the API and its JSON — which costs the socket nothing, since postcard
+/// writes an index and never a name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
     Easy,
     #[default]

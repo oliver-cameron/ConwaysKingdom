@@ -12,6 +12,7 @@
 //! replies, so whatever carries the bytes is somebody else's problem;
 //! [`ws`] is what carries them today.
 
+pub mod api;
 pub mod bot;
 pub mod console;
 pub mod lockers;
