@@ -1034,9 +1034,9 @@ impl Server {
         if !self.phase.open_to_newcomers() {
             return Err(format!("\"{}\" is a match already under way", self.room));
         }
-        // Judged before the seat is taken, because a number is never given
-        // back -- see `next_player_id` -- and a refused side would otherwise
-        // cost the room a seat.
+        // Judged before the seat is taken, because a world never gives a
+        // number back -- see `next_player_id` -- and a refused side would
+        // otherwise cost the room a seat.
         if let Some(team) = team {
             if self.sides.is_empty() {
                 return Err("this match has no teams".into());
@@ -1057,6 +1057,13 @@ impl Server {
 
     /// Take a bot out again. Only while the room admits anybody: a seat
     /// leaving a running match is a forfeit, and [`Self::forfeit`] is that.
+    ///
+    /// **In a lobby the number comes back; in a world it is spent.** Nothing
+    /// is laid out before the whistle, so a bot removed while a match gathers
+    /// has its number in no cell and its row goes with it -- kept, fifteen
+    /// presses of add-and-remove from one seat locked the room to everybody
+    /// not already in it. A world grants on arrival, so there the seat is left
+    /// as a person's who walked away, for the reason [`Self::leave`] gives.
     pub fn remove_bot(&mut self, seat: PlayerId) -> Result<(), String> {
         if !self.bots.contains_key(&seat) {
             return Err(format!("seat {} is not a bot", seat.0));
@@ -1065,7 +1072,16 @@ impl Server {
             return Err("bots are settled once a match starts".into());
         }
         self.bots.remove(&seat);
-        self.leave(seat);
+        if self.phase.accepts_actions() {
+            self.leave(seat);
+        } else {
+            self.players.remove(&seat);
+            self.lobby_changed = true;
+            log::info!(
+                "bot {seat:?} left room {} before the whistle; its number is free",
+                self.room
+            );
+        }
         Ok(())
     }
 
@@ -3574,10 +3590,12 @@ mod tests {
         assert!(s.value_of(bot).unwrap() < 200, "the team's purse did not pay");
     }
 
-    /// Removing one frees the seat, and a room with fifteen of them refuses a
-    /// person with the words it refuses a sixteenth person with.
+    /// **In a world a removed bot's seat stays spent**, as a person's who left
+    /// does, because its ground carries its number; so a room with fifteen
+    /// seats taken refuses a person with the words it refuses a sixteenth
+    /// person with, and one removed bot, me and thirteen more is fifteen.
     #[test]
-    fn removing_a_bot_frees_its_seat_and_a_room_of_bots_is_full() {
+    fn a_removed_bots_seat_stays_spent_in_a_world_and_a_room_of_bots_is_full() {
         let mut s = Server::new(World::infinite_empty());
         let bot = s.add_bot("bot", Level::Normal, Driver::Book, None).unwrap();
         assert!(s.remove_bot(PlayerId(9)).is_err(), "nobody is in seat 9");
@@ -3596,6 +3614,31 @@ mod tests {
         assert!(why.contains("full"), "{why}");
         let why = s.add_bot("one more", Level::Easy, Driver::Book, None).unwrap_err();
         assert!(why.contains("full"), "{why}");
+    }
+
+    /// **A bot taken out of a lobby gives its number back.** Nothing is laid
+    /// out before the whistle, so the number is in no cell -- and a seat that
+    /// stayed spent let anybody seated lock a room to newcomers with fifteen
+    /// presses of add-and-remove from one connection.
+    #[test]
+    fn a_bot_removed_while_gathering_gives_its_number_back() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        s.make_teams(2).unwrap();
+        let me = s.join_with("me", None).unwrap();
+        let bot = s.add_bot("bot", Level::Normal, Driver::Book, Some(PlayerId(2))).unwrap();
+        s.remove_bot(bot).unwrap();
+        assert!(!s.is_bot(bot));
+        assert!(s.players().all(|p| p.id != bot), "the row stayed behind");
+        for _ in 0..2 * PlayerId::MAX as usize {
+            let again = s.add_bot("bot", Level::Normal, Driver::Book, Some(PlayerId(2))).unwrap();
+            assert_eq!(again, bot, "the number was not given back");
+            s.remove_bot(again).unwrap();
+        }
+        assert_eq!(s.player_count(), 3, "two sides and me");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        assert_eq!(lobby.players.iter().map(|p| p.id).collect::<Vec<_>>(), [me]);
+        assert_eq!(s.join_with("late", None).unwrap(), bot, "the seat went to nobody");
     }
 
     /// **Never before the whistle and never after the end.** A gathering
