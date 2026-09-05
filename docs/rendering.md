@@ -35,14 +35,6 @@ At 16×16 chunks a 4K screen at one pixel per cell wants 160 layers. The floor o
 
 `Queue::write_texture` is exempt from the 256-byte `bytes_per_row` alignment that `copy_buffer_to_texture` imposes, which is what makes a 64-byte chunk row a legal upload.
 
-## The halo
-
-An overclocker's disc runs the rule twice a generation and mostly does not look it. The shapes worth building are period one or two, and stepping a period-two pattern twice lands it on the phase it started from — so the fastest ground on the board reads as the stillest, which is what ice looks like. Two mechanics with one appearance is worse than either.
-
-So the edge of the disc is drawn, faintly, in its owner's colour, as the cells on it: everything on this board is a square on a grid and a smooth circle over it belongs to a different game — the same argument [a blast's fire](#a-blast) is made of. The **union per player**, not a ring per machine, so two overclockers side by side are one patch of fast ground with one border rather than two circles with a line drawn through ground that has no line in it.
-
-It is asked of `World::overclockers`, which is the list the pass itself acts on, so the mark and the rule cannot come apart; and it is skipped below two points a cell, where an edge is a stain. What it does not draw is the interior, which is still ordinary ground with ordinary cells on it.
-
 ## A wrapping world is folded, not tiled
 
 Every chunk position the viewport covers is asked which chunk actually fills it. On an infinite world that is the identity; on a torus it is many-to-one, so **the world repeats for as far as anyone can pan** and the work is proportional to the screen rather than to the world.
@@ -131,6 +123,8 @@ A row is what a **full-saturation texel at lightness 0.62** draws as — `hue::L
 Asking for more chroma than sRGB can show is the *normal* case: a row's chroma fits at 0.62 and most hues leave the gamut somewhere above or below it. Clamping fixes the range but bends hue, because red clips before blue, so two players drift towards each other — which defeats the point of choosing distinct colours. The chroma is **bisected down until it fits**, eight steps, keeping hue and lightness exactly.
 
 `client::views::hue::shade_at` reproduces the shader's arithmetic on the CPU, bisection included, so a swatch and the board cannot disagree. It sits beside the table it reads, rather than in the HUD, so that a screen wanting a swatch does not have to depend on the HUD to get one.
+
+**Hue is counted first.** The table was first chosen under a plain OKLab distance, which counts lightness, chroma and hue alike — and that reading put two olives four degrees of hue apart and called them far apart because one was darker than the other. On a board they were one player's ground in two lights. `hue::apart` halves lightness and chroma and doubles the hue arc, and the table was re-chosen under it: the worst pair went from 0.097 to 0.192 read that way. What falls out is two tiers, half the players bright and half dark, with the hues spread inside each — so where a hue family is used twice, the two are a lightness apart, which is dark green against bright green rather than olive against olive. The hue term is scaled by chroma, so two greys are not held to be far apart for pointing in different directions.
 
 ## The camera
 

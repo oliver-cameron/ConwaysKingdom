@@ -31,39 +31,7 @@ pub struct Marks {
     pub selection: Option<Selection>,
     /// **Fireballs**, in screen points, newest last — see [`Fireball`].
     pub blasts: Vec<Fireball>,
-    /// **Where a generation happens twice**, one per player — see [`Halo`].
-    pub halos: Vec<Halo>,
 }
-
-/// The edge of the ground an overclocker runs the rule twice over.
-///
-/// **Drawn because nothing else says it is there.** A disc runs at double rate
-/// and the cells in it mostly do not look it: the shapes worth building are
-/// period one or two, and stepping a period-two pattern twice lands it on the
-/// phase it started from, so the fastest ground on the board reads as the
-/// stillest. The edge is the one honest mark — it says where the rule changes,
-/// which is the thing a player has to know and cannot infer.
-///
-/// **The edge of the union, per player, not a ring per machine.** Two
-/// overclockers side by side make one patch of fast ground with one border;
-/// drawing a circle round each would say there are two regions and draw a line
-/// through the middle of ground that has no line in it.
-///
-/// Cells rather than a curve, for the reason [`Fireball`] gives: everything on
-/// this board is a square on a grid.
-pub struct Halo {
-    /// One rectangle per cell on the border, already in screen points.
-    pub tiles: Vec<egui::Rect>,
-    /// Whose clock it is. A halo is drawn in its owner's colour and not in the
-    /// viewer's, because whose ground runs fast is the whole of what it says.
-    pub tint: egui::Color32,
-}
-
-/// How strongly a halo's edge is drawn, out of 255.
-///
-/// Faint on purpose: it is a boundary on ground that is still ground, and the
-/// cells inside it are what somebody is looking at.
-const HALO_ALPHA: u8 = 90;
 
 /// A detonation, part way through burning out.
 ///
@@ -119,25 +87,12 @@ pub struct Selection {
 }
 
 pub fn show(ctx: &egui::Context, theme: &Theme, marks: &Marks) {
-    if marks.hover.is_none()
-        && marks.selection.is_none()
-        && marks.blasts.is_empty()
-        && marks.halos.is_empty()
-    {
+    if marks.hover.is_none() && marks.selection.is_none() && marks.blasts.is_empty() {
         return;
     }
     let p = theme.palette;
     let painter = ctx
         .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("world-marks")));
-
-    // Under everything, and under the fire especially: a halo is a standing
-    // fact about the ground and a blast is something that just happened to it.
-    for halo in &marks.halos {
-        let edge = halo.tint.gamma_multiply(HALO_ALPHA as f32 / 255.0);
-        for tile in &halo.tiles {
-            painter.rect_filled(*tile, 0.0, edge);
-        }
-    }
 
     // Under the pointer's marks, because what you are about to do matters more
     // than what just happened.
@@ -265,37 +220,50 @@ pub fn heat(age: f32, out: f32, noise: u64) -> Option<egui::Color32> {
     let left = ((1.0 - age) - gone * 0.55).clamp(0.0, 1.0);
     let hot = (left * 1.4).clamp(0.0, 1.0);
 
-    // Red at the edges and through the cooling, orange and pale in the middle
-    // while it is young. Two colours and a blend, because a fire drawn in more
-    // than that at this size is a rainbow.
-    let (r, g, b) = if hot > 0.55 {
-        blend(ORANGE, PALE, (hot - 0.55) / 0.45)
-    } else {
-        blend(RED, ORANGE, hot / 0.55)
-    };
+    // **A step off the ramp, not a point along it.** A tile takes one of five
+    // colours and nothing between them, so what is drawn is a fire made of
+    // squares of flat colour rather than a smooth disc of light that happens
+    // to be drawn on squares — the same argument that made the fire cells in
+    // the first place, carried into what a cell is coloured.
+    let step = (hot * FIRE.len() as f32) as usize;
+    // And the step is dithered by the cell's own number, so a band's edge is a
+    // scatter of both colours rather than a contour line. Two cells of the
+    // same heat take different colours and keep them, which is what makes a
+    // grid of five colours read as fire rather than as five rings.
+    let dither = (noise >> 3) % 3;
+    let step = (step + dither as usize).saturating_sub(1).min(FIRE.len() - 1);
+    let (r, g, b) = FIRE[step];
 
-    // Translucent throughout, so the ground it turned over reads through it —
-    // the disc is *why* the fire is there and covering it would hide the thing
-    // being announced.
-    let alpha = (40.0 + 150.0 * left) * (0.75 + (noise % 8) as f32 / 32.0);
-    Some(egui::Color32::from_rgba_unmultiplied(r, g, b, alpha.min(200.0) as u8))
+    // **One opacity, whatever a tile is doing.** A fire that also faded would
+    // be saying the same thing twice, once in colour and once in alpha, and
+    // the second is the one that turns flat colour back into a gradient. It
+    // goes out by cells going out, which is what `None` above is for.
+    Some(egui::Color32::from_rgba_unmultiplied(r, g, b, FIRE_ALPHA))
 }
 
-/// The three temperatures a tile passes through, as plain sRGB.
+/// A temperature, as plain sRGB.
 ///
 /// Not from the theme: a fire is not a piece of interface and does not take the
 /// palette's accent. The player's own colour is already what the ground it
 /// turned over is drawn in.
 type Heat = (u8, u8, u8);
-const PALE: Heat = (255, 226, 150);
-const ORANGE: Heat = (233, 126, 38);
-const RED: Heat = (168, 38, 24);
 
-fn blend(from: Heat, to: Heat, t: f32) -> Heat {
-    let t = t.clamp(0.0, 1.0);
-    let one = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
-    (one(from.0, to.0), one(from.1, to.1), one(from.2, to.2))
-}
+/// **The whole fire, coolest first.** Five and no blending between them, so a
+/// tile is one of five colours and the disc is a scatter of them.
+const FIRE: [Heat; 5] = [
+    (92, 26, 20),    // ember
+    (168, 38, 24),   // red
+    (233, 126, 38),  // orange
+    (250, 186, 66),  // amber
+    (255, 232, 168), // pale
+];
+
+/// How opaque every burning tile is, out of 255.
+///
+/// One number for all of them: the ground under a blast is what the blast is
+/// about, so the fire has to be seen through, and a per-tile alpha is a second
+/// gradient smuggled in beside the palette.
+const FIRE_ALPHA: u8 = 165;
 
 #[cfg(test)]
 mod tests {
@@ -356,6 +324,33 @@ mod tests {
     #[test]
     fn one_cell_burns_the_same_way_twice() {
         assert_eq!(heat(0.3, 0.4, 12345), heat(0.3, 0.4, 12345));
-        assert_ne!(heat(0.3, 0.4, 1), heat(0.3, 0.4, 20), "every tile is the same fire");
+    }
+
+    /// **One heat is more than one colour**, which is what makes five flat
+    /// colours read as fire: the cell's own number decides which side of a
+    /// band it falls, so the join between two of them is a scatter rather
+    /// than a contour. Two given tiles may match — with five colours most
+    /// pairs do — so what is asserted is the spread, not a difference.
+    #[test]
+    fn tiles_at_one_heat_are_dithered_across_the_ramp() {
+        let seen: std::collections::HashSet<_> =
+            (0..256u64).filter_map(|noise| heat(0.3, 0.4, noise)).collect();
+        assert!(seen.len() > 1, "every tile at one heat took the same colour");
+        assert!(seen.len() <= FIRE.len(), "a tile took a colour that is not on the ramp");
+    }
+
+    /// **One opacity, whatever a tile is doing.** A second gradient hidden in
+    /// the alpha is what the flat ramp exists to be rid of.
+    #[test]
+    fn every_burning_tile_is_equally_opaque() {
+        for age in [0.0, 0.3, 0.6, 0.9] {
+            for out in [0.0, 0.4, 0.8] {
+                for noise in [0, 7, 91, 4242] {
+                    if let Some(c) = heat(age, out, noise) {
+                        assert_eq!(c.a(), FIRE_ALPHA, "a tile at {age}/{out} had its own alpha");
+                    }
+                }
+            }
+        }
     }
 }

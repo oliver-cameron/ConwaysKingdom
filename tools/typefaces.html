@@ -518,8 +518,7 @@
   }
 
   /* The fifteen, straight out of client::views::hue::PALETTE, as player_colour draws them. */
-  const HUES = ["#005798","#6c00c5","#f03700","#00663a","#ffa28e","#0099a5","#7777ff",
-                "#f400bf","#7ac6ff","#990065","#00dea9","#998500","#824100","#d1c100","#e89bff"];
+  const HUES = ["#b1b6ff","#04dcbf","#a30006","#356400","#00e44a","#7200bd","#ffa65c","#cbc402","#97006c","#006268","#724d00","#ff9daf","#4cceff","#f88fff","#004db5"];
   const FLAGGED = new Set([5, 15, 4, 13]);
   const hues = document.getElementById("hues");
   HUES.forEach((hex, i) => {
@@ -532,11 +531,11 @@
 
   /* Straight-line distance in OKLab, from the table. */
   const PAIRS = [
-    [5, 15, 0.169, "salmon against lilac — the closest anything gets"],
-    [4, 13, 0.170, "deep green against brown, the two dark earths"],
-    [9, 11, 0.170, "sky against mint, both pale"],
-    [9, 15, 0.170, "sky against lilac"],
-    [5, 14, 0.171, "salmon against yellow"],
+    [7, 11, 0.192, "light orange against a dark brown \u2014 the closest anything gets"],
+    [10, 13, 0.198, "a dark teal against a bright sky"],
+    [2, 10, 0.198, "bright teal against dark teal"],
+    [4, 5, 0.199, "dark green against bright green, twelve degrees of hue apart"],
+    [1, 15, 0.206, "a pale periwinkle against a deep blue"],
   ];
   const pairs = document.getElementById("pairs");
   PAIRS.forEach(([a, b, d, note]) => {

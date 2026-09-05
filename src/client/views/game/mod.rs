@@ -145,18 +145,6 @@ fn look_at<'a>(
     }
 }
 
-/// The cells of a patch that have something else beside them.
-///
-/// **Orthogonally**, so a patch touching another only at a corner keeps its own
-/// edge rather than reading as one region with a pinhole in it. The union is
-/// taken before this, which is what makes two overlapping discs one shape:
-/// nothing inside either of them has a neighbour outside both.
-fn border(patch: &std::collections::HashSet<(i32, i32)>) -> impl Iterator<Item = (i32, i32)> + '_ {
-    patch.iter().copied().filter(|&(r, c)| {
-        [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dr, dc)| !patch.contains(&(r + dr, c + dc)))
-    })
-}
-
 /// A finished gesture waiting to be resolved to cells. Input callbacks are not
 /// handed the `GpuState`, and the screen-to-world mapping needs the viewport,
 /// so it waits for the next `update` rather than guessing here.
@@ -1377,52 +1365,6 @@ impl GameApp {
             .collect()
     }
 
-    /// The edge of every player's fast ground, in screen points.
-    ///
-    /// Asked of [`World::overclockers`], which is the list the pass itself
-    /// acts on, so the mark and the rule cannot come apart.
-    ///
-    /// Skipped at the same zoom the fire is, and for the same reason: an edge
-    /// made of two-point squares is a stain rather than a boundary. Machines
-    /// whose disc cannot reach the screen are dropped before any of this, so a
-    /// board full of them costs what is on it rather than what is on the map.
-    fn halos(&self) -> Vec<overlay::Halo> {
-        /// Below this a cell is not a cell and an edge is a smear.
-        const SMALLEST: f32 = 2.0;
-        if self.camera.zoom < SMALLEST {
-            return Vec::new();
-        }
-        let reach = crate::sim::OVERCLOCK_REACH;
-        let seen = self.camera.visible_cells(reach);
-        let mut ground: std::collections::BTreeMap<
-            PlayerId,
-            std::collections::HashSet<(i32, i32)>,
-        > = std::collections::BTreeMap::new();
-        for (at, owner) in self.world.overclockers() {
-            if at.0 < seen.0 .0 || at.0 > seen.1 .0 || at.1 < seen.0 .1 || at.1 > seen.1 .1 {
-                continue;
-            }
-            let patch = ground.entry(owner).or_default();
-            for dr in -reach..=reach {
-                for dc in -reach..=reach {
-                    if dr * dr + dc * dc <= reach * reach {
-                        patch.insert((at.0 + dr, at.1 + dc));
-                    }
-                }
-            }
-        }
-        ground
-            .into_iter()
-            .map(|(owner, patch)| {
-                let tiles =
-                    border(&patch).map(|(r, c)| self.camera.cell_rect((r, c), (r, c))).collect();
-                let (r, g, b) = crate::client::views::hue::player_colour(owner);
-                overlay::Halo { tiles, tint: egui::Color32::from_rgb(r, g, b) }
-            })
-            .filter(|h| !h.tiles.is_empty())
-            .collect()
-    }
-
     /// **Act on what the session could not.**
     ///
     /// The other half of [`Effect`]: everything here needs a screen, a camera
@@ -2159,7 +2101,6 @@ impl App for GameApp {
             hover: self.hover_mark(status.pointer_on_ui),
             selection: self.selection_mark(),
             blasts: self.fireballs(),
-            halos: self.halos(),
         };
         let mut picked = None;
         let mut told_rules = rules::Did::default();
@@ -3356,37 +3297,5 @@ mod tests {
         assert_eq!(centroid(&one), (4.0, 6.0));
         assert_eq!(pinch_span(&one), None);
         assert_eq!(pinch_span(&[]), None);
-    }
-
-    /// **Two discs that overlap are one shape with one edge.** A halo says
-    /// where the rule changes, so a line through the middle of ground whose
-    /// rule does not change would be a line that means nothing.
-    #[test]
-    fn a_border_runs_round_a_union_and_not_through_it() {
-        let square = |at: (i32, i32), r: i32| {
-            (-r..=r)
-                .flat_map(move |dr| (-r..=r).map(move |dc| (at.0 + dr, at.1 + dc)))
-                .collect::<std::collections::HashSet<_>>()
-        };
-        let one = square((0, 0), 2);
-        let edge: std::collections::HashSet<_> = border(&one).collect();
-        assert_eq!(edge.len(), 16, "a five-by-five has sixteen cells on its edge");
-        assert!(!edge.contains(&(0, 0)), "the middle is not on the edge");
-
-        // Side by side and touching: nothing between them is a border.
-        let two: std::collections::HashSet<_> = one.union(&square((0, 5), 2)).copied().collect();
-        let edge: std::collections::HashSet<_> = border(&two).collect();
-        assert!(!edge.contains(&(0, 2)), "the seam between two discs is not an edge");
-        assert!(!edge.contains(&(0, 3)), "nor the other side of it");
-        assert!(edge.contains(&(0, -2)) && edge.contains(&(0, 7)), "the outside still is");
-
-        // A corner touch is not a join: each keeps its own edge, because a
-        // border is drawn where a neighbour is missing and a diagonal
-        // neighbour was never one.
-        let corner: std::collections::HashSet<_> =
-            square((0, 0), 1).union(&square((3, 3), 1)).copied().collect();
-        let edge: std::collections::HashSet<_> = border(&corner).collect();
-        assert!(edge.contains(&(1, 1)), "the near corner of the first is still its edge");
-        assert!(edge.contains(&(2, 2)), "and the near corner of the second is still its own");
     }
 }
