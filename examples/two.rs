@@ -43,12 +43,14 @@ impl Peer {
         for _ in 0..200 {
             for msg in link.drain() {
                 if let ServerMessage::Welcome { you, tick, spawn, room, world: shape, .. } = msg {
-                    // Built to the shape the server named, as the client does.
-                    // Assuming a plane against a wrapping server folds no
-                    // coordinates, so the two peers would disagree about which
-                    // chunk is which and this would report a divergence that
-                    // was really a misunderstanding.
-                    let mut world = shape.build();
+                    // Built as the client builds it: to the shape the server
+                    // named, and seeded from the room. Either left out is a
+                    // divergence that is really a misunderstanding -- a plane
+                    // against a torus folds no coordinates, and the wrong
+                    // seed rolls different dice at every contested birth and
+                    // every adjustment of the ground, which this reported as
+                    // the server correcting both peers at every checkpoint.
+                    let mut world = conwayskingdom::net::sane_world(shape, &room);
                     world.set_generation(tick);
                     println!(
                         "{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}"
