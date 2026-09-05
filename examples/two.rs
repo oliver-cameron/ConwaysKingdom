@@ -15,7 +15,7 @@
 
 use conwayskingdom::net::link::Link;
 use conwayskingdom::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
-use conwayskingdom::sim::{Chunk, PlayerId, World};
+use conwayskingdom::sim::{Chunk, PlayerId, World, CHUNK_N};
 use std::time::Duration;
 
 /// A client, minus everything that draws.
@@ -85,7 +85,11 @@ impl Peer {
                     if !actions.is_empty() {
                         self.heard += actions.len();
                     }
-                    for s in &actions {
+                    // **Not our own**, which were applied when they were made:
+                    // a paint laid again a generation late is a different
+                    // paint, and that is the gotcha this example exists to
+                    // catch rather than commit.
+                    for s in actions.iter().filter(|s| s.seat != self.me) {
                         conwayskingdom::net::apply(&mut self.world, s);
                     }
                     while self.world.generation < tick {
@@ -111,7 +115,7 @@ impl Peer {
                 }
                 ServerMessage::Resync { tick, chunks } => {
                     println!(
-                        "{}: server says {} chunks are wrong at {tick}; refetching",
+                        "{}: server says {} chunks are wrong at {tick}: {chunks:?}; refetching",
                         self.name,
                         chunks.len()
                     );
@@ -136,11 +140,15 @@ fn main() {
     assert_ne!(a.me, b.me);
 
     // Both look at both grants, so neither is missing ground the other has.
+    // **In chunks the world's size**: this divided by sixteen after a chunk
+    // had become sixty-four cells wide, which held the right ring only while
+    // alice sat at the origin and so hid it.
+    let n = CHUNK_N as i32;
     let chunks: Vec<(i32, i32)> = [a.spawn, b.spawn]
         .iter()
         .flat_map(|&(r, c)| {
             (-1..=1).flat_map(move |dr| {
-                (-1..=1).map(move |dc| (r.div_euclid(16) + dr, c.div_euclid(16) + dc))
+                (-1..=1).map(move |dc| (r.div_euclid(n) + dr, c.div_euclid(n) + dc))
             })
         })
         .collect();
