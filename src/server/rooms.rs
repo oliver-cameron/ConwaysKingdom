@@ -1983,6 +1983,31 @@ mod tests {
         assert!(rooms.make(1, "c", WorldKind::Infinite, None, None, false, false).is_ok());
     }
 
+    /// **A bot is not somebody standing in a room.** Deleting is refused
+    /// while anybody is in it, because it cannot be taken back; a bot goes
+    /// with the room, and a person does not.
+    #[test]
+    fn a_room_of_bots_can_be_deleted_and_a_room_with_a_person_in_it_cannot() {
+        use crate::net::Level;
+        use crate::server::bot::Driver;
+        let mut rooms =
+            Rooms::open(temp_dir("bots-in"), &["hall".into()], WorldKind::Infinite, true).unwrap();
+        let timer = Victory::Timer { generations: 10 };
+
+        let dawn = rooms.new_match("dawn", WorldKind::Infinite, timer).unwrap();
+        rooms.get_mut(&dawn).unwrap().add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        rooms.delete("dawn").unwrap();
+        assert!(rooms.get(&dawn).is_none(), "a room holding only a bot was kept");
+
+        let dusk = rooms.new_match("dusk", WorldKind::Infinite, timer).unwrap();
+        let room = rooms.get_mut(&dusk).unwrap();
+        room.add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        room.join_with("me", None).unwrap();
+        let why = rooms.delete("dusk").unwrap_err();
+        assert!(why.starts_with("1 still in"), "the bot was counted, or the person was not: {why}");
+        assert!(rooms.get(&dusk).is_some());
+    }
+
     /// A private room is reachable by its code and mentioned nowhere else —
     /// including in the refusal a mistyped name gets back, which used to name
     /// every room on the server and would have handed out every code.
