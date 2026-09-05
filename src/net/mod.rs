@@ -1128,6 +1128,17 @@ pub enum ClientMessage {
     /// included, so it is something you do after everybody has left. Refused
     /// unless the key presented is the one that made it.
     Close { room: RoomId },
+    /// **Bring somebody in by name**, to the private room this connection is
+    /// sitting in.
+    ///
+    /// Anybody seated there may. What it changes on the room is that the
+    /// person named may join it by its id with no code, from now on — an
+    /// invitation names a person where a code names nobody, which is the
+    /// whole of what it adds. Delivered as [`ServerMessage::Invited`] the way
+    /// a challenge is, the next time they are heard from. It does not expire;
+    /// what would carry an "until" is a signed invitation, which is not
+    /// built.
+    Invite { who: PersonId, room: RoomId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1349,6 +1360,23 @@ pub enum ServerMessage {
     /// The answer to [`ClientMessage::Close`]: the room that is gone, or why
     /// it is not. A refusal leaves you where you were, with a reason to read.
     Closed(Result<RoomId, String>),
+    /// **Somebody holds a door open for you**: a private room you may now
+    /// join by its id. Who, so the panel can show a face rather than a
+    /// fingerprint; the name, because a room you were never listed has no name
+    /// on your screen yet.
+    Invited {
+        from: Profile,
+        room: RoomId,
+        name: RoomName,
+    },
+    /// **It would not do that, and here is why.** For anything asked of a
+    /// person rather than of a world — an invitation, a party — where
+    /// [`Self::Rejected`] would be wrong: that one closes a door on a
+    /// connection, and this leaves you exactly where you were with a sentence
+    /// to read, the way [`Self::NotStarted`] does for a whistle.
+    NotDone {
+        reason: String,
+    },
 }
 
 /// Screens this server asks a client not to offer.

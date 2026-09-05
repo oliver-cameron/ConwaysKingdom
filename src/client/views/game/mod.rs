@@ -1404,6 +1404,13 @@ impl GameApp {
                     self.notice = Some(words::challenge::answered(&who.label(), room.is_some()));
                 }
             }
+            // A door held open, said out loud for the reason a challenge is.
+            Effect::Invited => {
+                if let Some((from, _, name)) = &self.session.invited {
+                    self.say(words::invite::asked(&from.label(), name));
+                }
+            }
+            Effect::NotDone(why) => self.say(why),
             // **The server's copy is the copy, except when there isn't one.**
             // A locker with anything in it replaces what this client was
             // carrying; an empty one from a server that has met us is the
@@ -2126,7 +2133,18 @@ impl App for GameApp {
         let challenge = self.session.challenge.clone();
         let mut challenging = challenge.is_some();
         let mut answered_challenge = social::challenge::Did::Nothing;
+        let invited = self.session.invited.clone();
+        let mut inviting = invited.is_some();
+        let mut answered_invite = social::invite::Did::Nothing;
         let mut asked_for_a_game = profile::Did::Nothing;
+        // **The door this client could hold open**: the private room it is
+        // sitting in, by name. A code is what makes a room private and the
+        // lobby carries it, so a room with one is a room somebody can be
+        // invited into; a watcher holds no door, being in no seat.
+        let inviting_into = (!self.session.watching
+            && self.session.lobby.as_ref().is_some_and(|l| l.code.is_some()))
+        .then(|| self.session.room_name.as_deref())
+        .flatten();
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
         // slow server and a stranger look like the same thing.
@@ -2162,6 +2180,7 @@ impl App for GameApp {
                     // every game this client has played anywhere.
                     yours: (self.session.profile.as_ref().map(|p| &p.who) == Some(who))
                         .then_some(&self.record),
+                    into: inviting_into,
                     it,
                 },
             }
@@ -2354,6 +2373,14 @@ impl App for GameApp {
                 answered_challenge = shown.did;
                 rects.extend(shown.rect);
             }
+            // And a door held open, which is the same shape with a different
+            // sentence on it.
+            if let Some((from, _, name)) = &invited {
+                let terms = words::invite::into_room(name);
+                let shown = social::invite::show(ctx, &theme, from, &terms, &mut inviting);
+                answered_invite = shown.did;
+                rects.extend(shown.rect);
+            }
             rects
         });
 
@@ -2361,10 +2388,35 @@ impl App for GameApp {
         // you want to play somebody: the panel is opened from a lobby row, a
         // standings bar or a list of who plays here, and all three are places
         // you got to by wondering about a person.
-        if let profile::Did::Challenge(who) = asked_for_a_game {
-            self.session.challenge(who);
-            self.ui.showing_profile = None;
-            self.notice = Some(w().challenge.asked_them.into());
+        match asked_for_a_game {
+            profile::Did::Nothing => {}
+            profile::Did::Challenge(who) => {
+                self.session.challenge(who);
+                self.ui.showing_profile = None;
+                self.notice = Some(w().challenge.asked_them.into());
+            }
+            // Into the room this client is in, which the session knows.
+            profile::Did::Invite(who) => {
+                self.session.invite(who);
+                self.ui.showing_profile = None;
+                self.notice = Some(w().invite.asked_them.into());
+            }
+        }
+
+        // **Going in is the join, and not going in is nothing.** An
+        // invitation is an offer rather than a question, so a decline is
+        // shutting the panel; the door stays open on the server either way.
+        if let Some((_, room, _)) = invited {
+            match answered_invite {
+                social::invite::Did::Nothing if inviting => {}
+                social::invite::Did::Nothing | social::invite::Did::Decline => {
+                    self.session.invited = None;
+                }
+                social::invite::Did::Accept => {
+                    self.session.invited = None;
+                    self.chose(menu::Chose::Join(room));
+                }
+            }
         }
 
         // The two answers, and both are sent: a decline reaches the person who

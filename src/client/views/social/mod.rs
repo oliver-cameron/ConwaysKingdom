@@ -41,5 +41,6 @@
 pub mod account;
 pub mod challenge;
 pub mod face;
+pub mod invite;
 pub mod people;
 pub mod profile;

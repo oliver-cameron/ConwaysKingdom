@@ -113,6 +113,11 @@ pub enum Effect {
     /// **Somebody wants a game.** Into [`Session::challenge`], for whatever
     /// puts an invitation on screen.
     Challenged,
+    /// **Somebody holds a door open** — into [`Session::invited`].
+    Invited,
+    /// The server would not do what was asked of it, and this is why. Left
+    /// where the player is looking rather than sending them to the menu.
+    NotDone(String),
     /// They said yes or no — [`Session::answered`].
     Answered,
     /// A list of who else plays here arrived, into whatever asked for it.
@@ -283,6 +288,10 @@ pub struct Session {
     /// `views::game::overlay`, which owns how many generations one lasts.
     pub blasts: Vec<(crate::sim::Blast, u64)>,
     pub challenge: Option<(crate::net::Profile, RoomId)>,
+    /// **An invitation into a private room**, and what the room is called —
+    /// which the listing never said, the room being private. Held the way a
+    /// challenge is, and taken by the answer.
+    pub invited: Option<(crate::net::Profile, RoomId, String)>,
     /// What somebody said to one of ours. `None` in the second half is a
     /// decline.
     pub answered: Option<(crate::net::Profile, Option<RoomId>)>,
@@ -380,6 +389,7 @@ impl Session {
             hidden: crate::net::Hidden::default(),
             blasts: Vec::new(),
             challenge: None,
+            invited: None,
             answered: None,
             filed_a_game: false,
             people: None,
@@ -904,6 +914,17 @@ impl Session {
                     log::info!("{} challenged us in {room}", from.label());
                     self.challenge = Some((from, room));
                     effects.push(Effect::Challenged);
+                }
+                // **Somebody holds a door open.** Held, like a challenge:
+                // going through it is the player's to decide.
+                ServerMessage::Invited { from, room, name } => {
+                    log::info!("{} invited us into \"{name}\" ({room})", from.label());
+                    self.invited = Some((from, room, name));
+                    effects.push(Effect::Invited);
+                }
+                ServerMessage::NotDone { reason } => {
+                    log::info!("the server would not: {reason}");
+                    effects.push(Effect::NotDone(reason));
                 }
                 // And the answer, either way. A decline reaches the person who
                 // asked instead of looking like a server that lost it.
@@ -1477,6 +1498,14 @@ impl Session {
     /// Close a room this client made. The answer is an [`Effect::RoomClosed`].
     pub fn close(&mut self, room: RoomId) {
         self.tell(ClientMessage::Close { room });
+    }
+
+    /// **Bring somebody into the private room this client is in.** Nothing
+    /// comes back unless it would not go, which is an [`Effect::NotDone`].
+    pub fn invite(&mut self, who: crate::net::PersonId) {
+        if let Some(room) = self.room.clone() {
+            self.tell(ClientMessage::Invite { who, room });
+        }
     }
 
     /// Yes or no, to whoever asked.

@@ -44,6 +44,7 @@ pub use eng::{
     help,
     hotbar,
     hud,
+    invite,
     lobby,
     menu,
     phase,
@@ -507,6 +508,15 @@ pub struct Challenge {
     pub asked_them: &'static str,
 }
 
+/// Somebody holding a door open.
+pub struct Invite {
+    pub title: &'static str,
+    pub accept: &'static str,
+    pub decline: &'static str,
+    /// Said when one goes out, for the reason a challenge's is.
+    pub asked_them: &'static str,
+}
+
 pub struct Profile {
     pub title: &'static str,
     /// Asked for, and not answered yet. Its own line rather than an empty
@@ -746,6 +756,8 @@ pub struct Words {
     pub clock: Clock,
     /// What a server says about somebody.
     pub challenge: Challenge,
+    /// Somebody holding a door open.
+    pub invite: Invite,
     pub profile: Profile,
     /// The screen before a match starts.
     pub lobby: Lobby,

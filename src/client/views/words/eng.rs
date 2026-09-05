@@ -305,6 +305,12 @@ pub static WORDS: super::Words = super::Words {
         ask: "Challenge",
         asked_them: "Asked. They will see it when they are next looking.",
     },
+    invite: super::Invite {
+        title: "An invitation",
+        accept: "Go in",
+        decline: "Not now",
+        asked_them: "Invited. They will see it when they are next looking.",
+    },
     profile: super::Profile {
         title: "Player",
         asking: "asking…",
@@ -617,6 +623,24 @@ pub mod challenge {
         } else {
             format!("{who} said no")
         }
+    }
+}
+
+pub mod invite {
+    /// The button on somebody's profile, naming the room it would let them
+    /// into: an invitation is into somewhere, and the somewhere is the point.
+    pub fn ask_into(room: &str) -> String {
+        format!("Invite into {room}")
+    }
+
+    /// What the door opens onto, said once on the panel.
+    pub fn into_room(room: &str) -> String {
+        format!("A private world, \u{201c}{room}\u{201d}. Nobody else is listed it.")
+    }
+
+    /// Said out loud when one arrives, for the reason a challenge is.
+    pub fn asked(who: &str, room: &str) -> String {
+        format!("{who} invites you into {room}")
     }
 }
 

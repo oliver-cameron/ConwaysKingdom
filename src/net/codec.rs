@@ -225,6 +225,10 @@ mod tests {
                 person: crate::net::Secret::read(&"a1".repeat(16)).expect("a secret"),
             },
             ClientMessage::Close { room: "r-abc234".into() },
+            ClientMessage::Invite {
+                who: crate::net::PersonId("3f2a91c4".into()),
+                room: "r-abc234".into(),
+            },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -440,6 +444,20 @@ mod tests {
             // Both arms, since the refusal is the one somebody reads.
             ServerMessage::Closed(Ok("r-abc234".into())),
             ServerMessage::Closed(Err("2 still in \"den\"".into())),
+            ServerMessage::Invited {
+                from: crate::net::Profile {
+                    who: crate::net::PersonId("3f2a91c4".into()),
+                    name: "alice".into(),
+                    rating: 1240,
+                    provisional: false,
+                    games: 9,
+                    history: vec![1200, 1220, 1240],
+                    best: 512,
+                },
+                room: "r-xyz789".into(),
+                name: "den".into(),
+            },
+            ServerMessage::NotDone { reason: "this server has never met them".into() },
         ];
         for msg in cases {
             let bytes = encode_server(&msg).unwrap();

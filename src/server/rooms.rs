@@ -28,7 +28,7 @@
 //! is one too many, and the one that can be renamed by a person is the one
 //! that has to win.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,14 @@ fn refuse(why: &str) -> Vec<ServerMessage> {
     vec![ServerMessage::Rejected { reason: why.to_string() }]
 }
 
+/// A refusal that leaves the caller where they were — see
+/// [`ServerMessage::NotDone`]. For what is asked of a person rather than of a
+/// world, where a `Rejected` would close a door on somebody standing in a room.
+fn not_done(why: &str) -> Vec<ServerMessage> {
+    log::info!("would not: {why}");
+    vec![ServerMessage::NotDone { reason: why.to_string() }]
+}
+
 /// Which socket a message came in on. Unique for as long as the process lives
 /// and never reused, so a room's owner cannot become somebody else by a
 /// counter wrapping onto a number a departed connection had.
@@ -69,6 +77,7 @@ pub type ConnectionId = u64;
 /// to and appears only after a `Welcome`, while the connection exists from the
 /// moment the socket opens — which is when a room can first be made, since
 /// making one is what you do before there is a world to sit in.
+#[derive(Clone)]
 pub struct Caller {
     pub connection: ConnectionId,
     /// Which world, and who in it. `None` until this connection has joined.
@@ -281,7 +290,16 @@ pub struct Rooms {
     /// already what `Join` carries, so a second namespace to keep in step
     /// would be a second thing that can disagree. What is private about a
     /// private room is that [`Self::listing`] does not mention it.
-    unlisted: std::collections::BTreeSet<RoomId>,
+    unlisted: BTreeSet<RoomId>,
+    /// **Who may walk into each unlisted room by its id.**
+    ///
+    /// A code names nobody: whoever it is forwarded to gets in, and the room
+    /// cannot tell. This names people — whoever was invited, whoever was
+    /// challenged, and whoever once came in by the code, so a refresh on a
+    /// room joined that way is not a refusal. It is what [`Self::may_enter`]
+    /// asks, and it is saved, so an invitation given before a restart stands
+    /// after it. The maker is not in it; the maker owns the room.
+    admitted: BTreeMap<RoomId, BTreeSet<PersonId>>,
 }
 
 impl Rooms {
@@ -365,7 +383,8 @@ impl Rooms {
         let mut made = BTreeMap::new();
         let mut owner = BTreeMap::new();
         let mut codes = BTreeMap::new();
-        let mut unlisted = std::collections::BTreeSet::new();
+        let mut unlisted = BTreeSet::new();
+        let mut admitted = BTreeMap::new();
         if !fresh {
             for row in load_meta(&meta_path(&dir))? {
                 if !rooms.contains_key(&row.id) {
@@ -377,6 +396,9 @@ impl Rooms {
                 }
                 if let Some(code) = row.code {
                     codes.insert(row.id.clone(), code);
+                }
+                if !row.admitted.is_empty() {
+                    admitted.insert(row.id.clone(), row.admitted.into_iter().collect());
                 }
                 if row.unlisted {
                     unlisted.insert(row.id);
@@ -404,6 +426,7 @@ impl Rooms {
             owner,
             max_made: MAX_MADE_ROOMS,
             unlisted,
+            admitted,
         })
     }
 
@@ -428,6 +451,7 @@ impl Rooms {
             owner: BTreeMap::new(),
             max_made: MAX_MADE_ROOMS,
             unlisted: Default::default(),
+            admitted: BTreeMap::new(),
         }
     }
 
@@ -508,10 +532,58 @@ impl Rooms {
         if let Some((id, _)) = self.codes.iter().find(|(_, code)| **code == asked) {
             return Ok(id.clone());
         }
-        Err(format!(
+        Err(self.not_here(&asked))
+    }
+
+    /// The refusal for a room that is not here — and for one that is and
+    /// that this caller may not know about, which from where they stand is the
+    /// same thing.
+    fn not_here(&self, asked: &str) -> String {
+        format!(
             "no room \"{asked}\" here; this server has {}",
             self.public_names().collect::<Vec<_>>().join(", ")
-        ))
+        )
+    }
+
+    /// **Whether this door opens for this caller.**
+    ///
+    /// A listed room opens for anybody. An unlisted one opens by its **code**,
+    /// which is the latch a private room is meant to have; for the connection
+    /// that made it in this process, which is a keyless maker's only way in;
+    /// and for a key that owns it or is in [`Self::admitted`]. Anything else
+    /// is refused as though the room were not here, because to somebody
+    /// holding neither the code nor an invitation it is not — and the id
+    /// alone, which every client that has been in the room has seen in its
+    /// address bar, stops being a bearer credential.
+    fn may_enter(
+        &self,
+        id: &RoomId,
+        connection: ConnectionId,
+        who: Option<&PersonId>,
+        asked: Option<&str>,
+    ) -> bool {
+        if !self.unlisted.contains(id) || self.entered_by_code(id, asked) {
+            return true;
+        }
+        if self.made.get(id) == Some(&Some(connection)) {
+            return true;
+        }
+        let Some(who) = who else { return false };
+        self.owned_by(id) == Some(who) || self.admitted.get(id).is_some_and(|in_| in_.contains(who))
+    }
+
+    /// Whether `asked` was this room's code, as against its id or its name.
+    fn entered_by_code(&self, id: &RoomId, asked: Option<&str>) -> bool {
+        let (Some(code), Some(asked)) = (self.codes.get(id), asked) else { return false };
+        crate::net::room_name(asked).is_ok_and(|asked| *code == asked)
+    }
+
+    /// Let this person through this room's door from now on. Saved at once,
+    /// for the reason an owner is.
+    fn admit(&mut self, id: &RoomId, who: &PersonId) {
+        if self.admitted.entry(id.clone()).or_default().insert(who.clone()) {
+            self.save_meta();
+        }
     }
 
     /// Decoded message in, replies out — the same contract as
@@ -624,12 +696,29 @@ impl Rooms {
         if let ClientMessage::Close { room } = &msg {
             return vec![ServerMessage::Closed(self.close(caller, room))];
         }
+        // Judged here rather than by the room, because who may come in is a
+        // fact about the map: a `Server` knows nothing of codes or listings.
+        if let ClientMessage::Invite { who, room } = &msg {
+            return self.invite(caller, who, room);
+        }
         // Admitted at any generation, and that is the point rather than an
         // oversight: **no late joining is a rule about players.** Somebody
         // turning up at generation four hundred is exactly what watching is
         // for, so this asks only whether the room is here.
         if let ClientMessage::Watch { room } = &msg {
-            return match self.resolve(Some(room.as_str())) {
+            let door = self.resolve(Some(room.as_str())).and_then(|id| {
+                if self.may_enter(
+                    &id,
+                    caller.connection,
+                    caller.person.as_ref(),
+                    Some(room.as_str()),
+                ) {
+                    Ok(id)
+                } else {
+                    Err(self.not_here(room.as_str()))
+                }
+            });
+            return match door {
                 Ok(id) => {
                     let name = self.name_of(&id).to_string();
                     let server = self.rooms.get(&id).expect("resolve only returns rooms here");
@@ -736,7 +825,17 @@ impl Rooms {
             // that offered a key meant to be somebody, and putting them in as
             // a stranger instead would be answering a different question.
             let who = person.as_ref().map(|secret| self.meet(secret));
-            return match self.resolve(asked.as_ref().map(RoomId::as_str)) {
+            // **And whether the door opens for them**, which is the map's
+            // question and not the room's -- see `may_enter`.
+            let asked_for = asked.as_ref().map(RoomId::as_str);
+            let door = self.resolve(asked_for).and_then(|id| {
+                if self.may_enter(&id, caller.connection, who.as_ref(), asked_for) {
+                    Ok(id)
+                } else {
+                    Err(self.not_here(asked_for.unwrap_or_default()))
+                }
+            });
+            return match door {
                 Ok(name) => {
                     if let Some(seat) = seat {
                         log::info!("{:?} is leaving room \"{}\" for \"{name}\"", seat.1, seat.0);
@@ -805,6 +904,13 @@ impl Rooms {
                     let welcomed = out.iter().any(|m| matches!(m, ServerMessage::Welcome { .. }));
                     if let (Some(who), true) = (&who, welcomed) {
                         out.push(ServerMessage::Yours(self.lockers.of(who)));
+                        // **Somebody who came in by the code is in from now
+                        // on.** Their address bar says the id, and a refresh
+                        // rejoins by it; a door that shut behind them would
+                        // make a refresh a refusal.
+                        if self.entered_by_code(&name, asked_for) {
+                            self.admit(&name, who);
+                        }
                     }
                     out
                 }
@@ -976,6 +1082,9 @@ impl Rooms {
         };
 
         self.claim_for(&made.id, &from);
+        // The room is held for them: the id in the `Challenged` is their way
+        // in, and the door has to know it.
+        self.admit(&made.id, who);
 
         let Some(theirs) = self.profile_of(&from) else {
             return refuse("this server has nothing to say about you yet");
@@ -1026,6 +1135,43 @@ impl Rooms {
             }],
             _ => Vec::new(),
         }
+    }
+
+    /// **Bring somebody in by name.**
+    ///
+    /// Anybody seated in a private room may, and the invitation waits in the
+    /// outbox the way a challenge does. What it changes on the room is one
+    /// entry in [`Self::admitted`], which is what lets the person it names
+    /// join by the room's id with no code — so an invitation names a person
+    /// where a code names nobody, and that is the whole of what it adds.
+    fn invite(&mut self, caller: &Caller, who: &PersonId, room: &RoomId) -> Vec<ServerMessage> {
+        let Some(from) = caller.person.clone() else {
+            return not_done("an invitation comes from somebody, and this client has no key");
+        };
+        if caller.seat.as_ref().map(|(here, _)| here) != Some(room) {
+            return not_done("you can only invite somebody into a room you are in");
+        }
+        if !self.unlisted.contains(room) {
+            return not_done("anybody can join that room from the list");
+        }
+        if from == *who {
+            return not_done("you are already here");
+        }
+        if !self.people.knows(who) {
+            return not_done("this server has never met them");
+        }
+        let Some(theirs) = self.profile_of(&from) else {
+            return not_done("this server has nothing to say about you yet");
+        };
+        self.admit(room, who);
+        let name = self.name_of(room).to_string();
+        self.waiting.entry(who.clone()).or_default().push(ServerMessage::Invited {
+            from: theirs,
+            room: room.clone(),
+            name,
+        });
+        log::info!("{from} invited {who} into {room}");
+        Vec::new()
     }
 
     /// **Who this secret is, written down if it is new.**
@@ -1084,6 +1230,11 @@ impl Rooms {
             owner: self.owned_by(id).cloned(),
             code: self.codes.get(id).cloned(),
             unlisted: self.unlisted.contains(id),
+            admitted: self
+                .admitted
+                .get(id)
+                .map(|in_| in_.iter().cloned().collect())
+                .unwrap_or_default(),
         });
         let path = meta_path(&self.dir);
         if let Err(e) = std::fs::write(&path, crate::net::jsonl::write(rows)) {
@@ -1535,6 +1686,7 @@ impl Rooms {
         self.owner.remove(&id);
         self.unlisted.remove(&id);
         self.codes.remove(&id);
+        self.admitted.remove(&id);
         self.names.remove(&id);
         self.save_meta();
         log::info!("deleted room \"{name}\"");
@@ -1724,6 +1876,9 @@ struct MetaRow {
     owner: Option<PersonId>,
     code: Option<Code>,
     unlisted: bool,
+    /// Sorted, so two saves of one table are the same bytes.
+    #[serde(default)]
+    admitted: Vec<PersonId>,
 }
 
 fn meta_path(dir: &Path) -> PathBuf {
@@ -2412,6 +2567,179 @@ mod tests {
         assert!(matches!(&out[..], [ServerMessage::Closed(Ok(id))] if *id == den), "{out:?}");
         assert!(rooms.get(&den).is_none(), "the room is still here");
         assert_eq!(rooms.made_count().0, 0, "and it still counts against the cap");
+    }
+
+    /// Somebody met by hello, with the secret still in hand for a join.
+    fn met(rooms: &mut Rooms, n: u64) -> (Secret, PersonId) {
+        let key = Secret::new().unwrap();
+        let out = rooms.handle(
+            &Caller::new(n),
+            ClientMessage::Hello { name: format!("p{n}"), person: key.clone() },
+        );
+        let [ServerMessage::You(profile), ..] = &out[..] else { panic!("{out:?}") };
+        (key, profile.who.clone())
+    }
+
+    fn join_as(key: &Secret, room: &str) -> ClientMessage {
+        ClientMessage::Join {
+            name: "somebody".into(),
+            room: Some(RoomId::from(room)),
+            person: Some(key.clone()),
+        }
+    }
+
+    fn private_room(rooms: &mut Rooms, by: &Caller) -> Made {
+        let out = rooms.handle(
+            by,
+            ClientMessage::Create {
+                name: "den".into(),
+                shape: WorldKind::Infinite,
+                victory: None,
+                teams: None,
+                private: true,
+                laboratory: false,
+            },
+        );
+        let [ServerMessage::Made(Ok(made))] = &out[..] else { panic!("{out:?}") };
+        made.clone()
+    }
+
+    /// **An invitation names a person, where a code names nobody.** The id of
+    /// a private room stops being a way in on its own: it opens for its maker,
+    /// for whoever was invited, and by the code — and somebody who came in by
+    /// the code is in from then on, so a refresh is not a refusal.
+    #[test]
+    fn an_invitation_admits_the_person_it_names_and_the_id_alone_admits_nobody() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (ka, a) = met(&mut rooms, 1);
+        let (kb, b) = met(&mut rooms, 2);
+        let made = private_room(&mut rooms, &Caller::known(1, a.clone()));
+        let (den, code) = (made.id.clone(), made.code.expect("a code"));
+
+        // A stranger with the id is told what anybody mistyping a name is
+        // told, and no more: the refusal echoes what they typed and names the
+        // listed rooms, and the code is in neither.
+        let out = rooms.handle(&Caller::known(2, b.clone()), join_as(&kb, den.as_str()));
+        let [ServerMessage::Rejected { reason }] = &out[..] else { panic!("{out:?}") };
+        assert!(reason.contains("no room"), "{reason}");
+        assert!(!reason.contains(&code), "the refusal leaked a code: {reason}");
+        let out = rooms.handle(&Caller::new(9), ClientMessage::Watch { room: den.clone() });
+        assert!(
+            matches!(&out[..], [ServerMessage::Rejected { .. }]),
+            "a stranger watched: {out:?}"
+        );
+
+        // The maker, by id: the key that made it.
+        let out = rooms.handle(&Caller::known(1, a.clone()), join_as(&ka, den.as_str()));
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let mut inside = Caller::sitting(1, (den.clone(), *you));
+        inside.person = Some(a.clone());
+
+        // Invited, and told so with the next thing they say -- with the room's
+        // name, which they have never been listed.
+        let out =
+            rooms.handle(&inside, ClientMessage::Invite { who: b.clone(), room: den.clone() });
+        assert!(out.is_empty(), "{out:?}");
+        let out = rooms.handle(&Caller::known(2, b.clone()), ClientMessage::Rooms);
+        let told = out.iter().find_map(|m| match m {
+            ServerMessage::Invited { from, room, name } => {
+                Some((from.who.clone(), room.clone(), name.clone()))
+            }
+            _ => None,
+        });
+        assert_eq!(told, Some((a.clone(), den.clone(), "den".into())), "{out:?}");
+
+        // And now the id is a way in for them.
+        let out = rooms.handle(&Caller::known(2, b.clone()), join_as(&kb, den.as_str()));
+        assert!(matches!(&out[..], [ServerMessage::Welcome { .. }, ..]), "{out:?}");
+
+        // Codes stay: a third person, by the code, and from then on by the id.
+        let (kc, c) = met(&mut rooms, 3);
+        let out = rooms.handle(&Caller::known(3, c.clone()), join_as(&kc, &code));
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        rooms.handle(&Caller::sitting(3, (den.clone(), *you)), ClientMessage::Leave);
+        let out = rooms.handle(&Caller::known(3, c), join_as(&kc, den.as_str()));
+        assert!(
+            matches!(&out[..], [ServerMessage::Welcome { .. }, ..]),
+            "a refresh refused: {out:?}"
+        );
+    }
+
+    /// The five ways an invitation will not go, each a sentence that leaves the
+    /// asker where they were rather than back on the menu.
+    #[test]
+    fn an_invitation_nobody_can_use_is_refused_where_it_was_asked() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (ka, a) = met(&mut rooms, 1);
+        let (_, b) = met(&mut rooms, 2);
+        let made = private_room(&mut rooms, &Caller::known(1, a.clone()));
+        let den = made.id.clone();
+        let out = rooms.handle(&Caller::known(1, a.clone()), join_as(&ka, den.as_str()));
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let mut inside = Caller::sitting(1, (den.clone(), *you));
+        inside.person = Some(a.clone());
+        let why = |out: &[ServerMessage]| match out {
+            [ServerMessage::NotDone { reason }] => reason.clone(),
+            other => panic!("not a refusal in place: {other:?}"),
+        };
+        let invite = |who: &PersonId, room: &RoomId| ClientMessage::Invite {
+            who: who.clone(),
+            room: room.clone(),
+        };
+
+        let mut keyless = inside.clone();
+        keyless.person = None;
+        assert!(why(&rooms.handle(&keyless, invite(&b, &den))).contains("no key"));
+        assert!(why(&rooms.handle(&Caller::known(1, a.clone()), invite(&b, &den)))
+            .contains("a room you are in"));
+        assert!(why(&rooms.handle(&inside, invite(&b, &RoomId::from("hall"))))
+            .contains("a room you are in"));
+        assert!(why(&rooms.handle(&inside, invite(&a, &den))).contains("already here"));
+        let stranger = PersonId("nobody-here".into());
+        assert!(why(&rooms.handle(&inside, invite(&stranger, &den))).contains("never met"));
+        assert!(
+            rooms.admitted.get(&den).is_none_or(|in_| in_.is_empty()),
+            "a refusal admitted somebody"
+        );
+    }
+
+    /// **An invitation given before a restart stands after it**, because the
+    /// door is in `rooms.jsonl` beside the code.
+    #[test]
+    fn an_invitation_survives_a_restart() {
+        let dir = temp_dir("admitted");
+        let kb = Secret::new().unwrap();
+        let den = {
+            let mut rooms = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
+            let (ka, a) = met(&mut rooms, 1);
+            let out = rooms.handle(
+                &Caller::new(2),
+                ClientMessage::Hello { name: "b".into(), person: kb.clone() },
+            );
+            let [ServerMessage::You(theirs)] = &out[..] else { panic!("{out:?}") };
+            let b = theirs.who.clone();
+            let made = private_room(&mut rooms, &Caller::known(1, a.clone()));
+            let out = rooms.handle(&Caller::known(1, a.clone()), join_as(&ka, made.id.as_str()));
+            let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+            let mut inside = Caller::sitting(1, (made.id.clone(), *you));
+            inside.person = Some(a);
+            rooms.handle(&inside, ClientMessage::Invite { who: b, room: made.id.clone() });
+            rooms.save().unwrap();
+            made.id
+        };
+
+        let mut back = Rooms::open(&dir, &[], WorldKind::Infinite, false).unwrap();
+        let out = back.handle(&Caller::new(5), join_as(&kb, den.as_str()));
+        assert!(
+            matches!(&out[..], [ServerMessage::Welcome { .. }, ..]),
+            "the door forgot them: {out:?}"
+        );
+        let out = back.handle(&Caller::new(6), join_as(&Secret::new().unwrap(), den.as_str()));
+        assert!(
+            matches!(&out[..], [ServerMessage::Rejected { .. }]),
+            "and let a stranger in: {out:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Whoever is running the server can read the save directory anyway, and
