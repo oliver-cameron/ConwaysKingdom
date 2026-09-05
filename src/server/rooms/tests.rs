@@ -346,16 +346,14 @@ fn a_victory_makes_a_match_and_no_victory_makes_a_world() {
     let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
     let me = Caller::new(1);
 
-    rooms.make(1, "plain", WorldKind::Infinite, None, None, Reach::Listed, false).unwrap();
+    rooms.make(1, Blueprint::world("plain", WorldKind::Infinite)).unwrap();
     rooms
         .make(
             1,
-            "cup",
-            WorldKind::Infinite,
-            Some(Victory::Territory { squares: 500 }),
-            None,
-            Reach::Listed,
-            false,
+            Blueprint {
+                victory: Some(Victory::Territory { squares: 500 }),
+                ..Blueprint::world("cup", WorldKind::Infinite)
+            },
         )
         .unwrap();
 
@@ -412,13 +410,12 @@ fn the_cap_is_on_rooms_players_made_and_not_on_the_operators() {
     rooms.cap_made(2);
     assert_eq!(rooms.len(), 3, "three declared, none of them counted");
 
-    assert!(rooms.make(1, "a", WorldKind::Infinite, None, None, Reach::Listed, false).is_ok());
-    assert!(rooms.make(1, "b", WorldKind::Infinite, None, None, Reach::Listed, false).is_ok());
+    assert!(rooms.make(1, Blueprint::world("a", WorldKind::Infinite)).is_ok());
+    assert!(rooms.make(1, Blueprint::world("b", WorldKind::Infinite)).is_ok());
     let (made, cap) = rooms.made_count();
     assert_eq!((made, cap), (2, 2));
 
-    let refused =
-        rooms.make(1, "c", WorldKind::Infinite, None, None, Reach::Listed, false).unwrap_err();
+    let refused = rooms.make(1, Blueprint::world("c", WorldKind::Infinite)).unwrap_err();
     assert!(refused.contains('2'), "the refusal says how many: {refused}");
     assert!(rooms.get(&RoomId::from("c")).is_none(), "and made none");
 
@@ -426,7 +423,7 @@ fn the_cap_is_on_rooms_players_made_and_not_on_the_operators() {
     // cap's worth would refuse for ever while holding nothing.
     rooms.delete("a").unwrap();
     assert_eq!(rooms.made_count().0, 1);
-    assert!(rooms.make(1, "c", WorldKind::Infinite, None, None, Reach::Listed, false).is_ok());
+    assert!(rooms.make(1, Blueprint::world("c", WorldKind::Infinite)).is_ok());
 }
 
 /// **A bot is not somebody standing in a room.** Deleting is refused
@@ -462,8 +459,15 @@ fn a_private_room_is_reachable_by_code_and_named_nowhere() {
     let mut rooms =
         Rooms::open(temp_dir("private"), &["hall".into()], WorldKind::Infinite, true).unwrap();
 
-    let made =
-        rooms.make(3, "friends-only", WorldKind::Infinite, None, None, Reach::Code, false).unwrap();
+    let made = rooms
+        .make(
+            3,
+            Blueprint {
+                reach: Reach::Code,
+                ..Blueprint::world("friends-only", WorldKind::Infinite)
+            },
+        )
+        .unwrap();
     let code = made.code.clone().expect("a private room gets a code");
     assert_eq!(code.len(), CODE_LEN);
     assert_ne!(code, made.id.as_str(), "a code is a credential, not an identity");
@@ -542,16 +546,19 @@ fn a_seat_owner_is_not_saved_and_a_deleted_room_leaves_no_row() {
     let dir = temp_dir("meta-seat");
     let id = {
         let mut rooms = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
-        let made =
-            rooms.make(4, "den", WorldKind::Infinite, None, None, Reach::Code, false).unwrap();
+        let made = rooms
+            .make(
+                4,
+                Blueprint { reach: Reach::Code, ..Blueprint::world("den", WorldKind::Infinite) },
+            )
+            .unwrap();
         let out = rooms.handle(
             &Caller::new(4),
             ClientMessage::Join { name: "maker".into(), room: Some(made.id.clone()), person: None },
         );
         let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
         assert_eq!(rooms.owner.get(&made.id), Some(&Owner::Seat(*you)), "owned by seat");
-        let gone =
-            rooms.make(4, "gone", WorldKind::Infinite, None, None, Reach::Listed, false).unwrap();
+        let gone = rooms.make(4, Blueprint::world("gone", WorldKind::Infinite)).unwrap();
         rooms.delete(gone.id.as_str()).unwrap();
         rooms.save().unwrap();
         made.id
@@ -1117,7 +1124,9 @@ fn fresh_leaves_a_players_worlds_as_they_were() {
         let mut fresh = Rooms::open(&dir, &["hall".into()], WorldKind::Infinite, true).unwrap();
         assert!(fresh.get(&den).is_none() && fresh.get(&lair).is_none(), "fresh opened them");
         assert_eq!(fresh.made_count().0, 0, "fresh counted them");
-        fresh.make(9, "", WorldKind::Infinite, None, None, Reach::Code, false).unwrap();
+        fresh
+            .make(9, Blueprint { reach: Reach::Code, ..Blueprint::world("", WorldKind::Infinite) })
+            .unwrap();
         fresh.save().unwrap();
     }
 
@@ -1142,7 +1151,9 @@ fn fresh_leaves_a_players_worlds_as_they_were() {
 fn the_console_sees_private_rooms_and_the_wire_does_not() {
     let mut rooms =
         Rooms::open(temp_dir("console-sees"), &["hall".into()], WorldKind::Infinite, true).unwrap();
-    let made = rooms.make(3, "", WorldKind::Infinite, None, None, Reach::Code, false).unwrap();
+    let made = rooms
+        .make(3, Blueprint { reach: Reach::Code, ..Blueprint::world("", WorldKind::Infinite) })
+        .unwrap();
     assert!(made.code.is_some(), "a private room gets a code");
 
     let everything = rooms.everything();
@@ -1188,12 +1199,10 @@ fn only_whoever_made_a_match_can_start_it() {
     let made = rooms
         .make(
             5,
-            "cup",
-            WorldKind::Infinite,
-            Some(Victory::Timer { generations: 50 }),
-            None,
-            Reach::Listed,
-            false,
+            Blueprint {
+                victory: Some(Victory::Timer { generations: 50 }),
+                ..Blueprint::world("cup", WorldKind::Infinite)
+            },
         )
         .unwrap();
     let join = |name: &str| ClientMessage::Join {
@@ -1246,12 +1255,10 @@ fn a_keyed_maker_owns_their_match_from_any_seat() {
     let made = rooms
         .make(
             5,
-            "cup",
-            WorldKind::Infinite,
-            Some(Victory::Timer { generations: 50 }),
-            None,
-            Reach::Listed,
-            false,
+            Blueprint {
+                victory: Some(Victory::Timer { generations: 50 }),
+                ..Blueprint::world("cup", WorldKind::Infinite)
+            },
         )
         .unwrap();
     let key = Secret::new().unwrap();

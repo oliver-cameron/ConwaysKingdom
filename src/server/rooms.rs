@@ -154,6 +154,36 @@ pub enum Reach {
 /// browses for it, so a name is a courtesy rather than a requirement.
 const UNNAMED: &str = "private game";
 
+/// What a room is asked for, in one value.
+///
+/// A **server-side** struct and not a wire type. What a client sends is
+/// [`ClientMessage::Create`], which also names a party; by the time a room is
+/// being built the party has been checked and turned into a [`Reach`], and
+/// what is left is this. Keeping the two apart is what lets a field be added
+/// or reordered here without touching a format postcard reads positionally.
+pub struct Blueprint {
+    pub name: RoomName,
+    pub shape: WorldKind,
+    pub victory: Option<Victory>,
+    pub teams: Option<u8>,
+    pub reach: Reach,
+    pub laboratory: bool,
+}
+
+impl Blueprint {
+    /// A listed world with no way to win, which is what most rooms are.
+    pub fn world(name: impl Into<RoomName>, shape: WorldKind) -> Self {
+        Self {
+            name: name.into(),
+            shape,
+            victory: None,
+            teams: None,
+            reach: Reach::Listed,
+            laboratory: false,
+        }
+    }
+}
+
 /// A short code that reaches a room the listing does not mention.
 ///
 /// The thing you send somebody, rather than the thing you type. Room names are
@@ -709,368 +739,368 @@ impl Rooms {
     }
 
     /// What this caller asked for, without what was waiting for them.
+    ///
+    /// **Everything above the `_` is answered without a seat**, because none
+    /// of it names a world the caller is standing in — and each has its own
+    /// sharpening of that. `Rooms` and `People` are how somebody finds a room
+    /// or a person *before* picking either. `Create` names a room that does
+    /// not exist yet, so there was nowhere to be standing when it was sent.
+    /// `Profile` is read from a lobby, a standings bar or a menu, and only one
+    /// of those is inside a room. `Challenge` is pressed on a profile panel.
+    /// `Keep` edits a library between games. `Close` cannot run while anybody
+    /// is in the room, so whoever closes one is on the menu. A party is a list
+    /// of people rather than a place. The rest name a room by naming a seat,
+    /// and are forwarded to it.
     fn answer_for(&mut self, caller: &Caller, msg: ClientMessage) -> Vec<ServerMessage> {
-        // Answered without a seat, like `Join` and for the same reason: it
-        // names no world. A player has to see the rooms before picking one,
-        // and a room *is* a world, so asking from inside one is asking too
-        // late.
-        if let ClientMessage::Rooms = msg {
-            return vec![ServerMessage::Rooms { rooms: self.listing(), hidden: self.hidden }];
-        }
-        // **Who, with no where.** The same meeting a `Join` does, without the
-        // room: a client on the menu is somebody, and until it could say so
-        // nothing filed against a person could reach it there. What was
-        // waiting rides out with the answer rather than with the next thing
-        // said, because `deliver` above ran before this connection had a name.
-        if let ClientMessage::Hello { name, person } = &msg {
-            let who = self.meet(person);
-            self.profiles.met(&who, name);
-            let mut out = self.deliver(&Caller::known(caller.connection, who.clone()));
-            if let Some(profile) = self.profile_of(&who) {
-                out.insert(0, ServerMessage::You(profile));
+        match msg {
+            ClientMessage::Rooms => {
+                vec![ServerMessage::Rooms { rooms: self.listing(), hidden: self.hidden }]
             }
-            return out;
-        }
-        // Answered without a seat for a sharper version of the same reason: it
-        // names a room that does not exist, so there is nowhere to have been
-        // standing when it was sent.
-        if let ClientMessage::Create { name, shape, victory, teams, private, laboratory, party } =
-            msg
-        {
-            // A party's world is its members' to make: a room nobody in the
-            // party asked for is a room they cannot close.
-            let reach = match party {
-                Some(party) => {
-                    let member = caller
-                        .person
-                        .as_ref()
-                        .is_some_and(|who| self.parties.is_member(&party, who));
-                    if !member {
-                        return vec![ServerMessage::Made(Err("you are not in that party".into()))];
+            // **Who, with no where.** The same meeting a `Join` does, without
+            // the room: a client on the menu is somebody, and until it could
+            // say so nothing filed against a person could reach it there. What
+            // was waiting rides out with the answer rather than with the next
+            // thing said, because `deliver` above ran before this connection
+            // had a name.
+            ClientMessage::Hello { name, person } => {
+                let who = self.meet(&person);
+                self.profiles.met(&who, &name);
+                let mut out = self.deliver(&Caller::known(caller.connection, who.clone()));
+                if let Some(profile) = self.profile_of(&who) {
+                    out.insert(0, ServerMessage::You(profile));
+                }
+                out
+            }
+            ClientMessage::Create { name, shape, victory, teams, private, laboratory, party } => {
+                // A party's world is its members' to make: a room nobody in
+                // the party asked for is a room they cannot close.
+                let reach = match party {
+                    Some(party) => {
+                        let member = caller
+                            .person
+                            .as_ref()
+                            .is_some_and(|who| self.parties.is_member(&party, who));
+                        if !member {
+                            return vec![ServerMessage::Made(Err(
+                                "you are not in that party".into()
+                            ))];
+                        }
+                        Reach::Party(party)
                     }
-                    Reach::Party(party)
-                }
-                None if private => Reach::Code,
-                None => Reach::Listed,
-            };
-            let made =
-                self.make(caller.connection, &name, shape, victory, teams, reach, laboratory);
-            if let Ok(made) = &made {
-                self.claim(&made.id, caller);
-            }
-            return vec![ServerMessage::Made(made)];
-        }
-        // Answered without a seat for the same reason `Rooms` is: a profile is
-        // looked at from a lobby, from a standings bar and from a menu, and
-        // only one of those is inside a room.
-        if let ClientMessage::Profile { who } = &msg {
-            return vec![ServerMessage::Profile(self.profile_of(who))];
-        }
-        // Answered without a seat for the same reason `Profile` is, and one
-        // more: this is how somebody finds a person to look up in the first
-        // place, and the menu is where they are standing when they do.
-        if let ClientMessage::People { like } = &msg {
-            return vec![ServerMessage::People {
-                like: like.clone(),
-                found: self.people_like(like),
-            }];
-        }
-        // **Play me.** Answered without a seat, because you challenge somebody
-        // from a profile panel or a list of who plays here and neither is
-        // inside a room.
-        if let ClientMessage::Challenge { who } = &msg {
-            return self.challenge(caller, who);
-        }
-        if let ClientMessage::Answer { from, yes } = &msg {
-            return self.answer(caller, from, *yes);
-        }
-        // Answered without a seat for the same reason again, and one of its
-        // own: a library is edited *between* games, on a screen that is not
-        // inside a room. What it does need is a person, because a locker is
-        // filed against one -- a connection that has never joined has nowhere
-        // to put what it is offering, and cannot say whose it is.
-        if let ClientMessage::Keep(offered) = msg {
-            match &caller.person {
-                Some(who) => {
-                    self.lockers.keep(who, offered);
-                    self.save_lockers();
-                }
-                None => log::info!("a locker was offered by nobody, so there is nowhere for it"),
-            }
-            return Vec::new();
-        }
-        // Answered without a seat, and it has to be: a room will not close
-        // while anybody is in it, so whoever closes one is on the menu.
-        if let ClientMessage::Close { room } = &msg {
-            return vec![ServerMessage::Closed(self.close(caller, room))];
-        }
-        // Judged here rather than by the room, because who may come in is a
-        // fact about the map: a `Server` knows nothing of codes or listings.
-        if let ClientMessage::Invite { who, room } = &msg {
-            return self.invite(caller, who, room);
-        }
-        // **Parties**, which are lists of people and so are answered to a
-        // person: a connection that has presented no key is on no list and
-        // gets an empty one, which is true rather than a refusal.
-        if let ClientMessage::Parties = &msg {
-            return self.parties_for(caller);
-        }
-        if let ClientMessage::MakeParty { name } = &msg {
-            return self.make_party(caller, name);
-        }
-        if let ClientMessage::InviteToParty { party, who } = &msg {
-            return self.invite_to_party(caller, party, who);
-        }
-        if let ClientMessage::JoinParty { party } = &msg {
-            return self.join_party(caller, party);
-        }
-        if let ClientMessage::LeaveParty { party } = &msg {
-            return self.leave_party(caller, party);
-        }
-        // Admitted at any generation, and that is the point rather than an
-        // oversight: **no late joining is a rule about players.** Somebody
-        // turning up at generation four hundred is exactly what watching is
-        // for, so this asks only whether the room is here.
-        if let ClientMessage::Watch { room } = &msg {
-            let door = self.resolve(Some(room.as_str())).and_then(|id| {
-                if self.may_enter(
-                    &id,
+                    None if private => Reach::Code,
+                    None => Reach::Listed,
+                };
+                let made = self.make(
                     caller.connection,
-                    caller.person.as_ref(),
-                    Some(room.as_str()),
-                ) {
-                    Ok(id)
-                } else {
-                    Err(self.not_here(room.as_str()))
+                    Blueprint { name, shape, victory, teams, reach, laboratory },
+                );
+                if let Ok(made) = &made {
+                    self.claim(&made.id, caller);
                 }
-            });
-            return match door {
-                Ok(id) => {
-                    let name = self.name_of(&id).to_string();
-                    let server = self.rooms.get(&id).expect("resolve only returns rooms here");
-                    log::info!("connection {} is watching \"{name}\" ({id})", caller.connection);
-                    vec![ServerMessage::Watching {
-                        room: id.clone(),
-                        name,
-                        tick: server.tick(),
-                        world: server.world().kind(),
-                        rules: server.rules(),
-                    }]
-                }
-                Err(reason) => vec![ServerMessage::Rejected { reason }],
-            };
-        }
-        // Blowing the whistle on a match. Judged here because this is the only
-        // thing that knows who made a room -- a `Server` is one room and has
-        // no idea how it came to exist.
-        if let ClientMessage::Start = msg {
-            let Some((room, player)) = caller.seat.as_ref() else {
-                return vec![ServerMessage::NotStarted { reason: "you are not in a match".into() }];
-            };
-            // Whoever made it. Anybody may join a gathering match; if anybody
-            // could also start it, the person who set it up could not wait for
-            // their friends to arrive.
-            //
-            // A room the console made has no owner, so nobody may start it
-            // from a client -- which is right: it is the operator's match, and
-            // `match start` is theirs.
-            if !self.owns(room, caller, *player) {
-                return vec![ServerMessage::NotStarted {
-                    reason: match self.owner.get(room) {
-                        Some(_) => "only whoever made this match can start it".into(),
-                        None => "this match is the server's; it starts at the console".into(),
-                    },
-                }];
+                vec![ServerMessage::Made(made)]
             }
-            let room = room.clone();
-            let server = self.rooms.get_mut(&room).expect("a seat names a room that is here");
-            return match server.start_match(Some(*player)) {
-                Ok(()) => {
-                    log::info!(
-                        "connection {} started match \"{}\"",
-                        caller.connection,
-                        self.name_of(&room)
-                    );
-                    // Nothing to reply: `start_match` sets `lobby_changed`, so
-                    // the next step broadcasts the new phase to everybody in
-                    // the room -- including whoever pressed it.
-                    Vec::new()
-                }
-                Err(reason) => vec![ServerMessage::NotStarted { reason }],
-            };
-        }
-        // Calling it off. Judged here for the same reason `Start` is: this is
-        // the only thing that knows who made a room.
-        if let ClientMessage::EndMatch = msg {
-            let Some((room, player)) = caller.seat.as_ref() else {
-                return vec![ServerMessage::NotStarted { reason: "you are not in a match".into() }];
-            };
-            if !self.owns(room, caller, *player) {
-                return vec![ServerMessage::NotStarted {
-                    reason: match self.owner.get(room) {
-                        Some(_) => "only whoever started this match can end it".into(),
-                        None => "this match is the server's; it ends at the console".into(),
-                    },
-                }];
+            ClientMessage::Profile { who } => vec![ServerMessage::Profile(self.profile_of(&who))],
+            ClientMessage::People { like } => {
+                let found = self.people_like(&like);
+                vec![ServerMessage::People { like, found }]
             }
-            let room = room.clone();
-            let server = self.rooms.get_mut(&room).expect("a seat names a room that is here");
-            return match server.end_match() {
-                // Nothing to reply: `end_match` sets `lobby_changed`, so the
-                // next step broadcasts the result to everybody in the room,
-                // including whoever pressed it.
-                Ok(()) => {
-                    log::info!(
-                        "connection {} ended match \"{}\"",
-                        caller.connection,
-                        self.name_of(&room)
-                    );
-                    Vec::new()
-                }
-                Err(reason) => vec![ServerMessage::NotStarted { reason }],
-            };
-        }
-        // Giving up a seat without closing the socket. Handled here because a
-        // seat is this map's business — a `Server` is told who left, it does
-        // not find out.
-        if let ClientMessage::Leave = msg {
-            if let Some(seat) = caller.seat.as_ref() {
-                log::info!("{:?} left room \"{}\"", seat.1, self.name_of(&seat.0));
-                self.leave(seat);
-            }
-            return Vec::new();
-        }
-        let seat = caller.seat.as_ref();
-        if let ClientMessage::Join { room, person, name: joining_as, .. } = &msg {
-            let asked = room.clone();
-            let joining_as = joining_as.clone();
-            // **Who, before where.** People are a server's table and a room is
-            // one world on it, so this is settled once here rather than
-            // fifteen times by fifteen rooms each with their own idea of who
-            // somebody is. A refusal is a refusal to join at all: a client
-            // that offered a key meant to be somebody, and putting them in as
-            // a stranger instead would be answering a different question.
-            let who = person.as_ref().map(|secret| self.meet(secret));
-            // **And whether the door opens for them**, which is the map's
-            // question and not the room's -- see `may_enter`.
-            let asked_for = asked.as_ref().map(RoomId::as_str);
-            let door = self.resolve(asked_for).and_then(|id| {
-                if self.may_enter(&id, caller.connection, who.as_ref(), asked_for) {
-                    Ok(id)
-                } else {
-                    Err(self.not_here(asked_for.unwrap_or_default()))
-                }
-            });
-            return match door {
-                Ok(name) => {
-                    if let Some(seat) = seat {
-                        log::info!("{:?} is leaving room \"{}\" for \"{name}\"", seat.1, seat.0);
-                        self.leave(seat);
+            ClientMessage::Challenge { who } => self.challenge(caller, &who),
+            ClientMessage::Answer { from, yes } => self.answer(caller, &from, yes),
+            // A locker needs a person as well as no room, because it is filed
+            // against one: a connection that has never joined has nowhere to
+            // put what it is offering, and cannot say whose it is.
+            ClientMessage::Keep(offered) => {
+                match &caller.person {
+                    Some(who) => {
+                        self.lockers.keep(who, offered);
+                        self.save_lockers();
                     }
-                    // A `Server` is one room and knows only what it is
-                    // called; ids are this map's business, so the id and the
-                    // name are stamped on the way out rather than passed in.
-                    // Keeping `Server` ignorant of ids is what stops a room
-                    // needing to be told its own identity to answer a join.
-                    let room_name = self.name_of(&name).to_string();
-                    let mut out = self
-                        .rooms
-                        .get_mut(&name)
-                        .expect("resolve only returns rooms that are here")
-                        .handle(None, who.as_ref(), msg);
-                    // A maker who presented no key at `Create` is recorded at
-                    // their first join, which is the first moment there is a
-                    // seat to record. By person if they have one now -- see
-                    // `Owner`.
-                    if self.made.get(&name) == Some(&Some(caller.connection)) {
-                        if let Some(ServerMessage::Welcome { you, .. }) =
-                            out.iter().find(|m| matches!(m, ServerMessage::Welcome { .. }))
-                        {
-                            match &who {
-                                Some(person) => self.claim_for(&name, person),
-                                None => {
-                                    self.owner.entry(name.clone()).or_insert(Owner::Seat(*you));
+                    None => {
+                        log::info!("a locker was offered by nobody, so there is nowhere for it")
+                    }
+                }
+                Vec::new()
+            }
+            ClientMessage::Close { room } => vec![ServerMessage::Closed(self.close(caller, &room))],
+            // Judged here rather than by the room, because who may come in is
+            // a fact about the map: a `Server` knows nothing of codes or
+            // listings.
+            ClientMessage::Invite { who, room } => self.invite(caller, &who, &room),
+            // A party is answered to a person: a connection that has presented
+            // no key is on no list and gets an empty one, which is true rather
+            // than a refusal.
+            ClientMessage::Parties => self.parties_for(caller),
+            ClientMessage::MakeParty { name } => self.make_party(caller, &name),
+            ClientMessage::InviteToParty { party, who } => {
+                self.invite_to_party(caller, &party, &who)
+            }
+            ClientMessage::JoinParty { party } => self.join_party(caller, &party),
+            ClientMessage::LeaveParty { party } => self.leave_party(caller, &party),
+            // Admitted at any generation, and that is the point rather than an
+            // oversight: **no late joining is a rule about players.** Somebody
+            // turning up at generation four hundred is exactly what watching is
+            // for, so this asks only whether the room is here.
+            ClientMessage::Watch { room } => {
+                let door = self.resolve(Some(room.as_str())).and_then(|id| {
+                    if self.may_enter(
+                        &id,
+                        caller.connection,
+                        caller.person.as_ref(),
+                        Some(room.as_str()),
+                    ) {
+                        Ok(id)
+                    } else {
+                        Err(self.not_here(room.as_str()))
+                    }
+                });
+                match door {
+                    Ok(id) => {
+                        let name = self.name_of(&id).to_string();
+                        let server = self.rooms.get(&id).expect("resolve only returns rooms here");
+                        log::info!(
+                            "connection {} is watching \"{name}\" ({id})",
+                            caller.connection
+                        );
+                        vec![ServerMessage::Watching {
+                            room: id.clone(),
+                            name,
+                            tick: server.tick(),
+                            world: server.world().kind(),
+                            rules: server.rules(),
+                        }]
+                    }
+                    Err(reason) => vec![ServerMessage::Rejected { reason }],
+                }
+            }
+            // Blowing the whistle on a match. Judged here because this is the
+            // only thing that knows who made a room -- a `Server` is one room
+            // and has no idea how it came to exist.
+            ClientMessage::Start => {
+                let Some((room, player)) = caller.seat.as_ref() else {
+                    return vec![ServerMessage::NotStarted {
+                        reason: "you are not in a match".into(),
+                    }];
+                };
+                // Whoever made it. Anybody may join a gathering match; if
+                // anybody could also start it, the person who set it up could
+                // not wait for their friends to arrive.
+                //
+                // A room the console made has no owner, so nobody may start it
+                // from a client -- which is right: it is the operator's match,
+                // and `match start` is theirs.
+                if !self.owns(room, caller, *player) {
+                    return vec![ServerMessage::NotStarted {
+                        reason: match self.owner.get(room) {
+                            Some(_) => "only whoever made this match can start it".into(),
+                            None => "this match is the server's; it starts at the console".into(),
+                        },
+                    }];
+                }
+                let room = room.clone();
+                let server = self.rooms.get_mut(&room).expect("a seat names a room that is here");
+                match server.start_match(Some(*player)) {
+                    Ok(()) => {
+                        log::info!(
+                            "connection {} started match \"{}\"",
+                            caller.connection,
+                            self.name_of(&room)
+                        );
+                        // Nothing to reply: `start_match` sets `lobby_changed`,
+                        // so the next step broadcasts the new phase to
+                        // everybody in the room -- including whoever pressed
+                        // it.
+                        Vec::new()
+                    }
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
+            // Calling it off. Judged here for the same reason `Start` is: this
+            // is the only thing that knows who made a room.
+            ClientMessage::EndMatch => {
+                let Some((room, player)) = caller.seat.as_ref() else {
+                    return vec![ServerMessage::NotStarted {
+                        reason: "you are not in a match".into(),
+                    }];
+                };
+                if !self.owns(room, caller, *player) {
+                    return vec![ServerMessage::NotStarted {
+                        reason: match self.owner.get(room) {
+                            Some(_) => "only whoever started this match can end it".into(),
+                            None => "this match is the server's; it ends at the console".into(),
+                        },
+                    }];
+                }
+                let room = room.clone();
+                let server = self.rooms.get_mut(&room).expect("a seat names a room that is here");
+                match server.end_match() {
+                    // Nothing to reply: `end_match` sets `lobby_changed`, so
+                    // the next step broadcasts the result to everybody in the
+                    // room, including whoever pressed it.
+                    Ok(()) => {
+                        log::info!(
+                            "connection {} ended match \"{}\"",
+                            caller.connection,
+                            self.name_of(&room)
+                        );
+                        Vec::new()
+                    }
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
+            // Giving up a seat without closing the socket. Handled here
+            // because a seat is this map's business — a `Server` is told who
+            // left, it does not find out.
+            ClientMessage::Leave => {
+                if let Some(seat) = caller.seat.as_ref() {
+                    log::info!("{:?} left room \"{}\"", seat.1, self.name_of(&seat.0));
+                    self.leave(seat);
+                }
+                Vec::new()
+            }
+            ClientMessage::Join { ref room, ref person, name: ref joining_as, .. } => {
+                let asked = room.clone();
+                let joining_as = joining_as.clone();
+                // **Who, before where.** People are a server's table and a
+                // room is one world on it, so this is settled once here rather
+                // than fifteen times by fifteen rooms each with their own idea
+                // of who somebody is. A refusal is a refusal to join at all: a
+                // client that offered a key meant to be somebody, and putting
+                // them in as a stranger instead would be answering a different
+                // question.
+                let who = person.as_ref().map(|secret| self.meet(secret));
+                // **And whether the door opens for them**, which is the map's
+                // question and not the room's -- see `may_enter`.
+                let asked_for = asked.as_ref().map(RoomId::as_str);
+                let door = self.resolve(asked_for).and_then(|id| {
+                    if self.may_enter(&id, caller.connection, who.as_ref(), asked_for) {
+                        Ok(id)
+                    } else {
+                        Err(self.not_here(asked_for.unwrap_or_default()))
+                    }
+                });
+                let seat = caller.seat.as_ref();
+                match door {
+                    Ok(name) => {
+                        if let Some(seat) = seat {
+                            log::info!(
+                                "{:?} is leaving room \"{}\" for \"{name}\"",
+                                seat.1,
+                                seat.0
+                            );
+                            self.leave(seat);
+                        }
+                        // A `Server` is one room and knows only what it is
+                        // called; ids are this map's business, so the id and
+                        // the name are stamped on the way out rather than
+                        // passed in. Keeping `Server` ignorant of ids is what
+                        // stops a room needing to be told its own identity to
+                        // answer a join.
+                        let room_name = self.name_of(&name).to_string();
+                        let mut out = self
+                            .rooms
+                            .get_mut(&name)
+                            .expect("resolve only returns rooms that are here")
+                            .handle(None, who.as_ref(), msg);
+                        // A maker who presented no key at `Create` is recorded
+                        // at their first join, which is the first moment there
+                        // is a seat to record. By person if they have one now
+                        // -- see `Owner`.
+                        if self.made.get(&name) == Some(&Some(caller.connection)) {
+                            if let Some(ServerMessage::Welcome { you, .. }) =
+                                out.iter().find(|m| matches!(m, ServerMessage::Welcome { .. }))
+                            {
+                                match &who {
+                                    Some(person) => self.claim_for(&name, person),
+                                    None => {
+                                        self.owner.entry(name.clone()).or_insert(Owner::Seat(*you));
+                                    }
                                 }
                             }
                         }
-                    }
-                    let owner = self.owner_seat(&name);
-                    let code = self.codes.get(&name).cloned();
-                    // What this server has to say about them, which a room
-                    // cannot know: a profile outlives every room here. A join
-                    // is also when a name is taken, so a profile can be looked
-                    // at before anybody has finished a match.
-                    let profile = who.as_ref().and_then(|who| {
-                        self.profiles.met(who, &joining_as);
-                        self.profile_of(who)
-                    });
-                    for reply in &mut out {
-                        if let ServerMessage::Welcome {
-                            room, name: called, profile: ours, ..
-                        } = reply
-                        {
-                            *room = name.clone();
-                            *called = room_name.clone();
-                            ours.clone_from(&profile);
+                        let owner = self.owner_seat(&name);
+                        let code = self.codes.get(&name).cloned();
+                        // What this server has to say about them, which a room
+                        // cannot know: a profile outlives every room here. A
+                        // join is also when a name is taken, so a profile can
+                        // be looked at before anybody has finished a match.
+                        let profile = who.as_ref().and_then(|who| {
+                            self.profiles.met(who, &joining_as);
+                            self.profile_of(who)
+                        });
+                        for reply in &mut out {
+                            if let ServerMessage::Welcome {
+                                room,
+                                name: called,
+                                profile: ours,
+                                ..
+                            } = reply
+                            {
+                                *room = name.clone();
+                                *called = room_name.clone();
+                                ours.clone_from(&profile);
+                            }
+                            stamp(reply, owner, code.clone());
                         }
-                        stamp(reply, owner, code.clone());
-                    }
-                    // **And what this server merely holds for them**, which is
-                    // the other half of a profile and goes only to its owner.
-                    // Sent even when it is empty, because an empty one is what
-                    // tells a client to offer what it is carrying -- see
-                    // `ServerMessage::Yours`.
-                    //
-                    // Only on a join that was *allowed*: this room resolved,
-                    // and the room itself can still refuse -- a match already
-                    // under way, or a person already sitting here in another
-                    // tab. Handing a locker to a connection that was turned
-                    // away would have that tab replace the library of the one
-                    // holding the seat.
-                    let welcomed = out.iter().any(|m| matches!(m, ServerMessage::Welcome { .. }));
-                    if let (Some(who), true) = (&who, welcomed) {
-                        out.push(ServerMessage::Yours(self.lockers.of(who)));
-                        // **Somebody who came in by the code is in from now
-                        // on.** Their address bar says the id, and a refresh
-                        // rejoins by it; a door that shut behind them would
-                        // make a refresh a refusal.
-                        if self.entered_by_code(&name, asked_for) {
-                            self.admit(&name, who);
+                        // **And what this server merely holds for them**, which
+                        // is the other half of a profile and goes only to its
+                        // owner. Sent even when it is empty, because an empty
+                        // one is what tells a client to offer what it is
+                        // carrying -- see `ServerMessage::Yours`.
+                        //
+                        // Only on a join that was *allowed*: this room
+                        // resolved, and the room itself can still refuse -- a
+                        // match already under way, or a person already sitting
+                        // here in another tab. Handing a locker to a connection
+                        // that was turned away would have that tab replace the
+                        // library of the one holding the seat.
+                        let welcomed =
+                            out.iter().any(|m| matches!(m, ServerMessage::Welcome { .. }));
+                        if let (Some(who), true) = (&who, welcomed) {
+                            out.push(ServerMessage::Yours(self.lockers.of(who)));
+                            // **Somebody who came in by the code is in from now
+                            // on.** Their address bar says the id, and a
+                            // refresh rejoins by it; a door that shut behind
+                            // them would make a refresh a refusal.
+                            if self.entered_by_code(&name, asked_for) {
+                                self.admit(&name, who);
+                            }
                         }
+                        out
                     }
-                    out
+                    Err(reason) => {
+                        log::info!("refused a join for {asked:?}: {reason}");
+                        vec![ServerMessage::Rejected { reason }]
+                    }
                 }
-                Err(reason) => {
-                    log::info!("refused a join for {asked:?}: {reason}");
-                    vec![ServerMessage::Rejected { reason }]
+            }
+            // A watcher is routed like a player with no number. `Server::handle`
+            // already takes `Option<PlayerId>` and already answers a `Subscribe`
+            // from nobody with the chunks it asked for, so reading works out of
+            // the box — and everything that *acts* is refused for want of an id
+            // rather than for want of a check somebody has to remember to write.
+            _ => {
+                let Some(room) = caller.room() else {
+                    log::debug!("a message from a connection in no room; dropped");
+                    return Vec::new();
+                };
+                let id = caller.seat.as_ref().map(|(_, id)| *id);
+                match self.rooms.get_mut(room) {
+                    // Not a `Join`: those are answered above, where the person
+                    // was settled. Everything else is asked by a seat and needs
+                    // no name.
+                    Some(server) => server.handle(id, None, msg),
+                    // Only reachable if a room could go away under a seated
+                    // player, which nothing does yet. Said out loud rather than
+                    // ignored, because the symptom would be one client silently
+                    // going deaf.
+                    None => {
+                        log::warn!("{id:?} is in room \"{room}\", which is not here");
+                        Vec::new()
+                    }
                 }
-            };
-        }
-
-        // A watcher is routed like a player with no number. `Server::handle`
-        // already takes `Option<PlayerId>` and already answers a `Subscribe`
-        // from nobody with the chunks it asked for, so reading works out of
-        // the box — and everything that *acts* is refused for want of an id
-        // rather than for want of a check somebody has to remember to write.
-        let Some(room) = caller.room() else {
-            log::debug!("a message from a connection in no room; dropped");
-            return Vec::new();
-        };
-        let id = seat.map(|(_, id)| *id);
-        match self.rooms.get_mut(room) {
-            // Not a `Join`: those are answered above, where the person was
-            // settled. Everything else is asked by a seat and needs no name.
-            Some(server) => server.handle(id, None, msg),
-            // Only reachable if a room could go away under a seated player,
-            // which nothing does yet. Said out loud rather than ignored,
-            // because the symptom would be one client silently going deaf.
-            None => {
-                log::warn!("{id:?} is in room \"{room}\", which is not here");
-                Vec::new()
             }
         }
     }
-
     /// Everything the rooms want said **now** rather than at the next step,
     /// with the room it belongs to. See [`ServerMessage::Acted`].
     pub fn take_announcements(&mut self) -> Vec<(RoomId, ServerMessage)> {
@@ -1196,12 +1226,12 @@ impl Rooms {
         let name = format!("{}-v-{}", from.short(), who.short());
         let made = match self.make(
             caller.connection,
-            &name,
-            WorldKind::Infinite,
-            Some(Victory::Territory { squares: crate::net::CHALLENGE_SQUARES }),
-            Some(2),
-            Reach::Code,
-            false,
+            Blueprint {
+                victory: Some(Victory::Territory { squares: crate::net::CHALLENGE_SQUARES }),
+                teams: Some(2),
+                reach: Reach::Code,
+                ..Blueprint::world(name, WorldKind::Infinite)
+            },
         ) {
             Ok(made) => made,
             Err(why) => return refuse(&why),
@@ -1745,16 +1775,8 @@ impl Rooms {
     /// already produce, so a client is told the same thing an operator would
     /// be — including that a name is taken, which is the common case and the
     /// one worth reading.
-    pub fn make(
-        &mut self,
-        by: ConnectionId,
-        name: &str,
-        shape: WorldKind,
-        victory: Option<Victory>,
-        teams: Option<u8>,
-        reach: Reach,
-        laboratory: bool,
-    ) -> Result<Made, String> {
+    pub fn make(&mut self, by: ConnectionId, asked: Blueprint) -> Result<Made, String> {
+        let Blueprint { name, shape, victory, teams, reach, laboratory } = asked;
         // Checked before the name is, so a server that is full says so rather
         // than arguing about a name it was never going to use. Counted over
         // rooms made this way and not over every room: an operator who
@@ -1776,7 +1798,7 @@ impl Rooms {
         // was that the code *became* the name, which conflated a credential
         // with an identity: the code could never be changed, and somebody
         // making a game for four friends could not call it anything.
-        let name = crate::net::room_name(name).or_else(|e| {
+        let name = crate::net::room_name(&name).or_else(|e| {
             // A private room may go unnamed, since nobody browses for it.
             if reach != Reach::Listed && name.trim().is_empty() {
                 Ok(UNNAMED.to_string())
