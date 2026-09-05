@@ -503,6 +503,8 @@ fn open_country_nobody_has_loaded_is_worth_hitting() {
     assert!(centre.1 > at.1, "the blast stayed at {centre:?} beside the void");
 }
 
+use super::dynamite::clusters;
+use super::turrets::Aim;
 use super::*;
 
 /// The glider is seeded at chunk-local (6, 6) and travels south-east one

@@ -5,6 +5,7 @@ The crate is divided by **who needs the code**, not by what it does.
 ```
 src/
   sim/      the rules                 client AND server
+    world/    the three passes a generation runs outside the rule
   net/      wire types and transport  client AND server
     spawn.rs  where a player starts, and the ground they are granted
   server/   the authoritative side    server only
