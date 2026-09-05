@@ -59,8 +59,9 @@ fn refuse(why: &str) -> Vec<ServerMessage> {
 }
 
 /// A refusal that leaves the caller where they were — see
-/// [`ServerMessage::NotDone`]. For what is asked of a person rather than of a
-/// world, where a `Rejected` would close a door on somebody standing in a room.
+/// [`ServerMessage::NotDone`]. For an invitation and the party verbs, where a
+/// `Rejected` would close a door on somebody standing in a room; a challenge
+/// still refuses through [`refuse`].
 fn not_done(why: &str) -> Vec<ServerMessage> {
     log::info!("would not: {why}");
     vec![ServerMessage::NotDone { reason: why.to_string() }]

@@ -1443,11 +1443,11 @@ pub enum ServerMessage {
         room: RoomId,
         name: RoomName,
     },
-    /// **It would not do that, and here is why.** For anything asked of a
-    /// person rather than of a world — an invitation, a party — where
-    /// [`Self::Rejected`] would be wrong: that one closes a door on a
-    /// connection, and this leaves you exactly where you were with a sentence
-    /// to read, the way [`Self::NotStarted`] does for a whistle.
+    /// **It would not do that, and here is why.** For an invitation and the
+    /// party verbs, where [`Self::Rejected`] would be wrong: that one closes a
+    /// door on a connection, and this leaves you exactly where you were with a
+    /// sentence to read, the way [`Self::NotStarted`] does for a whistle. A
+    /// challenge still refuses with `Rejected`.
     NotDone {
         reason: String,
     },

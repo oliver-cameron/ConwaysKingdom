@@ -30,7 +30,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted factories](#depleted-factories) | Built | a factory's age is its wear; the numbers have not been through `balance` |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
-| [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu, and closed from it; what is left is the whistle and auto-sleep |
+| [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu, started and closed from it; what is left is auto-sleep |
 | [Spectating](#spectating) | Built | a room with no seat in it |
 | [Games and matches by code](#games-and-matches-by-code) | Built | private rooms with a door that knows who was let in; what is left is `?code=` |
 | [Ice anywhere, at a price](#ice-anywhere-at-a-price) | Decided | a wall you can build on somebody else's doorstep |
@@ -545,9 +545,9 @@ the cell — but the thing to *design* first is the storage, not the shader.
 
 **Closing a room from the client is built** — see [server.md](server.md#closing-one). `ClientMessage::Close` is `Rooms::delete` behind the owner check, the owner is the maker's key and is saved, and the answer for a room somebody is standing in is a refusal that says so: it closes once everybody has left, from the menu, which is where you are once you have.
 
-What is left:
+**The whistle is built** — see [game.md](game.md#the-menu). `ClientMessage::Start` and `EndMatch` are answered behind `Rooms::owns`, so whoever made a match starts and ends it from whichever seat their key sits in, and a match the console made is still the operator's and still starts at `match dispatch`. This entry said the whistle was left for some time after it was not.
 
-**Nothing starts a match but `match dispatch`.** A client can make a match and cannot blow the whistle on it, so a client-made match still needs the operator for its one remaining verb. `ClientMessage::Start` is the same shape as `Create` and wants the same owner check.
+What is left:
 
 **Auto-sleep is the fix the cap only backstops.** Every room steps four times a second for as long as the process lives, whether or not anybody is in it. Half the answer is already built and unused: `Server::set_asleep` exists, `Server::step` returns nothing for a sleeping room, and `world sleep` / `world wake` are at the console. What is missing is the trigger — a room whose last player leaves sleeps after a grace period, and the `Join` that resolves to it wakes it.
 

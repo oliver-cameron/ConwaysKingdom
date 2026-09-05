@@ -114,6 +114,8 @@ For an unlisted room, `Close` first asks `may_enter`, the door below, and somebo
 
 **The id of an unlisted room is not a way in on its own.** It used to be: `resolve` takes an id, a name or a code, and took an id for a private room from anybody who had it, so a private room was exactly as private as its id was unguessable — which is very, and is also what every client that has been in the room has in its address bar. `Rooms::may_enter` is the door now, asked on `Join` and `Watch` after `resolve` has said which room. A listed room opens for anybody. An unlisted one opens by its **code**, for the connection that made it in this process, which is a keyless maker's only way in, and for a key that owns it or is in `Rooms::admitted`. Everybody else is told what a mistyped name is told, and no more. `resolve` itself is unchanged: the console still finds a room by any of the three.
 
+A client with **no key** that came in by the code is refused on a refresh and types the code again: nothing identifies it across sockets, so there is nothing for `admitted` to hold. That is the one regression the door cost, and the smallest one available. The client already has the code from the lobby stamp, so carrying it in the address — `?code=`, left in [planned.md](planned.md#games-and-matches-by-code) — is what removes it.
+
 `admitted` is who may walk in by the id: whoever was **invited**, whoever was **challenged**, and whoever once came in **by the code** — because the address bar says the id after a join by code and a refresh rejoins by it, so a door that shut behind them would make a refresh a refusal. It is written to `rooms.jsonl` beside the code, so an invitation given before a restart stands after it.
 
 ### Invitations

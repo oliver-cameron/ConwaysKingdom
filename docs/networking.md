@@ -78,7 +78,7 @@ A `RoomInfo` is enough to choose by and no more — the name, how many players a
 
 The name rides with it for the reason it rides on a `Join`: it is the one thing a profile takes a client's word for, and a person met by hello and nowhere else would otherwise have none. This is the pre-seat state the keypair handshake will need — see [planned.md](planned.md#what-doing-it-actually-costs-in-order) — arrived at without a signature: a `Hello` is where the signed presentation goes when there is one.
 
-`NotDone { reason }` is the refusal for anything asked of a person rather than of a world. `Rejected` closes a door on a connection — the client shows the menu — and an invitation refused from inside a room has to leave you in it, the way `NotStarted` leaves you in a lobby.
+`NotDone { reason }` is the refusal for an invitation and for the party verbs. `Rejected` closes a door on a connection — the client shows the menu — and an invitation refused from inside a room has to leave you in it, the way `NotStarted` leaves you in a lobby. A challenge's refusals are still `Rejected`, as they were before there was a `NotDone`; a challenge is asked of a person too, and moving it is a client change as much as a server one.
 
 A chunk is identified by **where it is** — `type ChunkId = Coord`. There is no id to allocate, keep unique, or reconcile after a reconnect; two peers naming the same coordinate mean the same chunk. On a torus, fold with `World::canonical` before comparing.
 
