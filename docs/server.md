@@ -193,7 +193,7 @@ An outside program plays through HTTP, and the one thing it needs is a token:
 cargo run --no-default-features --features server --bin server -- --api-token hunter2
 ```
 
-**Without `--api-token` the routes are not mounted**, and the startup log says so; with it, the log names `/api`. Every request carries `Authorization: Bearer TOKEN`, compared in constant time, and anything else is a 401. That is the whole of the gate — there is no second rate limit and no per-route permission, so whoever holds the token is the operator.
+**Without `--api-token` the routes are not mounted**, and the startup log says so; with it, the log names `/api` and never the token. `CK_API_TOKEN` in the environment is the same setting, so a unit file can carry the secret in a file of its own rather than on the command line — see [deploying](#deploying); the flag wins where both are given. Every request carries `Authorization: Bearer TOKEN`, compared in constant time, and anything else is a 401. That is the whole of the gate — there is no second rate limit and no per-route permission, so whoever holds the token is the operator.
 
 `server::api` is the surface and `api::http` is the transport. `api::handle` takes a `Request` and the `Rooms` and returns a status and a JSON body, the way `console::run` takes a line, so every route is tested with no socket near it; only the routing needs axum, and it does one thing — build the request, hand it across to the simulation task on a oneshot, and turn what comes back into a response. Everything that touches a world still happens on the one task allowed to.
 

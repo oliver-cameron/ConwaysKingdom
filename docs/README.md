@@ -34,7 +34,7 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--max-rooms N` | how many rooms players may make | 32 |
 | `--torus RxC` | a world that wraps, sized in chunks | infinite |
 | `--hide NAME` | a screen clients are asked not to offer; repeatable | none |
-| `--api-token TOKEN` | mount the HTTP API at `/api`, for whoever sends this as a bearer token | not mounted |
+| `--api-token TOKEN` | mount the HTTP API at `/api`, for whoever sends this as a bearer token; `CK_API_TOKEN` in the environment is the same setting | not mounted |
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.
 

@@ -519,7 +519,7 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     log::info!("ws://{host}/ws  websocket");
     match &config.api_token {
         Some(_) => log::info!("http://{host}/api  the API, to whoever has the token"),
-        None => log::info!("no --api-token, so /api is not mounted"),
+        None => log::info!("no --api-token and no CK_API_TOKEN, so /api is not mounted"),
     }
     if config.addr.ip().is_unspecified() {
         // Not "reachable from other machines". Binding to an unspecified
