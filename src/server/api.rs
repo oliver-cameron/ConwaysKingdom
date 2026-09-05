@@ -39,7 +39,16 @@ pub enum Request {
     /// `GET /api/rooms/{room}/bots`
     Bots { room: String },
     /// `POST /api/rooms/{room}/bots`
-    AddBot { room: String, name: Option<String>, level: Option<Level>, team: Option<PlayerId> },
+    AddBot {
+        room: String,
+        name: Option<String>,
+        level: Option<Level>,
+        /// The word, not a [`Driver`]: one is a box with a judge in it and a
+        /// request is text. Refused here rather than defaulted, so a typo asks
+        /// for a bot that does not exist instead of quietly getting a book.
+        driver: Option<String>,
+        team: Option<PlayerId>,
+    },
     /// `DELETE /api/rooms/{room}/bots/{seat}`, and `DELETE
     /// /api/rooms/{room}/seats/{seat}` — one seat type, one way out.
     RemoveBot { room: String, seat: PlayerId },
@@ -108,14 +117,21 @@ pub fn handle(rooms: &mut Rooms, req: Request) -> Reply {
                 "bots": s.bots().map(|(seat, _)| seat_json(s, seat)).collect::<Vec<_>>(),
             }))
         }),
-        Request::AddBot { room, name, level, team } => with_room(rooms, &room, |s, _| {
-            let level = level.unwrap_or_default();
-            let name = name.unwrap_or_else(|| format!("{} bot", level.name()));
-            match s.add_bot(name, level, Driver::Book, team) {
-                Ok(seat) => Reply::ok(json!({ "seat": seat })),
-                Err(why) => Reply::error(409, why),
-            }
-        }),
+        Request::AddBot { room, name, level, driver, team } => {
+            let driver = match driver.as_deref().map(Driver::parse) {
+                Some(Err(why)) => return Reply::error(400, why),
+                Some(Ok(driver)) => driver,
+                None => Driver::Book,
+            };
+            with_room(rooms, &room, |s, _| {
+                let level = level.unwrap_or_default();
+                let name = name.unwrap_or_else(|| format!("{} bot", level.name()));
+                match s.add_bot(name, level, driver, team) {
+                    Ok(seat) => Reply::ok(json!({ "seat": seat })),
+                    Err(why) => Reply::error(409, why),
+                }
+            })
+        }
         Request::Sit { room, name, team } => with_room(rooms, &room, |s, _| {
             match s.add_bot(name, Level::default(), Driver::External, team) {
                 Ok(seat) => Reply::ok(json!({ "seat": seat })),
@@ -134,7 +150,7 @@ pub fn handle(rooms: &mut Rooms, req: Request) -> Reply {
         Request::Act { room, seat, action } => with_room(rooms, &room, |s, _| {
             match s.bot(seat).map(|b| &b.driver) {
                 None => return not_the_apis(s, seat),
-                Some(Driver::Book) => {
+                Some(Driver::Book | Driver::Search(_)) => {
                     return Reply::error(409, format!("seat {} is played by the server", seat.0));
                 }
                 Some(Driver::External) => {}
@@ -252,10 +268,7 @@ fn seat_json(server: &crate::server::Server, seat: PlayerId) -> Value {
         "purse": server.value_of(seat),
         "bot": bot.is_some(),
         "level": bot.map(|b| b.level),
-        "driver": bot.map(|b| match b.driver {
-            Driver::Book => "book",
-            Driver::External => "api",
-        }),
+        "driver": bot.map(|b| b.driver.name()),
     })
 }
 
@@ -310,6 +323,36 @@ mod tests {
         assert_eq!(reply.body["players"].as_array().unwrap().len(), 0);
     }
 
+    /// **The driver is asked for by name**, and a name that is not one is
+    /// refused rather than quietly given a book: a caller that asked for a
+    /// search and got the other thing would have no way to tell.
+    #[test]
+    fn a_bot_is_seated_with_the_driver_it_asked_for() {
+        let mut rooms = rooms();
+        let ask = |driver: &str| Request::AddBot {
+            room: "main".into(),
+            name: None,
+            level: None,
+            driver: Some(driver.into()),
+            team: None,
+        };
+        let searching = handle(&mut rooms, ask("search"));
+        assert_eq!(searching.status, 200, "{searching:?}");
+        let listed = handle(&mut rooms, Request::Bots { room: "main".into() });
+        assert_eq!(listed.body["bots"][0]["driver"], "search");
+
+        let nonsense = handle(&mut rooms, ask("psychic"));
+        assert_eq!(nonsense.status, 400, "{nonsense:?}");
+        assert_eq!(
+            handle(&mut rooms, Request::Bots { room: "main".into() }).body["bots"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "a refused driver seated somebody anyway"
+        );
+    }
+
     /// A bot added here is a bot the lobby lists and the console would, and
     /// taking it away vacates the seat; a seat nobody is in is a 404, a
     /// person's is a 409, and so is a match under way.
@@ -322,6 +365,7 @@ mod tests {
                 room: "main".into(),
                 name: None,
                 level: Some(Level::Hard),
+                driver: None,
                 team: None,
             },
         );
@@ -332,6 +376,7 @@ mod tests {
         assert_eq!(listed.body["bots"][0]["seat"], seat.0);
         assert_eq!(listed.body["bots"][0]["level"], "hard");
         assert_eq!(listed.body["bots"][0]["name"], "hard bot");
+        assert_eq!(listed.body["bots"][0]["driver"], "book", "no driver named is the book");
         let room = handle(&mut rooms, Request::Room { room: "main".into() });
         assert_eq!(room.body["players"][0]["bot"], true);
 
@@ -360,7 +405,13 @@ mod tests {
         rooms.start_match("dawn").unwrap();
         let late = handle(
             &mut rooms,
-            Request::AddBot { room: "dawn".into(), name: None, level: None, team: None },
+            Request::AddBot {
+                room: "dawn".into(),
+                name: None,
+                level: None,
+                driver: None,
+                team: None,
+            },
         );
         assert_eq!(late.status, 409, "{late:?}");
     }
@@ -421,7 +472,13 @@ mod tests {
 
         let book = handle(
             &mut rooms,
-            Request::AddBot { room: "main".into(), name: None, level: None, team: None },
+            Request::AddBot {
+                room: "main".into(),
+                name: None,
+                level: None,
+                driver: None,
+                team: None,
+            },
         );
         let not_ours = handle(
             &mut rooms,

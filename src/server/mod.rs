@@ -1125,11 +1125,11 @@ impl Server {
             let (plays_as, purse) = (self.plays_as(seat), self.value_of(seat).unwrap_or(0));
             let Some(bot) = self.bots.get_mut(&seat) else { continue };
             bot.next_at = tick + bot.cadence();
-            let chosen = match bot.driver {
-                Driver::Book => bot.choose(&self.world, &self.rules, plays_as, purse, tick),
-                // Priced as it arrived; nothing waits for a step.
-                Driver::External => None,
-            };
+            // Which driver it is, and how deep it looks, are [`bot::Bot`]'s
+            // own business: one door for the book and the search alike, and
+            // the API's seat answers nothing here because its actions were
+            // priced as they arrived.
+            let chosen = bot.choose(&self.world, &self.rules, plays_as, purse, tick);
             if let Some(action) = chosen {
                 if let Err(why) = self.act(Stamped { tick, player: plays_as, seat, action }) {
                     log::debug!("bot {seat:?} was refused: {why}");

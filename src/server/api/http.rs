@@ -123,6 +123,7 @@ fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, Response> {
 struct AddBotBody {
     name: Option<String>,
     level: Option<Level>,
+    driver: Option<String>,
     team: Option<u8>,
 }
 
@@ -162,11 +163,11 @@ async fn add_bot(
     Path(room): Path<String>,
     parsed: Result<Json<AddBotBody>, JsonRejection>,
 ) -> Response {
-    let AddBotBody { name, level, team } = match body(parsed) {
+    let AddBotBody { name, level, driver, team } = match body(parsed) {
         Ok(b) => b,
         Err(why) => return why,
     };
-    answer(&api, Request::AddBot { room, name, level, team: team.map(PlayerId) }).await
+    answer(&api, Request::AddBot { room, name, level, driver, team: team.map(PlayerId) }).await
 }
 
 async fn remove_bot(

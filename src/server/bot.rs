@@ -7,28 +7,38 @@
 //! ordinary action and can do nothing a client could not. Nothing about the
 //! protocol changes for it beyond the lobby saying which seats are bots.
 //!
-//! **Its play is a book, not a search.** `examples/balance` measured what the
-//! economy rewards — a blinker pays, a glider bleeds, sprawl bleeds badly — so
-//! a competent bot is a small book of shapes and a rule about where to put
-//! them: compact oscillators inside its own ground to earn, life at the
-//! frontier where ground is contested, and ice around what it wants to keep.
-//! Difficulty is two dials rather than an algorithm: how often it acts, and
-//! what it will do. A bot that *chooses* — tries a placement on a copy of the
-//! world and scores what happened — is the second version, and `World: Clone`
-//! is there for it; see planned.md.
+//! **Its play is a book or a search**, and the book comes first.
+//! `examples/balance` measured what the economy rewards — a blinker pays, a
+//! glider bleeds, sprawl bleeds badly — so a competent bot is a small book of
+//! shapes and a rule about where to put them: compact oscillators inside its
+//! own ground to earn, life at the frontier where ground is contested, and ice
+//! around what it wants to keep. Difficulty is two dials: how often it acts,
+//! and what it will do.
+//!
+//! [`Driver::Search`] is the second version and the dials are the same two.
+//! It takes the placements the book would have offered, tries each on a
+//! [`World::crop`] of the board, steps that [`SEARCH_HORIZON`] generations and
+//! asks a [`Judge`] what it is looking at; the level says how many it tries.
+//! The judge is a trait because the hand-written [`Counted`] is not meant to
+//! be the last one — a learned evaluator drops in behind it, and the search
+//! must not know which one it is holding. See planned.md.
 //!
 //! Determinism is not a problem, which is worth saying because it looks like
-//! one: a choice is made once, on the server, and reaches every peer as an
-//! action at a stated tick. The dice here are its own — the room's seed, the
-//! seat and the tick through [`crate::sim::mix`] — and never touch the
-//! streams [`crate::sim::seed`] rolls for a cell.
+//! one — twice over, since a score is an `f32` and a rollout steps a world. A
+//! choice is made once, on the server, and reaches every peer as an action at
+//! a stated tick; the dice here are its own — the room's seed, the seat and
+//! the tick through [`crate::sim::mix`] — and never touch the streams
+//! [`crate::sim::seed`] rolls for a cell. Nothing in [`crate::sim`] sees the
+//! `f32`, and the world a rollout moves is a copy nothing else can reach.
 //!
 //! [`Player`]: crate::sim::Player
 //! [`Server::step`]: crate::server::Server::step
 //! [`Server::act`]: crate::server::Server::act
 
 use crate::net::{Action, Level, Placement, Rules, Stamped, Tick};
-use crate::sim::{mix, Kind, PlayerId, Roll, World};
+use crate::sim::{
+    bits, mix, Kind, PlayerId, Roll, World, CHUNK_N, DYNAMITE_MOST_REACH, TURRET_REACH,
+};
 
 /// Generations between one act and the next: the first dial.
 const EASY_EVERY: Tick = 16;
@@ -52,13 +62,137 @@ const SAMPLES: usize = 48;
 /// How near somebody else's ground makes a square the frontier, in cells.
 const FRONTIER: i32 = 6;
 
+/// Placements one act of a search tries: the second dial's other end.
+const EASY_TRIES: usize = 2;
+const NORMAL_TRIES: usize = 5;
+const HARD_TRIES: usize = 10;
+
+/// Generations a rollout runs for.
+const SEARCH_HORIZON: usize = 8;
+
+/// How far the edge of a crop reaches into it over one rollout — see
+/// [`World::crop`], which is where the arithmetic is argued.
+const SEARCH_MARGIN: i32 = SEARCH_HORIZON as i32 + DYNAMITE_MOST_REACH;
+
+/// **The horizon has to fit inside a blast**, or the margin is a lie: past
+/// this a turret moves ground further in `SEARCH_HORIZON` generations than
+/// [`DYNAMITE_MOST_REACH`] allows for, and the region called exact is not.
+const _: () = assert!(SEARCH_HORIZON as i32 * TURRET_REACH <= DYNAMITE_MOST_REACH);
+
+/// The biggest span in [`BOOK`], pinned by `the_book_keeps_to_its_own_spans`.
+const MOST_SPAN: i32 = 4;
+
+/// **Everywhere a placement can reach**, and all a [`Judge`] is shown: as far
+/// out as the book offers one, the shape itself, and what a generation of it
+/// moves over the horizon. A window any tighter cuts the frontier in half —
+/// a shape laid at [`REACH`] would have the ground it claims fall outside the
+/// score, and the search would prefer home for a reason that is arithmetic
+/// rather than play.
+///
+/// Public because `examples/duel` records this exact window: what a corpus
+/// holds and what a judge is handed have to be the same picture.
+pub const SEARCH_SEEN: i32 = REACH + MOST_SPAN + SEARCH_HORIZON as i32;
+
+/// Half the board a rollout runs on: what is scored, and the margin round it.
+const SEARCH_CROP: i32 = SEARCH_SEEN + SEARCH_MARGIN;
+
+/// A square of this player's at full influence: the unit a match is won in.
+const SCORE_GROUND: f32 = 1.0;
+/// One of theirs held below it.
+const SCORE_EDGE: f32 = 0.5;
+/// One of somebody else's.
+const SCORE_THEIRS: f32 = -1.0;
+/// A living cell, over the square it stands on.
+const SCORE_LIFE: f32 = 0.5;
+/// A living factory, over the life.
+const SCORE_FACTORY: f32 = 2.0;
+/// A factory's corpse: a bill that has not fallen due.
+const SCORE_CORPSE: f32 = -1.0;
+
+/// **What a position is worth to a player**, in the units the game counts.
+///
+/// Higher is better and the scale is arbitrary: a search compares scores on
+/// one board and never across boards.
+///
+/// A trait because [`Counted`] is not meant to be the last word. A learned
+/// evaluator is the next piece of work here and arrives behind this signature
+/// — see planned.md — so a search must be able to hold one without knowing
+/// which it is.
+///
+/// The world handed over is a crop and **only its exact part**: see
+/// [`World::crop`] for what a crop stops being able to say, and
+/// [`SEARCH_SEEN`] for how much of one is trimmed off before a judge sees it.
+pub trait Judge: Send + Sync {
+    fn score(&self, world: &World, me: PlayerId) -> f32;
+}
+
+/// The hand-written judge: ground, life and manufacture, counted and weighted.
+/// The argument for the weights is in [server.md].
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#bots
+pub struct Counted;
+
+impl Judge for Counted {
+    fn score(&self, world: &World, me: PlayerId) -> f32 {
+        let mut total = 0.0;
+        for (_, chunk) in world.stored() {
+            for row in 0..CHUNK_N {
+                for col in 0..CHUNK_N {
+                    let cell = chunk[(row, col)];
+                    if !cell.player().is_owned() {
+                        continue;
+                    }
+                    if cell.player() != me {
+                        total += SCORE_THEIRS;
+                        continue;
+                    }
+                    total +=
+                        if cell.influence() == bits::MAX_LEVEL { SCORE_GROUND } else { SCORE_EDGE };
+                    if cell.is_alive() {
+                        total += SCORE_LIFE;
+                    }
+                    if cell.kind() == Kind::FACTORY {
+                        total += if cell.is_alive() { SCORE_FACTORY } else { SCORE_CORPSE };
+                    }
+                }
+            }
+        }
+        total
+    }
+}
+
 /// Who is driving the seat.
 pub enum Driver {
     /// The server, from [`BOOK`].
     Book,
+    /// The server, from the book and a rollout — see [`Ground::best`]. It
+    /// carries its own judge, so what a bot is scoring by is a fact about the
+    /// seat rather than about the build.
+    Search(Box<dyn Judge>),
     /// Something outside, through `server::api`. Its actions are priced the
     /// moment they arrive, so there is nothing to do here at a step.
     External,
+}
+
+impl Driver {
+    /// The word a console and the API name one by. Not [`Self::External`]:
+    /// that one is not asked for, it is what sitting down through the API
+    /// makes you.
+    pub fn parse(word: &str) -> Result<Self, String> {
+        match word {
+            "book" => Ok(Self::Book),
+            "search" => Ok(Self::Search(Box::new(Counted))),
+            _ => Err(format!("no driver \"{word}\"; try book or search")),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Book => "book",
+            Self::Search(_) => "search",
+            Self::External => "api",
+        }
+    }
 }
 
 /// One seat the server plays.
@@ -137,6 +271,16 @@ impl Level {
             Self::Hard => &[Intent::Earn, Intent::Contest, Intent::Keep],
         }
     }
+
+    /// How deep a searching bot looks: the level scales this the way it scales
+    /// [`Self::every`], so a level is one word for both dials.
+    fn tries(self) -> usize {
+        match self {
+            Self::Easy => EASY_TRIES,
+            Self::Normal => NORMAL_TRIES,
+            Self::Hard => HARD_TRIES,
+        }
+    }
 }
 
 impl Bot {
@@ -151,9 +295,11 @@ impl Bot {
 
     /// One act, or nothing if nowhere fits or nothing is affordable.
     ///
-    /// The intents its level allows, from one the dice pick, and the first
-    /// that finds an affordable placement wins. Every placement is tested cell
-    /// by cell with [`crate::net::may_place_under`] and priced with
+    /// The intents its level allows, from one the dice pick. A book takes the
+    /// first that finds an affordable placement; a search takes what every one
+    /// of them offers, up to [`Level::tries`], and picks between them by
+    /// looking. Either way a placement is tested cell by cell with
+    /// [`crate::net::may_place_under`] and priced with
     /// [`crate::net::price_under`], the way the server will judge it, so what
     /// comes back is an action that will be taken.
     pub fn choose(
@@ -164,47 +310,79 @@ impl Bot {
         purse: i32,
         tick: Tick,
     ) -> Option<Action> {
-        let roll = Roll::new(mix(self.dice, tick));
-        let intents = self.level.intents();
-        let first = roll.pick(0, intents.len());
+        // Taken apart rather than used through `self`, because one act needs
+        // the judge on the driver and the factories beside it at once, and
+        // that is two borrows of one struct.
+        let Self { level, driver, laid, dice, .. } = self;
+        let roll = Roll::new(mix(*dice, tick));
         let ground = Ground::around(world, rules, plays_as);
-        for k in 0..intents.len() {
-            let intent = intents[(first + k) % intents.len()];
-            let found = match intent {
-                Intent::Earn => ground.place(&roll, &EARNERS, Placement::Factory, false),
-                Intent::Contest => ground.place(&roll, &HOLDERS, Placement::Life, true),
-                Intent::Keep => self.keep(&ground),
-            };
-            let Some((action, note)) = found else { continue };
-            let stamped = Stamped { tick, player: plays_as, seat: plays_as, action };
-            if purse + crate::net::price_under(world, &stamped, rules) < 0 {
-                continue;
+        let intents = level.intents();
+        let first = roll.pick(0, intents.len());
+        let afford = |action: &Action| {
+            let stamped =
+                Stamped { tick, player: plays_as, seat: plays_as, action: action.clone() };
+            purse + crate::net::price_under(world, &stamped, rules) >= 0
+        };
+        let found = match driver {
+            // Priced as it arrived; nothing waits for a step.
+            Driver::External => None,
+            Driver::Book => (0..intents.len()).find_map(|k| {
+                let found = match intents[(first + k) % intents.len()] {
+                    Intent::Earn => ground.place(&roll, &EARNERS, Placement::Factory, false),
+                    Intent::Contest => ground.place(&roll, &HOLDERS, Placement::Life, true),
+                    Intent::Keep => Self::keep(laid, &ground),
+                };
+                found.filter(|(action, _)| afford(action))
+            }),
+            Driver::Search(judge) => {
+                let tries = level.tries();
+                let mut offers = Vec::new();
+                // Shared out between the intents rather than spent on the
+                // first, or a hard bot would never see a frontier while there
+                // was anywhere left at home to earn on.
+                let each = tries.div_ceil(intents.len());
+                for k in 0..intents.len() {
+                    let mut got = match intents[(first + k) % intents.len()] {
+                        Intent::Earn => {
+                            ground.offers(&roll, &EARNERS, Placement::Factory, false, each)
+                        }
+                        Intent::Contest => {
+                            ground.offers(&roll, &HOLDERS, Placement::Life, true, each)
+                        }
+                        // One ring or none: there is nothing to choose between.
+                        Intent::Keep => Self::keep(laid, &ground).into_iter().collect(),
+                    };
+                    got.retain(|(action, _)| afford(action));
+                    offers.append(&mut got);
+                }
+                offers.truncate(tries);
+                ground.best(judge.as_ref(), tick, offers)
             }
-            // Remembered only once it is affordable, or a thin purse would
-            // write a factory off as walled without a pane ever going down.
-            match note {
-                Note::Laid(laid) => self.laid.push(laid),
-                Note::Iced(i) => self.laid[i].iced = true,
-                Note::Nothing => {}
-            }
-            return Some(stamped.action);
+        };
+        let (action, note) = found?;
+        // Remembered only once it is affordable, or a thin purse would
+        // write a factory off as walled without a pane ever going down.
+        match note {
+            Note::Laid(one) => laid.push(one),
+            Note::Iced(i) => laid[i].iced = true,
+            Note::Nothing => {}
         }
-        None
+        Some(action)
     }
 
     /// Ice round the oldest factory that is still standing and not yet iced.
     /// One that has died is forgotten rather than walled; one with nowhere
     /// left to put a pane counts as walled.
-    fn keep(&mut self, ground: &Ground<'_>) -> Option<(Action, Note)> {
-        while let Some(i) = self.laid.iter().position(|l| !l.iced) {
-            let Laid { at, shape, .. } = self.laid[i];
+    fn keep(laid: &mut Vec<Laid>, ground: &Ground<'_>) -> Option<(Action, Note)> {
+        while let Some(i) = laid.iter().position(|l| !l.iced) {
+            let Laid { at, shape, .. } = laid[i];
             if !ground.standing(at, &BOOK[shape]) {
-                self.laid.remove(i);
+                laid.remove(i);
                 continue;
             }
             let ring = ground.ring(at, &BOOK[shape]);
             if ring.is_empty() {
-                self.laid[i].iced = true;
+                laid[i].iced = true;
                 continue;
             }
             return Some((Action::Paint { cells: ring, placement: Placement::Ice }, Note::Iced(i)));
@@ -245,9 +423,49 @@ impl Ground<'_> {
         placement: Placement,
         frontier: bool,
     ) -> Option<(Action, Note)> {
-        let shape = shapes[roll.pick(1, shapes.len())];
+        let mut out = Vec::new();
+        self.sample(roll, shapes[roll.pick(1, shapes.len())], placement, frontier, 1, &mut out);
+        out.pop()
+    }
+
+    /// **Everywhere one of these shapes fits, up to `most`.** What a search
+    /// chooses between, and it is the book's own generator rather than a
+    /// second one: the same samples in the same order, each taken instead of
+    /// only the first, walked over every shape the intent allows so a search
+    /// picks what to lay as well as where.
+    fn offers(
+        &self,
+        roll: &Roll,
+        shapes: &[usize],
+        placement: Placement,
+        frontier: bool,
+        most: usize,
+    ) -> Vec<(Action, Note)> {
+        let mut out = Vec::new();
+        let first = roll.pick(1, shapes.len());
+        for k in 0..shapes.len() {
+            let shape = shapes[(first + k) % shapes.len()];
+            self.sample(roll, shape, placement, frontier, most, &mut out);
+        }
+        out
+    }
+
+    /// Squares round home this shape fits on, **sampled and not scanned**, so
+    /// an act costs the same on a full torus as on an empty plane.
+    fn sample(
+        &self,
+        roll: &Roll,
+        shape: usize,
+        placement: Placement,
+        frontier: bool,
+        most: usize,
+        out: &mut Vec<(Action, Note)>,
+    ) {
         let pattern = &BOOK[shape];
         for k in 0..SAMPLES as u64 {
+            if out.len() >= most {
+                return;
+            }
             let reach = if k < SAMPLES as u64 / 2 { NEAR } else { REACH };
             let window = (2 * reach) as usize;
             let at = (
@@ -262,9 +480,45 @@ impl Ground<'_> {
                 Placement::Factory => Note::Laid(Laid { at, shape, iced: false }),
                 _ => Note::Nothing,
             };
-            return Some((Action::Paint { cells, placement }, note));
+            out.push((Action::Paint { cells, placement }, note));
         }
-        None
+    }
+
+    /// **Try each of them, step a copy, and take the best.**
+    ///
+    /// One crop for the whole act rather than one per candidate, which is what
+    /// makes this honest rather than a fudge: the board's missing edge is
+    /// wrong in the same way for everything scored on it, so what does not
+    /// cancel is small and the ordering — the only thing read here — survives
+    /// it. Only [`SEARCH_SEEN`] of the rollout reaches the judge, because that
+    /// is as much of it as is the real world's future; see [`World::crop`].
+    ///
+    /// The first of equal scores wins, so one board and one set of offers give
+    /// one answer.
+    fn best(
+        &self,
+        judge: &dyn Judge,
+        tick: Tick,
+        mut offers: Vec<(Action, Note)>,
+    ) -> Option<(Action, Note)> {
+        if offers.len() < 2 {
+            return offers.pop();
+        }
+        let board = self.world.crop(self.home, SEARCH_CROP);
+        let mut best: Option<(f32, usize)> = None;
+        for (i, (action, _)) in offers.iter().enumerate() {
+            let mut trial = board.clone();
+            let stamped = Stamped { tick, player: self.me, seat: self.me, action: action.clone() };
+            crate::net::apply(&mut trial, &stamped);
+            for _ in 0..SEARCH_HORIZON {
+                trial.step();
+            }
+            let score = judge.score(&trial.crop(self.home, SEARCH_SEEN), self.me);
+            if best.is_none_or(|(top, _)| score > top) {
+                best = Some((score, i));
+            }
+        }
+        Some(offers.swap_remove(best?.1))
     }
 
     /// Every cell of the shape is this player's to place on, and nothing
@@ -329,6 +583,7 @@ impl Ground<'_> {
 mod tests {
     use super::*;
     use crate::sim::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn granted(me: PlayerId) -> World {
         let mut world = World::infinite_empty();
@@ -336,8 +591,25 @@ mod tests {
         world
     }
 
+    fn searching() -> Driver {
+        Driver::Search(Box::new(Counted))
+    }
+
+    /// A judge that says nothing and counts what it was asked, which is how a
+    /// test sees how many rollouts one act ran.
+    struct Counting(std::sync::Arc<AtomicUsize>);
+
+    impl Judge for Counting {
+        fn score(&self, _: &World, _: PlayerId) -> f32 {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            0.0
+        }
+    }
+
     /// Every shape in the book is what it says: the cells sit inside the span
-    /// it declares, so the margin kept clear round one is round all of it.
+    /// it declares, so the margin kept clear round one is round all of it —
+    /// and no span is wider than [`MOST_SPAN`], which is what a crop is sized
+    /// against.
     #[test]
     fn the_book_keeps_to_its_own_spans() {
         for shape in &BOOK {
@@ -349,6 +621,12 @@ mod tests {
                     shape.span
                 );
             }
+            assert!(
+                shape.span.0 <= MOST_SPAN && shape.span.1 <= MOST_SPAN,
+                "{} is {:?}, over the {MOST_SPAN} a crop leaves room for",
+                shape.name,
+                shape.span
+            );
         }
     }
 
@@ -399,13 +677,84 @@ mod tests {
     }
 
     /// With nothing in hand there is nothing to lay, and the bot says so
-    /// rather than sending an action the server would refuse.
+    /// rather than sending an action the server would refuse. True of a
+    /// search as well, which must not spend a rollout on a placement it
+    /// cannot pay for.
     #[test]
     fn a_bot_with_no_money_chooses_nothing() {
         let me = PlayerId(1);
         let world = granted(me);
-        let mut bot = Bot::new(Level::Hard, Driver::Book, 0, me, 0);
+        for driver in [Driver::Book, searching()] {
+            let mut bot = Bot::new(Level::Hard, driver, 0, me, 0);
+            assert!(bot.choose(&world, &Rules::default(), me, 0, 0).is_none());
+        }
+        let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut bot =
+            Bot::new(Level::Hard, Driver::Search(Box::new(Counting(counted.clone()))), 0, me, 0);
         assert!(bot.choose(&world, &Rules::default(), me, 0, 0).is_none());
+        assert_eq!(counted.load(Ordering::Relaxed), 0, "a broke bot rolled a world forward");
+    }
+
+    /// **A search chooses between the book's offers and never outside them**,
+    /// which is what keeps everything the book refuses out of reach of the
+    /// thing that does the choosing.
+    #[test]
+    fn a_search_lays_only_what_the_book_would_have_offered() {
+        let me = PlayerId(1);
+        let world = granted(me);
+        let rules = Rules::default();
+        let mut bot = Bot::new(Level::Normal, searching(), 11, me, 0);
+        let laid = bot.choose(&world, &rules, me, 1000, 0).expect("nowhere to build on a grant");
+
+        // The same generator, at the same tick, off the same dice.
+        let roll = Roll::new(mix(mix(11, me.0 as u64), 0));
+        let ground = Ground::around(&world, &rules, me);
+        let mut book: Vec<Action> = Vec::new();
+        for (shapes, placement, frontier) in
+            [(&EARNERS[..], Placement::Factory, false), (&HOLDERS[..], Placement::Life, true)]
+        {
+            let offers = ground.offers(&roll, shapes, placement, frontier, NORMAL_TRIES);
+            book.extend(offers.into_iter().map(|(action, _)| action));
+        }
+        assert!(book.contains(&laid), "{laid:?} is nothing the book offered");
+    }
+
+    /// A level is how deep it looks as well as how often it acts, and the
+    /// budget is a cap rather than a target: however many squares the book
+    /// offers, an act rolls the world forward at most [`Level::tries`] times.
+    #[test]
+    fn a_search_rolls_the_world_forward_no_more_often_than_its_level_allows() {
+        let me = PlayerId(1);
+        let world = granted(me);
+        for level in Level::ALL {
+            let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let judge = Driver::Search(Box::new(Counting(counted.clone())));
+            let mut bot = Bot::new(level, judge, 5, me, 0);
+            bot.choose(&world, &Rules::default(), me, 10_000, 0);
+            let ran = counted.load(Ordering::Relaxed);
+            assert!(ran <= level.tries(), "{} ran {ran} rollouts", level.name());
+        }
+    }
+
+    /// **The cheapest end-to-end assertion there is**: a seat the server
+    /// searches for, against a seat nobody plays, on one board through the
+    /// same `act` a client's placement goes through. If the loop works at
+    /// all, the ground says so.
+    #[test]
+    fn a_searching_bot_beats_a_seat_that_never_plays() {
+        let mut server = crate::server::Server::new(World::infinite_empty());
+        let bot = server.add_bot("searcher", Level::Normal, searching(), None).unwrap();
+        let idle = server.join_with("idle", None).unwrap();
+        for _ in 0..120 {
+            server.step();
+        }
+        let held = server.territory();
+        assert!(
+            held[bot.0 as usize] > held[idle.0 as usize],
+            "the search held {} against {} doing nothing",
+            held[bot.0 as usize],
+            held[idle.0 as usize]
+        );
     }
 
     /// A hard bot walls what it built: once a factory is standing, some act
