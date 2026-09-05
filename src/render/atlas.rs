@@ -209,7 +209,18 @@ fn placeholder() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sim::{Cell, Kind, PlayerId};
+    use crate::sim::{bits, Ages, Cell, Kind, PlayerId};
+
+    /// Every row a kind can reach: one for a kind that never ages, all eight
+    /// for one that does. A redrawn sheet that left the fuse rows blank would
+    /// draw a burning dynamite as nothing at all, and only the guard below
+    /// would know.
+    fn oldest(kind: Kind) -> u8 {
+        match kind.ages() {
+            Ages::Never => 0,
+            _ => bits::MAX_AGE,
+        }
+    }
 
     /// The sheet is the size the mapping assumes. A tile byte indexes a 16x16
     /// grid of 16x16 tiles and nothing checks that at runtime, so it is
@@ -235,35 +246,38 @@ mod tests {
     }
 
     /// Every state a cell can be in must have art drawn at the tile its byte
-    /// points to. Dead and ice-free is allowed to be blank -- it is empty
-    /// ground -- but a state you cannot see is a state you cannot play
-    /// against.
+    /// points to, at every age its kind can reach. Dead and ice-free is
+    /// allowed to be blank -- it is empty ground -- but a state you cannot see
+    /// is a state you cannot play against, and a fuse half burnt is one.
     #[test]
     fn every_state_has_art_at_the_tile_its_byte_names() {
         let texels = decode(SHEET).expect("the sheet must decode");
         for kind in Kind::ALL {
-            for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
-                let cell = Cell::DEAD
-                    .with_kind(kind)
-                    .with_alive(alive)
-                    .with_ice(ice)
-                    .with_player(PlayerId(1));
-                let tile = cell.sprite();
-                let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
+            for age in 0..=oldest(kind) {
+                for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let cell = Cell::DEAD
+                        .with_kind(kind)
+                        .with_age(age)
+                        .with_alive(alive)
+                        .with_ice(ice)
+                        .with_player(PlayerId(1));
+                    let tile = cell.sprite();
+                    let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
 
-                let covered = (0..TILE_N)
-                    .flat_map(|y| (0..TILE_N).map(move |x| (x, y)))
-                    .filter(|&(x, y)| {
-                        let (px, py) = (tx * TILE_N + x, ty * TILE_N + y);
-                        texels[(((py * SHEET_W + px) * 4) + 3) as usize] > 8
-                    })
-                    .count();
-                if alive || ice {
-                    assert!(
-                        covered > (TILE_N * TILE_N / 8) as usize,
-                        "Kind({}) alive={alive} ice={ice}: tile {tile} is blank",
-                        kind.0
-                    );
+                    let covered = (0..TILE_N)
+                        .flat_map(|y| (0..TILE_N).map(move |x| (x, y)))
+                        .filter(|&(x, y)| {
+                            let (px, py) = (tx * TILE_N + x, ty * TILE_N + y);
+                            texels[(((py * SHEET_W + px) * 4) + 3) as usize] > 8
+                        })
+                        .count();
+                    if alive || ice {
+                        assert!(
+                            covered > (TILE_N * TILE_N / 8) as usize,
+                            "Kind({}) age={age} alive={alive} ice={ice}: tile {tile} is blank",
+                            kind.0
+                        );
+                    }
                 }
             }
         }
@@ -285,22 +299,25 @@ mod tests {
                 .count()
         };
         for kind in Kind::ALL {
-            for (alive, ice) in [(true, false), (false, true), (true, true)] {
-                let tile = Cell::DEAD
-                    .with_kind(kind)
-                    .with_alive(alive)
-                    .with_ice(ice)
-                    .with_player(PlayerId(1))
-                    .sprite();
-                let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
-                for level in 1..LEVELS {
-                    let (ox, oy) = LEVEL_ORIGIN[level];
-                    let side = LEVEL_TILE_N[level];
-                    assert!(
-                        covered(ox + tx * side, oy + ty * side, side) > 0,
-                        "Kind({}) alive={alive} ice={ice}: tile {tile} is blank at level {level}",
-                        kind.0
-                    );
+            for age in 0..=oldest(kind) {
+                for (alive, ice) in [(true, false), (false, true), (true, true)] {
+                    let tile = Cell::DEAD
+                        .with_kind(kind)
+                        .with_age(age)
+                        .with_alive(alive)
+                        .with_ice(ice)
+                        .with_player(PlayerId(1))
+                        .sprite();
+                    let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
+                    for level in 1..LEVELS {
+                        let (ox, oy) = LEVEL_ORIGIN[level];
+                        let side = LEVEL_TILE_N[level];
+                        assert!(
+                            covered(ox + tx * side, oy + ty * side, side) > 0,
+                            "Kind({}) age={age} alive={alive} ice={ice}: tile {tile} is blank at level {level}",
+                            kind.0
+                        );
+                    }
                 }
             }
         }
