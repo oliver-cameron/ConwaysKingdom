@@ -1508,6 +1508,29 @@ impl Rooms {
         }
     }
 
+    /// Every party — its id, its name, how many are in it and how many worlds
+    /// it has — for the **console** and nothing else. Whoever runs the server
+    /// can read `parties.jsonl` anyway, and an operator who cannot see a party
+    /// cannot remove one that is in the way.
+    pub fn parties_here(&self) -> Vec<(PartyId, String, usize, usize)> {
+        self.parties
+            .all()
+            .map(|(id, party)| {
+                (id.clone(), party.name.clone(), party.members.len(), party.rooms.len())
+            })
+            .collect()
+    }
+
+    /// Remove a party from the console, whoever is in it. Its worlds stay,
+    /// unlisted and their maker's, as when the last member leaves; nobody in
+    /// them is unseated, for the reason `leave_party` unseats nobody.
+    pub fn delete_party(&mut self, id: &str) -> Result<String, String> {
+        let gone = self.parties.remove(&PartyId(id.to_string()))?;
+        self.save_parties();
+        log::info!("removed party {id} \"{}\" with {} in it", gone.name, gone.members.len());
+        Ok(gone.name)
+    }
+
     /// Write what is known about the client-made rooms, and say so if it will
     /// not go. Not fatal, for the reason the tables are not; loud, because the
     /// symptom otherwise is a private world coming back listed and codeless.

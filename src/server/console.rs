@@ -53,6 +53,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("match dispatch", "start the one match that is waiting"),
     ("match delete NAME", "remove it"),
     ("match", "what matches there are, and what they are doing"),
+    ("party delete ID", "remove it, whoever is in it; its worlds stay"),
+    ("party", "what parties there are, and how many are in each"),
     ("rooms", "everything, worlds and matches together"),
     ("stop", "save every room and shut down"),
     ("help", "this"),
@@ -128,7 +130,45 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
 
         "match" | "m" => match_command(&rest, rooms),
 
+        "party" | "p" => party_command(&rest, rooms),
+
         other => Reply::say(format!("no command \"{other}\"; try help")),
+    }
+}
+
+/// `party`, and the one verb under it.
+///
+/// A party is removed by its last member leaving and by nothing else a client
+/// can do, so a party in the way — a name that should not be on anybody's
+/// screen, a founder who never came back — needed the server stopped and
+/// `parties.jsonl` edited by hand. The listing is what `delete` needs, since
+/// a party is named by an id nobody types.
+fn party_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
+    match rest.first().copied() {
+        None | Some("ls") | Some("list") => {
+            let listing = rooms.parties_here();
+            if listing.is_empty() {
+                return Reply::say("no parties");
+            }
+            Reply::lines(
+                listing
+                    .iter()
+                    .map(|(id, name, members, worlds)| {
+                        format!("  {name:<24} {id:<12} {members} in, {worlds} world(s)")
+                    })
+                    .collect(),
+            )
+        }
+
+        Some("delete" | "rm") => match rest.get(1) {
+            None => Reply::say("party delete ID -- the id is in `party`"),
+            Some(id) => match rooms.delete_party(id) {
+                Ok(name) => Reply::say(format!("removed \"{name}\"; its worlds stay")),
+                Err(e) => Reply::say(e),
+            },
+        },
+
+        Some(other) => Reply::say(format!("no party command \"{other}\"; try help")),
     }
 }
 
@@ -495,7 +535,7 @@ mod tests {
         // one command. Deduplicated rather than listed once, because the
         // subcommands are what somebody reading help needs to see.
         listed.dedup();
-        assert_eq!(listed, ["world", "match", "rooms", "stop", "help"]);
+        assert_eq!(listed, ["world", "match", "party", "rooms", "stop", "help"]);
         for word in &listed {
             let reply = run(word, &mut rooms, WorldKind::Infinite);
             assert!(
@@ -580,5 +620,33 @@ mod tests {
         assert!(answer.contains("dawn") && answer.contains("dusk"), "{answer}");
         assert!(out("match start dusk", &mut rooms).contains("running"));
         assert!(out("match dispatch", &mut rooms).contains("running"), "one left, so no guess");
+    }
+
+    /// A party is otherwise removed only by its last member leaving, so an
+    /// operator with one in the way had to stop the server and edit a file.
+    /// The listing carries the id because that is what `delete` takes.
+    #[test]
+    fn a_party_is_listed_and_removed_at_the_console() {
+        use crate::net::{ClientMessage, PersonId, ServerMessage};
+        let mut rooms = rooms();
+        assert!(out("party", &mut rooms).contains("no parties"));
+
+        let me = crate::server::rooms::Caller::known(1, PersonId("a".repeat(32)));
+        let made = rooms.handle(&me, ClientMessage::MakeParty { name: "friday".into() });
+        let [ServerMessage::Parties { parties }] = &made[..] else { panic!("{made:?}") };
+        let id = parties[0].id.clone();
+
+        let listing = out("party", &mut rooms);
+        assert!(listing.contains("friday") && listing.contains(id.as_str()), "{listing}");
+        assert!(listing.contains("1 in"), "{listing}");
+
+        assert!(out("party delete", &mut rooms).contains("party delete ID"));
+        assert!(out("party delete p-nothing", &mut rooms).contains("no such party"));
+        let gone = out(&format!("party delete {id}"), &mut rooms);
+        assert!(gone.contains("removed") && gone.contains("friday"), "{gone}");
+        assert!(out("party", &mut rooms).contains("no parties"));
+        let mine = rooms.handle(&me, ClientMessage::Parties);
+        let [ServerMessage::Parties { parties }] = &mine[..] else { panic!("{mine:?}") };
+        assert!(parties.is_empty(), "the founder is still in a party that is gone");
     }
 }

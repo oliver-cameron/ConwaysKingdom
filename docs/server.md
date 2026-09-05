@@ -210,6 +210,8 @@ The server reads its own terminal. `help` lists what it takes:
   match dispatch                           start the one match that is waiting
   match delete NAME                        remove it
   match                                    what matches there are, and what they are doing
+  party delete ID                          remove it, whoever is in it; its worlds stay
+  party                                    what parties there are, and how many are in each
   rooms                                    everything, worlds and matches together
   stop                                     save every room and shut down
   help                                     this
@@ -292,6 +294,8 @@ A party is **a list of people with a private set of worlds**, and it outlives ev
 `ClientMessage::Parties` is answered with the parties the asker is in, each with its people, whether each is in a room here right now, and its worlds as `RoomInfo`. It is a second message beside `Rooms` rather than a filter on it, because a party listing wants different *contents* and because the room list is the one message a client sends before it is anybody, and stays so. A connection that has presented no key is answered an empty list, which is true rather than a refusal. `MakeParty` makes one with the asker as its first member; `InviteToParty` queues a `PartyInvite` the way a challenge is queued and records the invitation as standing; `JoinParty` takes a standing invitation and nothing else gets anybody in; `LeaveParty` leaves, and the last one out takes the party with them. A party's worlds stay when it goes — unlisted, their maker's, and closed the way any room closes. `Create` with `party` set makes a world of the party's, refused from anybody not in it.
 
 A member's *online* flag is one server answering its own members about each other. The line [planned.md](planned.md#friends-searching-and-inviting-somebody-in-particular) draws about presence is about a game server reporting to a directory, and nothing here is reported anywhere.
+
+**Two caps, and a way out for the operator.** A server holds `parties::MAX_PARTIES`, and one person may be in `MAX_PARTIES_EACH` and still make another — asked first, because with the server's cap alone one client could found every party it would hold and nobody else could make any, and only a member can take a party away, by leaving it. That is also why the console has `party` and `party delete ID`: a party nobody comes back to would otherwise stand until somebody stopped the server and edited `parties.jsonl`. Deleting one leaves its worlds as leaving does, unlisted and their maker's.
 
 **Keyed by today's per-server person**, deliberately, on the pattern `Rooms::challenges` already used. The doc said parties wait on identity being a keypair; they are built on the `PersonId` a secret is exchanged for, at the price the leaderboard already pays — when a person becomes a key fingerprint every row in `parties.jsonl` resets, or is claimed under whatever migration ratings get. See [planned.md](planned.md#parties).
 

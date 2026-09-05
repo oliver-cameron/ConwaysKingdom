@@ -47,6 +47,12 @@ const VERSION: u8 = 1;
 /// rather than a budget.
 pub const MAX_PARTIES: usize = 64;
 
+/// How many parties one person may be in and still make another. Asked
+/// before [`MAX_PARTIES`] is, because without it one person could found every
+/// party the server will hold and nobody else could make any — and only a
+/// member can take a party away, by leaving it.
+pub const MAX_PARTIES_EACH: usize = 4;
+
 /// One party as the table stores it.
 #[derive(Serialize, Deserialize)]
 struct Row {
@@ -99,6 +105,11 @@ impl Parties {
     /// way a player's is — see [`crate::net::player_name`] — because it goes
     /// on a row of a file and on a row of a screen.
     pub fn make(&mut self, name: &str, founder: &PersonId) -> Result<PartyId, String> {
+        if self.of(founder).count() >= MAX_PARTIES_EACH {
+            return Err(format!(
+                "you are in {MAX_PARTIES_EACH} parties already; leave one to make another"
+            ));
+        }
         if self.known.len() >= MAX_PARTIES {
             return Err(format!(
                 "this server is holding {MAX_PARTIES} parties, which is all it will"
@@ -125,6 +136,20 @@ impl Parties {
     /// The parties somebody is in, in id order.
     pub fn of<'a>(&'a self, who: &'a PersonId) -> impl Iterator<Item = (&'a PartyId, &'a Party)> {
         self.known.iter().filter(move |(_, p)| p.members.contains(who))
+    }
+
+    /// Every party, in id order. For the console, which is the one reader
+    /// that is in none of them.
+    pub fn all(&self) -> impl Iterator<Item = (&PartyId, &Party)> {
+        self.known.iter()
+    }
+
+    /// Take a party off the table whoever is in it. The console's: a party
+    /// is otherwise removed only by its last member leaving, so one that is
+    /// in the way and has a member who never comes back would stand for ever.
+    /// Its worlds stay, as they do when the last member leaves.
+    pub fn remove(&mut self, id: &PartyId) -> Result<Party, String> {
+        self.known.remove(id).ok_or_else(|| "there is no such party".to_string())
     }
 
     /// Ask somebody in. Only a member may, and asking somebody already in, or
@@ -304,18 +329,39 @@ mod tests {
     }
 
     /// A name is the one thing a client chooses here, and it is clamped the
-    /// way a player's is. The cap is a backstop rather than a budget.
+    /// way a player's is. Two caps, and the one on a person is asked first:
+    /// one person founding every party the server will hold is what the
+    /// server's cap alone allowed, and nobody but that person could undo it.
     #[test]
-    fn a_name_is_clamped_and_a_server_holds_only_so_many() {
+    fn a_name_is_clamped_and_nobody_holds_every_party() {
         let mut parties = Parties::new();
         assert!(parties.make("   ", &who("a")).is_err(), "a blank name made a party");
         let id = parties.make("  Friday\tnight\n ", &who("a")).unwrap();
         assert_eq!(parties.get(&id).unwrap().name, "Fridaynight");
-        for n in 1..MAX_PARTIES {
+        for n in 1..MAX_PARTIES_EACH {
             parties.make(&format!("p{n}"), &who("a")).unwrap();
         }
         let why = parties.make("one more", &who("a")).unwrap_err();
+        assert!(why.contains("leave one"), "{why}");
+        // Leaving one makes room for another.
+        parties.leave(&id, &who("a")).unwrap();
+        parties.make("one more", &who("a")).unwrap();
+
+        // Filled by as many people as it takes, and then full for everybody.
+        let mut n = 0;
+        while parties.len() < MAX_PARTIES {
+            n += 1;
+            parties.make(&format!("q{n}"), &who(&format!("f{n}"))).unwrap();
+        }
+        let why = parties.make("one more", &who("z")).unwrap_err();
         assert!(why.contains(&MAX_PARTIES.to_string()), "{why}");
+
+        // The console can take one away whoever is in it.
+        let first = parties.all().next().map(|(id, _)| id.clone()).unwrap();
+        let gone = parties.remove(&first).unwrap();
+        assert!(!gone.members.is_empty(), "the party removed had nobody in it");
+        assert_eq!(parties.len(), MAX_PARTIES - 1);
+        assert!(parties.remove(&first).is_err(), "removed twice");
     }
 
     /// Written down and read back, the same bytes each time, with the standing
