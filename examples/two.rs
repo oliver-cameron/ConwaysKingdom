@@ -13,12 +13,14 @@
 //! **found and put right**: so this reports every generation they come to
 //! differ at, and the generation by which they agree again.
 //!
-//! Three switches in the environment. `LIE=1` has one peer invent a block
-//! nobody sent it, so the safety net is tested rather than assumed. `DIFF=1`
-//! prints what a refetched chunk actually changed, cell by cell, which is how
-//! a resync that is not a rules bug gets told apart from one that is.
-//! `SNAP_ON_CHUNK=1` adopts a chunk's tick on arrival, the way the client
-//! once did, for comparing the two behaviours.
+//! Four switches in the environment. `LIE=1` has one peer invent a block
+//! nobody sent it, so the safety net is tested rather than assumed.
+//! `OVERCLOCK=1` stands a block of overclockers over the blinker, so the
+//! second pass runs on both sides of the socket and the same comparison
+//! covers it. `DIFF=1` prints what a refetched chunk actually changed, cell
+//! by cell, which is how a resync that is not a rules bug gets told apart
+//! from one that is. `SNAP_ON_CHUNK=1` adopts a chunk's tick on arrival, the
+//! way the client once did, for comparing the two behaviours.
 
 use conwayskingdom::net::link::Link;
 use conwayskingdom::net::{Action, ClientMessage, Placement, ServerMessage, Stamped};
@@ -207,6 +209,24 @@ fn main() {
     // Predicted here and sent, which is what the client does.
     conwayskingdom::net::apply(&mut a.world, &stamped);
     a.link.send(ClientMessage::Act(stamped));
+
+    // And a block of overclockers above it, with the blinker inside their
+    // disc and the opening block outside anything they would feed a birth
+    // to -- so both peers and the server run the second pass over something
+    // that moves, and a digest that agrees is agreeing about it.
+    if std::env::var_os("OVERCLOCK").is_some() {
+        let cells: Vec<(i32, i32)> =
+            [(2, 2), (2, 3), (3, 2), (3, 3)].map(|(r, c)| (a.spawn.0 + r, a.spawn.1 + c)).to_vec();
+        println!("alice: standing overclockers at {cells:?}");
+        let stamped = Stamped {
+            tick: a.world.generation,
+            player: a.me,
+            seat: a.me,
+            action: Action::Paint { cells, placement: Placement::Overclock },
+        };
+        conwayskingdom::net::apply(&mut a.world, &stamped);
+        a.link.send(ClientMessage::Act(stamped));
+    }
 
     // A deliberate lie, so the safety net is tested rather than assumed: bob
     // invents a cell nobody told him about. Nothing in the protocol can stop
