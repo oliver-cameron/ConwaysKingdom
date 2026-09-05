@@ -47,7 +47,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Texels nothing samples](#texels-nothing-samples) | **Open** | between zoom 5 and 16 the art is drawn from a subset of itself |
 | [Something to see when it goes off](#something-to-see-when-it-goes-off) | Designed | a blast is a frame of noise and nothing else says it happened |
 | [Bots](#bots) | Built | a player the server plays, from a book, and an API an engine plays through; a search on `World: Clone` is what is left |
-| [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; one derive away, and shared with bots |
+| [Predicting a match](#predicting-a-match-and-what-it-shares-with-bots-and-experiments) | Decided | run the world forward and look; the clone is derived, the rollout is not |
 | [A leaderboard](#a-leaderboard) | Part built | per server it is built; across servers it waits on identity |
 | [The session comes out of the game view](#the-session-comes-out-of-the-game-view) | Built | what is left is the gesture-to-cells half |
 | [Rooms per server](#rooms-per-server) | Built | what is left is lifetime |
@@ -1419,7 +1419,7 @@ So there are two versions and they differ by one thing.
 
 Every one of these needs to step a world without stepping *the* world, and now they can: **`World` is `Clone`**. `Storage` is a `HashMap<Coord, Chunk>` or a `Box<[Chunk]>`, `scratch` and `active` are working space, and the step is already pure in state and tick, so a copy diverges cleanly and cannot reach back — `a_clone_steps_without_moving_the_original` in `sim::world` pins it. `Server::step` owns the only world there is, and a rollout must touch neither the pending actions, nor the purses, nor the tick.
 
-So the whole of the machinery is a clone stepped *n* times with `net::standings` read off the end. What that one derive buys:
+So the whole of the machinery is a clone stepped *n* times with `net::standings` read off the end. What that derive buys:
 
 | | |
 |---|---|
@@ -1428,7 +1428,7 @@ So the whole of the machinery is a clone stepped *n* times with `net::standings`
 | an experiment's **reset** | keep the clone, put it back |
 | an experiment's **step one generation** | built, as `Server::step_once`; the clone is what makes it undoable |
 
-Four things this file lists separately, waiting on one line.
+Four things this file lists separately, and the piece they share is built. **What is left is the rollout itself**: a hundred generations of a clone on the `STANDING_EVERY` cadence, `net::standings` read off the end, and a figure on a screen — shown to a spectator and not to a player, for the reason below.
 
 ### Where it runs
 

@@ -69,7 +69,8 @@ pub struct Bot {
     pub next_at: Tick,
     /// The room's seed and the seat, mixed once; the tick goes in per act.
     dice: u64,
-    /// Factories it has laid, so `Keep` has something to come back to.
+    /// Factories it has laid, so `Keep` has something to come back to. At
+    /// most [`REMEMBERED`] of them.
     laid: Vec<Laid>,
 }
 
@@ -104,6 +105,16 @@ pub const BOOK: [Shape; 5] = [
         span: (3, 4),
     },
 ];
+
+/// How many factories a bot remembers laying.
+///
+/// **A bound, because only Hard walks the list.** `keep` prunes as it goes,
+/// and it is the one intent the other two levels never pick — so an easy bot
+/// laying a factory every few hundred generations grew this by one entry
+/// apiece for as long as its room was open. The oldest goes: a factory old
+/// enough to fall off has died or been walled long since, and `keep` starts
+/// from the oldest anyway.
+const REMEMBERED: usize = 32;
 
 /// Which of the book pays as a factory: the ones with births in them.
 const EARNERS: [usize; 3] = [0, 1, 2];
@@ -183,7 +194,12 @@ impl Bot {
             // Remembered only once it is affordable, or a thin purse would
             // write a factory off as walled without a pane ever going down.
             match note {
-                Note::Laid(laid) => self.laid.push(laid),
+                Note::Laid(laid) => {
+                    self.laid.push(laid);
+                    if self.laid.len() > REMEMBERED {
+                        self.laid.remove(0);
+                    }
+                }
                 Note::Iced(i) => self.laid[i].iced = true,
                 Note::Nothing => {}
             }
@@ -396,6 +412,28 @@ mod tests {
             assert!(!world.cell_at(r, c).unwrap().is_alive(), "({r}, {c}) is the block");
         }
         assert!(bot.laid.len() == 1, "a factory laid is a factory remembered");
+    }
+
+    /// **What a bot remembers is bounded.** `keep` is the only thing that
+    /// prunes the list and it is the one intent an easy bot never picks, so
+    /// this used to grow by an entry a factory for as long as the room was
+    /// open — a room that runs for a week is a list nobody ever reads to the
+    /// end of.
+    #[test]
+    fn what_a_bot_remembers_is_bounded_at_every_level() {
+        let me = PlayerId(1);
+        let mut world = granted(me);
+        let rules = Rules::default();
+        let mut bot = Bot::new(Level::Easy, Driver::Book, 0, me, 0);
+        for tick in 0..REMEMBERED as Tick * 4 {
+            // A purse deep enough that nothing is refused for want of money,
+            // and the world left as it was so every act finds somewhere.
+            if let Some(action) = bot.choose(&world, &rules, me, 100_000, tick) {
+                crate::net::apply(&mut world, &Stamped { tick, player: me, seat: me, action });
+            }
+        }
+        assert!(bot.laid.len() > 1, "the bot laid nothing, so this proves nothing");
+        assert!(bot.laid.len() <= REMEMBERED, "{} factories remembered", bot.laid.len());
     }
 
     /// With nothing in hand there is nothing to lay, and the bot says so

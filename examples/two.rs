@@ -42,6 +42,9 @@ struct Peer {
     heard: usize,
     /// How many times the server has had to put this peer right.
     resyncs: usize,
+    /// Whether the message just seen was a `Spawned`, so the `Resync` that
+    /// follows one can be told apart from a correction. See `pump`.
+    granting: bool,
 }
 
 impl Peer {
@@ -64,7 +67,16 @@ impl Peer {
                     println!(
                         "{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}"
                     );
-                    return Self { name, link, world, me: you, spawn, heard: 0, resyncs: 0 };
+                    return Self {
+                        name,
+                        link,
+                        world,
+                        me: you,
+                        spawn,
+                        heard: 0,
+                        resyncs: 0,
+                        granting: false,
+                    };
                 }
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -75,6 +87,9 @@ impl Peer {
     /// Everything waiting, folded in exactly as the client folds it.
     fn pump(&mut self) {
         for msg in self.link.drain() {
+            // Cleared on every message, so only the one *immediately* after a
+            // `Spawned` reads as the grant.
+            let granting = std::mem::take(&mut self.granting);
             match msg {
                 ServerMessage::ChunkData { tick, chunk, cells } => {
                     if let Ok(c) = bytemuck::try_from_bytes::<Chunk>(&cells) {
@@ -147,15 +162,25 @@ impl Peer {
                         }
                     }
                 }
+                // **A grant is announced as a `Spawned` and then the chunks it
+                // covers**, which is a `Resync` carrying news rather than a
+                // correction. Counted as one, a clean run reported a resync
+                // apiece and the summary line meant nothing.
+                ServerMessage::Spawned { player, at } => {
+                    println!("{}: {player:?} was granted ground at {at:?}", self.name);
+                    self.granting = true;
+                }
                 ServerMessage::Resync { tick, chunks } => {
-                    // A grant is announced this way too, so the first of these
-                    // after joining is news rather than a correction.
-                    println!(
-                        "{}: server says {} chunks are wrong at {tick}: {chunks:?}; refetching",
-                        self.name,
-                        chunks.len()
-                    );
-                    self.resyncs += 1;
+                    if granting {
+                        println!("{}: and the {} chunks it covers", self.name, chunks.len());
+                    } else {
+                        println!(
+                            "{}: server says {} chunks are wrong at {tick}: {chunks:?}; refetching",
+                            self.name,
+                            chunks.len()
+                        );
+                        self.resyncs += 1;
+                    }
                     self.link.send(ClientMessage::Subscribe { chunks });
                 }
                 _ => {}

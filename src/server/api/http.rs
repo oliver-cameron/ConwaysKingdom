@@ -66,14 +66,21 @@ async fn bearer(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let given = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+    let given = bearer_token(headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
     if given.is_some_and(|given| same(given.as_bytes(), api.token.as_bytes())) {
         return next.run(request).await;
     }
     refuse(StatusCode::UNAUTHORIZED, "a bearer token is needed; the server was started with one")
+}
+
+/// The token out of an `Authorization` header, whatever case the scheme is in.
+///
+/// **A scheme is case-insensitive** — RFC 7235 — and a client sending `bearer`
+/// is sending this scheme, not a different one. The token itself is not: it is
+/// compared byte for byte by [`same`].
+fn bearer_token(header: Option<&str>) -> Option<&str> {
+    let (scheme, token) = header?.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("Bearer").then_some(token)
 }
 
 /// Equal, in time that does not depend on where they differ.
@@ -239,4 +246,23 @@ async fn cells(
 
 async fn standings(State(api): State<Api>, Path(room): Path<String>) -> Response {
     answer(&api, Request::Standings { room }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scheme is the only part that is case-insensitive, and it has to be:
+    /// a client sending `bearer` was refused with "a bearer token is needed",
+    /// which reads as the token being wrong rather than its spelling.
+    #[test]
+    fn the_bearer_scheme_is_read_in_any_case() {
+        assert_eq!(bearer_token(Some("Bearer sesame")), Some("sesame"));
+        assert_eq!(bearer_token(Some("bearer sesame")), Some("sesame"));
+        assert_eq!(bearer_token(Some("BEARER sesame")), Some("sesame"));
+        assert_eq!(bearer_token(Some("Basic sesame")), None, "another scheme is another scheme");
+        assert_eq!(bearer_token(Some("Bearer")), None, "a scheme with no token is no token");
+        assert_eq!(bearer_token(None), None);
+        assert_eq!(bearer_token(Some("Bearer SESAME")), Some("SESAME"), "the token is not folded");
+    }
 }

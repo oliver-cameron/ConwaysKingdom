@@ -49,7 +49,7 @@ A save is authoritative, so the shape a `--torus` asks for only applies to rooms
 
 A room opens empty. There is no seeded pattern: the first life arrives with the first player, who is granted ground and a block on joining.
 
-The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
+The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL] [TEAM]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
 
 A bot is a seat the server plays from a small book of shapes, and an outside program can play a seat too, through the HTTP API `--api-token` mounts. Both are in [server.md](server.md#bots).
 
