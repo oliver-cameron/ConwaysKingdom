@@ -984,3 +984,64 @@ fn unheld_ground_prices_as_empty() {
     assert!(!may_place(&world, PlayerId(1), far[0].0, far[0].1));
     assert_eq!(reach(&world, PlayerId(1), far[0].0, far[0].1), 0);
 }
+
+/// **Replacing your own machine with life is free**, because erasing it and
+/// laying life would be: a reclaim and a cell of life are both one. The two
+/// paths used to differ by a point a cell, which quietly asked the player to
+/// take the long way round.
+#[test]
+fn laying_life_over_your_own_machine_costs_what_erasing_it_first_would() {
+    let me = PlayerId(1);
+    let at = (0, 0);
+    for kind in [Kind::OVERCLOCK, Kind::FACTORY, Kind::TURRET] {
+        let mut world = World::infinite_empty();
+        world.set_cell_at(at.0, at.1, Cell::alive(me).with_kind(kind));
+        let paint = Stamped {
+            tick: 0,
+            player: me,
+            seat: me,
+            action: Action::Paint { cells: vec![at], placement: Placement::Life },
+        };
+        let erase = Stamped {
+            tick: 0,
+            player: me,
+            seat: me,
+            action: Action::Erase { cells: vec![at], placement: Placement::Life },
+        };
+        let straight = value_delta(&world, &paint);
+        let two_steps = value_delta(&world, &erase) - LIFE_COST;
+        assert_eq!(straight, two_steps, "{kind:?}: one step and two disagree");
+        assert_eq!(straight, 0, "{kind:?}: turning your own machine back into life should be free");
+    }
+}
+
+/// And laying on empty ground still costs what it says, so the credit is for
+/// what was taken away rather than a discount on placing.
+#[test]
+fn laying_life_on_empty_ground_still_costs_a_life() {
+    let me = PlayerId(1);
+    let world = World::infinite_empty();
+    let paint = Stamped {
+        tick: 0,
+        player: me,
+        seat: me,
+        action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Life },
+    };
+    assert_eq!(value_delta(&world, &paint), -LIFE_COST);
+}
+
+/// **Ice is not a replacement**, so it earns nothing back: a pane covers a
+/// cell and takes nothing away, and the cell is still there underneath.
+#[test]
+fn icing_your_own_cell_is_the_full_price_of_a_pane() {
+    let me = PlayerId(1);
+    let mut world = World::infinite_empty();
+    world.set_cell_at(0, 0, Cell::alive(me).with_kind(Kind::FACTORY));
+    let paint = Stamped {
+        tick: 0,
+        player: me,
+        seat: me,
+        action: Action::Paint { cells: vec![(0, 0)], placement: Placement::Ice },
+    };
+    assert_eq!(value_delta(&world, &paint), -ICE_COST);
+}

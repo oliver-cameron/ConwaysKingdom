@@ -150,6 +150,10 @@ One drag lays at most 4096 cells. A rectangle at one pixel per cell can cover mi
 
 More than one cell is what makes a drag a drag. A press that travelled but stayed inside one cell would place where a click would take, so which of the two happens must not turn on a few pixels of hand shake at high zoom.
 
+**Replacing your own costs only the difference.** Laying life over your own overclocker, factory or turret gives you the reclaim back at the same moment it charges you for the cell — so it is free, because a reclaim and a cell of life are both one. That is not a discount, it is the same price as erasing it and laying life, which is what you would otherwise do in two presses; the two used to disagree by a point a cell, which quietly asked you to take the long way round. Ice is not a replacement and earns nothing back: a pane covers a cell and takes nothing away.
+
+Somebody else's is unchanged. Erasing theirs costs you a reclaim rather than paying one, so what you pay to build over an enemy square is what it always was.
+
 ## Territory
 
 Every dead cell carries an owner **and a level** — how much of that owner's influence reaches it, nought to seven — and that is territory. The level is not drawn: ground fading with it made every claim look like a different kind of cell, and a strength you cannot act on separately is one the map does not need to spell out. What it decides is where the border ends up, which the map shows by having one. The rule spreads it: a dead cell next to living ones takes one of their owners most generations, so ground is claimed by the life that grows over it. It stays dead — this sets the owner and nothing else. Ice is exempt while it stands, since a pane's cover is not claimed out from under it.

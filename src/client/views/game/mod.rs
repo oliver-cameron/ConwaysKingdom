@@ -1057,10 +1057,6 @@ impl GameApp {
         matches!(self.ui.screen, Screen::Playing)
     }
 
-    /// Back to the menu, in this state, keeping whatever was typed into it.
-    ///
-    /// Rebuilt from what is remembered when there was no menu to return to,
-    /// which is the case of a game started from a command line being refused.
     /// Whether the board is what the player is looking at.
     ///
     /// Not on the menu, and not in a lobby: a gathering match has an empty

@@ -1669,13 +1669,35 @@ pub fn value_delta(world: &World, stamped: &Stamped) -> i32 {
                 if placement.apply_to(existing, stamped.player) == existing {
                     return 0;
                 }
+                // **What you had back, when you are replacing your own.**
+                // Erasing a machine of yours pays [`RECLAIM`], so laying life
+                // over one had to be priced as erasing it and laying life
+                // would be, or the two-step was a point a cell better than
+                // the one-step and the interface was quietly asking you to
+                // take it. Since a reclaim and a cell of life are both one,
+                // that makes turning your own overclocker or your own factory
+                // back into ordinary life free — which is right: it is a
+                // thing you already paid for, being spent.
+                //
+                // Only when the *kind* changes, so icing your own cell is
+                // still the full price of a pane: ice covers a cell and takes
+                // nothing away, and there would be nothing to have back.
+                //
+                // Somebody else's is left exactly as it was, deliberately.
+                // Erasing theirs costs a reclaim rather than paying one, so
+                // matching the two here would make taking ground dearer, and
+                // no table has been run on what that does.
+                let laid = placement.apply_to(existing, stamped.player);
+                let had_back = existing.is_alive()
+                    && existing.player() == stamped.player
+                    && laid.kind() != existing.kind();
                 // Flat, wherever it is. A price that rose as influence
                 // thinned went out with the shading that made it visible: a
                 // cost the player cannot see is a cost they cannot play
                 // around. Whether a placement is *allowed* still depends on
                 // the square — `may_place` is that question, asked before
                 // this one.
-                placement.cost()
+                placement.cost() - if had_back { RECLAIM } else { 0 }
             })
             .sum::<i32>(),
         // What counts as "there" depends on what is being taken, since life
