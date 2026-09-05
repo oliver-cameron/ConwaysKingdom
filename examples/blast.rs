@@ -42,7 +42,7 @@
 
 use conwayskingdom::sim::{
     bits, mix, Cell, Kind, PlayerId, Roll, World, CHUNK_N, DYNAMITE_COST, DYNAMITE_DENSITY,
-    DYNAMITE_FUSE, DYNAMITE_REACH, DYNAMITE_WARN, OUT_OF, TURRET_COST,
+    DYNAMITE_FUSE, DYNAMITE_REACH, DYNAMITE_THROW, DYNAMITE_WARN, OUT_OF, TURRET_COST,
 };
 
 /// When the census is taken.
@@ -72,13 +72,15 @@ fn disc(reach: i32) -> usize {
 fn turned_over(blob: usize) -> usize {
     let (me, them) = (PlayerId(1), PlayerId(2));
     let mut world = World::infinite_empty();
-    let far = conwayskingdom::sim::blast_reach(blob) + 2;
+    let side = (blob as f64).sqrt().ceil() as i32;
+    // Wherever the centre lands — the blob's middle, thrown at most the throw
+    // — the whole disc has to be inside the box, or the edge goes uncounted.
+    let far = conwayskingdom::sim::blast_reach(blob) + side + DYNAMITE_THROW;
     for r in -far..=far {
         for c in -far..=far {
             put(&mut world, (r, c), Cell::DEAD.with_player(them).with_level(bits::MAX_LEVEL));
         }
     }
-    let side = (blob as f64).sqrt().ceil() as i32;
     let armed = Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(bits::MAX_AGE);
     for i in 0..blob as i32 {
         put(&mut world, (i / side, i % side), armed);
