@@ -259,29 +259,18 @@ Note what that means read literally: the mirror of "the nearest square that is n
 
 ## Overclockers
 
-An **overclocker** makes the ground around it step twice a generation. Every live, ice-free one owns a disc of `rule::OVERCLOCK_REACH` cells, and the union of those discs runs the rule a second time after the whole world has run it once — `rule::OVERCLOCK_RATE` is how many times in all, and two is one extra pass. The machine itself is placed like a turret, in fours, and for the turret's reasons: it does not inherit, because a birth that copied it would let any gun claim the map's clock, and one on its own dies of loneliness in a generation.
+**A cell that steps more than once a generation**, and it is part of a shape rather than a place. An overclocker runs the rule again over itself and the eight cells around it, after the whole-world pass and before the generation is called done — so a shape built out of them advances twice while everything else advances once.
 
-### Sub-steps, not a faster tick
+The kind **inherits**, which is what makes it a unit: a birth from overclocked parents is an overclocker, so an overclocked glider keeps its clock as it flies and travels at double speed instead of running out of a region and being torn in half by the border. That is also why the region is the cell and its ring rather than the cell alone — a shape moves by births, a birth lands on a cell that is currently dead, and a dead cell carries no kind, so a region of exactly the overclocked cells would let a shape's tail run twice while its head stood still.
 
-A generation is the unit everything else is keyed to — the dice, the `Step` on the wire, the checkpoint, the standings, the save — so "twice a generation" is a question about what a generation *is*, and there were two answers. The other one is a tick half as long with ordinary cells stepping every second one. It has exactly these semantics — on the odd tick only overclocked cells move and they read frozen ordinary neighbours, which is the border rule below — and it costs twice the `Step` broadcasts, a tick doubled in every save and checkpoint, a parity guard in every rule and pass, and every per-generation chance in `rule.rs` halved unless rescaled. So the passes run **inside** `World::step`, and the order there is now: ice seeds, detonation, the whole-world pass, the overclock passes, `generation += 1`, shattering, turrets, prune. Nothing outside `sim` knows: one `Step`, one tick, one digest — and because a pass writes cell bytes, the checkpoint already covers it with no new message.
+A square and not a disc, because Conway reads a square: a birth can land on a corner of the neighbourhood as readily as on a side, and a disc would run a shape twice on its flanks and once at its corners.
 
-### What the second pass reads
+**Every overclocked birth is bought.** A kind that spreads for nothing would hand the map its clock for the price of the first cell, so the rule counts births of the kind and `net::earnings` charges for them — the exact inverse of a factory, which is counted the same way and paid for. The generation stays the unit on the wire, in the save, in the digest and in the checkpoint: the second pass writes into the same chunks and everything downstream is unchanged.
 
-`World::overclock_pass` finds the discs from the world **as the first pass left it**, so a machine that died this generation does not run again, and one under a pane runs nothing, since a pane stops time over what it covers and that is every rule. It gathers a fresh halo for every chunk a disc touches, all before any cell is written — the discipline the first pass keeps, and for the same reason — and then steps only the masked cells through `Halo::step_into_where`. The mask is a bit per cell, so a disc of a hundred and thirteen cells costs a hundred and thirteen evaluations and a few halo copies rather than a chunk's four thousand per overclocker, and two discs that overlap, or one that wraps onto itself on a small torus, step each cell once.
+The second pass rolls **dice of its own**, from `seed::pass_seed`, or every chance the rule takes — a territory adjustment, which parent a birth copies, whether a factory pays — would come out identically twice in one generation.
 
-### The edge
+An overclocked pattern of even period looks unchanged, because stepping a period-two shape twice lands it on the phase it started from. That is not a fault to fix but the reason the kind is attached to shapes that move: what reads as fast is motion, and a glider at double speed is unmistakable where a blinker at double speed is invisible.
 
-A masked cell reads all eight neighbours from the halo whether they are in the disc or not, and the ones outside are as the first pass left them and this pass will not move. An unmasked cell is neither evaluated nor written, so next generation it sees the disc's *second* state. That is the whole of the border: **the inside runs at twice the clock and the outside sees every other state of it.** A blinker wholly inside is flat again every generation; a gun inside fires twice as often; a glider crossing the ring is torn where it crosses, because the cells it needs on the far side are a state behind. That is a hazard of the piece the way a pane's edge is, and the answer is the same — keep what you care about wholly in or wholly out. `a_pattern_straddling_a_disc_is_deterministic_and_is_torn` pins both halves.
-
-### Dice of its own
-
-A pass rolls from `seed::pass_seed(generation_seed, pass)`, and pass nought is the generation's own seed, so nothing that runs once changed its dice for this existing. A second pass handed the same seed would give every cell the identical roll twice — territory's `LEVEL_ADJUST` would fire on the same squares, a birth would pick the same parent, a factory would pay or not exactly as it just had — which is a correlation nothing would think to look for, and the one fact about running the rule again that is not obvious from the rule.
-
-### What it pays, and what it burns
-
-The second pass is the same rule, so it counts what the rule counts: a factory inside a disc is born twice a generation and pays twice as often, a corpse is charged twice as often, and a dynamite inside burns down twice as fast. Those are prices rather than determinism questions, and they are what an overclocked gun is *for*. Ice seeds are taken once, at the top of the generation, so a cell born beside a pane in the second pass breaks it next generation — the same one-beat lag `life_born_beside_a_pane_breaks_it` pins for the first.
-
-`rule::OVERCLOCK_REACH` is at or under `CHUNK_N`, asserted at compile time, for the turret's reason: a disc that reached further could write two chunks away, past anything `compute_active` has a way to know about. Within it a pass makes the chunk it writes into, so life born at the edge of a disc wakes its chunk next generation without being told.
 
 ## Ice
 

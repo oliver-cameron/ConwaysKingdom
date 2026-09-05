@@ -11,7 +11,8 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | place life | −1 each |
 | place a factory | −10 each |
 | place a turret | −15 each, and four is the smallest one that works |
-| place an overclocker | −15 each, and four is the smallest one that works |
+| place an overclocker | −15 each, over every cell of the shape |
+| a birth from an overclocker | −2 |
 | place ice | −5 each |
 | **anywhere but your own ground** | **×10**, whatever is being placed |
 | **a factory of yours is born** | **+1** |
@@ -86,11 +87,14 @@ A turret is not inherited. A factory's children are factories, but a birth besid
 
 ## Overclockers
 
-An **overclocker** makes everything within six cells of it step twice for every step the world takes. It is a machine like a turret and priced like one: fifteen a cell, not inherited, and one on its own dies of loneliness in a generation, so the smallest one that works is the block of four — sixty, the same opening a turret is.
+An **overclocker** steps twice for every step the world takes, and so does everything in the eight cells around it. It is fifteen a cell and you pay it over every cell of the shape, because an overclocker is part of a shape rather than a machine standing beside one.
 
-What it buys is a disc at twice the clock. A blinker inside is back where it started every time you look; a gun inside fires twice as often and, made of factories, earns twice as often; a stick of dynamite inside burns down twice as fast. The disc is `rule::OVERCLOCK_REACH`, six cells, which is the turret's reach and for the turret's reason.
+**It is inherited**, which is the whole of the piece: a birth from overclocked parents is an overclocker, so a shape built out of them keeps its clock. Build a glider out of five and it flies at double speed, indefinitely, carrying its fast ground with it. That is the only thing in the game that moves and is yours; everything else is a way of holding a square.
 
-**The edge is the cost.** The outside of the disc only ever sees every other state of the inside, so a pattern that crosses the ring comes apart where it crosses — a glider leaving the disc is torn. That is a hazard of the piece the way a pane's edge is, and the answer is the same: keep what you care about wholly in or wholly out. How the ring works is in [simulation.md](simulation.md#overclockers).
+**Every birth from one costs two.** A glider replaces about a cell a generation and twice that when it is running double, so a fast glider is about eight a generation to keep in the air — the exact inverse of a factory, which pays you per birth instead. A shape that spreads costs more the more it spreads, which is what stops an overclocked gun owning the map. If your purse runs dry the births simply stop paying out against you; the shape flies on.
+
+An overclocked oscillator is a waste of money. Stepping a blinker twice puts it back where it started, so it looks exactly like an ordinary one and earns you nothing for the clocks. What overclocking is for is things that **go somewhere**.
+
 
 ## Placing and taking
 

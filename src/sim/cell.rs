@@ -573,12 +573,18 @@ kinds! {
     /// see [`super::World::overclock_pass`], and [docs/simulation.md] for what
     /// its edge looks like.
     ///
-    /// It does not inherit, for a turret's reason: a birth that copied it
-    /// would let any gun claim the map's clock. And nothing reads its corpse,
-    /// so a dead one is ordinary ground at once — what it does, it does alive.
+    /// **It inherits, because it is part of a shape rather than a place.** A
+    /// pattern built out of overclockers births overclockers, so the fast
+    /// ground travels with it and an overclocked glider keeps flying at double
+    /// speed instead of running off the edge of its own region. What stops a
+    /// gun handing the map its clock is the price: overclocking a shape costs
+    /// a cell at a time.
+    ///
+    /// Nothing reads its corpse, so a dead one is ordinary ground at once —
+    /// what it does, it does alive.
     ///
     /// [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md#overclockers
-    OVERCLOCK = 4, inherited: false, ages: Ages::Never, corpse: false,
+    OVERCLOCK = 4, inherited: true, ages: Ages::Never, corpse: false,
 }
 
 /// What each player's factories did in one generation, indexed by the number the
@@ -599,6 +605,12 @@ kinds! {
 pub struct Takings {
     pub born: [u32; PlayerId::COUNT],
     pub upkeep: [u32; PlayerId::COUNT],
+    /// Overclockers born. **A clock is bought every time one appears**, not
+    /// only when a hand places it, which is what stops a shape that makes
+    /// copies of itself making copies of the clock for nothing — see
+    /// [`super::rule::OVERCLOCK_BIRTH`]. The exact inverse of `born`, and
+    /// counted here for the same reason: the rule counts, `net` prices.
+    pub clocked: [u32; PlayerId::COUNT],
 }
 
 impl Takings {
@@ -611,6 +623,9 @@ impl Takings {
             *t = t.saturating_add(*n);
         }
         for (t, n) in self.upkeep.iter_mut().zip(&other.upkeep) {
+            *t = t.saturating_add(*n);
+        }
+        for (t, n) in self.clocked.iter_mut().zip(&other.clocked) {
             *t = t.saturating_add(*n);
         }
     }
@@ -818,6 +833,18 @@ impl Halo {
     fn step_cell(&self, hr: usize, hc: usize, cell_seed: u64, earned: &mut Takings) -> Cell {
         let before = self.get(hr, hc);
         let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
+        // **A clock is paid for every time one is born.** An overclocker
+        // inherits, so a shape made of them makes more of them, and a lineage
+        // that spread for nothing would hand the map its clock for the price
+        // of the first cell. Charged on the birth rather than held as a rent,
+        // so what it costs is bounded by how much of it you made.
+        if after.kind() == Kind::OVERCLOCK
+            && after.is_alive()
+            && !before.is_alive()
+            && after.player().is_owned()
+        {
+            earned.clocked[after.player().0 as usize] += 1;
+        }
         if after.kind() == Kind::FACTORY && after.player().is_owned() {
             if after.is_alive() {
                 // **Paid on a chance that peaks and then falls away**, so a

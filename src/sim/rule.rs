@@ -170,11 +170,27 @@ pub const DYNAMITE_FOREIGN: u64 = 16;
 
 // --- overclockers ----------------------------------------------------------------
 
-/// How far an overclocker's disc reaches, in cells. At or under [`super::CHUNK_N`].
-pub const OVERCLOCK_REACH: i32 = 6;
+/// How far the second step reaches from an overclocker, in cells, as a square.
+///
+/// **One**: the cell and the ring it could be born into. A pattern moves by
+/// births, a birth lands on a cell that is currently dead, and a dead cell
+/// carries no kind — so a region of exactly the overclocked cells would let a
+/// shape's tail run twice while its head stood still, which tears it up
+/// instead of speeding it up. One is the smallest number that lets an
+/// overclocked pattern travel, and it means the fast ground goes with it. At
+/// or under [`super::CHUNK_N`].
+pub const OVERCLOCK_REACH: i32 = 1;
 const _: () = assert!(OVERCLOCK_REACH <= super::CHUNK_N as i32, "a disc reaches one chunk");
 /// How many times a generation the disc runs the rule.
 pub const OVERCLOCK_RATE: u32 = 2;
+/// What one overclocked birth costs its owner.
+///
+/// Small, because a shape that moves is mostly births: a glider replaces about
+/// a cell a generation and twice that when it is running double, so anything
+/// near the price of laying one would ground it in a dozen generations. Two is
+/// a cell and the clock on it, against [`LIFE_COST`] of one. Not measured —
+/// see planned.md.
+pub const OVERCLOCK_BIRTH: i32 = 2;
 
 // --- what a new world defaults to ---------------------------------------------
 
@@ -238,7 +254,9 @@ pub const TURRET_COST: i32 = 15;
 /// `examples/blast` and argued in planned.md: dearer a square than a turret
 /// where a turret works, and the only tool that works where one does not.
 pub const DYNAMITE_COST: i32 = 153;
-/// One overclocker. Read per emplacement, as a turret is.
+/// One overclocker, and it is read **per cell**: an overclocker is part of a
+/// shape rather than an emplacement beside one, so a fast glider is five of
+/// them. Not measured — see planned.md.
 pub const OVERCLOCK_COST: i32 = 15;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;

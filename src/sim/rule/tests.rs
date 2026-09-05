@@ -69,10 +69,12 @@ fn a_turret_is_not_inherited() {
     }
 }
 
-/// An overclocker is a machine for the same reason: a birth that copied it
-/// would let any gun claim the map's clock.
+/// **An overclocker is inherited**, because it is part of a shape rather than
+/// a machine standing beside one: a pattern built of them births more of them,
+/// which is what lets an overclocked glider stay overclocked while it flies.
+/// What stops it being free is the price on every such birth.
 #[test]
-fn an_overclocker_is_not_inherited() {
+fn an_overclocker_is_inherited() {
     let mut n = [Cell::DEAD; 8];
     for i in [0, 3, 6] {
         n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::OVERCLOCK);
@@ -81,7 +83,21 @@ fn an_overclocker_is_not_inherited() {
         let born = next_cell(Cell::DEAD, &n, seed);
         assert!(born.is_alive(), "seed {seed}");
         assert_eq!(born.player(), PlayerId(4), "the ground still changes hands");
-        assert_eq!(born.kind(), Kind::NORMAL, "seed {seed} bred an overclocker");
+        assert_eq!(born.kind(), Kind::OVERCLOCK, "seed {seed} dropped the clock");
+    }
+}
+
+/// And a turret still is not, because a turret claims ground by standing
+/// there: a gun whose children were turrets would claim the map.
+#[test]
+fn a_turret_is_still_not_inherited() {
+    let mut n = [Cell::DEAD; 8];
+    for i in [0, 3, 6] {
+        n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::TURRET);
+    }
+    for seed in 0..64 {
+        let born = next_cell(Cell::DEAD, &n, seed);
+        assert_eq!(born.kind(), Kind::NORMAL, "seed {seed} bred a turret");
     }
 }
 

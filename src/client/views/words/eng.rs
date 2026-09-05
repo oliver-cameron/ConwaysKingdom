@@ -114,8 +114,8 @@ pub static WORDS: super::Words = super::Words {
                 "It burns down on a fuse you can watch — the last warning sprite is on screen for exactly one generation — and then scrambles a disc. What comes up alive is yours and what does not belongs to nobody, so a bomb breaks a country apart and leaves you some of the pieces. Ice stops the fuse, and a dynamite has to stay alive to go off at all.",
             ),
             (
-                "An overclocker runs a disc at twice the clock, and the edge of it tears.",
-                "Everything within six cells of a live one steps twice for every step the world takes: a blinker inside is back where it started every generation, and a gun fires twice as often. The outside only ever sees every other state of the inside, so a pattern crossing the edge comes apart there. Place it in fours, like a turret, and keep what you care about wholly in or wholly out.",
+                "An overclocker is a shape that runs at twice the clock, and it takes the clock with it.",
+                "A live one steps twice for every step the world takes, and so do the eight cells around it — and the kind is inherited, so a shape built out of overclockers keeps it. Build a glider from five and it flies at double speed for as long as it lives. Every birth from one costs you two, so a shape that spreads costs more the more it spreads. Overclocking an oscillator buys nothing: stepping a blinker twice puts it back where it started.",
             ),
         ],
             tip_title: "Other people's patterns work here.",

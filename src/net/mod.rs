@@ -1980,8 +1980,8 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    DYNAMITE_COST, FACTORY_COST, FACTORY_DRAIN, FACTORY_YIELD, ICE_COST, LIFE_COST, OVERCLOCK_COST,
-    RECLAIM, TURRET_COST,
+    DYNAMITE_COST, FACTORY_COST, FACTORY_DRAIN, FACTORY_YIELD, ICE_COST, LIFE_COST,
+    OVERCLOCK_BIRTH, OVERCLOCK_COST, RECLAIM, TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
@@ -1990,7 +1990,9 @@ pub use crate::sim::{
 /// know prices — it counts births and deaths and this says what they are worth.
 pub fn earnings(earned: &crate::sim::Takings, player: PlayerId) -> i32 {
     let at = player.0 as usize;
-    earned.born[at] as i32 * FACTORY_YIELD - earned.upkeep[at] as i32 * FACTORY_DRAIN
+    earned.born[at] as i32 * FACTORY_YIELD
+        - earned.upkeep[at] as i32 * FACTORY_DRAIN
+        - earned.clocked[at] as i32 * OVERCLOCK_BIRTH
 }
 
 /// What an action is worth to the player who did it.

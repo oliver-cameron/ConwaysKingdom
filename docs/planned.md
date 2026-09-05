@@ -27,7 +27,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
 | [Dynamite](#dynamite) | Built | the art is a placeholder; the numbers are measured, and stand |
-| [Overclockers](#overclockers) | Built | the art is a placeholder; the price is a turret's until somebody measures |
+| [Overclockers](#overclockers) | Built | a shape that flies at double speed and pays per birth; both numbers want measuring |
 | [Depleted factories](#depleted-factories) | Built | a factory's age is its wear; the numbers have not been through `balance` |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu, started and closed from it; what is left is auto-sleep |
@@ -338,17 +338,19 @@ The four figures on the hotbar are labelled with a word each — `purse`, `groun
 
 ## Overclockers
 
-**Built.** `Kind::OVERCLOCK` is a machine placed in fours, and `World::overclock_pass` runs the rule again over the union of its discs after the whole-world pass and before the generation is called done — so the generation stays the unit on the wire, in the save and in the digest, and the checkpoint covers it with no new message. The design is in [simulation.md](simulation.md#overclockers): why sub-steps rather than a faster tick, what the second pass reads at a disc's edge, and why it rolls dice of its own. The price is in [game.md](game.md#overclockers), and `examples/two` runs it over the real protocol behind `OVERCLOCK=1`.
+**Built**, and it is a unit rather than a place. See [simulation.md](simulation.md#overclockers) for the pass and its rules.
 
-What is left:
+It began as a disc: an emplacement of machines making a patch of fast ground, priced per emplacement and not inherited, on a turret's reasoning. Playing it found the fault at once. The shapes anybody actually places are period one or two, and stepping a period-two shape twice lands it on the phase it started from — so the fastest ground on the board read as the stillest, which is what ice looks like, and a glider crossing the border was torn in half rather than launched.
 
-**The art** is a placeholder in the manner of the others — a double chevron over the plain kind's four tiles, at row 8 of the sheet, which is the first art in its bottom half.
+So the kind inherits and the region is the cell and its ring. You overclock a *shape*: an overclocked glider flies at double speed, carries its own fast ground with it, and is unmistakable on screen, which the disc could never be. It is the first thing in this game that moves and is yours — everything else is a way of holding a square.
 
-**The numbers want playing.** `OVERCLOCK_COST` starts where a turret's does and nothing has measured what an overclocked gun is worth; `examples/balance.rs` wants a row for a blinker and a gun inside a disc, and the price read off it. A factory inside a disc is born twice a generation, so it pays twice as often and depletes twice as fast, and which of those wins is the number to look at.
+**Every overclocked birth is bought**, which is what stops a kind that spreads from spreading for free, and is the exact inverse of a factory.
 
-**A rate other than two** is a loop that is already generic and art and pricing that are not: `OVERCLOCK_RATE` is one constant for every overclocker, and if a kind ever wants its own it belongs as a column on the `kinds!` row rather than a constant beside it.
+### The numbers, which are not measured
 
-**Ice seeds between passes.** They are taken once, at the top, so a cell born beside a pane in the second pass breaks it a generation later — the same one-beat lag the first pass has. Retaking them between passes would break it in the same generation, and is a line if that turns out to be wanted.
+`OVERCLOCK_COST` is 15 a cell, so a fast glider is 75 to lay, and `OVERCLOCK_BIRTH` is 2, which a glider pays about four times a generation — eight a generation to keep flying, against the fifty a factory blinker earns in a hundred. That is dear, and deliberately so on the first pass, but neither number has been through anything like `examples/blast`. What would settle them is the same treatment dynamite got: a table of what a fast glider takes and holds against what the same value buys as life or as turrets.
+
+What is left besides the numbers: art of its own — kind four wears a placeholder — and the question of whether a shape whose owner cannot pay should stop being overclocked rather than merely stop earning, which is what happens today when a purse hits nought.
 
 ## Zooming out without lying
 
