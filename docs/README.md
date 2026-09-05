@@ -85,7 +85,7 @@ rm -rf pkg && wasm-pack build --target web
 
 The page shows a **loading bar** while the module arrives, and it is not decoration: the module is megabytes, and until this the page was black and empty for the whole of that. A blank screen is indistinguishable from a broken one, so the wait read as a client that could not reach the server rather than one that had not started. The bar needs the module's length to show a percentage and falls back to an indeterminate sweep without one. The server sends `Content-Length`, and sends the same number again as `X-Content-Length`, because an edge that compresses the module on the way through — Cloudflare does — takes the first and leaves the second; see [server.md](server.md#deploying).
 
-Rebuild the browser client with `wasm-pack build --target web` — but **not while iterating**, because most of that wall clock is `wasm-opt` rather than the compiler. wasm-pack runs it over the whole module after wasm-bindgen, single-threaded and whole-program, and this module is large: wgpu, naga, winit and egui are all linked into it. It earns its ninety seconds for a build that ships, taking 12.1 MB down to 7.5 MB, and earns nothing for one served from localhost.
+Rebuild the browser client with `wasm-pack build --target web` — but **not while iterating**, because most of that wall clock is `wasm-opt` rather than the compiler. wasm-pack runs it over the whole module after wasm-bindgen, single-threaded and whole-program, and this module is large: wgpu, naga, winit and egui are all linked into it. It earns its two minutes for a build that ships, taking 12.2 MB down to 8.4 MB, and earns nothing for one served from localhost.
 
 ```
 wasm-pack build --profiling --target web   # iterating: same codegen, no wasm-opt
