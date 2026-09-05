@@ -767,7 +767,7 @@ The room side is small: `Rooms` gains a set of admitted keys per private room, a
 
 ### Room ownership should be keyed by person
 
-`Rooms::owner` is a `PlayerId`, which is deliberate and survives a reconnect — a seat is per room and comes back. What it does not survive is a restart, and it cannot mean anything on a second server. Keyed by `PersonId` it is one fact everywhere, which is what "close the room you opened" and "hand this room to somebody else" both need, and it falls out of the identity work rather than being separate from it.
+**Keyed by person now, in memory.** `Rooms::owner` records the maker's `PersonId` at their first join — or their seat, for a client with no key — and `Start` and `EndMatch` answer to the key wherever it is presented from, while the lobby is told the seat that key holds so a client can show the whistle. It used to be the seat alone, which survives a reconnect and is enough for a refresh, but meant a lobby comparing the owner's seat with the viewer's *side* in a team match, and nobody could start one. What it still does not survive is a restart, because ownership is not saved, and it cannot mean anything on a second server until identity is a keypair. Saving it — with the code and the unlisting, which are lost the same way — is what "close the room you opened" and "hand this room to somebody else" both need, and belongs with [parties](#parties).
 
 ### Multi-homing the client
 

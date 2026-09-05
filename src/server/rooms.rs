@@ -116,6 +116,13 @@ impl Caller {
     }
 }
 
+/// Who a client-made room belongs to. See [`Rooms::owner`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Owner {
+    Person(PersonId),
+    Seat(PlayerId),
+}
+
 /// What a private room is called when whoever made it named nothing. Nobody
 /// browses for it, so a name is a courtesy rather than a requirement.
 const UNNAMED: &str = "private game";
@@ -251,18 +258,20 @@ pub struct Rooms {
     /// without a migration, and that the log line for a room that appeared
     /// says who asked for it.
     made: BTreeMap<RoomId, ConnectionId>,
-    /// Whose match each client-made room is: the player who may start it.
+    /// Whose match each client-made room is: who may start it and end it.
     ///
-    /// A `PlayerId` and not the connection that asked, because a connection
-    /// does not survive a reconnect and the person does — a rejoin token
-    /// brings somebody back to the same number, so ownership recorded this way
-    /// survives a refresh, which is exactly when somebody would otherwise find
-    /// they could no longer start their own match.
+    /// **The person when this server knows one, and the seat when it does
+    /// not.** A seat is a room's number for somebody and comes back on a
+    /// rejoin, which is enough for a refresh; a person is who they are on this
+    /// server, which is what "the match you made" means, and is the key that
+    /// can outlive the seat once ownership is saved. The seat stands in for a
+    /// client with no key, which is somebody this server will not remember.
     ///
     /// Set on the **creating connection's first join**, which is the moment
-    /// there is a player to record. A room whose maker never joined has none,
-    /// and so cannot be started from a client at all.
-    owner: BTreeMap<RoomId, PlayerId>,
+    /// there is anybody to record. A room whose maker never joined has none,
+    /// and so cannot be started from a client at all. Not saved yet — see
+    /// planned.md on room ownership.
+    owner: BTreeMap<RoomId, Owner>,
     /// The cap on `made`. [`MAX_MADE_ROOMS`] unless a flag says otherwise.
     max_made: usize,
     /// Rooms that are not in the listing, and the code that reaches each.
@@ -603,7 +612,7 @@ impl Rooms {
             // A room the console made has no owner, so nobody may start it
             // from a client -- which is right: it is the operator's match, and
             // `match start` is theirs.
-            if self.owner.get(room) != Some(player) {
+            if !self.owns(room, caller, *player) {
                 return vec![ServerMessage::NotStarted {
                     reason: match self.owner.get(room) {
                         Some(_) => "only whoever made this match can start it".into(),
@@ -634,7 +643,7 @@ impl Rooms {
             let Some((room, player)) = caller.seat.as_ref() else {
                 return vec![ServerMessage::NotStarted { reason: "you are not in a match".into() }];
             };
-            if self.owner.get(room) != Some(player) {
+            if !self.owns(room, caller, *player) {
                 return vec![ServerMessage::NotStarted {
                     reason: match self.owner.get(room) {
                         Some(_) => "only whoever started this match can end it".into(),
@@ -711,17 +720,20 @@ impl Rooms {
                         .expect("resolve only returns rooms that are here")
                         .handle(None, who.as_ref(), msg);
                     // The creator's first join is where a room's owner is
-                    // recorded: it is the first moment there is a player to
-                    // record, and a `PlayerId` survives the reconnect that a
-                    // connection id does not.
+                    // recorded: it is the first moment there is anybody to
+                    // record. By person where there is one -- see `Owner`.
                     if self.made.get(&name) == Some(&caller.connection) {
                         if let Some(ServerMessage::Welcome { you, .. }) =
                             out.iter().find(|m| matches!(m, ServerMessage::Welcome { .. }))
                         {
-                            self.owner.entry(name.clone()).or_insert(*you);
+                            let owner = match &who {
+                                Some(person) => Owner::Person(person.clone()),
+                                None => Owner::Seat(*you),
+                            };
+                            self.owner.entry(name.clone()).or_insert(owner);
                         }
                     }
-                    let owner = self.owner.get(&name).copied();
+                    let owner = self.owner_seat(&name);
                     let code = self.codes.get(&name).cloned();
                     // What this server has to say about them, which a room
                     // cannot know: a profile outlives every room here. A join
@@ -794,12 +806,12 @@ impl Rooms {
     /// Everything the rooms want said **now** rather than at the next step,
     /// with the room it belongs to. See [`ServerMessage::Acted`].
     pub fn take_announcements(&mut self) -> Vec<(RoomId, ServerMessage)> {
-        let owners = self.owner.clone();
+        let owners = self.owner_seats();
         let codes = self.codes.clone();
         self.rooms
             .iter_mut()
             .flat_map(|(id, server)| {
-                let (owner, code) = (owners.get(id).copied(), codes.get(id).cloned());
+                let (owner, code) = (owners.get(id).copied().flatten(), codes.get(id).cloned());
                 server.take_announcements().into_iter().map(move |mut m| {
                     stamp(&mut m, owner, code.clone());
                     (id.clone(), m)
@@ -815,7 +827,7 @@ impl Rooms {
     pub fn step(&mut self, dt: std::time::Duration) -> Vec<(RoomId, ServerMessage)> {
         // Cloned so the stamp below can read them while the rooms are borrowed
         // mutably. Sixteen bytes and a short string per room, once a tick.
-        let owners = self.owner.clone();
+        let owners = self.owner_seats();
         let codes = self.codes.clone();
         // **Each room on its own clock.** They shared one, on the reasoning
         // that a room with its own rate would be a second thing to tell a
@@ -828,7 +840,7 @@ impl Rooms {
             .rooms
             .iter_mut()
             .flat_map(|(id, server)| {
-                let (owner, code) = (owners.get(id).copied(), codes.get(id).cloned());
+                let (owner, code) = (owners.get(id).copied().flatten(), codes.get(id).cloned());
                 server.owe(dt).into_iter().map(move |mut m| {
                     stamp(&mut m, owner, code.clone());
                     (id.clone(), m)
@@ -1301,6 +1313,35 @@ impl Rooms {
     /// Whether this room is kept out of the listing.
     pub fn is_unlisted(&self, id: &RoomId) -> bool {
         self.unlisted.contains(id)
+    }
+
+    /// Whether this caller, sitting in `seat`, is who this room belongs to.
+    ///
+    /// Asked of the person first: a key presented on any socket is the maker,
+    /// whichever seat it was given. The seat is the answer only for a maker
+    /// this server never knew, and then a seat is all there is to ask.
+    fn owns(&self, room: &RoomId, caller: &Caller, seat: PlayerId) -> bool {
+        match self.owner.get(room) {
+            Some(Owner::Person(who)) => caller.person.as_ref() == Some(who),
+            Some(Owner::Seat(theirs)) => *theirs == seat,
+            None => false,
+        }
+    }
+
+    /// The owner as the seat they hold in the room, which is what a lobby
+    /// shows: a client compares it with its own number. `None` for a room with
+    /// no owner, and for a keyed owner who has no seat there yet.
+    fn owner_seat(&self, room: &RoomId) -> Option<PlayerId> {
+        match self.owner.get(room)? {
+            Owner::Seat(seat) => Some(*seat),
+            Owner::Person(who) => self.rooms.get(room)?.seat_of(who),
+        }
+    }
+
+    /// [`Self::owner_seat`] for every room at once, taken before the rooms
+    /// are borrowed mutably to be stepped.
+    fn owner_seats(&self) -> BTreeMap<RoomId, Option<PlayerId>> {
+        self.rooms.keys().map(|id| (id.clone(), self.owner_seat(id))).collect()
     }
 
     /// Which connection asked for this room, if a client did.
@@ -2113,6 +2154,73 @@ mod tests {
             Some(owner),
             "and it remembers who blew it"
         );
+    }
+
+    /// **A match is its maker's by person, not by seat.** A seat is a room's
+    /// number for somebody and a key is who they are on this server, so the
+    /// whistle answers to the key wherever it is presented from, and to
+    /// nobody holding the seat without it.
+    #[test]
+    fn a_keyed_maker_owns_their_match_from_any_seat() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let made = rooms
+            .make(
+                5,
+                "cup",
+                WorldKind::Infinite,
+                Some(Victory::Timer { generations: 50 }),
+                None,
+                false,
+                false,
+            )
+            .unwrap();
+        let key = Secret::new().unwrap();
+        let out = rooms.handle(
+            &Caller::new(5),
+            ClientMessage::Join {
+                name: "maker".into(),
+                room: Some(made.id.clone()),
+                person: Some(key),
+            },
+        );
+        let Some(ServerMessage::Welcome { you, profile: Some(profile), .. }) =
+            out.iter().find(|m| matches!(m, ServerMessage::Welcome { .. }))
+        else {
+            panic!("{out:?}")
+        };
+        let (seat, who) = (*you, profile.who.clone());
+        // The lobby names the maker's seat, which is how a client knows the
+        // whistle is its own to blow. It goes out with the next step, as every
+        // lobby does.
+        let broadcast = rooms.step(std::time::Duration::from_secs(1));
+        let named = broadcast.iter().find_map(|(_, m)| match m {
+            ServerMessage::Match(lobby) => Some(lobby.owner),
+            _ => None,
+        });
+        assert_eq!(named, Some(Some(seat)), "the lobby did not name the maker: {broadcast:?}");
+
+        // Somebody in the maker's seat without the maker's key: a stranger.
+        let mut impostor = Caller::sitting(9, (made.id.clone(), seat));
+        let out = rooms.handle(&impostor, ClientMessage::Start);
+        assert!(
+            matches!(&out[..], [ServerMessage::NotStarted { .. }]),
+            "a seat started a keyed match: {out:?}"
+        );
+        impostor.person = Some(PersonId("nobody".into()));
+        let out = rooms.handle(&impostor, ClientMessage::Start);
+        assert!(
+            matches!(&out[..], [ServerMessage::NotStarted { .. }]),
+            "the wrong key started it: {out:?}"
+        );
+        assert_eq!(*rooms.get(&made.id).unwrap().phase(), Phase::Gathering);
+
+        // The maker's key on a new socket, given a seat the room never handed
+        // out: the whistle is theirs anyway.
+        let mut maker = Caller::sitting(99, (made.id.clone(), PlayerId(7)));
+        maker.person = Some(who);
+        let out = rooms.handle(&maker, ClientMessage::Start);
+        assert!(out.is_empty(), "the whistle answers by broadcast, got {out:?}");
+        assert!(matches!(rooms.get(&made.id).unwrap().phase(), Phase::Running { .. }));
     }
 
     /// The whole flow a client actually walks: make a match, join it, and be
