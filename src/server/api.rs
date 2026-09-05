@@ -128,7 +128,7 @@ pub fn handle(rooms: &mut Rooms, req: Request) -> Reply {
         }),
         Request::RemoveBot { room, seat } => with_room(rooms, &room, |s, _| {
             if !s.is_bot(seat) {
-                return Reply::error(404, format!("seat {} is not a bot", seat.0));
+                return not_the_apis(s, seat);
             }
             match s.remove_bot(seat) {
                 Ok(()) => Reply::ok(json!({ "seat": seat })),
@@ -137,7 +137,7 @@ pub fn handle(rooms: &mut Rooms, req: Request) -> Reply {
         }),
         Request::Act { room, seat, action } => with_room(rooms, &room, |s, _| {
             match s.bot(seat).map(|b| &b.driver) {
-                None => return Reply::error(404, format!("seat {} is not the API's", seat.0)),
+                None => return not_the_apis(s, seat),
                 Some(Driver::Book) => {
                     return Reply::error(409, format!("seat {} is played by the server", seat.0));
                 }
@@ -216,6 +216,17 @@ fn with_room(
             then(server, &id)
         }
         Err(why) => Reply::error(404, why),
+    }
+}
+
+/// A seat the API may not move or take away. **Nobody in it is a 404 and
+/// somebody in it is a 409**, the line the room refusals draw between a room
+/// that is not here and one that will not take it.
+fn not_the_apis(server: &crate::server::Server, seat: PlayerId) -> Reply {
+    if server.players().any(|p| p.id == seat && p.online) {
+        Reply::error(409, format!("seat {} is a person's", seat.0))
+    } else {
+        Reply::error(404, format!("nobody is in seat {}", seat.0))
     }
 }
 
@@ -304,8 +315,8 @@ mod tests {
     }
 
     /// A bot added here is a bot the lobby lists and the console would, and
-    /// taking it away frees the seat; a seat that is not a bot is a 404 and a
-    /// match under way is a 409.
+    /// taking it away vacates the seat; a seat nobody is in is a 404, a
+    /// person's is a 409, and so is a match under way.
     #[test]
     fn bots_are_added_listed_and_removed() {
         let mut rooms = rooms();
@@ -341,7 +352,7 @@ mod tests {
         let person = PlayerId(2);
         let not_a_bot =
             handle(&mut rooms, Request::RemoveBot { room: "main".into(), seat: person });
-        assert_eq!(not_a_bot.status, 404, "{not_a_bot:?}");
+        assert_eq!(not_a_bot.status, 409, "{not_a_bot:?}");
 
         rooms
             .new_match(
@@ -360,7 +371,8 @@ mod tests {
 
     /// **An engine's seat is judged as a client is.** Its action is accepted
     /// or refused with the reason `act` gives, at the tick it was priced at;
-    /// a seat the server plays is not the API's to move.
+    /// a seat the server plays and a person's are not the API's to move, and
+    /// the standings are what a `Standing` carries.
     #[test]
     fn an_external_seat_acts_and_is_refused_in_the_servers_words() {
         let mut rooms = rooms();
@@ -400,6 +412,16 @@ mod tests {
             },
         );
         assert_eq!(nobody.status, 404);
+        let person = rooms.get_mut(&"main".into()).unwrap().join("someone").unwrap();
+        let theirs = handle(
+            &mut rooms,
+            Request::Act {
+                room: "main".into(),
+                seat: person,
+                action: Action::Paint { cells: vec![], placement: Placement::Life },
+            },
+        );
+        assert_eq!(theirs.status, 409, "{theirs:?}");
 
         let book = handle(
             &mut rooms,
@@ -432,6 +454,11 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].as_array().unwrap().len(), 4);
         assert_eq!(rows[1][1]["player"], seat.0, "the cell laid is not there");
+
+        let standings = handle(&mut rooms, Request::Standings { room: "main".into() });
+        assert_eq!(standings.status, 200, "{standings:?}");
+        assert_eq!(standings.body["tick"], 1);
+        assert!(standings.body["held"].is_array(), "{standings:?}");
     }
 
     /// A window is bounded, because it is JSON: sixteen chunks' worth and no

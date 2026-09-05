@@ -214,7 +214,7 @@ cargo run --no-default-features --features server --bin server -- --api-token hu
 
 `{room}` is resolved the way a `Join` resolves it — id, name or code — and refused in the same words. **A seat the API sits in is a bot whose driver is the API**: one seat type, one way out, one flag in the lobby. An action it posts goes through `act` the moment it arrives, so it is priced against the world as it stands and refused in the server's own words, and the reply says which; it is applied on the next step, where the cells are. An engine that wants to know where it is reads `spawn` off its seat, for the reason a `Welcome` carries one.
 
-Refusals are `{"error": "..."}`: 401 with no token, 404 for a room or a seat that is not here, 400 for a body or a path that does not parse, 409 for a room that will not take it — full, or a match already under way — and 413 for a window bigger than sixteen chunks' worth, which is the cap because this is JSON: a cell is an object of five fields here, so the socket's cap on chunks would be a gigabyte. An engine polls the region it plays in.
+Refusals are `{"error": "..."}`: 401 with no token, 404 for a room that is not here or a seat nobody is in, 400 for a body or a path that does not parse, 409 for what is here and will not take it — a room that is full or a match already under way, a seat that is a person's, a seat the server plays — and 413 for a window bigger than sixteen chunks' worth, which is the cap because this is JSON: a cell is an object of five fields here, so the socket's cap on chunks would be a gigabyte. An engine polls the region it plays in.
 
 ```
 A='Authorization: Bearer hunter2'; J='Content-Type: application/json'; U=http://localhost:8080/api
