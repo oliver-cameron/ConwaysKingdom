@@ -35,7 +35,9 @@ size() {
 }
 
 wasm=pkg/conwayskingdom_bg.wasm
-server=target/release/server
+# Where cargo actually put it, which is `target` unless somebody shares one
+# between checkouts.
+server="${CARGO_TARGET_DIR:-target}/release/server"
 echo
 echo "$(size "$wasm")  $wasm"
 echo "$(size "$server")  $server"
