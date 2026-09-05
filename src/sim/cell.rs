@@ -680,6 +680,42 @@ impl Chunk {
 
 pub const HALO_N: usize = CHUNK_N + 2;
 
+/// Which of a chunk's cells a pass evaluates: one bit a cell, row-major.
+///
+/// A second pass over part of the world — see
+/// [`super::World::overclock_pass`] — steps the cells inside a disc and has to
+/// leave every other byte of the chunk exactly as the pass before left it, and
+/// a bitset is the cheapest way to say which is which. A row is one word, so
+/// the cells in it are walked by clearing bits rather than by testing each.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ChunkMask {
+    rows: [u64; CHUNK_N],
+}
+
+const _: () = assert!(CHUNK_N <= u64::BITS as usize, "a mask row is one word");
+
+impl ChunkMask {
+    /// No cell at all.
+    pub const NONE: Self = Self { rows: [0; CHUNK_N] };
+    /// Every cell, which is what a whole-world pass steps.
+    pub const ALL: Self = Self { rows: [u64::MAX >> (u64::BITS as usize - CHUNK_N); CHUNK_N] };
+
+    #[inline]
+    pub fn set(&mut self, row: usize, col: usize) {
+        self.rows[row] |= 1u64 << col;
+    }
+
+    #[inline]
+    pub fn get(&self, row: usize, col: usize) -> bool {
+        (self.rows[row] >> col) & 1 != 0
+    }
+
+    /// How many cells it names.
+    pub fn count(&self) -> usize {
+        self.rows.iter().map(|r| r.count_ones() as usize).sum()
+    }
+}
+
 /// A chunk plus a one-cell border copied from its eight neighbours.
 ///
 /// Gathering into this first means the generation step reads one flat grid
@@ -732,68 +768,92 @@ impl Halo {
         at: (i32, i32),
         earned: &mut Takings,
     ) {
+        self.step_into_where(next, generation, at, earned, &ChunkMask::ALL);
+    }
+
+    /// Step the cells `mask` names, and write nothing else.
+    ///
+    /// What a second pass over a disc runs — see
+    /// [`super::World::overclock_pass`]. A cell outside the mask is neither
+    /// evaluated nor written, so the rest of `next` stays exactly as the pass
+    /// before left it; a cell inside reads all eight neighbours from this
+    /// halo, inside the mask or not.
+    pub fn step_into_where(
+        &self,
+        next: &mut Chunk,
+        generation: u64,
+        at: (i32, i32),
+        earned: &mut Takings,
+        mask: &ChunkMask,
+    ) {
         for row in 0..CHUNK_N {
-            for col in 0..CHUNK_N {
-                let (hr, hc) = (row + 1, col + 1);
+            let mut bits = mask.rows[row];
+            while bits != 0 {
+                let col = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
                 let cell_seed =
                     super::seed::cell_seed(generation, at.0 + row as i32, at.1 + col as i32);
-                let before = self.get(hr, hc);
-                let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
-                if after.kind() == Kind::FACTORY && after.player().is_owned() {
-                    if after.is_alive() {
-                        // **Paid on a chance that peaks and then falls away**,
-                        // so a square that has been earned over and over stops
-                        // being worth manufacture — see [`super::rule::factory_chance`],
-                        // which is the whole of the diminishing return. The age
-                        // is the square's depletion and the rule has already
-                        // put this birth's on the cell, so what is rolled
-                        // against is what the sprite is showing.
-                        if !before.is_alive()
-                            && Roll::new(cell_seed)
-                                .chance(YIELD_STREAM, factory_chance(after.age()))
-                        {
-                            earned.born[after.player().0 as usize] += 1;
-                        }
-                    } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, FACTORY_UPKEEP) {
-                        // A corpse costs once and is then ordinary ground.
-                        // Charging it for as long as it lay there made a factory
-                        // field a debt you could not pay off; this way what a
-                        // factory costs in the end is bounded by how many died.
-                        //
-                        // The age goes with the kind, which is the one moment
-                        // it resets: a factory's age is its depletion, so ground
-                        // that has stopped being a factory has nothing left to be
-                        // depleted.
-                        earned.upkeep[after.player().0 as usize] += 1;
-                        after = after.with_kind(Kind::NORMAL).with_age(0);
-                    }
-                }
-                // A dead turret fires backwards over the ground behind it for
-                // as long as it lies there, and then stops being one. Nothing
-                // is tallied: what it costs its owner is the ground it hands
-                // back and the life it takes with it, which `World::step`
-                // applies, not money.
-                if after.kind() == Kind::TURRET
-                    && !after.is_alive()
-                    && Roll::new(cell_seed).chance(TURRET_ROT_STREAM, TURRET_DECAY)
-                {
-                    after = after.with_kind(Kind::NORMAL);
-                }
-                // **A kind whose corpse is nothing becomes nothing at once**
-                // — see [`Kind::leaves_a_corpse`], which is where that is said
-                // for every kind rather than as a branch each.
-                //
-                // A dynamite is the one that matters: it never goes off after
-                // it dies, and it does not lie there being a bomb either. An
-                // armed corpse would take away the one answer that does not
-                // need ice, which is that a dynamite is a live cell and has to
-                // be kept alive to be worth anything.
-                if !after.is_alive() && !after.kind().leaves_a_corpse() {
-                    after = after.with_kind(Kind::NORMAL).with_age(0);
-                }
-                next[(row, col)] = after;
+                next[(row, col)] = self.step_cell(row + 1, col + 1, cell_seed, earned);
             }
         }
+    }
+
+    /// One cell: the rule, then what a kind does that the rule does not
+    /// know about — manufacture, rot, and a corpse that is nothing.
+    #[inline]
+    fn step_cell(&self, hr: usize, hc: usize, cell_seed: u64, earned: &mut Takings) -> Cell {
+        let before = self.get(hr, hc);
+        let mut after = next_cell(before, &self.neighbours(hr, hc), cell_seed);
+        if after.kind() == Kind::FACTORY && after.player().is_owned() {
+            if after.is_alive() {
+                // **Paid on a chance that peaks and then falls away**, so a
+                // square that has been earned over and over stops being worth
+                // manufacture — see [`super::rule::factory_chance`], which is
+                // the whole of the diminishing return. The age is the square's
+                // depletion and the rule has already put this birth's on the
+                // cell, so what is rolled against is what the sprite is
+                // showing.
+                if !before.is_alive()
+                    && Roll::new(cell_seed).chance(YIELD_STREAM, factory_chance(after.age()))
+                {
+                    earned.born[after.player().0 as usize] += 1;
+                }
+            } else if Roll::new(cell_seed).chance(UPKEEP_STREAM, FACTORY_UPKEEP) {
+                // A corpse costs once and is then ordinary ground. Charging it
+                // for as long as it lay there made a factory field a debt you
+                // could not pay off; this way what a factory costs in the end
+                // is bounded by how many died.
+                //
+                // The age goes with the kind, which is the one moment it
+                // resets: a factory's age is its depletion, so ground that has
+                // stopped being a factory has nothing left to be depleted.
+                earned.upkeep[after.player().0 as usize] += 1;
+                after = after.with_kind(Kind::NORMAL).with_age(0);
+            }
+        }
+        // A dead turret fires backwards over the ground behind it for as long
+        // as it lies there, and then stops being one. Nothing is tallied: what
+        // it costs its owner is the ground it hands back and the life it takes
+        // with it, which `World::step` applies, not money.
+        if after.kind() == Kind::TURRET
+            && !after.is_alive()
+            && Roll::new(cell_seed).chance(TURRET_ROT_STREAM, TURRET_DECAY)
+        {
+            after = after.with_kind(Kind::NORMAL);
+        }
+        // **A kind whose corpse is nothing becomes nothing at once** — see
+        // [`Kind::leaves_a_corpse`], which is where that is said for every
+        // kind rather than as a branch each.
+        //
+        // A dynamite is the one that matters: it never goes off after it
+        // dies, and it does not lie there being a bomb either. An armed corpse
+        // would take away the one answer that does not need ice, which is
+        // that a dynamite is a live cell and has to be kept alive to be worth
+        // anything.
+        if !after.is_alive() && !after.kind().leaves_a_corpse() {
+            after = after.with_kind(Kind::NORMAL).with_age(0);
+        }
+        after
     }
 
     /// The eight cells around a halo position, in `Dir::ALL` order.
@@ -1150,6 +1210,70 @@ mod tests {
         let mut c = Chunk::zeroed();
         b.step(&mut c);
         assert_eq!(live(&c), vec![(5, 4), (5, 5), (5, 6)]);
+    }
+
+    /// **A masked step moves what it names and nothing else.** A blinker
+    /// inside the mask steps, one beside it does not, and every byte outside
+    /// the mask is what it was — which is the whole of what lets a second
+    /// pass run over part of a chunk.
+    #[test]
+    fn a_masked_step_moves_what_it_names_and_nothing_else() {
+        assert_eq!(ChunkMask::ALL.count(), CHUNK_CELLS, "the whole chunk is every cell");
+        assert_eq!(ChunkMask::NONE.count(), 0);
+
+        let before = seed(&[(5, 4), (5, 5), (5, 6), (20, 4), (20, 5), (20, 6)]);
+        let mut halo = Halo::dead();
+        halo.set_centre(&before);
+        let mut mask = ChunkMask::NONE;
+        for row in 3..=7 {
+            for col in 3..=7 {
+                mask.set(row, col);
+            }
+        }
+
+        let mut next = *before;
+        halo.step_into_where(&mut next, 0, (0, 0), &mut Takings::default(), &mask);
+
+        assert_eq!(live(&next), vec![(4, 5), (5, 5), (6, 5), (20, 4), (20, 5), (20, 6)]);
+        for row in 0..CHUNK_N {
+            for col in 0..CHUNK_N {
+                if !mask.get(row, col) {
+                    assert_eq!(next[(row, col)], before[(row, col)], "({row}, {col}) moved");
+                }
+            }
+        }
+    }
+
+    /// And it tallies only the births it made: what two masks earn between
+    /// them is what the whole chunk earns, so a pass over part of the world
+    /// pays for that part and nothing outside it.
+    #[test]
+    fn a_masked_step_tallies_only_the_births_it_made() {
+        let mut c = Chunk::zeroed();
+        for (r, k) in [(5, 4), (5, 5), (5, 6), (20, 4), (20, 5), (20, 6)] {
+            c[(r, k)] = Cell::alive(PlayerId(1)).with_kind(Kind::FACTORY);
+        }
+        let mut halo = Halo::dead();
+        halo.set_centre(&c);
+        let window = |rows: std::ops::RangeInclusive<usize>| {
+            let mut mask = ChunkMask::NONE;
+            for row in rows {
+                for col in 3..=7 {
+                    mask.set(row, col);
+                }
+            }
+            mask
+        };
+        let born = |mask: &ChunkMask| {
+            let mut next = *c;
+            let mut earned = Takings::default();
+            halo.step_into_where(&mut next, 0, (0, 0), &mut earned, mask);
+            earned.born[1]
+        };
+
+        let all = born(&ChunkMask::ALL);
+        assert!(all > 0, "two blinkers of factories should pay for something");
+        assert_eq!(born(&window(3..=7)) + born(&window(18..=22)), all);
     }
 
     #[test]
