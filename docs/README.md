@@ -34,6 +34,7 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--max-rooms N` | how many rooms players may make | 32 |
 | `--torus RxC` | a world that wraps, sized in chunks | infinite |
 | `--hide NAME` | a screen clients are asked not to offer; repeatable | none |
+| `--api-token TOKEN` | mount the HTTP API at `/api`, for whoever sends this as a bearer token | not mounted |
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.
 
@@ -43,7 +44,9 @@ A save is authoritative, so the shape a `--torus` asks for only applies to rooms
 
 A room opens empty. There is no seeded pattern: the first life arrives with the first player, who is granted ground and a block on joining.
 
-The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
+The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
+
+A bot is a seat the server plays from a small book of shapes, and an outside program can play a seat too, through the HTTP API `--api-token` mounts. Both are in [server.md](server.md#bots).
 
 `--span MS` is gone with it. A world's speed is **generations a minute** now — 250 milliseconds is four a second is 240 a minute, which is a number people can halve and double meaningfully, and passing the old flag says what to pass instead. It is also a *room's* rate rather than the server's: it rides on `net::Rules` beside `paused`, a laboratory's rules panel has a slider for it, and the server ticks on a fine grain while each room banks time against its own. Safe to change while a world runs, which almost nothing here is — the dice are seeded by the generation *number*, never a clock, so how fast generations arrive changes nothing any peer computes.
 
