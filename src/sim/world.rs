@@ -723,6 +723,13 @@ impl World {
     /// player's seat. A blast that took one would evict somebody from their
     /// spawn permanently and hand them a second patch on their next join. Life
     /// standing on it is still scrambled; the owner is not.
+    ///
+    /// Ground nobody has loaded is not a third. An infinite world holds only
+    /// the chunks something has touched, and a disc that ran past them used to
+    /// be scrambled on one side and left alone on the other — the same stick
+    /// did half as much at a chunk corner as in the middle of one. An absent
+    /// chunk reads as dead and nobody's, the way [`Self::turret_wants`] reads
+    /// it, and writing there is what loads it.
     fn scramble(
         &mut self,
         centre: (i32, i32),
@@ -738,7 +745,7 @@ impl World {
                     continue;
                 }
                 let (row, col) = (centre.0 + dr, centre.1 + dc);
-                let Some(cell) = self.cell_at(row, col) else { continue };
+                let cell = self.cell_at(row, col).unwrap_or(Cell::DEAD);
                 if cell.is_ice() {
                     continue;
                 }
@@ -1144,7 +1151,10 @@ impl World {
     /// hold ground, so it is priced out rather than ruled out.
     ///
     /// A count and not a cost, and it stops the moment it has seen enough — so
-    /// a dynamite on a frontier answers in a handful of reads.
+    /// a dynamite on a frontier answers in a handful of reads. Ground nobody
+    /// has loaded is nobody's and counts: it used to count for nothing, so a
+    /// stick at the edge of what was stored would not walk toward the open
+    /// country the rule says is worth hitting.
     fn worth_hitting(&self, centre: (i32, i32), owner: PlayerId, reach: i32) -> bool {
         let mut theirs = 0u64;
         // How many squares of a disc this radius holds, so the threshold is a
@@ -1158,9 +1168,8 @@ impl World {
                 if dr * dr + dc * dc > reach * reach {
                     continue;
                 }
-                let not_yet_mine =
-                    self.cell_at(centre.0 + dr, centre.1 + dc).is_some_and(|c| c.player() != owner);
-                if not_yet_mine {
+                let there = self.cell_at(centre.0 + dr, centre.1 + dc).unwrap_or(Cell::DEAD);
+                if there.player() != owner {
                     theirs += 1;
                     if theirs * 64 >= total * rule::DYNAMITE_FOREIGN {
                         return true;
@@ -1925,6 +1934,62 @@ mod tests {
                 disc.len()
             );
         }
+    }
+
+    /// **A blast reaches ground nobody has loaded.** An infinite world holds
+    /// only the chunks something has touched, so a disc that ran past them
+    /// was scrambled on one side and left alone on the other, and the same
+    /// stick did half as much at a chunk corner as in the middle of one —
+    /// which `examples/blast` found by moving. Absent ground is dead and
+    /// nobody's, as it is to a turret.
+    #[test]
+    fn a_blast_reaches_ground_nobody_has_loaded() {
+        let me = PlayerId(1);
+        let mut world = World::infinite_empty();
+        // On the first column of the only chunk there is: everything west of
+        // the stick is void.
+        let at = (CHUNK_N as i32 / 2, 0);
+        let armed =
+            Cell::alive(me).with_kind(Kind::DYNAMITE).with_age(super::super::cell::bits::MAX_AGE);
+        world.set_cell_at(at.0, at.1, armed);
+        world.detonate();
+
+        let reach = rule::DYNAMITE_REACH;
+        let live_between = |lo: i32, hi: i32| {
+            (-reach..=reach)
+                .flat_map(|dr| (lo..=hi).map(move |dc| (dr, dc)))
+                .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+                .filter(|(dr, dc)| {
+                    world.cell_at(at.0 + dr, at.1 + dc).is_some_and(|c| c.is_alive())
+                })
+                .count()
+        };
+        let (west, east) = (live_between(-reach, -1), live_between(1, reach));
+        assert!(west > 0, "the blast left the void alone");
+        // Two halves of one disc at one chance, so neither is a fraction of
+        // the other.
+        assert!(west * 3 > east && east * 3 > west, "{west} west of the stick, {east} east");
+    }
+
+    /// **Open country nobody has loaded is worth hitting**, the same as open
+    /// country that is: a stick at the edge of its owner's country walks
+    /// toward the void beyond it rather than going off in its own ground.
+    #[test]
+    fn open_country_nobody_has_loaded_is_worth_hitting() {
+        let me = PlayerId(1);
+        let mut world = World::infinite_empty();
+        let n = CHUNK_N as i32;
+        for r in 0..n {
+            for c in 0..n {
+                let mine =
+                    Cell::DEAD.with_player(me).with_level(super::super::cell::bits::MAX_LEVEL);
+                world.set_cell_at(r, c, mine);
+            }
+        }
+        let at = (n / 2, n - 3);
+        assert!(!world.worth_hitting(at, me, rule::DYNAMITE_REACH), "the disc is all mine");
+        let centre = world.blast_centre(at, me, 7, rule::DYNAMITE_REACH);
+        assert!(centre.1 > at.1, "the blast stayed at {centre:?} beside the void");
     }
 
     use super::*;
