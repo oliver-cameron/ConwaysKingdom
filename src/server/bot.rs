@@ -59,10 +59,25 @@ const NEAR: i32 = crate::net::SPAWN_N / 2;
 /// costs the same on a full torus as on an empty plane.
 const SAMPLES: usize = 48;
 
+/// How many a search looks at, which is more because it can use them: a book
+/// stops at the first square that fits and a search is choosing between the
+/// ones that do. A sample costs a walk of a shape's span against a rollout's
+/// several thousand cells, so this is the cheap dial — and it is the one that
+/// was measured to matter, see [server.md].
+///
+/// At most 198, or the row and column streams below overlap.
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#bots
+const SEARCH_SAMPLES: usize = 192;
+
 /// How near somebody else's ground makes a square the frontier, in cells.
 const FRONTIER: i32 = 6;
 
-/// Placements one act of a search tries: the second dial's other end.
+/// Placements one act of a search tries: the second dial's other end, and
+/// **what a rollout was measured to cost sets the ceiling on it** — see
+/// [server.md], which has the figure and the tick it is against.
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#bots
 const EASY_TRIES: usize = 2;
 const NORMAL_TRIES: usize = 5;
 const HARD_TRIES: usize = 10;
@@ -424,15 +439,22 @@ impl Ground<'_> {
         frontier: bool,
     ) -> Option<(Action, Note)> {
         let mut out = Vec::new();
-        self.sample(roll, shapes[roll.pick(1, shapes.len())], placement, frontier, 1, &mut out);
+        let shape = shapes[roll.pick(1, shapes.len())];
+        self.sample(roll, shape, placement, frontier, SAMPLES, 1, &mut out);
         out.pop()
     }
 
     /// **Everywhere one of these shapes fits, up to `most`.** What a search
     /// chooses between, and it is the book's own generator rather than a
     /// second one: the same samples in the same order, each taken instead of
-    /// only the first, walked over every shape the intent allows so a search
-    /// picks what to lay as well as where.
+    /// only the first.
+    ///
+    /// The budget is **taken a shape at a time round the ring** rather than
+    /// spent on the first, so a search picks what to lay as well as where.
+    /// Every shape samples the same squares, so one pooled cap is a cap the
+    /// first shape fills every time — and a search that can only choose a
+    /// square is half a search. Going round means a shape that fits nowhere
+    /// costs the others nothing.
     fn offers(
         &self,
         roll: &Roll,
@@ -441,11 +463,26 @@ impl Ground<'_> {
         frontier: bool,
         most: usize,
     ) -> Vec<(Action, Note)> {
-        let mut out = Vec::new();
         let first = roll.pick(1, shapes.len());
-        for k in 0..shapes.len() {
-            let shape = shapes[(first + k) % shapes.len()];
-            self.sample(roll, shape, placement, frontier, most, &mut out);
+        let mut each: Vec<Vec<(Action, Note)>> = (0..shapes.len())
+            .map(|k| {
+                let mut got = Vec::new();
+                let shape = shapes[(first + k) % shapes.len()];
+                self.sample(roll, shape, placement, frontier, SEARCH_SAMPLES, most, &mut got);
+                // Reversed, so popping hands them back in the order they were
+                // sampled in.
+                got.reverse();
+                got
+            })
+            .collect();
+        let mut out = Vec::with_capacity(most);
+        while out.len() < most && each.iter().any(|got| !got.is_empty()) {
+            for got in &mut each {
+                if out.len() >= most {
+                    break;
+                }
+                out.extend(got.pop());
+            }
         }
         out
     }
@@ -458,15 +495,16 @@ impl Ground<'_> {
         shape: usize,
         placement: Placement,
         frontier: bool,
+        samples: usize,
         most: usize,
         out: &mut Vec<(Action, Note)>,
     ) {
         let pattern = &BOOK[shape];
-        for k in 0..SAMPLES as u64 {
+        for k in 0..samples as u64 {
             if out.len() >= most {
                 return;
             }
-            let reach = if k < SAMPLES as u64 / 2 { NEAR } else { REACH };
+            let reach = if k < samples as u64 / 2 { NEAR } else { REACH };
             let window = (2 * reach) as usize;
             let at = (
                 self.home.0 - reach + roll.pick(2 + k, window) as i32,
@@ -719,6 +757,27 @@ mod tests {
         assert!(book.contains(&laid), "{laid:?} is nothing the book offered");
     }
 
+    /// **A search chooses what to lay as well as where.** Every shape samples
+    /// the same squares, so a budget pooled across them is a budget the first
+    /// one spends — and a search that can only pick a square is half a search.
+    #[test]
+    fn what_a_search_is_offered_is_more_than_one_shape() {
+        let me = PlayerId(1);
+        let world = granted(me);
+        let rules = Rules::default();
+        let ground = Ground::around(&world, &rules, me);
+        let offers =
+            ground.offers(&Roll::new(mix(3, 0)), &EARNERS, Placement::Factory, false, HARD_TRIES);
+        let shapes: std::collections::BTreeSet<usize> = offers
+            .iter()
+            .filter_map(|(_, note)| match note {
+                Note::Laid(laid) => Some(laid.shape),
+                _ => None,
+            })
+            .collect();
+        assert!(shapes.len() > 1, "every one of {} offers was the same shape", offers.len());
+    }
+
     /// A level is how deep it looks as well as how often it acts, and the
     /// budget is a cap rather than a target: however many squares the book
     /// offers, an act rolls the world forward at most [`Level::tries`] times.
@@ -734,6 +793,23 @@ mod tests {
             let ran = counted.load(Ordering::Relaxed);
             assert!(ran <= level.tries(), "{} ran {ran} rollouts", level.name());
         }
+    }
+
+    /// **A search with money in hand actually chooses.** A budget is a cap
+    /// and a cap is met by offering nothing, so the test above passes on a
+    /// search that never chooses at all; this is the other side of it — an
+    /// act with a purse rolls the world forward more than once, which is the
+    /// only condition under which a rollout is worth what it costs.
+    #[test]
+    fn an_act_with_money_in_hand_tries_more_than_one_placement() {
+        let me = PlayerId(1);
+        let world = granted(me);
+        let counted = std::sync::Arc::new(AtomicUsize::new(0));
+        let judge = Driver::Search(Box::new(Counting(counted.clone())));
+        let mut bot = Bot::new(Level::Normal, judge, 5, me, 0);
+        bot.choose(&world, &Rules::default(), me, 1000, 0);
+        let ran = counted.load(Ordering::Relaxed);
+        assert!(ran >= 2, "an act with a thousand in hand rolled the world forward {ran} times");
     }
 
     /// **The cheapest end-to-end assertion there is**: a seat the server
