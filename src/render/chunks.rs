@@ -489,14 +489,21 @@ pub struct CameraUniform {
     pub coarse_wraps: f32,
     /// A hue per player, as a turn in `0..1`, indexed by `PlayerId`.
     ///
-    /// Worked out on the client — see `client::views::hue` — because where a
-    /// player sits in their team's family of hue depends on who else is on
-    /// that team, which no function of one player's number can answer. The
-    /// shader looks it up and does nothing else with it.
+    /// One column of `client::views::hue::PALETTE`, with the two below: a
+    /// fixed table the client owns and the shader looks up and does nothing
+    /// else with. It rides in the uniform rather than as a shader constant
+    /// so the lobby's swatch and the board read the same numbers.
     ///
     /// Four to a `vec4` because a uniform array of scalars has a 16-byte
     /// stride in WGSL: `array<f32, 16>` would spend 256 bytes carrying 64.
     pub hues: [[f32; 4]; 4],
+    /// The lightness a full-saturation texel at the swatch lightness draws at,
+    /// per player. The shader places the sheet's range around it.
+    pub lightness: [[f32; 4]; 4],
+    /// The chroma that texel reaches, per player; the sheet's saturation
+    /// scales it. Nought for player zero, which is what makes unowned ground
+    /// grey.
+    pub chroma: [[f32; 4]; 4],
     /// The world rect the coarse texture holds: top-left row and column, then
     /// how many rows and columns. Cells throughout.
     ///
@@ -527,7 +534,7 @@ pub struct CameraUniform {
 const _: () = {
     // Must match `Camera` and the instance attributes in shaders/grid.wgsl.
     // WGSL requires a uniform struct's size to be a multiple of 16.
-    assert!(size_of::<CameraUniform>() == 128);
+    assert!(size_of::<CameraUniform>() == 256);
     assert!(size_of::<Instance>() == 32);
 };
 
@@ -974,6 +981,8 @@ mod tests {
             ("encode", std::mem::offset_of!(CameraUniform, encode_srgb)),
             ("wraps", std::mem::offset_of!(CameraUniform, coarse_wraps)),
             ("hues", std::mem::offset_of!(CameraUniform, hues)),
+            ("lightness", std::mem::offset_of!(CameraUniform, lightness)),
+            ("chroma", std::mem::offset_of!(CameraUniform, chroma)),
             ("coarse", std::mem::offset_of!(CameraUniform, coarse)),
             ("over", std::mem::offset_of!(CameraUniform, over)),
             // `pad` is Rust's alone: WGSL rounds the struct up to a multiple of

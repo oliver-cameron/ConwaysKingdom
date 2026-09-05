@@ -1,179 +1,148 @@
 //! What colour a player's cells are, and what that colour is in sRGB.
 //!
-//! A hue per player, worked out **once on the client** and used in two places
-//! that must not disagree: the shader, handed the whole table in the camera
-//! uniform, and the interface, which reads the same table for a swatch beside
-//! a name. Two derivations of one number are two chances for the lobby and the
-//! board to say different things about who is who. A team needs nothing extra,
-//! because a team *is* a player: everybody on it places cells carrying one
-//! number, so they are one colour by construction.
+//! **One table, read in two places that must not disagree**: the shader,
+//! handed every column of it in the camera uniform, and the interface, which
+//! reads the same row for a swatch beside a name. Two derivations of one colour
+//! are two chances for the lobby and the board to say different things about
+//! who is who — and they did, at two different chromas with two different
+//! tapers, so the swatch beside a name was duller than the cells it stood for.
+//! A team needs nothing extra, because a team *is* a player: everybody on it
+//! places cells carrying one number, so they are one colour by construction.
 //!
-//! ## Three axes, because one wraps and two were not enough
+//! ## A fixed table, measured in OKLab
 //!
-//! Hue alone crowds. Stepping by the golden ratio spreads a prefix about as
-//! well as a prefix can be spread — which is why the step is what it is — and
-//! it still comes back around, so over fifteen players some pair ends up
-//! nearly the same colour. Which pair is not arbitrary: the ones it brings
-//! closest are a **Fibonacci** number apart, so an axis with a period of two
-//! does nothing for exactly the pairs the first one crowded.
-//!
-//! So: saturation cycles on **three** and lightness on **five**, the smallest
-//! pair of periods for which every one of the fifteen live players gets its own
-//! combination — their least common multiple is fifteen. No two players are
-//! told apart by hue alone, and the worst pair is about thirty apart in sRGB,
+//! It used to be a formula — hue stepped by the golden ratio, saturation and
+//! lightness cycling on three and five — and a formula is only as good as its
+//! worst pair. As the shader drew it, the closest two of the fifteen were 0.045
+//! apart in OKLab. [`PALETTE`] is the fifteen chosen at once instead, by descent
+//! on a repulsion energy in OKLab with every colour held inside sRGB and five of
+//! them allowed down to a lightness of 0.45. Its closest pair is 0.169 apart,
 //! which `the_closest_two_players_are_far_enough_apart` measures rather than
-//! asserts.
+//! asserts. The working is in `docs/rendering.md`.
 //!
-//! Both are **multipliers on the sheet**, not replacements for it: a texel
-//! carries its own saturation and lightness, the player scales each, and the
-//! art keeps its shading. Below about two thirds a cell stops reading as its
-//! own picture and starts reading as a dark patch, which is why the range is
-//! narrow.
+//! Each row is the colour of a **full-saturation texel at [`L_SWATCH`]**, and
+//! the rest of the sheet is placed around it: the texel's saturation scales the
+//! row's chroma, and its lightness is remapped so that the reference lands on
+//! the row's and white stays white — see [`player_lightness`]. So the art keeps
+//! its shading, a swatch is the board's colour exactly, and nothing the sheet
+//! can hold leaves the gamut by lightness alone.
 
 use crate::sim::PlayerId;
 
 /// A colour, as the interface wants one: eight bits a channel, sRGB.
 pub type Rgb = (u8, u8, u8);
 
-/// The step between hues, as a turn.
+/// The lightness a swatch is drawn at, and the one at which a full-saturation
+/// texel lands exactly on its [`PALETTE`] row.
 ///
-/// The golden ratio, so every prefix of the sequence is about as evenly spread
-/// around the circle as a prefix can be.
-pub const STEP: f32 = 0.618_034;
+/// MUST MATCH `L_SWATCH` in `grid.wgsl`.
+pub const L_SWATCH: f32 = 0.62;
+
+/// Every player's colour at [`L_SWATCH`], in OKLCH: lightness, chroma, and
+/// hue as a turn in `0..1`. Indexed by [`PlayerId`].
+///
+/// Player zero is nobody, and nobody's ground is grey: no chroma, and the
+/// swatch lightness, which leaves the sheet's own lightness alone.
+///
+/// The bench's palette C, decided 2026-09-05. Four decimals because three put
+/// four of the swatches a byte or two off the sRGB the table was chosen as.
+pub const PALETTE: [(f32, f32, f32); PlayerId::COUNT] = [
+    (L_SWATCH, 0.0, 0.0),
+    (0.4500, 0.1270, 249.83 / 360.0),
+    (0.4500, 0.2425, 298.40 / 360.0),
+    (0.6220, 0.2256, 33.69 / 360.0),
+    (0.4500, 0.1093, 155.96 / 360.0),
+    (0.8000, 0.1156, 32.67 / 360.0),
+    (0.6224, 0.1062, 204.38 / 360.0),
+    (0.6384, 0.1974, 279.39 / 360.0),
+    (0.6511, 0.2812, 341.41 / 360.0),
+    (0.8000, 0.1107, 242.10 / 360.0),
+    (0.4500, 0.1886, 349.02 / 360.0),
+    (0.8000, 0.1623, 167.85 / 360.0),
+    (0.6165, 0.1279, 99.05 / 360.0),
+    (0.4500, 0.1112, 55.33 / 360.0),
+    (0.8000, 0.1687, 103.61 / 360.0),
+    (0.8000, 0.1584, 318.20 / 360.0),
+];
 
 /// Every player's hue, as a turn in `0..1`, indexed by [`PlayerId`].
 ///
-/// Still a table rather than a function, because the shader is handed the whole
-/// thing in one uniform. It used to have to be one: a member's place within its
-/// team's family depended on who else was on that team, so it could not be
-/// answered a player at a time. It can now, and this is that answer written
-/// out.
+/// The one column of [`PALETTE`] a swatch can be handed from outside — see
+/// [`team_colour`]. It used to have to be worked out, because a member's place
+/// within its team's family depended on who else was on that team; it is a
+/// column of a constant now.
 pub fn table() -> &'static [f32; PlayerId::COUNT] {
-    /// **Worked out once.** It is a pure function of nothing, and it was being
-    /// recomputed three times a frame — once for the camera uniform and twice
-    /// for the lobby, which draws it in two places. `fract` is not const, so a
-    /// lock rather than a `const`.
-    static HUES: std::sync::LazyLock<[f32; PlayerId::COUNT]> = std::sync::LazyLock::new(|| {
+    // `array::map` is not const, so a loop.
+    const HUES: [f32; PlayerId::COUNT] = {
         let mut hues = [0.0; PlayerId::COUNT];
-        for (i, hue) in hues.iter_mut().enumerate().skip(1) {
-            *hue = (i as f32 * STEP).fract();
+        let mut i = 0;
+        while i < PlayerId::COUNT {
+            hues[i] = PALETTE[i].2;
+            i += 1;
         }
         hues
-    });
+    };
     &HUES
 }
 
 /// What the shader draws a sheet texel as, for this player.
 ///
-/// The sheet carries no hue: a texel is saturation and lightness, and the hue
-/// comes from the player's number. OKLab with the chroma bisected down until it
-/// fits sRGB, which keeps hue and lightness exactly rather than bending them
-/// the way clamping would. Mirrors `shade` and `player_hue` in `grid.wgsl`,
-/// which is the one that has to be right — this only has to agree with it.
-pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> (u8, u8, u8) {
-    shade_at(
-        lightness,
-        saturation,
-        player,
-        (player.0 as f32 * crate::client::views::hue::STEP).fract(),
-    )
+/// The sheet carries no hue: a texel is saturation and lightness, and the
+/// colour comes from the player's row. Mirrors `shade` in `grid.wgsl`, which is
+/// the one that has to be right — this only has to agree with it.
+pub fn shade(lightness: f32, saturation: f32, player: PlayerId) -> Rgb {
+    shade_at(lightness, saturation, player, PALETTE[player.0 as usize].2)
 }
 
-/// A player's saturation, as a multiplier on the sheet's own.
+/// The sheet's lightness, placed around the player's.
 ///
-/// **Three tiers, cycling on three** — and the three is the point.
-///
-/// It alternated, which is a period of two, and that is the one period that
-/// could not help. Hues are stepped by the golden ratio, so the pairs it brings
-/// closest together are the ones a **Fibonacci** number apart — and eight is
-/// even, so a tier repeating every two gave players 1 and 9 the same strength
-/// on top of nearly the same hue. The second axis did nothing for exactly the
-/// pairs the first one crowded.
-///
-/// Three against lightness's five, so their combination repeats every fifteen —
-/// which is every live player. Each of the fifteen gets its own pair, and no
-/// two of them differ by hue alone. See [`lightness_tier`].
-///
-/// Player zero is nobody and nobody's ground is grey.
-///
-/// MUST MATCH `player_saturation` in `grid.wgsl`.
-pub fn saturation_tier(player: PlayerId) -> f32 {
-    if player.0 == 0 {
-        return 0.0;
-    }
-    match player.0 % 3 {
-        0 => 1.0,
-        1 => 0.78,
-        _ => 0.58,
-    }
-}
-
-/// A player's lightness, as a multiplier on the sheet's own — **the third
-/// axis**, and the one that does the most work.
-///
-/// Hue is stepped by the golden ratio, which spreads a prefix about as well as
-/// a prefix can be spread and still wraps: by fifteen players two of them are
-/// nearer each other than the eye separates at the size a cell is drawn.
-/// Saturation was the second axis and repeats every two, so it does not help a
-/// pair four apart.
-///
-/// **Five tiers, cycling on five**, against saturation's three.
-///
-/// Three and five are the smallest pair of periods for which *every* pair of
-/// live players differs in at least one — checked by hand over all fifteen,
-/// which is what makes it a choice rather than a guess. Their combination
-/// repeats every fifteen, and fifteen is exactly the number of players there
-/// can be, so each one gets its own pair of tiers and no two are told apart by
-/// hue alone.
-///
-/// Multiplied into the sheet's lightness exactly the way saturation is
-/// multiplied into its saturation, so the art keeps its shading and the whole
-/// cell moves together rather than only its colour.
-///
-/// The range is narrow on purpose. Below about two thirds a cell stops reading
-/// as its own art and starts reading as a dark patch, which is a worse problem
-/// than two players looking alike.
+/// **Remapped rather than scaled.** A multiplier lands [`L_SWATCH`] on the
+/// row's lightness only by pushing everything above it the same way, and the
+/// sheet's brightest live texel is at 0.84: the palest rows would carry it
+/// past white, where no chroma survives and the bisection in [`shade_at`] has
+/// nothing left to give up. So the map is linear from black to the reference
+/// and linear again from the reference to white — a multiplier below, where
+/// the art's shading lives and an offset would crush it, and a compression
+/// above, where there is no room for one.
 ///
 /// MUST MATCH `player_lightness` in `grid.wgsl`.
-pub fn lightness_tier(player: PlayerId) -> f32 {
-    // Nobody's ground keeps the sheet's own lightness: it is grey either way,
-    // and dimming it would make unclaimed ground a shade nothing else is.
-    if player.0 == 0 {
-        return 1.0;
-    }
-    match player.0 % 5 {
-        0 => 1.0,
-        1 => 0.91,
-        2 => 0.83,
-        3 => 0.75,
-        _ => 0.68,
+pub fn player_lightness(lightness: f32, player: PlayerId) -> f32 {
+    let l_ref = PALETTE[player.0 as usize].0;
+    if lightness < L_SWATCH {
+        lightness * l_ref / L_SWATCH
+    } else {
+        l_ref + (lightness - L_SWATCH) * (1.0 - l_ref) / (1.0 - L_SWATCH)
     }
 }
 
 /// The same, at a hue somebody else worked out — which is how a team's colour
-/// reaches a swatch. See [`crate::client::views::hue`], which is the one place
-/// a hue is decided and is handed to the shader as a whole table.
-pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) -> (u8, u8, u8) {
+/// reaches a swatch. Lightness and chroma are still the player's own row.
+///
+/// OKLab with the chroma bisected down until it fits sRGB, which keeps hue and
+/// lightness exactly rather than bending them the way clamping would.
+pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) -> Rgb {
     const TAU: f32 = std::f32::consts::TAU;
-    const MAX_CHROMA: f32 = 0.13;
 
     let hue = turn * TAU;
-    let tier = saturation_tier(player);
-    let lightness = lightness * lightness_tier(player);
-    // Chroma tapers off at the ends, where there is no room for it.
-    let taper = 1.0 - (2.0 * lightness - 1.0).abs().powi(2);
-    let chroma = MAX_CHROMA * saturation * tier * taper;
-    let (a, b) = (chroma * hue.cos(), chroma * hue.sin());
+    let (dx, dy) = (hue.cos(), hue.sin());
+    let lightness = player_lightness(lightness, player);
+    let chroma = PALETTE[player.0 as usize].1 * saturation;
 
-    let l_ = lightness + 0.396_337_78 * a + 0.215_803_76 * b;
-    let m_ = lightness - 0.105_561_346 * a - 0.063_854_17 * b;
-    let s_ = lightness - 0.089_484_18 * a - 1.291_485_5 * b;
-    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-    let linear = [
-        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
-        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
-        -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
-    ];
+    let mut linear = oklab_to_linear([lightness, chroma * dx, chroma * dy]);
+    if !in_gamut(linear) {
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..8 {
+            let mid = (lo + hi) * 0.5;
+            let c = chroma * mid;
+            if in_gamut(oklab_to_linear([lightness, c * dx, c * dy])) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let c = chroma * lo;
+        linear = oklab_to_linear([lightness, c * dx, c * dy]);
+    }
     let byte = |v: f32| {
         let v = v.clamp(0.0, 1.0);
         let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
@@ -182,101 +151,159 @@ pub fn shade_at(lightness: f32, saturation: f32, player: PlayerId, turn: f32) ->
     (byte(linear[0]), byte(linear[1]), byte(linear[2]))
 }
 
+fn oklab_to_linear([l, a, b]: [f32; 3]) -> [f32; 3] {
+    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+    [
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    ]
+}
+
+/// The shader's tolerance, so the two agree about what fits.
+fn in_gamut(rgb: [f32; 3]) -> bool {
+    rgb.iter().all(|v| (-0.0005..=1.0005).contains(v))
+}
+
 /// The colour of a player's cells, for a swatch beside their name.
-pub fn player_colour(player: PlayerId) -> (u8, u8, u8) {
-    shade(0.62, 1.0, player)
+pub fn player_colour(player: PlayerId) -> Rgb {
+    shade(L_SWATCH, 1.0, player)
 }
 
 /// The same, for a player whose team decides their hue.
-pub fn team_colour(player: PlayerId, hues: &[f32; PlayerId::COUNT]) -> (u8, u8, u8) {
-    shade_at(0.62, 1.0, player, hues[player.0 as usize])
+pub fn team_colour(player: PlayerId, hues: &[f32; PlayerId::COUNT]) -> Rgb {
+    shade_at(L_SWATCH, 1.0, player, hues[player.0 as usize])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A row as the point in OKLab the table was optimised in.
+    fn lab(player: usize) -> [f32; 3] {
+        let (l, c, h) = PALETTE[player];
+        let h = h * std::f32::consts::TAU;
+        [l, c * h.cos(), c * h.sin()]
+    }
+
     /// **How far apart the closest pair is, as a number.**
     ///
     /// Distinctness is the whole job of this module and "they look different"
     /// is not a thing a test can check, so this measures it: the smallest gap
-    /// between any two players' cells, in sRGB, which is a coarse stand-in for
-    /// a perceptual distance and is the one the screen actually shows.
-    ///
-    /// Hue alone crowds — the golden step spreads a prefix well and still wraps
-    /// — and saturation repeating every two does nothing for a pair four apart.
-    /// Lightness cycling on three is what pulls the worst pair apart, and this
-    /// is what says by how much. It is a floor rather than an equality so the
-    /// tiers can be tuned without rewriting it; what must not happen is the
-    /// floor quietly dropping.
+    /// between any two players' cells, in OKLab, which is the space the table
+    /// was chosen in and a fair stand-in for what an eye does. A floor rather
+    /// than an equality so a row can be retouched without rewriting it; what
+    /// must not happen is the floor quietly dropping.
     #[test]
     fn the_closest_two_players_are_far_enough_apart() {
-        let live: Vec<(u8, (u8, u8, u8))> =
-            (1..PlayerId::COUNT as u8).map(|n| (n, shade(0.62, 1.0, PlayerId(n)))).collect();
-        let apart = |a: (u8, u8, u8), b: (u8, u8, u8)| {
-            let d = |x: u8, y: u8| (x as i32 - y as i32).pow(2);
-            ((d(a.0, b.0) + d(a.1, b.1) + d(a.2, b.2)) as f64).sqrt()
-        };
-        let mut worst = (f64::MAX, 0u8, 0u8);
-        for (i, (n, a)) in live.iter().enumerate() {
-            for (m, b) in &live[i + 1..] {
-                let gap = apart(*a, *b);
+        let mut worst = (f32::MAX, 0, 0);
+        for a in 1..PlayerId::COUNT {
+            for b in a + 1..PlayerId::COUNT {
+                let (p, q) = (lab(a), lab(b));
+                let gap =
+                    ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
                 if gap < worst.0 {
-                    worst = (gap, *n, *m);
+                    worst = (gap, a, b);
                 }
             }
         }
-        // Thirty is what three axes achieve over fifteen players; the floor is
-        // a little under it, so the tiers can be tuned without rewriting this
-        // and a change that quietly makes two players harder to tell apart
-        // still fails.
+        // The table gives 0.169; the formula it replaced gave 0.045.
         assert!(
-            worst.0 > 28.0,
-            "players {} and {} are only {:.1} apart in sRGB",
+            worst.0 > 0.16,
+            "players {} and {} are only {:.3} apart in OKLab",
             worst.1,
             worst.2,
             worst.0
         );
     }
 
-    /// **A tier is a multiplier on the sheet, not a replacement for it.** Both
-    /// axes have to leave the art recognisable: a cell dimmed past about two
-    /// thirds stops reading as its own picture and starts reading as a dark
-    /// patch, which is a worse problem than two players looking alike.
+    /// The lobby's swatch is the board's colour: `player_colour` lands on the
+    /// sRGB each row was chosen as, which is also what `tools/typefaces.html`
+    /// carries as `HUES`. Retouch a row and both lists move with it.
+    ///
+    /// To within a byte a channel, not exactly: three of the rows happen to
+    /// fall within a hundredth of a byte of a rounding boundary, so equality
+    /// would pin float noise rather than the colour.
     #[test]
-    fn no_player_is_dimmed_out_of_legibility() {
-        for n in 0..PlayerId::COUNT as u8 {
-            let tier = lightness_tier(PlayerId(n));
-            assert!(tier > 0.65, "player {n} is drawn at {tier} of the sheet's lightness");
-            assert!(tier <= 1.0, "player {n} is drawn brighter than the sheet");
+    fn a_swatch_is_the_tables_colour() {
+        const SRGB: [(u8, u8, u8); PlayerId::COUNT - 1] = [
+            (0x00, 0x57, 0x98),
+            (0x6c, 0x00, 0xc5),
+            (0xf0, 0x37, 0x00),
+            (0x00, 0x66, 0x3a),
+            (0xff, 0xa2, 0x8e),
+            (0x00, 0x99, 0xa5),
+            (0x77, 0x77, 0xff),
+            (0xf4, 0x00, 0xbf),
+            (0x7a, 0xc6, 0xff),
+            (0x99, 0x00, 0x65),
+            (0x00, 0xde, 0xa9),
+            (0x99, 0x85, 0x00),
+            (0x82, 0x41, 0x00),
+            (0xd1, 0xc1, 0x00),
+            (0xe8, 0x9b, 0xff),
+        ];
+        let within_a_byte = |a: Rgb, b: Rgb| {
+            a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1 && a.2.abs_diff(b.2) <= 1
+        };
+        for (i, want) in SRGB.iter().enumerate() {
+            let player = PlayerId(i as u8 + 1);
+            let got = player_colour(player);
+            assert!(
+                within_a_byte(got, *want),
+                "player {} draws {got:?} for a row that is {want:?}",
+                player.0
+            );
+            assert_eq!(got, team_colour(player, table()), "the lobby disagrees with the HUD");
         }
     }
 
-    /// Every number gets its own hue, and no two are close enough to be
-    /// mistaken for each other on a screen of cells.
+    /// Lightness is remapped, not scaled: the swatch lightness lands on the
+    /// row's, and black and white stay where they are, so no texel the sheet
+    /// can hold leaves the gamut by lightness alone.
     #[test]
-    fn no_two_players_share_a_colour() {
-        let hues = table();
-        for a in 1..PlayerId::COUNT {
-            for b in a + 1..PlayerId::COUNT {
-                let apart = (hues[a] - hues[b]).abs();
-                // Round the circle, so 0.99 and 0.01 are close.
-                let apart = apart.min(1.0 - apart);
-                assert!(apart > 0.02, "{a} and {b} are {apart} apart");
+    fn the_sheets_range_is_placed_inside_the_gamut() {
+        for n in 0..PlayerId::COUNT as u8 {
+            let player = PlayerId(n);
+            let l_ref = PALETTE[n as usize].0;
+            assert!((player_lightness(L_SWATCH, player) - l_ref).abs() < 1e-6);
+            assert_eq!(player_lightness(0.0, player), 0.0);
+            assert!((player_lightness(1.0, player) - 1.0).abs() < 1e-6);
+            // Monotone, so the art's shading keeps its order.
+            let mut last = 0.0;
+            for step in 1..=64 {
+                let now = player_lightness(step as f32 / 64.0, player);
+                assert!(now > last, "player {n} folds the sheet at {step}/64");
+                last = now;
             }
         }
     }
 
-    /// Nought is nobody, and unowned cells are not drawn in anybody's colour.
+    /// **A row is a placement of the sheet, not a replacement for it.** A cell
+    /// dimmed past about two thirds stops reading as its own picture and
+    /// starts reading as a dark patch, which is a worse problem than two
+    /// players looking alike — so the darkest row is bounded below.
     #[test]
-    fn nobody_has_no_hue() {
-        assert_eq!(table()[0], 0.0);
+    fn no_player_is_dimmed_out_of_legibility() {
+        for n in 1..PlayerId::COUNT as u8 {
+            let dim = player_lightness(0.5, PlayerId(n)) / 0.5;
+            assert!(dim > 0.65, "player {n} is drawn at {dim} of the sheet's lightness");
+        }
     }
 
-    /// The table is the same every time it is built. Two clients drawing one
-    /// world have to agree, and neither asks the other.
+    /// Nought is nobody, and unowned cells are grey at the sheet's own
+    /// lightness rather than drawn in anybody's colour.
     #[test]
-    fn the_table_is_the_same_on_every_client() {
-        assert_eq!(table(), table());
+    fn nobody_is_grey() {
+        assert_eq!(table()[0], 0.0);
+        assert_eq!(PALETTE[0].1, 0.0);
+        for lightness in [0.16, 0.5, 0.84] {
+            let (r, g, b) = shade(lightness, 1.0, PlayerId(0));
+            assert!(r == g && g == b, "nobody's ground came out {:?}", (r, g, b));
+            assert!((player_lightness(lightness, PlayerId(0)) - lightness).abs() < 1e-6);
+        }
     }
 }

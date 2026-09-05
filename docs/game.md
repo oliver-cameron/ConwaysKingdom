@@ -349,7 +349,7 @@ A match is played **solo or in teams**, chosen when it is made, along with how m
 
 That is the second version of teams. The first made allies two players who were allowed to build on each other's ground: a `Sides` array said who was on whose side, every rule that read a cell's owner asked it, and the colour was a *family* of hue per team with each member on a narrow arc inside it so that allies read as allies without being identical. All of it was machinery for keeping two numbers behaving like one, and the two bugs it produced were both about the seam — see [server.md](server.md#teams).
 
-The shader looks a hue up rather than computing one, and the table is a constant: a player's colour is their number stepped around the wheel by the golden ratio, which is what it was before teams existed. Nothing else about a cell changes with the player — the sprite, its lightness and its coverage all come from the sheet, and the player contributes a hue and a saturation tier.
+The shader looks a colour up rather than computing one, and the table is a constant: a row of `hue::PALETTE` per number, chosen for separation — see [rendering.md](rendering.md#colour). Nothing else about a cell changes with the player — the sprite, its shading and its coverage all come from the sheet, and the player contributes a row and nothing more.
 
 What a team costs is a **number**. There are fifteen, and a team takes one, so a match with three teams seats twelve people. The simulation knows nothing about teams at all, the same way it knows nothing about matches or money — and now neither does anything else.
 

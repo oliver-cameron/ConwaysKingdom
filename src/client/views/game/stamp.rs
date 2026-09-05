@@ -372,7 +372,7 @@ fn cell(
         // No sheet yet, so a flat square stands in — and this one *is* a solid
         // block when cells touch, so it keeps a corner radius to break it up.
         None => {
-            let (red, green, blue) = crate::client::views::hue::shade(0.62, 1.0, player);
+            let (red, green, blue) = crate::client::views::hue::player_colour(player);
             painter.rect_filled(
                 rect,
                 (rect.width() * 0.18).min(3.0),
