@@ -111,9 +111,6 @@ pub const DYNAMITE_WARN: u8 = bits::MAX_AGE - 1;
 ///
 /// [`DYNAMITE_MOST_REACH`] follows it, being a multiple.
 ///
-/// Ten rather than eight: a dynamite has to be built around and kept alive to
-/// go off at all, and eight was a blast you had to look for.
-///
 /// A cluster that goes off together reaches further — see [`blast_reach`],
 /// where each dynamite is worth a constant *area* of blast.
 pub const DYNAMITE_REACH: i32 = 6;
@@ -137,14 +134,20 @@ pub const DYNAMITE_MOST_REACH: i32 = DYNAMITE_REACH * 10;
 /// It is also the honest reading of what a cluster *is*: one bomb made of n
 /// charges, rather than n bombs that happen to be adjacent.
 pub fn blast_reach(n: usize) -> i32 {
-    let reach = (DYNAMITE_REACH as f64 * (n as f64).sqrt()).round() as i32;
-    reach.clamp(DYNAMITE_REACH, DYNAMITE_MOST_REACH)
+    blast_reach_from(DYNAMITE_REACH, n)
+}
+/// [`blast_reach`] for a stick that reaches `one` on its own, which is what
+/// `examples/blast` sweeps through `World::detonate_with`.
+pub fn blast_reach_from(one: i32, n: usize) -> i32 {
+    let reach = (one as f64 * (n as f64).sqrt()).round() as i32;
+    reach.clamp(one, DYNAMITE_MOST_REACH.max(one))
 }
 /// How many squares in sixty-four a detonation brings to life.
 ///
 /// Conway's classic soup is a half, which mostly burns down; a third is where
-/// a random field goes on happening longest. This wants playing with rather
-/// than deriving — see `examples/balance.rs`.
+/// a random field goes on happening longest. **Swept, and it stands**:
+/// `examples/blast` tries a sixth, a third and a half, and planned.md says
+/// what each held a hundred generations on.
 pub const DYNAMITE_DENSITY: u64 = 24;
 /// The furthest a blast's centre may be thrown from the dynamite, in cells.
 ///
@@ -152,16 +155,16 @@ pub const DYNAMITE_DENSITY: u64 = 24;
 /// dynamite deep inside a large country lobs itself at the nearest frontier;
 /// past this it goes off where it stands.
 pub const DYNAMITE_THROW: i32 = 12;
-/// How much of a blast's disc has to be **held by somebody else** for it to be
-/// worth setting off there, in squares out of sixty-four.
+/// How much of a blast's disc has to be **not already the bomber's** for it
+/// to be worth setting off there, in squares out of sixty-four.
 ///
-/// Somebody else's, not merely not-yours: unowned ground passes "not mine"
-/// trivially, so that test sent dynamite out of their own country to go off
-/// over the nearest empty stretch — and over the debris of earlier blasts,
-/// which is mostly unowned, so they detonated in each other's craters.
+/// Nobody's counts. A blast claims what it reaches, so open country is worth
+/// hitting, and the crater loop that re-admits — the debris of a blast is
+/// mostly unowned, so one can be aimed at the last one's hole — is priced out
+/// rather than ruled out; see `World::worth_hitting`.
 ///
 /// A quarter, which is lower than it reads: a disc centred on a frontier is
-/// half somebody's country at best, and anything further in has to be reached
+/// half somebody else's at best, and anything further in has to be reached
 /// by walking past ground that qualifies less.
 pub const DYNAMITE_FOREIGN: u64 = 16;
 
@@ -222,6 +225,10 @@ pub const TURRET_COST: i32 = 15;
 /// a hundred and thirteen. It is also more than [`crate::sim::Player`] starts
 /// with, so a first blast is something to earn rather than something to open
 /// with.
+///
+/// What that buys beside a turret and beside plain life is measured in
+/// `examples/blast` and argued in planned.md: dearer a square than a turret
+/// where a turret works, and the only tool that works where one does not.
 pub const DYNAMITE_COST: i32 = 153;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;

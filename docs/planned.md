@@ -26,7 +26,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Icons on the bar](#icons-on-the-bar) | Decided | a picture where a word is now |
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
-| [Dynamite](#dynamite) | Built | the art is a placeholder; the numbers want arguing out |
+| [Dynamite](#dynamite) | Built | the art is a placeholder; the numbers are measured, and stand |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
 | [Depleted factories](#depleted-factories) | Decided | a factory that stops paying, so income does not scale with size |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
@@ -65,13 +65,13 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 ## Dynamite
 
-**Built**, and the age field it was designed around finally does something. `Kind::PAYLOAD` counts down while it lives, `World::detonate` runs at the top of the generation, and the blast walks outward to somewhere worth hitting. What is left is the **art** — the sprites in the sheet are a generated placeholder, a casing that fills as the fuse burns — and the numbers, which want `examples/balance.rs` pointed at them.
+**Built**, and the age field it was designed around finally does something. `Kind::DYNAMITE` counts down while it lives, `World::detonate` runs at the top of the generation, and the blast walks outward to somewhere worth hitting. What is left is the **art** — the sprites in the sheet are a generated placeholder, a casing that fills as the fuse burns. The numbers are measured now, in `examples/blast.rs`, and [left where they were](#the-numbers-which-are-measured).
 
 Three things came out of building it that the design did not say.
 
 **A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A dynamite's fuse and a factory's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
 
-**A factory's age is not for this, and the table is where that is written down.** A dead factory still clears on `MINE_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spoken for by [depleted factories](#depleted-factories) below — a factory's age is a fade where a flag would be a cliff, so `Ages::Never` on that row is a reservation and not an absence.
+**A factory's age is not for this, and the table is where that is written down.** A dead factory still clears on `FACTORY_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spent on [depleted factories](#depleted-factories) — `Ages::Depletes` on that row is the wear on the square a factory was born on, a fade where a flag would be a cliff — so nothing else may count on it.
 
 **The detonating dynamite takes its own blast's roll**, and goes through the same `World::blasted` as every other square in the disc. Left alive it is a cell standing in the middle of noise nothing else could have produced, which reads as a survivor rather than as a crater.
 
@@ -89,7 +89,7 @@ The goal was *make the surrounding area look like random noise*, and the design 
 
 **Every peer already agrees about randomness.** `sim::seed` is a seeded stream per cell per generation, it exists precisely so that two peers make the same random choice without exchanging anything, and it is what a birth already uses to pick a parent. So the scoring function is a way of *manufacturing* randomness with a deterministic optimiser inside a codebase that has deterministic randomness. One `mix` per square gives the same result for nothing.
 
-So detonation is: **every square within `PAYLOAD_REACH` takes its own roll, and comes up alive at `PAYLOAD_DENSITY` out of sixty-four.** One constant, and it is the same constant the cost function was reaching for — the density term was the only thing in that design doing work that a probability does not do directly.
+So detonation is: **every square within `DYNAMITE_REACH` takes its own roll, and comes up alive at `DYNAMITE_DENSITY` out of sixty-four.** One constant, and it is the same constant the cost function was reaching for — the density term was the only thing in that design doing work that a probability does not do directly.
 
 Three more reasons to drop the search, beyond not needing it:
 
@@ -108,10 +108,28 @@ standing a dynamite deep in their own territory is making that mistake by
 accident rather than on purpose.
 
 So the blast **walks outward** until it is worth something: search rings at
-increasing distance from the dynamite for a centre whose disc is not already
-its owner's, take the nearest, and break a tie with a seeded roll. Which is
-`turret_target` again, in shape and in code — the nearest square that answers a
-question, with the tie broken so a volley does not always favour one direction.
+increasing distance from the dynamite for a centre whose disc is at least
+`DYNAMITE_FOREIGN` in sixty-four not its owner's, take the nearest, and break a
+tie with a seeded roll. Which is `turret_target` again, in shape and in code —
+the nearest square that answers a question, with the tie broken so a volley
+does not always favour one direction.
+
+**Not its owner's, which includes nobody's.** A blast claims what it reaches,
+so open country is worth hitting, and a count of somebody *else's* ground —
+which is what `worth_hitting` used to take — would leave a dynamite unable to
+do the thing it was given. What that re-admits is the crater loop: the debris
+of a blast is mostly unowned, so one can be aimed at the last one's hole. It is
+priced out rather than ruled out, since a third of a disc for `DYNAMITE_COST`
+is a worse rate than any ordinary way of holding ground. And the quarter is
+lower than it reads: a disc centred on a frontier is half somebody else's at
+best, and anything further in is reached by walking past ground that
+qualifies less.
+
+Nobody's includes **ground nobody has loaded**. An infinite world holds only
+the chunks something has touched, and both the count and the scramble read an
+absent chunk as dead and nobody's, the way a turret does. They did not, and
+the same stick did half as much at a chunk corner as in the middle of one —
+see [gotchas](gotchas.md#a-pass-that-reads-a-disc-reads-the-void).
 
 Two things make the search cheap enough to be a pass rather than a search.
 
@@ -120,7 +138,7 @@ candidate disc are already this player's — the same question
 [`crowding`](../src/net/mod.rs) asks when it seats a latecomer, and one pass
 over a disc rather than a scored optimisation over every cell in it.
 
-**And it is bounded.** `PAYLOAD_THROW` is the furthest a centre may be
+**And it is bounded.** `DYNAMITE_THROW` is the furthest a centre may be
 displaced, so a dynamite in the middle of a large country lobs itself at the
 nearest frontier and not across the map. Unbounded, it would be a homing weapon
 with a range of the whole world, which is a different thing entirely and a much
@@ -137,17 +155,18 @@ near my edge" is good enough, and the rule finds the rest.
 ### A blob is one bomb, and each charge is worth an area
 
 **A hundred dynamite reach ten times as far as one, not a hundred times.**
-`blast_reach` is `PAYLOAD_REACH * sqrt(n)`, so each one going off adds a
+`blast_reach` is `DYNAMITE_REACH * sqrt(n)`, so each one going off adds a
 constant *area* of blast — which is the only scaling that makes a cluster
 worth building without making it the only thing in the game. Below it, a blob
 does less than the same dynamite laid apart and nobody clusters; above it,
 nothing else matters.
 
-It is also the honest reading of what a cluster is. Dynamite whose discs would
-overlap are grouped, transitively, so a line of them is one long bomb rather
-than a chain of pairs — and the blast is centred on the middle of the blob,
-because that is where a bomb made of all of them is. `PAYLOAD_MOST_REACH`
-bounds it: the pass is one roll per square, which is nothing until somebody
+It is also the honest reading of what a cluster is. Dynamite that stand in
+each other's disc — within `DYNAMITE_REACH` of one another, which is closer
+than discs merely overlapping — are grouped, transitively, so a line of them
+is one long bomb rather than a chain of pairs, and the blast is centred on the
+middle of the blob, because that is where a bomb made of all of them is.
+`DYNAMITE_MOST_REACH` bounds it: the pass is one roll per square, which is nothing until somebody
 works out that a thousand of them would rewrite a quarter of a large world in
 one generation.
 
@@ -170,15 +189,15 @@ So, per square in the disc:
 
 What that buys is that a bomb **breaks a country apart and leaves you a third of the pieces**, rather than merely animating what was there. Their factories' corpses still cost them upkeep and their shapes still stop being shapes; what is new is that you hold what is left.
 
-It is now a land grab, deliberately, and that is the thing to watch in `examples/balance.rs`: at `PAYLOAD_COST` a dynamite buys about a third of a disc of `PAYLOAD_REACH`, and if that rate ever beats growing life outward then the turret stops being the tool that takes ground.
+It is now a land grab, deliberately, and that is the thing `examples/blast.rs` watches: at `DYNAMITE_COST` a dynamite buys about a third of a disc of `DYNAMITE_REACH`, and if that rate ever beat growing life outward the turret would stop being the tool that takes ground. It does not, by a wide margin — see [the numbers](#the-numbers-which-are-measured).
 
 **Two squares are exempt.** Ice, because a pane stops time over whatever it covers and that is every rule. And **granted ground**, which is subtler and matters more: `rule::territory` returns before a home square, so nothing else in the game moves one, and `net::already_granted` reads exactly that to know a returning player still has a seat. A blast that converted one would evict somebody from their spawn permanently and hand them a second patch on their next join. And because the owner there cannot move, a home square that came up *alive* would be alive **for them** — the gift bug again, in the one place somebody would aim to exploit it. So a blast may take life off a granted patch and may never put it there. `a_blast_clears_a_granted_patch_without_taking_or_feeding_it`.
 
-It needs no new placement rule. `net::may_place` confines you to your own influence, so a dynamite is laid on your own frontier and its blast reaches across the border — which is exactly the range question `PAYLOAD_REACH` is for.
+It needs no new placement rule. `net::may_place` confines you to your own influence, so a dynamite is laid on your own frontier and its blast reaches across the border — which is exactly the range question `DYNAMITE_REACH` is for.
 
 ### What it is made of
 
-`Kind::PAYLOAD`, which is a row in `kinds!` and costs one of eight kind indices — three are used, and [depleted factories](#depleted-factories) wants a fourth, leaving three spare. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
+`Kind::DYNAMITE`, which is a row in `kinds!` and costs one of eight kind indices — four are used, and four are spare, since [depleted factories](#depleted-factories) went into the age field rather than a kind. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
 
 **It inherits**, which is the decision that makes it a weapon rather than a factory you cannot eat. A birth copies its parent, so a glider that picks one up carries it — a pattern that crosses a border and goes off inside somebody's country, which is the piece the rest of this entry was missing. The cost is real and worth stating: a gun that catches one is a factory. What limits it is that the **fuse travels too**, so a factory's output goes off near the factory, and that a dynamite is a live cell like any other — kill the pattern and there is nothing left to inherit.
 
@@ -196,11 +215,29 @@ Worth checking rather than assuming, because a weapon that deletes a screen of s
 
 **It has to survive to go off.** A dynamite is a live cell, so one on its own dies of loneliness in a generation, exactly like a turret. Keeping it alive means building something around it, and that is the real cost rather than the purchase price.
 
-### The numbers, which are not decided
+### The numbers, which are measured
 
-`PAYLOAD_COST`, `PAYLOAD_REACH`, `PAYLOAD_DENSITY`, `PAYLOAD_THROW` and the fuse chance. `examples/balance.rs` is where they should be argued out, the way [turrets](#turrets) says its own numbers should be.
+`DYNAMITE_COST`, `DYNAMITE_REACH`, `DYNAMITE_DENSITY`, `DYNAMITE_THROW`, `DYNAMITE_FOREIGN` and the fuse chance. `examples/blast.rs` is where they are argued out, the way [turrets](#turrets) says its own numbers should be, and it measures **value rather than area** now: a stick laid armed on the frontier of somebody's field and stepped, beside a four-turret emplacement and beside a hundred and fifty-three cells of plain life laid in the same place, on three fields — held ground with nothing standing on it, a still life of blocks on a four-square pitch, and a soup at the blast's own density. Held is every square the bomber owns; lost is what the field's owner holds when left alone, less what they hold now. The mean of four seeds, and the stick is laid armed, so the twenty-five generations a fresh fuse takes to burn — and has to be kept alive through — are not in it. What it printed on the soup, at the numbers as they stand:
 
-The one with a shape already: **density**. Conway's classic soup is a half, which mostly burns down; a third is where a random field produces the most that goes on happening. So `PAYLOAD_DENSITY` around twenty-four in sixty-four, and it wants playing with rather than deriving.
+| | cost | gen 1: held, lost | gen 25: held, lost | gen 100: held, lost | a square held, at 25 |
+|---|---|---|---|---|---|
+| a stick | 153 | 75, 52 | 230, 136 | 434, 62 | 0.7 |
+| four turrets | 60 | 11, 0 | 34, 4 | 0, −109 | 1.8 |
+| life | 153 | 297, 4 | 658, 100 | 641, −74 | 0.2 |
+
+**A stick is the only one of the three that takes ground somebody is standing on.** On the generation it goes off it takes about fifty squares off the field whatever is on it — turrets take none and life two to four — and on the soup it has taken a hundred and thirty-six by the twenty-fifth generation while the turrets, which cannot take a square with life on it, have taken four and are dying; by the hundredth they are corpses handing ground back. On ground nothing stands on the turrets take fifty to sixty squares for sixty by the twenty-fifth generation, which is cheaper a square than the stick's hundred and one to a hundred and thirty-six for a hundred and fifty-three. So the price sits where it should: **dearer a square than a turret where a turret works, and the only tool that works where one does not.**
+
+**It never holds ground cheaper than life**, which is what the last version of this entry said to watch. A cell of life costs one, holds itself and a halo from the first generation, and a hundred and fifty-three of them hold about three hundred squares at once and six to seven hundred by the twenty-fifth generation on every field — a quarter of what the stick's ground costs a square at the first generation and a third at the twenty-fifth. The turret stays the tool that takes ground and life the tool that holds it.
+
+**A still life is woken by a blast, and what wakes is theirs.** On the field of blocks the stick's lost column goes negative by the fiftieth generation — sixty-eight, then seventy-eight squares the field's owner holds *more* than if left alone — and life laid against it does worse, at a hundred and eighty-nine and two hundred and forty. The noise runs into the blocks, the chaos it starts is mostly theirs because most of the life in it is, and a still life that held its own area holds a country afterwards. A field of blocks is, over fifty generations, a defence against being blasted. Nobody designed that, and it is worth knowing before anybody balances against it.
+
+**Density: twenty-four stands.** With the reach at six and the price the same, what the bomber holds at the first generation goes as the density — fifty-six, sixty-six, seventy-three and eighty-three at sixteen, twenty-one, twenty-four and thirty-two in sixty-four — and what they hold at the hundredth does not: on the soup five, two hundred and thirteen, four hundred and thirty-four and a hundred and eight; on the empty field two hundred and fifty-six, three hundred and seventy-six, three hundred and thirty-two and two hundred and thirty. A sixth does not catch, a half burns down as the constant's comment said it would, and twenty-one and twenty-four are within four seeds' noise of each other at the top.
+
+**Reach: six stands, and pricing by area is right.** What a stick takes on the generation it goes off goes as its disc — thirty-six, fifty-one and ninety-four squares lost for discs of eighty-one, a hundred and thirteen and a hundred and ninety-seven, which is forty-four to forty-eight hundredths of a square each — so a stick is worth its area and `DYNAMITE_COST` at forty plus the disc is the right shape. Nothing in the sweep prefers five or eight to six: at a hundred generations on the soup a reach of eight holds less than six does, for a disc three quarters bigger.
+
+**The throw and the quarter are not swept**, and nothing here argues for moving either; `a_blast_is_thrown_toward_the_frontier_and_no_further_than_the_throw` and `a_disc_one_square_under_the_foreign_threshold_is_not_worth_hitting` pin what they do. The fuse is the one number with a case against it that the tables cannot show: twenty-five generations is six seconds at two hundred and forty a minute, all of them spent keeping a live cell alive on a frontier, and that is the stick's real price on top of the hundred and fifty-three. Whether it is too long is a question for play rather than for a table.
+
+So: **no constant moved.** Leave all six where they are, re-run the example if any of them or the territory rule under them changes, and watch the still-life column, which is the one result nobody predicted.
 
 ## What to do next
 
