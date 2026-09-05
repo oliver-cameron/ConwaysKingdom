@@ -4,6 +4,7 @@
 //! the wire and what a placement costs are worth being able to read without a
 //! thousand lines of assertion between one type and the next.
 
+use super::spawn::{crowding, SPAWN_CROWDED, SPAWN_GAP, SPAWN_PITCH, SPAWN_SEARCH};
 use super::*;
 
 /// **A name is a label, so it is clamped rather than refused.** What it is
