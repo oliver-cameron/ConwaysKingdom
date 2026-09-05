@@ -37,7 +37,7 @@ cargo install wasm-pack
 cd /opt/conwayskingdom && deploy/build.sh
 ```
 
-It prints the size of both things it made. The module is what every visitor downloads and should be around 7.5 MB; a binary whose size did not move between deploys is usually one that was not rebuilt.
+It prints the size of both things it made. The module is what every visitor downloads — 8.3 MB the day this was written — and a binary whose size did not move between deploys is usually one that was not rebuilt.
 
 **The token.** Only if something is going to play through the API — without it `/api` is not mounted at all, which is the right default for a server nobody is writing an engine against:
 
