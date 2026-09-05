@@ -3,16 +3,34 @@
      specimen sheet.
 
      Open it in a browser; it needs nothing built and talks to nothing. The
-     five pairings load from Google Fonts, so it wants a network the first
-     time. The numbers in it — 44px slots, 4px radius, 10px panel padding,
-     14/12px text, 13px key hints, and the fifteen player colours — are copied
-     from the tree and go stale if the tree moves. -->
+     pairings load from Google Fonts, and Maple Mono from the fontsource files
+     on jsDelivr, so it wants a network the first time. The numbers in it —
+     44px slots, 4px radius, 10px panel padding, 14/12px text, 13px key hints,
+     and the fifteen player colours — are copied from the tree and go stale if
+     the tree moves. -->
 <title>Kingdom Type Bench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&family=Space+Mono:wght@400;700&family=Archivo:wght@400;500;600&family=Roboto+Mono:wght@400;500&family=Chivo:wght@400;500;600&family=Chivo+Mono:wght@400;500&display=swap">
 
 <style>
+  /* Maple Mono is not on Google Fonts. The two weights the game would ship,
+     as fontsource packages them. */
+  @font-face {
+    font-family: "Maple Mono";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url(https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-400-normal.woff2) format("woff2");
+  }
+  @font-face {
+    font-family: "Maple Mono";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url(https://cdn.jsdelivr.net/fontsource/fonts/maple-mono@latest/latin-500-normal.woff2) format("woff2");
+  }
+
   /* ---- Page chrome. Deliberately a system stack: every loaded face on this
      page is a candidate, and chrome in one of them would put a thumb on the
      scale. ---- */
@@ -136,6 +154,10 @@
     border-radius: 4px; overflow: hidden;
     min-height: 430px; display: flex; flex-direction: column; justify-content: space-between;
     font-family: var(--face-sans), var(--sys);
+    /* egui has no OpenType features, so neither does the screen it stands
+       in for: no ligatures, and the tabular figures below are a monospace's
+       own rather than a `tnum`. */
+    font-variant-ligatures: none;
     container-type: inline-size;
   }
   .board {
@@ -394,6 +416,17 @@
         <span class="verdict v-try">best in tight labels</span>
       </div>
       <div class="col">
+        <h3>Maple Mono, beside Plex Sans and beside Inter</h3>
+        <p>Rounded terminals and a tall x-height, made for editors — which is where its ligatures
+          live, and none of that reaches the game. <strong>egui has no OpenType features</strong>:
+          no ligatures and no <code>tnum</code>, so the bench turns them off and what is compared
+          is the letterforms alone, at the 17&nbsp;px of the figures and the 13&nbsp;px of the key
+          hints. Not on Google Fonts; it loads from the fontsource files on jsDelivr. Twice in the
+          picker so it can be judged against both the sans in the tree and the sans most likely to
+          replace it.</p>
+        <span class="verdict v-try">on trial beside two sans</span>
+      </div>
+      <div class="col">
         <h3>Chivo / Chivo Mono</h3>
         <p>One superfamily, so the sans and the mono share skeletons and the HUD reads as one voice
           rather than two. Chivo is a touch heavy at 12&nbsp;px on a dark ground — check the dim grey
@@ -438,6 +471,8 @@
     { id: "grotesk", name: "Space Grotesk", sans: "Space Grotesk",  mono: "Space Mono" },
     { id: "archivo", name: "Archivo",       sans: "Archivo",        mono: "Roboto Mono" },
     { id: "chivo",   name: "Chivo",         sans: "Chivo",          mono: "Chivo Mono" },
+    { id: "plex-maple",  name: "Plex + Maple",  sans: "IBM Plex Sans", mono: "Maple Mono" },
+    { id: "inter-maple", name: "Inter + Maple", sans: "Inter",         mono: "Maple Mono" },
   ];
 
   const picker = document.getElementById("picker");

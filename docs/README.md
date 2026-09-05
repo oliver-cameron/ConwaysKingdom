@@ -90,7 +90,7 @@ The `--profiling` profile is release codegen with the second optimiser switched 
 
 ## Looking at it
 
-`tools/typefaces.html` is the type bench: the hotbar and the HUD rebuilt at the sizes `views::theme` gives them, with a switcher for five typeface pairings and the fifteen player colours with their closest pairs measured in OKLab. Open it in a browser — it builds nothing and talks to nothing. The numbers in it are copied out of the tree, so it goes stale if the tree moves.
+`tools/typefaces.html` is the type bench: the hotbar and the HUD rebuilt at the sizes `views::theme` gives them, with a switcher for seven typeface pairings and the fifteen player colours with their closest pairs measured in OKLab. Open it in a browser — it builds nothing and talks to nothing. The numbers in it are copied out of the tree, so it goes stale if the tree moves.
 
 ## Formatting
 
