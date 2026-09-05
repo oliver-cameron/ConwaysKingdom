@@ -5,7 +5,7 @@
 //! list into a search. They are one question asked two ways, which is why
 //! there is one screen and one message rather than a board and a finder.
 
-use crate::client::views::menu::{Chose, Menu, Page};
+use crate::client::views::menu::{Chose, Menu};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::menu as words;
 use crate::client::views::words::w;
@@ -89,7 +89,7 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
 
     ui.horizontal(|ui| {
         if ui.small_button(w().menu.back).clicked() {
-            menu.page = Page::Home;
+            menu.page = menu.page.back();
         }
         ui.heading(w().menu.people.title);
     });

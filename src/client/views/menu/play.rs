@@ -5,7 +5,7 @@
 //! worlds on it, and home is about the person in front of the screen.
 
 use super::draft::{Access, Draft, Ends, Kind, Shape};
-use super::{describe, players, words, Chose, Menu, Page, Stage, Where, RETRY_EVERY, SETTLE};
+use super::{describe, players, words, Chose, Menu, Stage, Where, RETRY_EVERY, SETTLE};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::w;
 use crate::net::{RoomId, RoomInfo};
@@ -51,9 +51,10 @@ pub(super) fn play(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
         egui::vec2(full, 0.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            // Every screen has a way out, by pointer as well as by escape.
+            // Every screen has a way out, by pointer as well as by escape,
+            // and the two agree because both ask `Page::back`.
             if ui.small_button(w().menu.back).clicked() {
-                menu.page = Page::Home;
+                menu.page = menu.page.back();
             }
             ui.heading(w().menu.home.play);
             reach = server_field(ui, theme, menu, at, reached);

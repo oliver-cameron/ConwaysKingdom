@@ -21,7 +21,7 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Cho
 
     ui.horizontal(|ui| {
         if ui.small_button(w().menu.back).clicked() {
-            menu.page = Page::Home;
+            menu.page = menu.page.back();
         }
     });
     ui.add_space(m.item_spacing);

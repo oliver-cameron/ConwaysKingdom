@@ -14,7 +14,7 @@
 //! Read-only about the server, like every view here: it holds what it was told
 //! and returns what was chosen.
 
-use crate::client::views::menu::{Chose, Menu, Page};
+use crate::client::views::menu::{Chose, Menu};
 use crate::client::views::theme::Theme;
 use crate::client::views::words::menu as words;
 use crate::client::views::words::w;
@@ -26,7 +26,7 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
 
     ui.horizontal(|ui| {
         if ui.small_button(w().menu.back).clicked() {
-            menu.page = Page::Account;
+            menu.page = menu.page.back();
         }
         ui.heading(w().menu.parties.title);
     });

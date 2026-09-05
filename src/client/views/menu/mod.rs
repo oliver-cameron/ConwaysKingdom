@@ -98,7 +98,7 @@ pub enum Stage {
 /// more than one level down and disguises it where it does, which is the whole
 /// argument for this being a page rather than a stack: home is who you are and
 /// what you have done, play is where you go, and there is nothing under either.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     /// Your name, your record, and the way in.
     Home,
@@ -116,6 +116,20 @@ pub enum Page {
     Parties,
     /// What the board does not tell somebody who has just arrived.
     HowToPlay,
+}
+
+impl Page {
+    /// Where leaving this page goes: the page it is reached from. **One
+    /// answer for the back button and for escape**, so the two cannot
+    /// disagree — and People and Parties are both the account page's, so two
+    /// pages reached from the same button go back to the same place. Home has
+    /// nothing above it and stays.
+    pub fn back(self) -> Self {
+        match self {
+            Page::People | Page::Parties => Page::Account,
+            Page::Play | Page::Account | Page::HowToPlay | Page::Home => Page::Home,
+        }
+    }
 }
 
 pub struct Menu {
@@ -847,6 +861,25 @@ mod tests {
                 "the home screen does not reach one of its three"
             );
         }
+    }
+
+    /// **And every page has a way back**, which the back button and escape
+    /// both take from `Page::back`, so a page cannot be left by one and not
+    /// the other. Two pages reached from the account page go back to it, and
+    /// nothing is more than two steps from home.
+    #[test]
+    fn every_page_leads_back_to_home() {
+        for page in [Page::Play, Page::People, Page::Account, Page::Parties, Page::HowToPlay] {
+            let mut at = page;
+            let mut steps = 0;
+            while at != Page::Home {
+                at = at.back();
+                steps += 1;
+                assert!(steps <= 2, "{page:?} does not lead home");
+            }
+        }
+        assert_eq!(Page::People.back(), Page::Parties.back(), "siblings disagree about back");
+        assert_eq!(Page::Home.back(), Page::Home);
     }
 
     /// **The menu opens knowing who this client is.**

@@ -2804,9 +2804,10 @@ impl App for GameApp {
                 // The form is a column rather than something opened, so there
                 // is no rung for it: a field lets go of the keyboard (handled
                 // in `menu::show`, before the app sees the key at all), then
-                // the page goes back.
-                if m.page == menu::Page::Play {
-                    m.page = menu::Page::Home;
+                // the page goes back -- to where its back button goes, which
+                // is one answer for both. Home has nothing above it.
+                if m.page != menu::Page::Home {
+                    m.page = m.page.back();
                     return;
                 }
             }
