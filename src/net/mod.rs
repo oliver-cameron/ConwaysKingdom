@@ -814,6 +814,39 @@ impl Seat {
     }
 }
 
+/// How hard a bot plays.
+///
+/// Two dials rather than an algorithm — how often it acts, and what it will
+/// do — and both are the server's; see `server::bot`. This is the word a
+/// lobby picks and the wire carries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Level {
+    Easy,
+    #[default]
+    Normal,
+    Hard,
+}
+
+impl Level {
+    pub const ALL: [Self; 3] = [Self::Easy, Self::Normal, Self::Hard];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Normal => "normal",
+            Self::Hard => "hard",
+        }
+    }
+
+    /// Read one as typed at a console or in a request.
+    pub fn parse(word: &str) -> Result<Self, String> {
+        Self::ALL
+            .into_iter()
+            .find(|l| l.name() == word.to_ascii_lowercase())
+            .ok_or_else(|| format!("no level \"{word}\"; try easy, normal or hard"))
+    }
+}
+
 /// **What a server can vouch for about somebody**, which is only what
 /// happened on it.
 ///

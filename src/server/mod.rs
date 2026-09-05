@@ -12,6 +12,7 @@
 //! replies, so whatever carries the bytes is somebody else's problem;
 //! [`ws`] is what carries them today.
 
+pub mod bot;
 pub mod console;
 pub mod lockers;
 pub mod matches;
@@ -23,13 +24,14 @@ pub mod rooms;
 #[cfg(feature = "server")]
 pub mod ws;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::net::{
-    ChunkId, ClientMessage, RoomName, Rules, ServerMessage, Stamped, Tick, DEFAULT_ROOM,
+    ChunkId, ClientMessage, Level, RoomName, Rules, ServerMessage, Stamped, Tick, DEFAULT_ROOM,
 };
 use crate::sim::{Player, PlayerId, World};
+use bot::{Bot, Driver};
 use matches::{Phase, Victory};
 
 pub struct Server {
@@ -100,6 +102,11 @@ pub struct Server {
     /// the step they belong to. Drained by whatever carries the bytes; see
     /// [`ServerMessage::Acted`].
     announce: Vec<ServerMessage>,
+    /// The seats the server plays — see [`bot`]. Bot-ness lives here and
+    /// reaches the wire only through [`crate::net::Seat::bot`]: `sim::Player`
+    /// is saved, and a match never is, so after a restart a bot's seat is an
+    /// offline player like any human who left.
+    bots: BTreeMap<PlayerId, Bot>,
 }
 
 /// The most chunks one message may fetch.
@@ -171,6 +178,7 @@ impl Server {
             rules: Rules::default(),
             granted: Vec::new(),
             announce: Vec::new(),
+            bots: BTreeMap::new(),
         }
     }
 
@@ -1007,6 +1015,95 @@ impl Server {
         }
     }
 
+    /// Seat a player the server plays — see [`bot`].
+    ///
+    /// A seat like any other: [`Self::join_with`] hands it out, so a room
+    /// full of bots refuses a person with the same words, and the lobby puts
+    /// it on a side the way it puts anybody. `team` overrides that. Only
+    /// while the room admits anybody, because a seat arriving mid-match is the
+    /// late joining `join` refuses.
+    pub fn add_bot(
+        &mut self,
+        name: impl Into<String>,
+        level: Level,
+        driver: Driver,
+        team: Option<PlayerId>,
+    ) -> Result<PlayerId, String> {
+        if !self.phase.open_to_newcomers() {
+            return Err(format!("\"{}\" is a match already under way", self.room));
+        }
+        // Judged before the seat is taken, because a number is never given
+        // back -- see `next_player_id` -- and a refused side would otherwise
+        // cost the room a seat.
+        if let Some(team) = team {
+            if self.sides.is_empty() {
+                return Err("this match has no teams".into());
+            }
+            if !self.sides.contains(&team) {
+                return Err(format!("this match has {} teams", self.sides.len()));
+            }
+        }
+        let seat = self.join_with(name, None)?;
+        if let Some(team) = team {
+            self.join_team(seat, team)?;
+        }
+        let bot = Bot::new(level, driver, self.world.seed(), seat, self.tick());
+        log::info!("{seat:?} is a {} bot in room {}", level.name(), self.room);
+        self.bots.insert(seat, bot);
+        Ok(seat)
+    }
+
+    /// Take a bot out again. Only while the room admits anybody: a seat
+    /// leaving a running match is a forfeit, and [`Self::forfeit`] is that.
+    pub fn remove_bot(&mut self, seat: PlayerId) -> Result<(), String> {
+        if !self.bots.contains_key(&seat) {
+            return Err(format!("seat {} is not a bot", seat.0));
+        }
+        if !self.phase.open_to_newcomers() {
+            return Err("bots are settled once a match starts".into());
+        }
+        self.bots.remove(&seat);
+        self.leave(seat);
+        Ok(())
+    }
+
+    pub fn is_bot(&self, seat: PlayerId) -> bool {
+        self.bots.contains_key(&seat)
+    }
+
+    pub fn bot(&self, seat: PlayerId) -> Option<&Bot> {
+        self.bots.get(&seat)
+    }
+
+    /// Every bot here, by seat.
+    pub fn bots(&self) -> impl Iterator<Item = (PlayerId, &Bot)> {
+        self.bots.iter().map(|(&seat, bot)| (seat, bot))
+    }
+
+    /// Let every bot that is due make its move, through [`Self::act`] like
+    /// anybody's. Before `pending` is taken, so what it chose goes out in the
+    /// `Step` for this generation.
+    fn bots_act(&mut self) {
+        let tick = self.tick();
+        let due: Vec<PlayerId> =
+            self.bots.iter().filter(|(_, b)| b.next_at <= tick).map(|(&s, _)| s).collect();
+        for seat in due {
+            let (plays_as, purse) = (self.plays_as(seat), self.value_of(seat).unwrap_or(0));
+            let Some(bot) = self.bots.get_mut(&seat) else { continue };
+            bot.next_at = tick + bot.cadence();
+            let chosen = match bot.driver {
+                Driver::Book => bot.choose(&self.world, &self.rules, plays_as, purse, tick),
+                // Priced as it arrived; nothing waits for a step.
+                Driver::External => None,
+            };
+            if let Some(action) = chosen {
+                if let Err(why) = self.act(Stamped { tick, player: plays_as, seat, action }) {
+                    log::debug!("bot {seat:?} was refused: {why}");
+                }
+            }
+        }
+    }
+
     /// Decoded message in, replies out. Deliberately transport-agnostic.
     /// `who` is **which person this connection is**, as the server's table
     /// settled it — see [`crate::server::people`]. A room cannot work that out
@@ -1467,6 +1564,7 @@ impl Server {
             self.pending.clear();
             return lobby;
         }
+        self.bots_act();
         let applied = std::mem::take(&mut self.pending);
         for stamped in &applied {
             self.apply(stamped);
@@ -3327,5 +3425,166 @@ mod tests {
         // `handle` queues; `step` is what applies. Stepping once here would
         // also advance the world, so the pending action is drained by the
         // caller's own first step.
+    }
+
+    /// Step until a `Step` carries an action from this seat, and say what
+    /// number its cells carried; `None` if it never moved in `within` steps.
+    fn first_act_of(s: &mut Server, seat: PlayerId, within: usize) -> Option<PlayerId> {
+        for _ in 0..within {
+            for out in s.step() {
+                if let ServerMessage::Step { actions, .. } = out {
+                    if let Some(a) = actions.iter().find(|a| a.seat == seat) {
+                        return Some(a.player);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// **A bot is a seat the server plays.** It takes a number like anybody,
+    /// acts on its own within its cadence, and what it laid is priced against
+    /// its purse and stands in the world under its number.
+    #[test]
+    fn a_bot_takes_a_seat_and_acts_within_its_cadence() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("easy bot", Level::Easy, Driver::Book, None).unwrap();
+        assert!(s.is_bot(bot));
+        assert!(s.players().any(|p| p.id == bot && p.online), "a bot is a player here");
+        let purse = s.value_of(bot).unwrap();
+
+        // Three cadences, because the dice may find nowhere to build once.
+        assert!(first_act_of(&mut s, bot, 3 * 16).is_some(), "an easy bot never acted");
+        assert!(s.value_of(bot).unwrap() < purse, "its factories were free");
+        let standing = s
+            .world()
+            .live_cells()
+            .iter()
+            .filter(|&&(r, c)| {
+                let cell = s.world().cell_at(r, c).unwrap();
+                cell.player() == bot && cell.kind() == crate::sim::Kind::FACTORY
+            })
+            .count();
+        assert!(standing > 0, "nothing of the bot's is standing");
+    }
+
+    /// On a side it plays as the side's number, so its cells and its purse
+    /// are the team's — the same rule as a person at the team's controls.
+    #[test]
+    fn a_bot_on_a_team_plays_as_the_team() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 1000 });
+        s.make_teams(2).unwrap();
+        let me = s.join_with("me", None).unwrap();
+        s.join_team(me, PlayerId(1)).unwrap();
+        let bot = s.add_bot("hard bot", Level::Hard, Driver::Book, Some(PlayerId(2))).unwrap();
+        assert_eq!(s.plays_as(bot), PlayerId(2));
+        let why = s.add_bot("x", Level::Easy, Driver::Book, Some(PlayerId(9))).unwrap_err();
+        assert!(why.contains("teams"), "a side this match does not have: {why}");
+        assert_eq!(s.player_count(), 4, "a refused side cost a number");
+
+        s.start_match(None).unwrap();
+        s.credit(bot, 200);
+        assert_eq!(first_act_of(&mut s, bot, 3 * 4), Some(PlayerId(2)), "not the team's number");
+        assert!(s.value_of(bot).unwrap() < 200, "the team's purse did not pay");
+    }
+
+    /// Removing one frees the seat, and a room with fifteen of them refuses a
+    /// person with the words it refuses a sixteenth person with.
+    #[test]
+    fn removing_a_bot_frees_its_seat_and_a_room_of_bots_is_full() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("bot", Level::Normal, Driver::Book, None).unwrap();
+        assert!(s.remove_bot(PlayerId(9)).is_err(), "nobody is in seat 9");
+        let me = s.join("me").unwrap();
+        assert!(s.remove_bot(me).is_err(), "a person is not a bot");
+        s.remove_bot(bot).unwrap();
+        assert!(!s.is_bot(bot));
+        assert!(!s.players().find(|p| p.id == bot).unwrap().online, "the seat is still taken");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        assert!(lobby.players.iter().all(|p| p.id != bot), "a removed bot is still listed");
+
+        for i in 0..PlayerId::MAX as usize - 2 {
+            s.add_bot(format!("bot {i}"), Level::Easy, Driver::Book, None).unwrap();
+        }
+        let why = s.join("late").unwrap_err();
+        assert!(why.contains("full"), "{why}");
+        let why = s.add_bot("one more", Level::Easy, Driver::Book, None).unwrap_err();
+        assert!(why.contains("full"), "{why}");
+    }
+
+    /// **Never before the whistle and never after the end.** A gathering
+    /// match holds still and a decided one has stopped; a bot in either does
+    /// nothing, and neither admits or releases one once it is running.
+    #[test]
+    fn a_bot_does_nothing_before_the_whistle_or_after_the_end() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 2 });
+        s.join_with("me", None).unwrap();
+        let bot = s.add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        for _ in 0..20 {
+            let out = s.step();
+            assert!(
+                out.iter().all(|m| !matches!(m, ServerMessage::Step { .. })),
+                "gathering stepped"
+            );
+        }
+        assert!(s.pending.is_empty() && s.announce.is_empty(), "a bot acted before the whistle");
+        assert!(s.add_bot("second", Level::Easy, Driver::Book, None).is_ok(), "gathering admits");
+
+        s.start_match(None).unwrap();
+        s.credit(bot, 500);
+        assert!(s.add_bot("late", Level::Easy, Driver::Book, None).is_err(), "late joining");
+        assert!(s.remove_bot(bot).is_err(), "a seat leaving mid-match is a forfeit");
+        for _ in 0..2 {
+            s.step();
+        }
+        assert!(matches!(s.phase(), Phase::Over { .. }));
+        s.take_announcements();
+        for _ in 0..20 {
+            let out = s.step();
+            assert!(out.iter().all(|m| !matches!(m, ServerMessage::Step { .. })), "over stepped");
+        }
+        assert!(s.announce.is_empty() && s.pending.is_empty(), "a bot acted after the end");
+    }
+
+    /// **An external seat is judged exactly as a client is**: its action goes
+    /// through `act`, is refused off its ground and beyond its purse, and is
+    /// taken otherwise. The server never moves for it.
+    #[test]
+    fn an_external_seat_is_priced_like_anybody() {
+        let mut s = Server::new(World::infinite_empty());
+        let engine = s.add_bot("engine", Level::Normal, Driver::External, None).unwrap();
+        let paint = |cells: Vec<(i32, i32)>, placement| Stamped {
+            tick: 0,
+            player: engine,
+            seat: engine,
+            action: Action::Paint { cells, placement },
+        };
+
+        let far = vec![(9_000, 9_000), (9_000, 9_001), (9_001, 9_000), (9_001, 9_001)];
+        assert_eq!(s.act(paint(far, Placement::Life)), Err("nothing of yours reaches there"));
+
+        // A pane over the whole patch: more than the purse holds.
+        let patch: Vec<(i32, i32)> = (0..crate::net::SPAWN_N)
+            .flat_map(|r| (0..crate::net::SPAWN_N).map(move |c| (r, c)))
+            .collect();
+        assert_eq!(
+            s.act(paint(mine(engine, &patch), Placement::Ice)),
+            Err("you cannot afford that")
+        );
+
+        let purse = s.value_of(engine).unwrap();
+        assert_eq!(
+            s.act(paint(mine(engine, &[(2, 2), (2, 3), (2, 4)]), Placement::Factory)),
+            Ok(())
+        );
+        assert_eq!(s.value_of(engine), Some(purse - 3 * crate::net::FACTORY_COST));
+        assert_eq!(
+            first_act_of(&mut s, engine, 1),
+            Some(engine),
+            "the posted action was not applied"
+        );
+        assert!(first_act_of(&mut s, engine, 40).is_none(), "the server moved for an engine");
     }
 }
