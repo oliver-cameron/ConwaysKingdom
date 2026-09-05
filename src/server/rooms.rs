@@ -201,6 +201,13 @@ const CODE_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 /// [auto-sleep]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#making-rooms-from-the-client
 pub const MAX_MADE_ROOMS: usize = 32;
 
+/// How many messages this server will hold for one person who is not
+/// listening — see [`Rooms::waiting`]. An invitation is given once, so this is
+/// reached only by many rooms and many parties asking for one person; it is
+/// the backstop, because what waits here is memory held for somebody who may
+/// never come back, and was the one thing a client could grow without bound.
+pub const MAX_WAITING: usize = 32;
+
 pub struct Rooms {
     /// Sorted, so every listing — a log line, a rejection, a save sweep — is
     /// in the same order however the map was filled.
@@ -249,6 +256,9 @@ pub struct Rooms {
     /// time they open it, and somebody who never comes back never sees it. A
     /// challenge is an invitation rather than a notification, so arriving late
     /// is the right failure.
+    ///
+    /// Bounded, at [`MAX_WAITING`] a person: it is memory held for somebody
+    /// who may never come back, filled by whoever asks.
     waiting: BTreeMap<PersonId, Vec<ServerMessage>>,
     /// **Challenges standing against each person**, which is a different thing
     /// from the outbox above and was briefly the same one.
@@ -609,11 +619,20 @@ impl Rooms {
     }
 
     /// Let this person through this room's door from now on. Saved at once,
-    /// for the reason an owner is.
-    fn admit(&mut self, id: &RoomId, who: &PersonId) {
-        if self.admitted.entry(id.clone()).or_default().insert(who.clone()) {
+    /// for the reason an owner is. `false` when they were already in, which
+    /// is what makes a second invitation a refusal rather than a second
+    /// message.
+    fn admit(&mut self, id: &RoomId, who: &PersonId) -> bool {
+        let new = self.admitted.entry(id.clone()).or_default().insert(who.clone());
+        if new {
             self.save_meta();
         }
+        new
+    }
+
+    /// Whether one more message may wait for this person — see [`MAX_WAITING`].
+    fn can_hold_for(&self, who: &PersonId) -> bool {
+        self.waiting.get(who).is_none_or(|held| held.len() < MAX_WAITING)
     }
 
     /// Decoded message in, replies out — the same contract as
@@ -1229,10 +1248,17 @@ impl Rooms {
         if !self.people.knows(who) {
             return not_done("this server has never met them");
         }
+        if !self.can_hold_for(who) {
+            return not_done("they have too much waiting for them already");
+        }
         let Some(theirs) = self.profile_of(&from) else {
             return not_done("this server has nothing to say about you yet");
         };
-        self.admit(room, who);
+        // Once. The door is already open for them, and a second message would
+        // be a way to fill somebody's outbox from one seat.
+        if !self.admit(room, who) {
+            return not_done("they have already been let in");
+        }
         let name = self.name_of(room).to_string();
         self.waiting.entry(who.clone()).or_default().push(ServerMessage::Invited {
             from: theirs,
@@ -1385,6 +1411,9 @@ impl Rooms {
         }
         if !self.people.knows(who) {
             return not_done("this server has never met them");
+        }
+        if !self.can_hold_for(who) {
+            return not_done("they have too much waiting for them already");
         }
         let Some(theirs) = self.profile_of(&from) else {
             return not_done("this server has nothing to say about you yet");
@@ -2929,6 +2958,58 @@ mod tests {
             rooms.admitted.get(&den).is_none_or(|in_| in_.is_empty()),
             "a refusal admitted somebody"
         );
+    }
+
+    /// **An invitation is one message, however often it is sent.** A repeat
+    /// into a room or a party is refused the way a second challenge is, and
+    /// the outbox has a ceiling: what waits there is memory held for somebody
+    /// who may never come back, and was the one thing a client could grow
+    /// without bound.
+    #[test]
+    fn an_invitation_is_one_message_however_often_it_is_sent() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (ka, a) = met(&mut rooms, 1);
+        let (_, b) = met(&mut rooms, 2);
+        let den = private_room(&mut rooms, &Caller::known(1, a.clone())).id;
+        let out = rooms.handle(&Caller::known(1, a.clone()), join_as(&ka, den.as_str()));
+        let [ServerMessage::Welcome { you, .. }, ..] = &out[..] else { panic!("{out:?}") };
+        let mut inside = Caller::sitting(1, (den.clone(), *you));
+        inside.person = Some(a.clone());
+        let why = |out: &[ServerMessage]| match out {
+            [ServerMessage::NotDone { reason }] => reason.clone(),
+            other => panic!("not a refusal in place: {other:?}"),
+        };
+
+        let invite = ClientMessage::Invite { who: b.clone(), room: den.clone() };
+        assert!(rooms.handle(&inside, invite.clone()).is_empty());
+        for _ in 0..3 {
+            assert!(why(&rooms.handle(&inside, invite.clone())).contains("already"));
+        }
+        assert_eq!(rooms.waiting[&b].len(), 1, "a repeat queued a message");
+
+        let out = rooms.handle(&inside, ClientMessage::MakeParty { name: "friday".into() });
+        let party = parties_in(&out)[0].id.clone();
+        let ask = ClientMessage::InviteToParty { party: party.clone(), who: b.clone() };
+        assert!(rooms.handle(&inside, ask.clone()).is_empty());
+        assert!(why(&rooms.handle(&inside, ask)).contains("already"));
+        assert_eq!(rooms.waiting[&b].len(), 2, "a repeat queued a message");
+
+        // The ceiling. Reached honestly only by many rooms and many parties
+        // asking for one person, so it is filled by hand here; what matters is
+        // that a refusal at it changes nothing -- no door opens, nothing
+        // stands.
+        let (_, c) = met(&mut rooms, 3);
+        let filler = rooms.waiting[&b][0].clone();
+        rooms.waiting.entry(c.clone()).or_default().resize(MAX_WAITING, filler);
+        let out =
+            rooms.handle(&inside, ClientMessage::Invite { who: c.clone(), room: den.clone() });
+        assert!(why(&out).contains("waiting"), "{out:?}");
+        assert!(!rooms.admitted[&den].contains(&c), "a refused invitation opened the door");
+        let out = rooms
+            .handle(&inside, ClientMessage::InviteToParty { party: party.clone(), who: c.clone() });
+        assert!(why(&out).contains("waiting"), "{out:?}");
+        assert!(!rooms.parties.get(&party).unwrap().invited.contains(&c), "and one stands");
+        assert_eq!(rooms.waiting[&c].len(), MAX_WAITING, "the ceiling gave");
     }
 
     fn party_room(rooms: &mut Rooms, by: &Caller, party: &PartyId) -> Result<Made, String> {

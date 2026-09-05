@@ -120,6 +120,8 @@ Two things hold the line on a server anybody can ask for worlds. **A cap**, `roo
 
 It does not expire. What would carry an "until" is a signed invitation, which is the shape [planned.md](planned.md#friends-searching-and-inviting-somebody-in-particular) describes and which waits on identity being a key; today the server is the verifier rather than a signature, and the person is the one it issued. A party's world takes no invitations — that would be a way round the party — and the refusal says to ask them into the party instead.
 
+**It is given once.** A second invitation to the same person into the same room, or into the same party, is refused the way a second challenge is: the door is already open for them, and the message is what a repeat would add. The outbox that carries them holds `rooms::MAX_WAITING` messages for one person and refuses beyond that, because what waits there is memory held for somebody who may never come back, filled by whoever asks — and before the two rules it was the one thing a client could grow without bound.
+
 Refusals here are `NotDone { reason }` rather than `Rejected`: a `Rejected` sends the client back to the menu, and an invitation refused from inside a room has to leave you in it.
 
 A connection id is not a player. A room is made before anybody has joined it, so there is no `PlayerId` to record — `rooms::Caller` carries the connection, which exists from the moment the socket opens, alongside the seat, which appears only with a `Welcome`. Ids are never reused, so a room's owner cannot become somebody else by a counter filling a gap.

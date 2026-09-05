@@ -127,8 +127,9 @@ impl Parties {
         self.known.iter().filter(move |(_, p)| p.members.contains(who))
     }
 
-    /// Ask somebody in. Only a member may, and asking somebody already in is
-    /// refused rather than ignored so the asker learns it.
+    /// Ask somebody in. Only a member may, and asking somebody already in, or
+    /// already asked, is refused rather than ignored so the asker learns it —
+    /// and so that asking is not a way to queue a message a second time.
     pub fn invite(
         &mut self,
         id: &PartyId,
@@ -144,7 +145,9 @@ impl Parties {
         if party.members.contains(who) {
             return Err("they are already in it".into());
         }
-        party.invited.insert(who.clone());
+        if !party.invited.insert(who.clone()) {
+            return Err("they have already been asked".into());
+        }
         Ok(party.name.clone())
     }
 
@@ -276,6 +279,7 @@ mod tests {
         assert!(parties.invite(&id, &who("b"), &who("c")).is_err(), "a stranger invited somebody");
 
         assert_eq!(parties.invite(&id, &who("a"), &who("b")).unwrap(), "friday");
+        assert!(parties.invite(&id, &who("a"), &who("b")).is_err(), "asked somebody twice");
         parties.join(&id, &who("b")).unwrap();
         assert!(parties.is_member(&id, &who("b")));
         assert!(parties.invite(&id, &who("a"), &who("b")).is_err(), "asked somebody already in");
