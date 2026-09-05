@@ -1085,8 +1085,16 @@ impl Server {
     /// Let every bot that is due make its move, through [`Self::act`] like
     /// anybody's. Before `pending` is taken, so what it chose goes out in the
     /// `Step` for this generation.
+    ///
+    /// **And not announced.** `act` says an action out loud so that a cell
+    /// appears on everybody's screen before the `Step` that carries it, and
+    /// a bot's is taken inside that very step -- an `Acted` for it would leave
+    /// with the next thing any client said, a generation or more after the
+    /// `Step` had already applied it, and a paint laid again a generation
+    /// late is a different paint.
     fn bots_act(&mut self) {
         let tick = self.tick();
+        let said = self.announce.len();
         let due: Vec<PlayerId> =
             self.bots.iter().filter(|(_, b)| b.next_at <= tick).map(|(&s, _)| s).collect();
         for seat in due {
@@ -1104,6 +1112,7 @@ impl Server {
                 }
             }
         }
+        self.announce.truncate(said);
     }
 
     /// Decoded message in, replies out. Deliberately transport-agnostic.
@@ -3492,6 +3501,21 @@ mod tests {
             })
             .count();
         assert!(standing > 0, "nothing of the bot's is standing");
+    }
+
+    /// **A bot's move rides the `Step` and nothing else.** An `Acted` for it
+    /// would leave with the next thing anybody said, after the `Step` that
+    /// already carried it, and a paint laid a generation late is a different
+    /// paint.
+    #[test]
+    fn a_bots_action_is_never_announced() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        assert!(first_act_of(&mut s, bot, 3 * 4).is_some(), "the bot never acted");
+        assert!(
+            s.take_announcements().iter().all(|m| !matches!(m, ServerMessage::Acted(_))),
+            "a bot's action was announced"
+        );
     }
 
     /// On a side it plays as the side's number, so its cells and its purse
