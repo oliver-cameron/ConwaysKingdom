@@ -65,26 +65,36 @@ pub const HELD_FLOOR: f32 = 0.85;
 /// no neighbour on the circle shares a tier. It is there to separate colours
 /// that are already a full hue apart, never to rescue two that are not.
 ///
+/// **The order is not the hue order, and that is the point.** A room fills
+/// from player one up and most games are small, so what matters is not only
+/// how far apart fifteen are but how far apart the first few are. Laid out
+/// around the circle, players one and two took adjacent hues — the two
+/// closest of the fifteen, handed to the two people most likely to be the
+/// only ones playing. So it opens on blue and yellow, a hundred and
+/// sixty-eight degrees apart, and every row after is the one furthest from
+/// everything already seated. Six can sit down before any two are inside
+/// forty-eight degrees, against a floor of twenty-four for all fifteen.
+///
 /// Chroma is as much as the gamut allows up to a cap, which is why the pale
 /// rows carry less of it: at this lightness there is less to be had. Four
 /// decimals because three put some swatches a byte or two off.
 pub const PALETTE: [(f32, f32, f32); PlayerId::COUNT] = [
     (L_SWATCH, 0.0, 0.0),
-    (0.8200, 0.1008, 23.50 / 360.0),
-    (0.6800, 0.1500, 47.50 / 360.0),
-    (0.5500, 0.1182, 71.50 / 360.0),
+    (0.6800, 0.1500, 263.50 / 360.0),
     (0.8200, 0.1500, 95.50 / 360.0),
-    (0.6800, 0.1500, 119.50 / 360.0),
     (0.5500, 0.1500, 143.50 / 360.0),
+    (0.5500, 0.1500, 359.50 / 360.0),
+    (0.8200, 0.1244, 311.50 / 360.0),
+    (0.6800, 0.1500, 47.50 / 360.0),
     (0.8200, 0.1500, 167.50 / 360.0),
     (0.6800, 0.1169, 191.50 / 360.0),
+    (0.5500, 0.1182, 71.50 / 360.0),
+    (0.5500, 0.1500, 287.50 / 360.0),
+    (0.6800, 0.1500, 335.50 / 360.0),
+    (0.6800, 0.1500, 119.50 / 360.0),
     (0.5500, 0.0975, 215.50 / 360.0),
     (0.8200, 0.1012, 239.50 / 360.0),
-    (0.6800, 0.1500, 263.50 / 360.0),
-    (0.5500, 0.1500, 287.50 / 360.0),
-    (0.8200, 0.1244, 311.50 / 360.0),
-    (0.6800, 0.1500, 335.50 / 360.0),
-    (0.5500, 0.1500, 359.50 / 360.0),
+    (0.8200, 0.1008, 23.50 / 360.0),
 ];
 
 /// Every player's hue, as a turn in `0..1`, indexed by [`PlayerId`].
@@ -253,6 +263,36 @@ mod tests {
         );
     }
 
+    /// **A small game is better off than a full one.** A room fills from
+    /// player one up, so the order the table is written in decides what two
+    /// or three people get. Laid out around the circle they got adjacent
+    /// hues; this pins that they do not — and that the floor rises as the
+    /// room empties rather than staying at what fifteen can manage.
+    #[test]
+    fn the_first_few_players_are_further_apart_than_the_last() {
+        let hue_gap = |a: usize, b: usize| {
+            let turn = (PALETTE[a].2 - PALETTE[b].2).abs();
+            turn.min(1.0 - turn) * 360.0
+        };
+        let worst_among = |seated: usize| {
+            (1..=seated)
+                .flat_map(|a| (a + 1..=seated).map(move |b| (a, b)))
+                .map(|(a, b)| hue_gap(a, b))
+                .fold(f32::MAX, f32::min)
+        };
+        assert!(worst_among(2) > 160.0, "the first two should be most of the circle apart");
+        assert!(worst_among(4) > 45.0, "four seated should still be well clear");
+        assert!(worst_among(6) > 45.0, "and six, which is a full lobby of friends");
+        // And it never rises again as more sit down, which is what makes the
+        // order meaningful rather than arbitrary.
+        let mut last = f32::MAX;
+        for seated in 2..PlayerId::COUNT {
+            let now = worst_among(seated);
+            assert!(now <= last + 1e-3, "seating {seated} spread the colours out");
+            last = now;
+        }
+    }
+
     /// **And how far apart the closest pair is once everything counts.**
     ///
     /// Distinctness is the whole job of this module and "they look different"
@@ -295,21 +335,21 @@ mod tests {
     #[test]
     fn a_swatch_is_the_tables_colour() {
         const SRGB: [(u8, u8, u8); PlayerId::COUNT - 1] = [
-            (0xff, 0xaa, 0xa5),
-            (0xe1, 0x77, 0x3c),
-            (0x9c, 0x64, 0x00),
+            (0x67, 0x95, 0xf4),
             (0xe2, 0xc3, 0x3c),
-            (0x8e, 0xa5, 0x21),
             (0x2e, 0x87, 0x2f),
+            (0xb3, 0x44, 0x6f),
+            (0xdf, 0xad, 0xff),
+            (0xe1, 0x77, 0x3c),
             (0x41, 0xe3, 0xb0),
             (0x00, 0xaf, 0xaa),
+            (0x9c, 0x64, 0x00),
+            (0x6f, 0x5f, 0xc3),
+            (0xd0, 0x71, 0xbc),
+            (0x8e, 0xa5, 0x21),
             (0x00, 0x7f, 0x95),
             (0x85, 0xcd, 0xff),
-            (0x67, 0x95, 0xf4),
-            (0x6f, 0x5f, 0xc3),
-            (0xdf, 0xad, 0xff),
-            (0xd0, 0x71, 0xbc),
-            (0xb3, 0x44, 0x6f),
+            (0xff, 0xaa, 0xa5),
         ];
         let within_a_byte = |a: Rgb, b: Rgb| {
             a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1 && a.2.abs_diff(b.2) <= 1

@@ -126,6 +126,8 @@ Asking for more chroma than sRGB can show is the *normal* case: a row's chroma f
 
 **No two players share a hue.** The fifteen sit twenty-four degrees apart — the circle divided by fifteen, which is the most any fifteen can have — and three lightness tiers cycle under them, dividing fifteen exactly so no neighbour on the circle shares one. Two earlier tables were chosen by maximising a distance instead, and both spent the score the same way: a near-hue pair held apart by a lightness. Two olives four degrees apart scored as distinct because one was darker, and on a board they are one player's ground in two lights. Hue says *which* colour something is; lightness and chroma say which of it, so lightness separates colours that are already a hue apart and never rescues two that are not.
 
+**The order is not the hue order.** A room fills from player one up and most games are small, so what matters is not only how far apart fifteen are but how far apart the first few are — and laid out around the circle, players one and two took adjacent hues, which is the two closest of the fifteen handed to the two people most likely to be the only ones playing. The table opens on blue and yellow, a hundred and sixty-eight degrees apart, and every row after it is the one furthest from everything already seated. Six can sit down before any two are inside forty-eight degrees.
+
 The closest pair in OKLab is 0.134, lower than a table chosen to maximise that number, and the difference is what buys the hue floor. Chroma is as much as the gamut allows up to a cap, which is why the pale rows carry less: at that lightness there is less to be had. The darkest tier now clears the held-ground floor on its own, so that floor guards rather than corrects.
 
 ## The camera
