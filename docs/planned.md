@@ -17,7 +17,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | | status | |
 |---|---|---|
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
-| [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
+| [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Decided and prepared | a tunnel beside the server, one origin, and no client change |
 | [A minimap](#a-minimap) | Noted | a picture of where the territory is, drawn on the server, not from a client's own screen |
 | [Parties](#parties) | Built | a private set of worlds for one group of players, keyed by today's person; what is left is signed invitations |
 | [Buttons on a narrow screen](#buttons-on-a-screen-narrower-than-the-hotbar) | Thought about | shrink, wrap, or stop being full width |
@@ -1657,10 +1657,19 @@ What is left is the layout rather than the plumbing. The HUD is a desktop panel:
 
 ## Cloudflare, and which half of this fits
 
-**Thought about, not costed.** The two halves of what the server does come
-apart cleanly, and one of them is a fifteen-minute job while the other is a
-port. Worth writing down before anybody starts with the easy half and discovers
-the hard one.
+**Decided and prepared, and the answer was neither half.** The domain is
+`conwayskingdom.com`, the page and the socket stay on **one origin** served by
+this server, and `cloudflared` beside it is what makes that origin reachable:
+one outbound connection to Cloudflare, TLS at the edge, no port forwarded, and
+**no client change at all**. [deploy/](../deploy/) is the repository's half of
+it and [server.md](server.md#deploying) is what the server does differently
+behind it — `/healthz`, the cache headers, the token in the environment, and
+`CF-Connecting-IP`. **The host is still open**, the Beelink at home or a small
+VPS in Sydney, and the tunnel is what makes that postponable: the same files
+bring either one up, and nothing in the client knows where the server is.
+
+The two halves below still come apart the way they did, and are the reason the
+tunnel wins rather than a thing it replaced. Worth reading in that order.
 
 ### The page fits Pages, and one line of design is in the way
 
@@ -1727,12 +1736,23 @@ write. That suits the format better than it sounds — the file is chunk-based
 already — but `server::persist` is written as a stream over a whole world and
 would be rewritten rather than adapted.
 
-### The cheap answer, which is probably the right first one
+### The cheap answer, and the cheaper one that was taken
 
-Pages for the client, the Rust server unchanged on anything that runs a
-container, and Cloudflare in front of it proxying the websocket. No port, no
-DO, and the only code change is the configured-server-address one above, which
-is wanted anyway the moment there is more than one server — see
+The cheap answer was Pages for the client, the Rust server unchanged on
+anything that runs a container, and Cloudflare in front of it proxying the
+websocket. The tunnel is cheaper still, and the difference is the whole reason
+it was chosen: **Pages needs the configured-server-address change and the
+tunnel needs nothing**, because the page still comes from the server the socket
+is on.
+
+What is left of the split is delivery. Everything already goes through
+Cloudflare's edge, and `pkg/` and `assets/` are held there for an hour with a
+tag — see [server.md](server.md#deploying) — so the 7.5 MB is a CDN's problem
+for all but the first visitor in a region. Moving the page to Pages buys a
+shorter path to that first byte and costs the client a default server address
+it has no way to be told. So it is a step for when the module's delivery is
+measurably the problem, and it is wanted anyway the moment there is more than
+one server — see
 [many servers](#many-servers-and-what-must-not-be-decentralised), which is the
 entry this eventually collides with.
 

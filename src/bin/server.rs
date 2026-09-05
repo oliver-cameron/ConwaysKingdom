@@ -14,6 +14,7 @@
 //!                    repeatable. Today: howto
 //!     --api-token TOKEN  mount the HTTP API at /api, for whoever sends this
 //!                    as a bearer token       (default: not mounted)
+//!                    CK_API_TOKEN in the environment is the same setting
 //!
 //! With `--serve .` the browser client and the socket come from one origin, so
 //! no separate static-file server is needed.
@@ -144,6 +145,12 @@ fn main() -> std::io::Result<()> {
             }
             other => panic!("unknown argument {other}"),
         }
+    }
+
+    // The same setting from the environment, so a unit file never carries a
+    // secret -- see deploy/. The flag wins where both are given.
+    if api_token.is_none() {
+        api_token = std::env::var("CK_API_TOKEN").ok().filter(|t| !t.trim().is_empty());
     }
 
     // Without --fresh a save is authoritative, which is easy to forget: a room

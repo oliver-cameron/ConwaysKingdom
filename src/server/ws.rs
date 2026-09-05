@@ -16,13 +16,16 @@
 //! senders that connections and the simulation task would both have to lock —
 //! a lock, to avoid a string compare, on the one path that must not have one.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::response::IntoResponse;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
@@ -32,7 +35,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::net::codec::{decode_client, encode_server};
 use crate::net::{ClientMessage, RoomId, ServerMessage};
 use crate::server::rooms::{Caller, ConnectionId, Rooms, Seat};
-use crate::server::{api, console};
+use crate::server::{api, console, unjoined};
 use crate::sim::WorldKind;
 
 /// What a connection sends to the simulation task.
@@ -52,6 +55,12 @@ enum ToSim {
     Api {
         req: api::Request,
         reply: tokio::sync::oneshot::Sender<api::Reply>,
+    },
+    /// `/healthz` asking how many rooms there are. Asked of this task rather
+    /// than read off a counter, so a server whose one task has stalled fails
+    /// its health check instead of passing it.
+    Health {
+        reply: tokio::sync::oneshot::Sender<usize>,
     },
 }
 
@@ -76,6 +85,54 @@ type Broadcast = (RoomId, ServerMessage);
 struct AppState {
     to_sim: mpsc::UnboundedSender<ToSim>,
     broadcast: broadcast::Sender<Broadcast>,
+    connections: Arc<Connections>,
+}
+
+/// Every socket that is open, counted for `/healthz`, and the ones in no room
+/// by address, for the cap.
+#[derive(Default)]
+struct Connections {
+    open: AtomicUsize,
+    unjoined: Mutex<unjoined::PerAddress>,
+}
+
+impl Connections {
+    /// A place for one more socket from `from`, or `None` because that address
+    /// already holds [`MOST_UNJOINED_PER_ADDRESS`] that have joined nothing.
+    fn admit(self: &Arc<Self>, from: IpAddr) -> Option<Counted> {
+        let mut unjoined = self.unjoined.lock().unwrap_or_else(PoisonError::into_inner);
+        if !unjoined.admit(from, MOST_UNJOINED_PER_ADDRESS) {
+            return None;
+        }
+        self.open.fetch_add(1, Ordering::Relaxed);
+        Some(Counted { of: self.clone(), from, unjoined: true })
+    }
+}
+
+/// One socket's place in the counts: against its address's cap until it joins
+/// a room, and in the total until its task ends, however it ends.
+struct Counted {
+    of: Arc<Connections>,
+    from: IpAddr,
+    unjoined: bool,
+}
+
+impl Counted {
+    /// Seated or watching, so no longer one of the address's unjoined. A
+    /// `Leave` later does not put it back: a socket that has been somebody
+    /// is not the stranger the cap is for.
+    fn joined(&mut self) {
+        if std::mem::take(&mut self.unjoined) {
+            self.of.unjoined.lock().unwrap_or_else(PoisonError::into_inner).release(self.from);
+        }
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.joined();
+        self.of.open.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub struct Config {
@@ -465,6 +522,9 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
                                 let _ = sim_broadcast.send(labelled);
                             }
                         }
+                        Some(ToSim::Health { reply }) => {
+                            let _ = reply.send(rooms.len());
+                        }
                     }
                 }
             }
@@ -475,22 +535,8 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
         }
     });
 
-    let for_api = to_sim.clone();
-    let state = AppState { to_sim, broadcast: broadcast_tx };
-    let mut app = Router::new().route("/ws", get(upgrade));
-    if let Some(dir) = &config.static_dir {
-        app = serve_client(app, dir);
-    }
-    let mut app = app.with_state(state);
-    // Only with a token, and the routes are absent rather than refusing:
-    // there is nothing to guess at on a server that was not asked for one.
-    if let Some(token) = &config.api_token {
-        app = app.merge(api::http::router(token.clone(), move |req| {
-            let (reply, answer) = tokio::sync::oneshot::channel();
-            let _ = for_api.send(ToSim::Api { req, reply });
-            answer
-        }));
-    }
+    let state = AppState { to_sim, broadcast: broadcast_tx, connections: Default::default() };
+    let app = router(state, &config);
 
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
 
@@ -519,7 +565,7 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     log::info!("ws://{host}/ws  websocket");
     match &config.api_token {
         Some(_) => log::info!("http://{host}/api  the API, to whoever has the token"),
-        None => log::info!("no --api-token, so /api is not mounted"),
+        None => log::info!("no --api-token and no CK_API_TOKEN, so /api is not mounted"),
     }
     if config.addr.ip().is_unspecified() {
         // Not "reachable from other machines". Binding to an unspecified
@@ -544,7 +590,8 @@ pub async fn serve(mut rooms: Rooms, config: Config) -> std::io::Result<()> {
     log::info!("console: type `help` for commands, `stop` to shut down");
 
     let mut http_stop = stop_rx_for_http;
-    let served = axum::serve(listener, app)
+    // With the peer's address, which the cap on unjoined connections is per.
+    let served = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async move {
             // Any of the three: a signal, `stop` typed at the console, or the
             // simulation task ending of its own accord. One place to wait
@@ -593,6 +640,51 @@ fn outward_address(port: u16) -> Option<SocketAddr> {
     (!addr.ip().is_loopback()).then_some(addr)
 }
 
+/// Every route: the socket and the health line always, the page and its files
+/// given a directory, and the API only with a token.
+fn router(state: AppState, config: &Config) -> Router {
+    let for_api = state.to_sim.clone();
+    let mut app = Router::new().route("/ws", get(upgrade)).route("/healthz", get(healthz));
+    if let Some(dir) = &config.static_dir {
+        app = serve_client(app, dir);
+    }
+    let mut app = app.with_state(state);
+    // Only with a token, and the routes are absent rather than refusing:
+    // there is nothing to guess at on a server that was not asked for one.
+    if let Some(token) = &config.api_token {
+        app = app.merge(api::http::router(token.clone(), move |req| {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            let _ = for_api.send(ToSim::Api { req, reply });
+            answer
+        }));
+    }
+    app
+}
+
+/// How long `/healthz` gives the simulation task to say how many rooms there
+/// are before calling the server unwell.
+const HEALTH_WAIT: Duration = Duration::from_secs(1);
+
+/// `200 ok` and one line -- how many rooms, how many connections -- for an
+/// uptime check. Unauthenticated, and served with or without a page, because
+/// it says nothing the room list does not. See [server.md].
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#deploying
+async fn healthz(State(state): State<AppState>) -> Response {
+    let no_store = [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))];
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    let _ = state.to_sim.send(ToSim::Health { reply });
+    let rooms = match tokio::time::timeout(HEALTH_WAIT, answer).await {
+        Ok(Ok(rooms)) => rooms,
+        _ => {
+            let why = "the simulation is not answering\n";
+            return (StatusCode::SERVICE_UNAVAILABLE, no_store, why).into_response();
+        }
+    };
+    let open = state.connections.open.load(Ordering::Relaxed);
+    (StatusCode::OK, no_store, format!("ok: {rooms} rooms, {open} connections\n")).into_response()
+}
+
 /// The largest frame this server will read.
 ///
 /// The default is tens of megabytes, which is the transport being generous
@@ -606,10 +698,39 @@ fn outward_address(port: u16) -> Option<SocketAddr> {
 /// [`MOST_CHUNKS_AT_ONCE`]: crate::server::MOST_CHUNKS_AT_ONCE
 const MOST_BYTES_AT_ONCE: usize = 1 << 20;
 
-async fn upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+/// How long a connection in no room may say nothing before it is closed.
+/// Chosen, not measured -- see [known-bugs.md].
+///
+/// [known-bugs.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/known-bugs.md#fixed
+const MOST_UNJOINED_SILENCE: Duration = Duration::from_secs(120);
+
+/// How many connections in no room one address may hold at once. Chosen, not
+/// measured -- see [known-bugs.md].
+///
+/// [known-bugs.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/known-bugs.md#fixed
+const MOST_UNJOINED_PER_ADDRESS: usize = 8;
+
+async fn upgrade(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    let named = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok());
+    let from = unjoined::remote(named, peer.ip());
+    // Refused before the upgrade, so it costs a handshake and not a task.
+    let Some(counted) = state.connections.admit(from) else {
+        log::warn!(
+            "{from} holds {MOST_UNJOINED_PER_ADDRESS} connections that have joined nothing; \
+             refusing another"
+        );
+        let why = "too many connections from this address have joined nothing\n";
+        return (StatusCode::TOO_MANY_REQUESTS, why).into_response();
+    };
     ws.max_message_size(MOST_BYTES_AT_ONCE)
         .max_frame_size(MOST_BYTES_AT_ONCE)
-        .on_upgrade(|socket| connection(socket, state))
+        .on_upgrade(move |socket| connection(socket, state, from, counted))
+        .into_response()
 }
 
 /// What the browser client is served from, and nothing else.
@@ -632,7 +753,7 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
     let page = dir.join("index.html");
     let index = || ServeFile::new(page.clone());
 
-    let files = Router::<AppState>::new()
+    let page = Router::<AppState>::new()
         .route_service("/", index())
         // The client's own screens. Listed rather than matched by a catch-all,
         // so that `/src/main.rs` is a 404 and not a copy of the page.
@@ -644,11 +765,13 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
         .route_service("/room/{id}", index())
         .route_service("/lobby/{id}", index())
         .route_service("/watch/{id}", index())
+        .layer(axum::middleware::map_response(revalidate));
+    let files = Router::<AppState>::new()
         .nest_service("/pkg", ServeDir::new(dir.join("pkg")))
         .nest_service("/assets", ServeDir::new(dir.join("assets")))
-        .layer(axum::middleware::map_response(revalidate));
+        .layer(axum::middleware::from_fn(cached));
 
-    app.merge(files)
+    app.merge(page).merge(files)
 }
 
 /// **Ask before reusing.** `ServeDir` and `ServeFile` send `Last-Modified` and
@@ -666,21 +789,89 @@ fn serve_client(app: Router<AppState>, dir: &std::path::Path) -> Router<AppState
 ///
 /// `no-cache` does not mean do not store. It means revalidate before use, so
 /// the conditional request `ServeDir` already answers still comes back 304 and
-/// costs a round trip rather than a download. Nothing here is served from a
-/// CDN and the only client is on the same machine or the same network.
+/// costs a round trip rather than a download. The page is small and is what
+/// a deploy changes; the megabytes behind it are [`cached`].
 ///
 /// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
-async fn revalidate(mut response: axum::response::Response) -> axum::response::Response {
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-cache"),
-    );
+async fn revalidate(mut response: Response) -> Response {
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
 }
 
-async fn connection(socket: WebSocket, state: AppState) {
+/// What `pkg/` and `assets/` are served with: an hour, then ask. See
+/// [server.md].
+///
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#deploying
+const STATIC_CACHE: &str = "public, max-age=3600, must-revalidate";
+
+/// `Content-Length` again, under a name an edge that compresses leaves alone.
+const X_CONTENT_LENGTH: header::HeaderName = header::HeaderName::from_static("x-content-length");
+
+/// **An hour at the edge and in the browser, then a conditional request**,
+/// for the module and the art. They are the megabytes behind a page that is
+/// `no-cache`, and an edge that could not hold them would fetch the module
+/// from the origin for every visitor; an hour is how long a rebuild can go
+/// unseen without a purge. Nothing here carries a content hash in its name --
+/// wasm-pack names the module after the crate -- so nothing is `immutable`.
+///
+/// `ServeDir` sends `Last-Modified` and no `ETag`, so one is made from what it
+/// does send -- the length and the modification time -- rather than from the
+/// bytes, which for the module would be a pass over 7.5 MB per request. It is
+/// as strong as a filesystem timestamp, which is what nginx sends and for the
+/// same reason, and `If-None-Match` is answered here because `ServeDir` has
+/// never heard of the tag. `DefaultHasher::new` has fixed keys, so the tag is
+/// the same on both sides of a restart -- one that changed would cost every
+/// visitor a download for a file nobody had touched.
+///
+/// The length goes out twice. The loading bar wants `Content-Length`, and an
+/// edge that compresses the module on the way through takes it; the same
+/// number under a name the edge leaves alone is what the page falls back to.
+async fn cached(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let asked_with = request.headers().get(header::IF_NONE_MATCH).cloned();
+    let mut response = next.run(request).await;
+    let cache = match response.status() {
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED => STATIC_CACHE,
+        // A missing file is a build half done or a wrong path, and neither is
+        // worth an edge holding for an hour.
+        _ => "no-store",
+    };
+    // A whole file only: a range's length is the range's, and a 304 or a 404
+    // has nothing to validate.
+    let whole = response.status() == StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    let (Some(length), Some(modified)) =
+        (headers.get(header::CONTENT_LENGTH).cloned(), headers.get(header::LAST_MODIFIED))
+    else {
+        return response;
+    };
+    if !whole {
+        return response;
+    }
+    let tag = {
+        use std::hash::{Hash, Hasher};
+        let mut stamp = std::hash::DefaultHasher::new();
+        modified.as_bytes().hash(&mut stamp);
+        format!("\"{}-{:016x}\"", length.to_str().unwrap_or("?"), stamp.finish())
+    };
+    headers.insert(X_CONTENT_LENGTH, length);
+    if let Ok(tag) = HeaderValue::from_str(&tag) {
+        headers.insert(header::ETAG, tag);
+    }
+    let matched = asked_with
+        .as_ref()
+        .and_then(|w| w.to_str().ok())
+        .is_some_and(|w| w.split(',').any(|t| t.trim() == tag));
+    if matched {
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        *response.body_mut() = axum::body::Body::empty();
+    }
+    response
+}
+
+async fn connection(socket: WebSocket, state: AppState, from: IpAddr, mut counted: Counted) {
     let id = next_connection();
-    log::info!("connection {id} opened");
+    log::info!("connection {id} opened from {from}");
     let (mut sink, mut stream) = socket.split();
 
     let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<ServerMessage>();
@@ -699,9 +890,26 @@ async fn connection(socket: WebSocket, state: AppState) {
     // that joined without a key has no profile and so is nobody here, which is
     // right -- there is nowhere to file anything against.
     let mut who: Option<crate::net::PersonId> = None;
+    // When this connection last said anything. It is under a deadline for as
+    // long as it is in no room, because nothing else would ever notice it had
+    // gone -- see `unjoined::deadline`.
+    let mut last_heard = Instant::now();
 
     loop {
         tokio::select! {
+            _ = async {
+                let in_room = me.is_some() || watching.is_some();
+                match unjoined::deadline(last_heard, in_room, MOST_UNJOINED_SILENCE) {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                log::info!(
+                    "connection {id} from {from} said nothing for {}s in no room; closing",
+                    MOST_UNJOINED_SILENCE.as_secs()
+                );
+                break;
+            }
             // Replies addressed to this connection.
             Some(msg) = reply_rx.recv() => {
                 match &msg {
@@ -711,6 +919,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                         if let Some(profile) = profile {
                             who = Some(profile.who.clone());
                         }
+                        counted.joined();
                     }
                     // A person with no seat yet: the answer to a `Hello`.
                     ServerMessage::You(profile) => who = Some(profile.who.clone()),
@@ -720,6 +929,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                     ServerMessage::Watching { room, .. } => {
                         me = None;
                         watching = Some(room.clone());
+                        counted.joined();
                     }
                     _ => {}
                 }
@@ -753,6 +963,7 @@ async fn connection(socket: WebSocket, state: AppState) {
             }
             incoming = stream.next() => {
                 let Some(Ok(frame)) = incoming else { break };
+                last_heard = Instant::now();
                 match frame {
                     Message::Binary(bytes) => match decode_client(&bytes) {
                         Ok(msg) => {
@@ -797,7 +1008,7 @@ async fn connection(socket: WebSocket, state: AppState) {
         Some(seat) => {
             let _ = state.to_sim.send(ToSim::Left(seat));
         }
-        None => log::info!("connection {id} closed before joining"),
+        None => log::info!("connection {id} from {from} closed before joining"),
     }
 }
 
@@ -811,5 +1022,101 @@ async fn send(
             log::error!("encoding outbound message: {e}");
             true
         }
+    }
+}
+
+/// Over a real socket, because there is no `tower` here to drive a router
+/// without one. Reached by `cargo test --features server` and by nothing
+/// else -- see docs/README.md.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A router with a stand-in for the simulation task that answers every
+    /// `Health` with `rooms`, listening on a port of the system's choosing.
+    async fn listening(static_dir: Option<PathBuf>, rooms: usize) -> SocketAddr {
+        let (to_sim, mut from_conns) = mpsc::unbounded_channel::<ToSim>();
+        tokio::spawn(async move {
+            while let Some(asked) = from_conns.recv().await {
+                if let ToSim::Health { reply } = asked {
+                    let _ = reply.send(rooms);
+                }
+            }
+        });
+        let (broadcast, _) = broadcast::channel(8);
+        let state = AppState { to_sim, broadcast, connections: Default::default() };
+        let config = Config {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            static_dir,
+            save_every: Duration::from_secs(30),
+            bpm: crate::net::DEFAULT_BPM,
+            shape: WorldKind::Infinite,
+            api_token: None,
+        };
+        let app = router(state, &config);
+        let listener = tokio::net::TcpListener::bind(config.addr).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = app.into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    }
+
+    async fn get(addr: SocketAddr, path: &str) -> String {
+        get_with(addr, path, "").await
+    }
+
+    async fn get_with(addr: SocketAddr, path: &str, extra: &str) -> String {
+        let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n{extra}\r\n");
+        tcp.write_all(request.as_bytes()).await.unwrap();
+        let mut text = String::new();
+        tcp.read_to_string(&mut text).await.unwrap();
+        text
+    }
+
+    fn header<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+        text.lines().find_map(|l| l.strip_prefix(name)).map(|v| v.trim_start_matches(": ").trim())
+    }
+
+    /// `/healthz` is a 200 and one line whether or not there is a page to
+    /// serve, and the line counts what the simulation task said.
+    #[tokio::test]
+    async fn healthz_answers_with_and_without_a_page() {
+        for static_dir in [None, Some(PathBuf::from("."))] {
+            let addr = listening(static_dir, 3).await;
+            let text = get(addr, "/healthz").await;
+            assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+            assert!(text.ends_with("\r\n\r\nok: 3 rooms, 0 connections\n"), "{text}");
+            assert!(text.contains("cache-control: no-store"), "{text}");
+        }
+    }
+
+    /// The page is `no-cache`; a file under `assets/` is held for an hour with
+    /// a tag, the same tag back is a 304, and the length goes out twice.
+    #[tokio::test]
+    async fn the_page_asks_every_time_and_the_files_are_held_for_an_hour() {
+        let addr = listening(Some(PathBuf::from(".")), 1).await;
+
+        let page = get(addr, "/").await;
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        assert_eq!(header(&page, "cache-control"), Some("no-cache"));
+
+        let file = get(addr, "/assets/fonts/LICENSE.txt").await;
+        assert!(file.starts_with("HTTP/1.1 200"), "{file}");
+        assert_eq!(header(&file, "cache-control"), Some(STATIC_CACHE));
+        assert_eq!(header(&file, "x-content-length"), header(&file, "content-length"));
+        let tag = header(&file, "etag").expect("a tag");
+        assert!(tag.starts_with('"') && tag.ends_with('"'), "{tag}");
+
+        let again =
+            get_with(addr, "/assets/fonts/LICENSE.txt", &format!("If-None-Match: {tag}\r\n")).await;
+        assert!(again.starts_with("HTTP/1.1 304"), "{again}");
+        assert_eq!(header(&again, "etag"), Some(tag));
+
+        let missing = get(addr, "/assets/fonts/nope.txt").await;
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+        assert_eq!(header(&missing, "cache-control"), Some("no-store"));
     }
 }

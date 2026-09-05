@@ -14,6 +14,7 @@
 | [simplifying.md](simplifying.md) | How to cut this tree back, and what not to cut |
 | [../design-notes/](../design-notes/) | The working behind the decisions: cell layout, residency, topology, compute |
 | [known-bugs.md](known-bugs.md) | What is wrong and not fixed, with what you would see |
+| [../deploy/](../deploy/) | Bringing a host up: the build, the unit, the tunnel, and what to back up |
 
 ## Running it
 
@@ -34,7 +35,9 @@ cargo run --no-default-features --features server --bin server -- --serve .
 | `--max-rooms N` | how many rooms players may make | 32 |
 | `--torus RxC` | a world that wraps, sized in chunks | infinite |
 | `--hide NAME` | a screen clients are asked not to offer; repeatable | none |
-| `--api-token TOKEN` | mount the HTTP API at `/api`, for whoever sends this as a bearer token | not mounted |
+| `--api-token TOKEN` | mount the HTTP API at `/api`, for whoever sends this as a bearer token; `CK_API_TOKEN` in the environment is the same setting | not mounted |
+
+That is the command for a machine somebody is sitting at. A host answering on a domain is one origin behind a Cloudflare tunnel, a systemd unit and a state directory to back up: [deploy/README.md](../deploy/README.md) brings one up from nothing, and [server.md](server.md#deploying) says what the server does differently there — `/healthz`, the cache headers, the token in the environment, and the header it reads to find out who a connection is from.
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.
 
@@ -80,7 +83,7 @@ That matters more for the browser client than it looks, and the two are worth re
 rm -rf pkg && wasm-pack build --target web
 ```
 
-The page shows a **loading bar** while the module arrives, and it is not decoration: the module is megabytes, and until this the page was black and empty for the whole of that. A blank screen is indistinguishable from a broken one, so the wait read as a client that could not reach the server rather than one that had not started. The bar needs a `Content-Length` to show a percentage — the server sends one — and falls back to an indeterminate sweep when there is none.
+The page shows a **loading bar** while the module arrives, and it is not decoration: the module is megabytes, and until this the page was black and empty for the whole of that. A blank screen is indistinguishable from a broken one, so the wait read as a client that could not reach the server rather than one that had not started. The bar needs the module's length to show a percentage and falls back to an indeterminate sweep without one. The server sends `Content-Length`, and sends the same number again as `X-Content-Length`, because an edge that compresses the module on the way through — Cloudflare does — takes the first and leaves the second; see [server.md](server.md#deploying).
 
 Rebuild the browser client with `wasm-pack build --target web` — but **not while iterating**, because most of that wall clock is `wasm-opt` rather than the compiler. wasm-pack runs it over the whole module after wasm-bindgen, single-threaded and whole-program, and this module is large: wgpu, naga, winit and egui are all linked into it. It earns its ninety seconds for a build that ships, taking 12.1 MB down to 7.5 MB, and earns nothing for one served from localhost.
 
@@ -116,6 +119,7 @@ Keep comments concise: replace five lines of comment with well-labelled code and
 ```
 cargo test                                             # every test there is
 cargo check --features server --bins                   # and the one file they miss
+cargo test --features server                           # the one test in it, over a real socket
 cargo test --no-default-features                       # without the renderer
 cargo build --target wasm32-unknown-unknown --lib      # the browser client
 wasm-pack test --headless --firefox                    # GPU setup, in a browser
@@ -127,6 +131,6 @@ cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving th
 cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```
 
-`server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, everything else under `src/server/` compiles by default, and there is no test that opens a socket. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it.
+`server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, and everything else under `src/server/` compiles by default. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it. The one test the file does have — `/healthz` answering over a real socket, with and without a page to serve — runs only under `cargo test --features server`, because there is no `tower` in the tree to drive a router without a socket.
 
 [planned.md](planned.md) holds everything not built yet, with a status on each entry — built, being built, designed, or decided and not costed. [inspiration.md](inspiration.md) says where a design was borrowed from and for what.

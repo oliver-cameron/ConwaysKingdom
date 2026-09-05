@@ -241,7 +241,16 @@
       const response = await fetch("/pkg/conwayskingdom_bg.wasm");
       if (!response.ok) throw new Error(`${response.status} fetching the module`);
 
-      const total = Number(response.headers.get("content-length")) || 0;
+      // The second name first. An edge that compresses the module on the way
+      // either drops `Content-Length` or leaves the *compressed* number
+      // against a stream that yields the decompressed bytes, which is a bar
+      // that runs past its own end; `X-Content-Length` is the file's own
+      // length and nothing between here and this page touches it. See
+      // `server::ws::cached`.
+      const length =
+        response.headers.get("x-content-length") ||
+        response.headers.get("content-length");
+      const total = Number(length) || 0;
       if (!total || !response.body) {
         // No length, or no stream to read it with: an indeterminate sweep
         // rather than a bar that pretends to know.

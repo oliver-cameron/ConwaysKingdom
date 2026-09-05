@@ -219,7 +219,7 @@ An outside program plays through HTTP, and the one thing it needs is a token:
 cargo run --no-default-features --features server --bin server -- --api-token hunter2
 ```
 
-**Without `--api-token` the routes are not mounted**, and the startup log says so; with it, the log names `/api`. Every request carries `Authorization: Bearer TOKEN`, compared in constant time, and anything else is a 401. That is the whole of the gate — there is no second rate limit and no per-route permission, so whoever holds the token is the operator.
+**Without `--api-token` the routes are not mounted**, and the startup log says so; with it, the log names `/api` and never the token. `CK_API_TOKEN` in the environment is the same setting, so a unit file can carry the secret in a file of its own rather than on the command line — see [deploying](#deploying); the flag wins where both are given. Every request carries `Authorization: Bearer TOKEN`, compared in constant time, and anything else is a 401. That is the whole of the gate — there is no second rate limit and no per-route permission, so whoever holds the token is the operator.
 
 `server::api` is the surface and `api::http` is the transport. `api::handle` takes a `Request` and the `Rooms` and returns a status and a JSON body, the way `console::run` takes a line, so every route is tested with no socket near it; only the routing needs axum, and it does one thing — build the request, hand it across to the simulation task on a oneshot, and turn what comes back into a response. Everything that touches a world still happens on the one task allowed to.
 
@@ -310,6 +310,59 @@ Commands run on the **simulation task**, because making a room is touching the w
 Answers go to stdout rather than to the log. A log line is something that happened; the answer to a question somebody typed is neither a warning nor a record, and routing it through the logger would let a quiet log level swallow the reply to a command.
 
 A server with no terminal — under systemd, or started with `< /dev/null` — reads end-of-file, drops the console and runs on. That is the ordinary case for a server nobody is sitting at, so it is not a failure, and it must not become a loop that spins on end-of-file: the branch is guarded, and a headless server idles under one per cent of a core.
+
+## Deploying
+
+`conwayskingdom.com`, and the repository's half of it. [deploy/](../deploy/) is what a host needs — the shipping build, a systemd unit, the tunnel's one ingress rule and the one environment variable there is — and [deploy/README.md](../deploy/README.md) brings a machine up from nothing, in order. **Which machine is not decided**, and nothing here decides it.
+
+The shape is one process and one origin. This server holds the websocket and serves `index.html`, `pkg/` and `assets/`, and `cloudflared` sits beside it with a single outbound connection to Cloudflare — TLS at the edge, no port forwarded, and nothing of this listening on the open internet. It binds `127.0.0.1:8080` and warns that it has, which is the one deployment where that warning is the point.
+
+**Same origin is load-bearing** rather than tidy. The browser client derives its socket from the page that served it — `net::link_web::origin_url`, which already turns `https` into `wss` — so there is nothing to configure and nothing to configure wrongly. Putting the page on a CDN and the server elsewhere would need the client to carry a default server address, which it has no way to be told; see [planned.md](planned.md#cloudflare-and-which-half-of-this-fits). HTTPS earns its place for a reason beyond the obvious one as well: **a secure origin is what makes `navigator.gpu` exist**, so the browser gets WebGPU rather than the WebGL2 fallback anybody visiting by IP gets today.
+
+### `/healthz`
+
+`GET /healthz` is a 200 and one line, unauthenticated, served with or without `--serve`:
+
+```
+ok: 2 rooms, 5 connections
+```
+
+The room count is **asked of the simulation task**, on a oneshot with a second's patience, rather than read off a counter — so a server whose one task has stalled fails its check with a 503 instead of passing it while the game is stopped. The connection count is a counter each socket's task takes a place in and gives back when it ends, however it ends. It is what an uptime check and the tunnel's own probe hit, and it says nothing the room list does not.
+
+### What is held, and for how long
+
+| | | |
+|---|---|---|
+| `index.html`, and every client screen answered with it | `no-cache` | small, and it is what a deploy changes |
+| `pkg/` and `assets/` | `public, max-age=3600, must-revalidate`, with an `ETag` | megabytes an edge should be holding |
+
+`no-cache` does not mean do not store — it means revalidate before use, so the conditional request `ServeFile` already answers comes back 304 and costs a round trip rather than a download. It has to be said out loud: a response with a validator and **no** caching directive is one a browser is entitled to reuse without asking, commonly for a tenth of the file's age, so a module built yesterday would be fresh for a couple of hours and a rebuild inside that window would change nothing anybody could see. That is the `pkg/` divergence [README.md](README.md) warns about, arriving *after* a successful build, where reading the build output no longer catches it.
+
+Nothing is `immutable`, because nothing carries a content hash: wasm-pack names the module after the crate, so one URL means different bytes after every build and an hour is how long a rebuild may go unseen without a purge. **So purge the edge after a deploy**, or wait the hour out.
+
+`ServeDir` sends `Last-Modified` and no `ETag`, so the tag is made from what it does send — the length and the modification time — rather than from the bytes, which for the module would be a pass over 7.5 MB per request. It is as strong as a filesystem timestamp, which is what nginx sends and for the same reason, and it is the same tag on both sides of a restart: one that changed would cost every visitor a download for a file nobody had touched. `If-None-Match` is answered in the same layer, because `ServeDir` has never heard of the tag it is being asked about.
+
+### The loading bar wants a length
+
+The page shows a percentage while the module arrives and falls back to an indeterminate sweep without one — see [README.md](README.md). An edge that compresses the module on the way through takes the `Content-Length` away, or leaves the compressed number against a stream that yields the decompressed bytes, which is a bar that runs past its own end.
+
+So the length goes out twice, the second time as **`X-Content-Length`**: the file's length as the server read it, under a name nothing between here and the browser touches, and the one the page reads first. Chosen over the two alternatives — a compression rule at the edge, or a `<meta>` the server fills in — because it keeps `index.html` a **static file**, which is what makes the client servable by anything at all, and because it is right whether or not there is an edge in front of this server.
+
+### The token in the environment
+
+`--api-token` mounts [the API](#the-api), and `CK_API_TOKEN` is the same setting, so a unit file never carries a secret and the command line `ps` shows everybody says nothing. The flag wins where both are given, an empty variable is no token, and the startup log says whether `/api` is mounted and never what the token is.
+
+### Who a connection is from
+
+Behind the tunnel every connection arrives from `127.0.0.1`, so the socket's address is one bucket holding the whole internet. The server reads **`CF-Connecting-IP`** where there is one and falls back to the socket's own address, and that is what the cap on unjoined connections counts and what the log lines name.
+
+**It is believed only because nothing but the tunnel can reach the port.** A header is a claim the caller makes and any caller can make it; what makes this one safe is the bind — loopback, with `cloudflared` the only thing on the machine that speaks to it. **A server reachable directly must not trust it**: there the header is whatever was typed, and a cap counted per address is defeated by varying it.
+
+Two things hold a connection that is nobody yet, both of them entries in [known-bugs.md](known-bugs.md#fixed) until this: it is closed after **two minutes** of saying nothing while it is in no room, and one address may hold **eight** that have joined nothing. Both numbers were chosen rather than measured. `server::unjoined` is where the three decisions live — past its deadline, over the cap, and which address a connection is from — so `cargo test` reaches them without a socket, and `ws` keeps the numbers beside `MOST_BYTES_AT_ONCE`.
+
+### What to back up
+
+The rooms directory: the worlds, and [the four tables beside them](#the-four-tables-beside-the-rooms). A world can be started again and the tables cannot be rebuilt — `people.jsonl` is also the file worth stealing — so they are the reason there is a backup at all. The nightly tarball, and what a restore is, are in [deploy/README.md](../deploy/README.md).
 
 ## Stopping
 
