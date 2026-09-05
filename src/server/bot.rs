@@ -35,15 +35,14 @@ const EASY_EVERY: Tick = 16;
 const NORMAL_EVERY: Tick = 8;
 const HARD_EVERY: Tick = 4;
 
-/// How far from home a bot looks for somewhere to build, in cells each way.
+/// How far from home a bot looks for somewhere to build, in cells each way;
+/// half its samples land this far out and half within [`NEAR`] — see
+/// [server.md].
 ///
-/// Five patches: its own ground, the no-man's-land round it, and the near
-/// edge of the neighbour's, which is where a frontier is.
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#bots
 const REACH: i32 = 5 * crate::net::SPAWN_N;
 
-/// The patch itself, which is where the first half of the samples land: a
-/// fresh seat owns nothing else, and a window five patches wide would miss
-/// it forty times in fifty.
+/// The patch itself.
 const NEAR: i32 = crate::net::SPAWN_N / 2;
 
 /// How many squares one act looks at. **Sampled, not scanned**, so an act

@@ -75,16 +75,12 @@ impl Reply {
     }
 }
 
-/// The most cells one window may ask for: sixteen chunks' worth, which is a
-/// 256-square window.
-///
-/// **Smaller than [`MOST_CHUNKS_AT_ONCE`], because this is JSON.** A chunk on
-/// the socket is four kilobytes of raw cells; here every cell is an object of
-/// five fields, so the same chunk is two hundred kilobytes and four thousand
-/// of them would be a gigabyte. An engine polls the region it plays in, which
-/// is a few chunks.
+/// The most cells one window may ask for: sixteen chunks' worth, a 256-square
+/// window. Smaller than [`MOST_CHUNKS_AT_ONCE`] because this is JSON — see
+/// [server.md].
 ///
 /// [`MOST_CHUNKS_AT_ONCE`]: crate::server::MOST_CHUNKS_AT_ONCE
+/// [server.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#the-api
 pub const MOST_CELLS_IN_A_WINDOW: usize = 16 * CHUNK_CELLS;
 
 /// Answer one request against the worlds.
