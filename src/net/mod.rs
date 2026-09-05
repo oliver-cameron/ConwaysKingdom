@@ -3066,7 +3066,7 @@ mod tests {
     #[test]
     fn unheld_ground_prices_as_empty() {
         let world = World::infinite_empty();
-        let far = vec![(100_000, 100_000)];
+        let far = [(100_000, 100_000)];
         assert!(world.cell_at(far[0].0, far[0].1).is_none());
         // Nothing of anybody's reaches it, so nobody may build there. A
         // client cannot know what it does not hold, and reading unheld ground

@@ -395,9 +395,7 @@ impl Server {
                 // sides are even is a lobby where they sort it out and press
                 // it again.
                 if !self.sides.is_empty() {
-                    if let Err(why) = self.teams_are_fair() {
-                        return Err(why);
-                    }
+                    self.teams_are_fair()?;
                 }
                 self.phase = Phase::Running { from: self.tick() };
                 self.started_by = by;
@@ -1694,7 +1692,7 @@ impl Server {
         // chosen for eyes rather than for the machine. Sent the moment a match
         // is decided as well, whatever the cadence says, because the last one
         // is the result.
-        if self.tick() % STANDING_EVERY == 0
+        if self.tick().is_multiple_of(STANDING_EVERY)
             || matches!(self.phase, Phase::Over { at, .. } if at == self.tick())
         {
             out.push(self.standing());

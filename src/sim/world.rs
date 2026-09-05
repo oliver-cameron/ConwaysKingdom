@@ -1172,17 +1172,6 @@ impl World {
         }
     }
 
-    /// Every turret, in absolute coordinates, with its owner and whether it is
-    /// alive.
-    ///
-    /// **Sorted**, because `stored` walks a `HashMap` on an infinite world and
-    /// a `HashMap` iterates differently in different processes. Two turrets
-    /// aiming at one square is decided by which fires last, so an unsorted
-    /// list would let a client and a server disagree about who owns it.
-    ///
-    /// A scan rather than an index, the way `ice_cells` is. The world has no
-    /// list of anything, and a turret is found by looking, which costs one
-    /// pass over what is held per generation.
     /// **Where a blast is worth setting off**, walking outward from the
     /// dynamite until it finds somewhere.
     ///
@@ -1322,6 +1311,17 @@ impl World {
         out
     }
 
+    /// Every turret, in absolute coordinates, with its owner and whether it is
+    /// alive.
+    ///
+    /// **Sorted**, because `stored` walks a `HashMap` on an infinite world and
+    /// a `HashMap` iterates differently in different processes. Two turrets
+    /// aiming at one square is decided by which fires last, so an unsorted
+    /// list would let a client and a server disagree about who owns it.
+    ///
+    /// A scan rather than an index, the way `ice_cells` is. The world has no
+    /// list of anything, and a turret is found by looking, which costs one
+    /// pass over what is held per generation.
     fn turrets(&self) -> Vec<((i32, i32), PlayerId, bool)> {
         let mut out = Vec::new();
         for ((crow, ccol), chunk) in self.stored() {
@@ -2459,11 +2459,11 @@ mod tests {
 
         // A fixed soup, from the dice the simulation already uses, so this
         // starts from something busy rather than from something chosen.
-        for r in 0..N {
-            for c in 0..N {
+        for (r, row) in soup.iter_mut().enumerate() {
+            for (c, square) in row.iter_mut().enumerate() {
                 let seed = super::super::seed::mix(0x5011_5EED, (r as u64) << 32 | c as u64);
                 if Roll::new(seed).chance(0, 24) {
-                    soup[r][c] = true;
+                    *square = true;
                     w.set_cell_at(r as i32, c as i32, Cell::alive(PlayerId(1)));
                 }
             }

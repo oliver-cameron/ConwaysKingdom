@@ -311,7 +311,7 @@ mod tests {
     /// and a row of "neither" marks would be a row about nothing.
     #[test]
     fn the_form_strip_is_matches_only() {
-        let games = vec![
+        let games = [
             game(10, Outcome::Won),
             game(20, Outcome::Played),
             game(30, Outcome::Lost),

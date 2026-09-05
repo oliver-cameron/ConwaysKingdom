@@ -132,7 +132,7 @@ impl Peer {
                     if self.world.generation != tick {
                         self.world.set_generation(tick);
                     }
-                    if self.world.generation % 12 == 0 {
+                    if self.world.generation.is_multiple_of(12) {
                         let chunks: Vec<((i32, i32), u64)> = self
                             .world
                             .stored()

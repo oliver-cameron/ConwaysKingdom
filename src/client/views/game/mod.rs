@@ -1715,7 +1715,6 @@ impl App for GameApp {
                 }
             }
             Start::Menu { address, page, describing, access } => {
-                #[allow(clippy::let_and_return)]
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
                 // **The page the address named, whichever it is.** This
                 // honoured `Play` alone, so `/alone` and `/experiments` were
@@ -2162,7 +2161,7 @@ impl App for GameApp {
         // invited into; a watcher holds no door, being in no seat.
         let inviting_into = (!self.session.watching
             && self.session.lobby.as_ref().is_some_and(|l| l.code.is_some()))
-        .then(|| self.session.room_name.as_deref())
+        .then_some(self.session.room_name.as_deref())
         .flatten();
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
@@ -2283,7 +2282,7 @@ impl App for GameApp {
                                         &look_at(
                                             l,
                                             &self.session,
-                                            &crate::client::views::hue::table(),
+                                            crate::client::views::hue::table(),
                                             ui.refused_start.as_deref(),
                                         ),
                                         &mut ui.naming_team,
@@ -2303,7 +2302,7 @@ impl App for GameApp {
                         // screen that is about the room rather than about a player.
                         let clock_rect = lobby.as_ref().and_then(|l| {
                             clock::show(
-                                ctx, &theme, generation, &l.phase, l.victory, &standing, paused,
+                                ctx, &theme, generation, &l.phase, l.victory, standing, paused,
                                 rules.bpm,
                             )
                             .rect
@@ -2344,7 +2343,7 @@ impl App for GameApp {
                                 &look_at(
                                     l,
                                     &self.session,
-                                    &crate::client::views::hue::table(),
+                                    crate::client::views::hue::table(),
                                     ui.refused_start.as_deref(),
                                 ),
                                 &mut ui.naming_team,

@@ -850,7 +850,7 @@ fn square(
             painter,
             rect.right_bottom() + egui::vec2(-4.0, -2.0),
             egui::Align2::RIGHT_BOTTOM,
-            &price.to_string(),
+            price.to_string(),
             11.0,
             p.text_dim,
         );
@@ -879,7 +879,6 @@ fn shadowed(
 
 /// The same, in a named family — which is how an icon is drawn, since an icon
 /// is only ever asked of the font that has icons.
-#[allow(clippy::too_many_arguments)]
 fn shadowed_in(
     painter: &egui::Painter,
     at: egui::Pos2,

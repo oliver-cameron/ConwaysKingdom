@@ -135,7 +135,7 @@ fn shade(lightness: f32, saturation: f32, hue: f32) -> [f32; 3] {
 
 /// Golden ratio: consecutive player numbers land far apart on the hue circle.
 /// Mirrors `player_hue` in the shader.
-const HUE_STEP: f32 = 0.618_033_99;
+const HUE_STEP: f32 = 0.618_034;
 
 /// What the shader will draw a sheet's pixel as, for a given player.
 ///

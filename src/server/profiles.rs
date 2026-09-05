@@ -390,7 +390,7 @@ mod tests {
     fn a_search_answers_no_more_than_it_is_asked_for() {
         let mut store = Profiles::new();
         for i in 0..40 {
-            rated(&mut store, &format!("p{i:02}"), 1000 + i as i32);
+            rated(&mut store, &format!("p{i:02}"), 1000 + i);
         }
         assert_eq!(store.search("", crate::net::PEOPLE_MOST).len(), crate::net::PEOPLE_MOST);
         assert_eq!(store.search("p", crate::net::PEOPLE_MOST).len(), crate::net::PEOPLE_MOST);

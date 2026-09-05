@@ -702,7 +702,7 @@ impl ChunkStore {
     /// from — which the camera uniform has to carry so the shader can map a
     /// world position onto a texel.
     pub fn coarse_window(&self) -> Option<((i32, i32), (i32, i32))> {
-        self.was_coarse.then(|| self.coarse.window).flatten()
+        self.was_coarse.then_some(self.coarse.window).flatten()
     }
 
     /// Whether that window is the whole world, and so wraps.
@@ -1282,7 +1282,7 @@ mod tests {
     fn a_chunk_becomes_four_bytes_a_cell_with_the_cell_first() {
         let mut world = World::infinite_empty();
         alive(&mut world, &[(0, 0), (0, 1)], 3);
-        let chunk = world.chunk_at((0, 0)).unwrap().clone();
+        let chunk = *world.chunk_at((0, 0)).unwrap();
         let texels = texels(&world, (0, 0), &chunk);
 
         assert_eq!(texels.len(), CHUNK_CELLS * ChunkTexture::STRIDE);
