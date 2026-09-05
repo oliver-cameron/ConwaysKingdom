@@ -2442,7 +2442,9 @@ impl App for GameApp {
 
         // **Taking a party invitation is joining the party**, which the
         // server answers with the listing; the panel is otherwise the room
-        // invitation's, and so is the shutting.
+        // invitation's, and so is the shutting. Through `chose`, as a room
+        // invitation's join is, so a panel and a page reach the server by
+        // one road.
         if let Some((_, party, _)) = party_invite {
             match answered_party_invite {
                 social::invite::Did::Nothing if party_inviting => {}
@@ -2451,7 +2453,7 @@ impl App for GameApp {
                 }
                 social::invite::Did::Accept => {
                     self.session.party_invite = None;
-                    self.session.join_party(party);
+                    self.chose(menu::Chose::JoinParty(party));
                 }
             }
         }

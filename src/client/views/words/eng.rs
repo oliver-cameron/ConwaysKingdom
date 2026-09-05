@@ -680,7 +680,7 @@ pub mod invite {
 
     /// What the door opens onto, said once on the panel.
     pub fn into_room(room: &str) -> String {
-        format!("A private world, \u{201c}{room}\u{201d}. Nobody else is listed it.")
+        format!("A private world, \u{201c}{room}\u{201d}. It is listed to nobody else.")
     }
 
     /// Said out loud when one arrives, for the reason a challenge is.
