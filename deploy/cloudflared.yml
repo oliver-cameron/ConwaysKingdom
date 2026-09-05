@@ -1,0 +1,19 @@
+# The tunnel, as `cloudflared tunnel --config /etc/cloudflared/config.yml run`
+# reads it. One rule, because the page, the module and the websocket are one
+# origin -- see docs/planned.md#cloudflare-and-which-half-of-this-fits, which
+# is why that has to stay true.
+#
+# The tunnel's id and its credentials file are the host's and are not in this
+# repository: `cloudflared tunnel create conwayskingdom` writes both, prints
+# the id, and `cloudflared tunnel route dns conwayskingdom conwayskingdom.com`
+# is what puts it in DNS. Fill the id in below, in both places.
+
+tunnel: CHANGE-ME
+credentials-file: /etc/cloudflared/CHANGE-ME.json
+
+ingress:
+  - hostname: conwayskingdom.com
+    service: http://127.0.0.1:8080
+  # Anything else arriving on this tunnel. Required: cloudflared refuses a
+  # configuration whose last rule has a hostname.
+  - service: http_status:404

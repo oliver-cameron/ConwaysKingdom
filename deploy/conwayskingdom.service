@@ -1,0 +1,64 @@
+# The server as systemd runs it. Copy to /etc/systemd/system/, change the two
+# paths if the checkout is not in /opt, then `systemctl enable --now
+# conwayskingdom`. deploy/README.md is the whole of bringing a host up;
+# docs/server.md#deploying says what these flags are doing.
+
+[Unit]
+Description=ConwaysKingdom
+Documentation=https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conway
+Group=conway
+
+# The checkout, which is also what --serve publishes: index.html, pkg/ and
+# assets/ and nothing else. WorkingDirectory as well, so a relative path in
+# anything added later resolves somewhere predictable.
+WorkingDirectory=/opt/conwayskingdom
+ExecStart=/opt/conwayskingdom/target/release/server \
+    --addr 127.0.0.1:8080 \
+    --serve /opt/conwayskingdom \
+    --rooms /var/lib/conwayskingdom/rooms
+
+# Loopback, deliberately. cloudflared reaches it from this machine and nothing
+# else can, which is what makes CF-Connecting-IP worth believing. The server
+# warns about this bind on the way up -- it is the one deployment where the
+# warning is the intention.
+
+# The API token and nothing else, from a file only root can read, so the
+# command line `ps` shows to everybody says nothing. No file, no token, and
+# /api is simply not mounted.
+EnvironmentFile=-/etc/conwayskingdom/env
+
+# Worlds, people, profiles, stamps and games all live under here. systemd
+# creates it and gives it to this user; the server makes the rooms directory
+# inside it on its first save.
+StateDirectory=conwayskingdom
+
+# It saves every room on SIGTERM and gives the simulation task ten seconds to
+# finish doing it, so the stop timeout has to be longer than that or systemd
+# kills the process in the middle of the save it asked for. The default is 90
+# seconds, which would also do; 30 says the number was thought about.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# No terminal, so the console reads end-of-file once and runs headless rather
+# than spinning on it.
+StandardInput=null
+
+Restart=on-failure
+RestartSec=5
+
+# It reads a checkout and writes one directory, so nothing else needs to be
+# writable. ProtectSystem=strict leaves StateDirectory alone, which is the
+# whole of what it writes.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

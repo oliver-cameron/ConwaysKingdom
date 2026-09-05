@@ -72,6 +72,16 @@ In practice `pump_link` sets `self.link = None` on the frame it notices `is_clos
 
 Not a bug so much as a shape: the outbound half wants a `tokio::sync::mpsc` the select can await, and then there is no timer at all.
 
+### A table written in place is a table a crash can shorten
+
+`people.jsonl`, `profiles.jsonl`, `stamps.jsonl` and `games.jsonl` are saved with `std::fs::write`, which truncates and then writes. A world is not — `persist::save` writes beside the file and renames it into place, so a crash leaves the old world or the new one and never half of one — and the four tables beside it never learned the trick.
+
+What it costs is bounded by the format rather than by the write, which is [what the format was chosen for](server.md#the-four-tables-beside-the-rooms): one object a line means a crash mid-write leaves the rows that got there and loses the rest, and a half-written last line is skipped on the way back in. So it is the tail of a table rather than the table.
+
+*You would see* nothing until somebody who had played here arrived as a stranger — a lost row in `people.jsonl` is a person whose profile, patterns and record are filed under an id nobody holds any more.
+
+*Not confirmed,* and confirming it would take a power cut in a window of milliseconds a few times an hour. The fix is the trick `persist::save` already knows, applied to the four writers that do not.
+
 ### The tunnel is not in this repository
 
 `agent.py` and `relay.py` are what make a server on a home connection reachable, and they sit beside this repository rather than in it — so they are not in the tests, not in `cargo fmt`, and not in any history. The pool bug in [gotchas.md](gotchas.md#one-browser-is-six-connections-and-the-tunnel-counted-players) was a bug in the browser client as far as anybody debugging it could tell, and there was nowhere to record the fix.
