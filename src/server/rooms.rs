@@ -1396,7 +1396,8 @@ impl Rooms {
     /// **Refused while anybody is in it.** Deleting a world somebody is
     /// standing in is the one thing here that cannot be taken back, and the
     /// difference between "nobody is in it" and "nobody was in it a moment
-    /// ago" is a question the person typing can answer and this cannot.
+    /// ago" is a question the person typing can answer and this cannot. A bot
+    /// is not anybody: it goes with the room.
     ///
     /// The default room is refused too: `resolve(None)` sends every client
     /// that names no room to it, so a server without one has nowhere to put
@@ -1410,7 +1411,7 @@ impl Rooms {
             ));
         }
         let server = self.rooms.get(&id).expect("resolve only returns rooms that are here");
-        let here = server.players().filter(|p| p.online).count();
+        let here = server.players().filter(|p| p.online && !server.is_bot(p.id)).count();
         if here > 0 {
             return Err(format!("{here} still in \"{name}\""));
         }
@@ -2021,6 +2022,31 @@ mod tests {
         rooms.delete("a").unwrap();
         assert_eq!(rooms.made_count().0, 1);
         assert!(rooms.make(1, "c", WorldKind::Infinite, None, None, false, false).is_ok());
+    }
+
+    /// **A bot is not somebody standing in a room.** Deleting is refused
+    /// while anybody is in it, because it cannot be taken back; a bot goes
+    /// with the room, and a person does not.
+    #[test]
+    fn a_room_of_bots_can_be_deleted_and_a_room_with_a_person_in_it_cannot() {
+        use crate::net::Level;
+        use crate::server::bot::Driver;
+        let mut rooms =
+            Rooms::open(temp_dir("bots-in"), &["hall".into()], WorldKind::Infinite, true).unwrap();
+        let timer = Victory::Timer { generations: 10 };
+
+        let dawn = rooms.new_match("dawn", WorldKind::Infinite, timer).unwrap();
+        rooms.get_mut(&dawn).unwrap().add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        rooms.delete("dawn").unwrap();
+        assert!(rooms.get(&dawn).is_none(), "a room holding only a bot was kept");
+
+        let dusk = rooms.new_match("dusk", WorldKind::Infinite, timer).unwrap();
+        let room = rooms.get_mut(&dusk).unwrap();
+        room.add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        room.join_with("me", None).unwrap();
+        let why = rooms.delete("dusk").unwrap_err();
+        assert!(why.starts_with("1 still in"), "the bot was counted, or the person was not: {why}");
+        assert!(rooms.get(&dusk).is_some());
     }
 
     /// A private room is reachable by its code and mentioned nowhere else —

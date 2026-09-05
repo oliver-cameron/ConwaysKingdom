@@ -52,18 +52,15 @@ impl Peer {
         for _ in 0..200 {
             for msg in link.drain() {
                 if let ServerMessage::Welcome { you, tick, spawn, room, world: shape, .. } = msg {
-                    // Built to the shape the server named, as the client does.
-                    // Assuming a plane against a wrapping server folds no
-                    // coordinates, so the two peers would disagree about which
-                    // chunk is which and this would report a divergence that
-                    // was really a misunderstanding.
-                    let mut world = shape.build();
+                    // Built as the client builds it: to the shape the server
+                    // named, and seeded from the room. Either left out is a
+                    // divergence that is really a misunderstanding -- a plane
+                    // against a torus folds no coordinates, and the wrong
+                    // seed rolls different dice at every contested birth and
+                    // every adjustment of the ground, which this reported as
+                    // the server correcting both peers at every checkpoint.
+                    let mut world = conwayskingdom::net::sane_world(shape, &room);
                     world.set_generation(tick);
-                    // And rolling the room's dice, as the client does. Left at
-                    // nought, both peers rolled the same wrong number: they
-                    // agreed with each other about every contested square and
-                    // the server put them both right at every checkpoint.
-                    world.set_seed(conwayskingdom::net::world_seed(&room));
                     println!(
                         "{name}: {you:?} in room {room:?} at tick {tick}, ground at {spawn:?}"
                     );
@@ -122,7 +119,11 @@ impl Peer {
                     if !actions.is_empty() {
                         self.heard += actions.len();
                     }
-                    for s in &actions {
+                    // **Not our own**, which were applied when they were made:
+                    // a paint laid again a generation late is a different
+                    // paint, and that is the gotcha this example exists to
+                    // catch rather than commit.
+                    for s in actions.iter().filter(|s| s.seat != self.me) {
                         conwayskingdom::net::apply(&mut self.world, s);
                     }
                     while self.world.generation < tick {
@@ -150,7 +151,7 @@ impl Peer {
                     // A grant is announced this way too, so the first of these
                     // after joining is news rather than a correction.
                     println!(
-                        "{}: server names {} chunks to refetch at {tick}: {chunks:?}",
+                        "{}: server says {} chunks are wrong at {tick}: {chunks:?}; refetching",
                         self.name,
                         chunks.len()
                     );

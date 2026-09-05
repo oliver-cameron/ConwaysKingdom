@@ -29,6 +29,7 @@ enum ClientMessage {
     Rooms,                                     // what worlds are here?
     Create { name, shape, victory, teams, private },
     JoinTeam { team }, NameTeam { team, name },
+    AddBot { team, level }, RemoveBot { seat },   // a seat the server plays; see server.md
 }
 
 enum ServerMessage {
@@ -140,7 +141,9 @@ One byte on the front of every frame — `codec::PROTOCOL` — and it is there b
 
 Postcard writes an enum variant as its **index**, so a message inserted in the middle of `ClientMessage` renumbers every one after it, and a field added to a struct that rides on one changes that message's shape. Both are ordinary changes. What made them dangerous is that the browser client is a generated `pkg/` that **a pull does not update** — see [gotchas.md](gotchas.md) — so a page from last week talks to a new server and the frames decode to *something*. A join half works, a profile comes back empty, and the only sign is a warning in a log nobody is reading.
 
-Now a mismatch is a `Rejected` with the reason on it, which is the one thing here that already reaches the screen. Bump `PROTOCOL` whenever the vocabulary moves. Appending a variant is still the safe change and is why `Keep` is last in `ClientMessage`.
+Now a mismatch is a `Rejected` with the reason on it, which is the one thing here that already reaches the screen. Bump `PROTOCOL` whenever the vocabulary moves. Appending a variant is still the safe change, and is why `AddBot` and `RemoveBot` went on the end of `ClientMessage`, after `Keep`.
+
+**It is 2.** The reason is not those two messages but the flag beside them: `Seat` gained `bot`, and a field on a struct that rides on every `Match` changes the shape of every lobby, so a page from before it would have read the flag as the start of the next seat. `AddBot` and `RemoveBot` are what a lobby sends to seat a player the server plays and to take one away — any seated player may, while the room admits anybody, and the answer is the next `Match` or a `NotStarted` with the reason. A bot's own actions need nothing new: they go out in the `Step` for the generation they were taken in, from a seat like anybody's, which is what makes a bot cost the protocol one bit. See [server.md](server.md#bots).
 
 ## Coming back
 

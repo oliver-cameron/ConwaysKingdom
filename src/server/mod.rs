@@ -12,6 +12,8 @@
 //! replies, so whatever carries the bytes is somebody else's problem;
 //! [`ws`] is what carries them today.
 
+pub mod api;
+pub mod bot;
 pub mod console;
 pub mod lockers;
 pub mod matches;
@@ -23,13 +25,14 @@ pub mod rooms;
 #[cfg(feature = "server")]
 pub mod ws;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::net::{
-    ChunkId, ClientMessage, RoomName, Rules, ServerMessage, Stamped, Tick, DEFAULT_ROOM,
+    ChunkId, ClientMessage, Level, RoomName, Rules, ServerMessage, Stamped, Tick, DEFAULT_ROOM,
 };
 use crate::sim::{Player, PlayerId, World};
+use bot::{Bot, Driver};
 use matches::{Phase, Victory};
 
 pub struct Server {
@@ -100,6 +103,11 @@ pub struct Server {
     /// the step they belong to. Drained by whatever carries the bytes; see
     /// [`ServerMessage::Acted`].
     announce: Vec<ServerMessage>,
+    /// The seats the server plays — see [`bot`]. Bot-ness lives here and
+    /// reaches the wire only through [`crate::net::Seat::bot`]: `sim::Player`
+    /// is saved, and a match never is, so after a restart a bot's seat is an
+    /// offline player like any human who left.
+    bots: BTreeMap<PlayerId, Bot>,
 }
 
 /// The most chunks one message may fetch.
@@ -171,6 +179,7 @@ impl Server {
             rules: Rules::default(),
             granted: Vec::new(),
             announce: Vec::new(),
+            bots: BTreeMap::new(),
         }
     }
 
@@ -499,6 +508,7 @@ impl Server {
                 id: p.id,
                 name: p.name.clone(),
                 who: p.person.clone().map(crate::net::PersonId),
+                bot: self.bots.contains_key(&p.id),
             })
             .collect();
         // By number, which is the order they arrived, so the list does not
@@ -1013,6 +1023,120 @@ impl Server {
         }
     }
 
+    /// Seat a player the server plays — see [`bot`].
+    ///
+    /// A seat like any other: [`Self::join_with`] hands it out, so a room
+    /// full of bots refuses a person with the same words, and the lobby puts
+    /// it on a side the way it puts anybody. `team` overrides that. Only
+    /// while the room admits anybody, because a seat arriving mid-match is the
+    /// late joining `join` refuses.
+    pub fn add_bot(
+        &mut self,
+        name: impl Into<String>,
+        level: Level,
+        driver: Driver,
+        team: Option<PlayerId>,
+    ) -> Result<PlayerId, String> {
+        if !self.phase.open_to_newcomers() {
+            return Err(format!("\"{}\" is a match already under way", self.room));
+        }
+        // Judged before the seat is taken, because a world never gives a
+        // number back -- see `next_player_id` -- and a refused side would
+        // otherwise cost the room a seat.
+        if let Some(team) = team {
+            if self.sides.is_empty() {
+                return Err("this match has no teams".into());
+            }
+            if !self.sides.contains(&team) {
+                return Err(format!("this match has {} teams", self.sides.len()));
+            }
+        }
+        let seat = self.join_with(name, None)?;
+        if let Some(team) = team {
+            self.join_team(seat, team)?;
+        }
+        let bot = Bot::new(level, driver, self.world.seed(), seat, self.tick());
+        log::info!("{seat:?} is a {} bot in room {}", level.name(), self.room);
+        self.bots.insert(seat, bot);
+        Ok(seat)
+    }
+
+    /// Take a bot out again. Only while the room admits anybody: a seat
+    /// leaving a running match is a forfeit, and [`Self::forfeit`] is that.
+    ///
+    /// **In a lobby the number comes back; in a world it is spent.** Nothing
+    /// is laid out before the whistle, so a bot removed while a match gathers
+    /// has its number in no cell and its row goes with it -- kept, fifteen
+    /// presses of add-and-remove from one seat locked the room to everybody
+    /// not already in it. A world grants on arrival, so there the seat is left
+    /// as a person's who walked away, for the reason [`Self::leave`] gives.
+    pub fn remove_bot(&mut self, seat: PlayerId) -> Result<(), String> {
+        if !self.bots.contains_key(&seat) {
+            return Err(format!("seat {} is not a bot", seat.0));
+        }
+        if !self.phase.open_to_newcomers() {
+            return Err("bots are settled once a match starts".into());
+        }
+        self.bots.remove(&seat);
+        if self.phase.accepts_actions() {
+            self.leave(seat);
+        } else {
+            self.players.remove(&seat);
+            self.lobby_changed = true;
+            log::info!(
+                "bot {seat:?} left room {} before the whistle; its number is free",
+                self.room
+            );
+        }
+        Ok(())
+    }
+
+    pub fn is_bot(&self, seat: PlayerId) -> bool {
+        self.bots.contains_key(&seat)
+    }
+
+    pub fn bot(&self, seat: PlayerId) -> Option<&Bot> {
+        self.bots.get(&seat)
+    }
+
+    /// Every bot here, by seat.
+    pub fn bots(&self) -> impl Iterator<Item = (PlayerId, &Bot)> {
+        self.bots.iter().map(|(&seat, bot)| (seat, bot))
+    }
+
+    /// Let every bot that is due make its move, through [`Self::act`] like
+    /// anybody's. Before `pending` is taken, so what it chose goes out in the
+    /// `Step` for this generation.
+    ///
+    /// **And not announced.** `act` says an action out loud so that a cell
+    /// appears on everybody's screen before the `Step` that carries it, and
+    /// a bot's is taken inside that very step -- an `Acted` for it would leave
+    /// with the next thing any client said, a generation or more after the
+    /// `Step` had already applied it, and a paint laid again a generation
+    /// late is a different paint.
+    fn bots_act(&mut self) {
+        let tick = self.tick();
+        let said = self.announce.len();
+        let due: Vec<PlayerId> =
+            self.bots.iter().filter(|(_, b)| b.next_at <= tick).map(|(&s, _)| s).collect();
+        for seat in due {
+            let (plays_as, purse) = (self.plays_as(seat), self.value_of(seat).unwrap_or(0));
+            let Some(bot) = self.bots.get_mut(&seat) else { continue };
+            bot.next_at = tick + bot.cadence();
+            let chosen = match bot.driver {
+                Driver::Book => bot.choose(&self.world, &self.rules, plays_as, purse, tick),
+                // Priced as it arrived; nothing waits for a step.
+                Driver::External => None,
+            };
+            if let Some(action) = chosen {
+                if let Err(why) = self.act(Stamped { tick, player: plays_as, seat, action }) {
+                    log::debug!("bot {seat:?} was refused: {why}");
+                }
+            }
+        }
+        self.announce.truncate(said);
+    }
+
     /// Decoded message in, replies out. Deliberately transport-agnostic.
     /// `who` is **which person this connection is**, as the server's table
     /// settled it — see [`crate::server::people`]. A room cannot work that out
@@ -1108,93 +1232,13 @@ impl Server {
                     );
                     return Vec::new();
                 }
-                // **Before anything walks the list.** Pricing and applying are
-                // both linear in it, the whole action is cloned into an
-                // `Acted` and broadcast, and every client in the room applies
-                // it too -- so an unbounded list is unbounded work on the one
-                // task that owns every world, amplified to the room. Cost is
-                // no bound: an `Erase` over ground nobody holds prices at
-                // nothing however long it is.
-                if stamped.action.cells().len() > crate::net::MOST_CELLS_AT_ONCE {
-                    log::warn!(
-                        "dropped an action from {:?} naming {} cells, over the {} allowed",
-                        from,
-                        stamped.action.cells().len(),
-                        crate::net::MOST_CELLS_AT_ONCE
-                    );
-                    return Vec::new();
-                }
-                // And nothing from somebody who has given up: a forfeit is a
-                // seat leaving the match, so it must not go on placing.
-                if from.is_some_and(|seat| self.players.get(&seat).is_some_and(|p| p.forfeited)) {
-                    log::debug!("dropped an action from {from:?}, who gave up");
-                    return Vec::new();
-                }
-                // Nothing happens before the whistle, and nothing after it.
-                // Dropped rather than answered, which is what an action the
-                // server will not take already does -- the client predicted it
-                // locally and the next `Checkpoint` puts the world and the
-                // purse back. It will do that until a match's phase reaches
-                // the client and it can refuse for itself; see planned.md.
-                if !self.phase.accepts_actions() {
-                    log::debug!(
-                        "dropped an action from {:?}: \"{}\" is {}",
-                        stamped.player,
-                        self.room,
-                        self.phase.name()
-                    );
-                    return Vec::new();
-                }
-                // Judged here as well as refused in the client, because a
-                // client that sends whatever it likes is the case this exists
-                // for. Ice is not liftable, so an erase naming it is not an
-                // action, whoever asks.
-                if let crate::net::Action::Erase { placement, .. } = &stamped.action {
-                    if !placement.can_be_taken() {
-                        log::info!("refused {:?}: {placement:?} cannot be taken", stamped.player);
-                        return Vec::new();
-                    }
-                }
-                // Placing is confined to ground the player's own influence
-                // reaches. Judged here as well as refused in the client,
-                // because a client that sends whatever it likes is the case
-                // this exists for -- and all or nothing, matching how the
-                // client prices and previews it: a paint half applied is a
-                // shape nobody drew.
-                if let crate::net::Action::Paint { cells, .. } = &stamped.action {
-                    if let Some(&(row, col)) = cells.iter().find(|&&(r, c)| {
-                        !crate::net::may_place_under(&self.world, stamped.player, r, c, &self.rules)
-                    }) {
-                        log::info!(
-                            "refused {:?}: nothing of theirs reaches ({row}, {col})",
-                            stamped.player
-                        );
-                        return Vec::new();
-                    }
-                }
-                // Cost is charged now, against the world as it stands, rather
-                // than when the action is applied at the tick boundary -- the
-                // client priced it against the same state, so pricing it later
-                // would let the two disagree.
-                if let Some(player) = self.players.get(&stamped.player) {
-                    let delta = crate::net::price_under(&self.world, &stamped, &self.rules);
-                    if player.value + delta < 0 {
-                        log::info!(
-                            "refused {:?}: costs {} with {} in hand",
-                            stamped.player,
-                            -delta,
-                            player.value
-                        );
-                        return Vec::new();
-                    }
-                    self.credit(stamped.player, delta);
-                    // Out at once, so everybody else applies it on the tick it
-                    // names rather than when that tick is announced. It rides
-                    // in the `Step` as well, because a broadcast can be
-                    // dropped and this is a shortcut rather than a promise.
-                    self.announce.push(ServerMessage::Acted(stamped.clone()));
-                    self.pending.push(stamped);
-                }
+                // Dropped rather than answered when refused, which is what an
+                // action the server will not take already does -- the client
+                // predicted it locally and the next `Checkpoint` puts the
+                // world and the purse back. It will do that until a match's
+                // phase reaches the client and it can refuse for itself; see
+                // planned.md.
+                let _ = self.act(stamped);
                 Vec::new()
             }
             // **A fetch, whatever it is called.** Chunk contents only ever
@@ -1267,6 +1311,30 @@ impl Server {
                 Ok(()) => Vec::new(),
                 Err(reason) => vec![ServerMessage::NotStarted { reason }],
             },
+            // A seat the server plays. **Seated players only**: a spectator
+            // has no standing in a lobby, and is dropped the way anything
+            // from nobody is. Refused the way a side is, into the lobby it
+            // was pressed in, for the reason `JoinTeam` is.
+            ClientMessage::AddBot { team, level } => {
+                let Some(by) = from else { return Vec::new() };
+                match self.add_bot(format!("{} bot", level.name()), level, Driver::Book, team) {
+                    Ok(seat) => {
+                        log::info!("{by:?} seated {seat:?}, a {} bot", level.name());
+                        Vec::new()
+                    }
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
+            ClientMessage::RemoveBot { seat } => {
+                let Some(by) = from else { return Vec::new() };
+                match self.remove_bot(seat) {
+                    Ok(()) => {
+                        log::info!("{by:?} removed bot {seat:?}");
+                        Vec::new()
+                    }
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
             // A laboratory's clock and its two switches. Broadcast rather than
             // answered to whoever asked: a laboratory is a room several people
             // are in, and a clock that stopped for one of them would be two
@@ -1342,6 +1410,99 @@ impl Server {
                 out
             }
         }
+    }
+
+    /// Take an action, or say why not.
+    ///
+    /// **Everything an action is judged on, in one place**, whoever it came
+    /// from: the wire arm above keeps only the identity check, because that
+    /// is a question about the connection and a bot has none. So a bot goes
+    /// through here too, and can do nothing a client could not.
+    ///
+    /// A refusal is a sentence, so the API can hand it back; the wire drops
+    /// it and lets the next `Checkpoint` put the client right.
+    pub(crate) fn act(&mut self, stamped: Stamped) -> Result<(), &'static str> {
+        // **Before anything walks the list.** Pricing and applying are both
+        // linear in it, the whole action is cloned into an `Acted` and
+        // broadcast, and every client in the room applies it too -- so an
+        // unbounded list is unbounded work on the one task that owns every
+        // world, amplified to the room. Cost is no bound: an `Erase` over
+        // ground nobody holds prices at nothing however long it is.
+        if stamped.action.cells().len() > crate::net::MOST_CELLS_AT_ONCE {
+            log::warn!(
+                "dropped an action from {:?} naming {} cells, over the {} allowed",
+                stamped.seat,
+                stamped.action.cells().len(),
+                crate::net::MOST_CELLS_AT_ONCE
+            );
+            return Err("that names more cells than one action may");
+        }
+        // And nothing from somebody who has given up: a forfeit is a seat
+        // leaving the match, so it must not go on placing.
+        if self.players.get(&stamped.seat).is_some_and(|p| p.forfeited) {
+            log::debug!("dropped an action from {:?}, who gave up", stamped.seat);
+            return Err("you have given up");
+        }
+        // Nothing happens before the whistle, and nothing after it.
+        if !self.phase.accepts_actions() {
+            log::debug!(
+                "dropped an action from {:?}: \"{}\" is {}",
+                stamped.player,
+                self.room,
+                self.phase.name()
+            );
+            return Err("this match is not running");
+        }
+        // Judged here as well as refused in the client, because a client that
+        // sends whatever it likes is the case this exists for. Ice is not
+        // liftable, so an erase naming it is not an action, whoever asks.
+        if let crate::net::Action::Erase { placement, .. } = &stamped.action {
+            if !placement.can_be_taken() {
+                log::info!("refused {:?}: {placement:?} cannot be taken", stamped.player);
+                return Err("ice cannot be taken back");
+            }
+        }
+        // Placing is confined to ground the player's own influence reaches.
+        // Judged here as well as refused in the client, because a client that
+        // sends whatever it likes is the case this exists for -- and all or
+        // nothing, matching how the client prices and previews it: a paint
+        // half applied is a shape nobody drew.
+        if let crate::net::Action::Paint { cells, .. } = &stamped.action {
+            if let Some(&(row, col)) = cells.iter().find(|&&(r, c)| {
+                !crate::net::may_place_under(&self.world, stamped.player, r, c, &self.rules)
+            }) {
+                log::info!(
+                    "refused {:?}: nothing of theirs reaches ({row}, {col})",
+                    stamped.player
+                );
+                return Err("nothing of yours reaches there");
+            }
+        }
+        // Cost is charged now, against the world as it stands, rather than
+        // when the action is applied at the tick boundary -- the client priced
+        // it against the same state, so pricing it later would let the two
+        // disagree.
+        let Some(player) = self.players.get(&stamped.player) else {
+            return Err("nobody plays that number here");
+        };
+        let delta = crate::net::price_under(&self.world, &stamped, &self.rules);
+        if player.value + delta < 0 {
+            log::info!(
+                "refused {:?}: costs {} with {} in hand",
+                stamped.player,
+                -delta,
+                player.value
+            );
+            return Err("you cannot afford that");
+        }
+        self.credit(stamped.player, delta);
+        // Out at once, so everybody else applies it on the tick it names
+        // rather than when that tick is announced. It rides in the `Step` as
+        // well, because a broadcast can be dropped and this is a shortcut
+        // rather than a promise.
+        self.announce.push(ServerMessage::Acted(stamped.clone()));
+        self.pending.push(stamped);
+        Ok(())
     }
 
     fn chunk_message(&self, chunk: ChunkId) -> Option<ServerMessage> {
@@ -1460,6 +1621,7 @@ impl Server {
             self.pending.clear();
             return lobby;
         }
+        self.bots_act();
         let applied = std::mem::take(&mut self.pending);
         for stamped in &applied {
             self.apply(stamped);
@@ -3320,5 +3482,277 @@ mod tests {
         // `handle` queues; `step` is what applies. Stepping once here would
         // also advance the world, so the pending action is drained by the
         // caller's own first step.
+    }
+
+    /// Step until a `Step` carries an action from this seat, and say what
+    /// number its cells carried; `None` if it never moved in `within` steps.
+    fn first_act_of(s: &mut Server, seat: PlayerId, within: usize) -> Option<PlayerId> {
+        for _ in 0..within {
+            for out in s.step() {
+                if let ServerMessage::Step { actions, .. } = out {
+                    if let Some(a) = actions.iter().find(|a| a.seat == seat) {
+                        return Some(a.player);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// **A bot is a seat the server plays.** It takes a number like anybody,
+    /// acts on its own within its cadence, and what it laid is priced against
+    /// its purse and stands in the world under its number.
+    #[test]
+    fn a_bot_takes_a_seat_and_acts_within_its_cadence() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("easy bot", Level::Easy, Driver::Book, None).unwrap();
+        assert!(s.is_bot(bot));
+        assert!(s.players().any(|p| p.id == bot && p.online), "a bot is a player here");
+        let purse = s.value_of(bot).unwrap();
+
+        // Three cadences, because the dice may find nowhere to build once.
+        assert!(first_act_of(&mut s, bot, 3 * 16).is_some(), "an easy bot never acted");
+        assert!(s.value_of(bot).unwrap() < purse, "its factories were free");
+        let standing = s
+            .world()
+            .live_cells()
+            .iter()
+            .filter(|&&(r, c)| {
+                let cell = s.world().cell_at(r, c).unwrap();
+                cell.player() == bot && cell.kind() == crate::sim::Kind::FACTORY
+            })
+            .count();
+        assert!(standing > 0, "nothing of the bot's is standing");
+    }
+
+    /// **A bot's move rides the `Step` and nothing else.** An `Acted` for it
+    /// would leave with the next thing anybody said, after the `Step` that
+    /// already carried it, and a paint laid a generation late is a different
+    /// paint.
+    #[test]
+    fn a_bots_action_is_never_announced() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        assert!(first_act_of(&mut s, bot, 3 * 4).is_some(), "the bot never acted");
+        assert!(
+            s.take_announcements().iter().all(|m| !matches!(m, ServerMessage::Acted(_))),
+            "a bot's action was announced"
+        );
+    }
+
+    /// **A peer built from nothing but the `Step`s is the server's world**,
+    /// generation for generation, with a bot in the room: what it chose
+    /// reaches a client as ordinary actions and nothing else, so nothing a
+    /// client does not hear can move the server's copy.
+    #[test]
+    fn a_peer_built_from_steps_agrees_with_the_server_with_a_bot_in_the_room() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("hard bot", Level::Hard, Driver::Book, None).unwrap();
+        s.credit(bot, 5_000);
+        let mut peer = s.world().clone();
+        let mut acted = 0;
+        for _ in 0..200 {
+            for out in s.step() {
+                if let ServerMessage::Step { tick, actions } = out {
+                    acted += actions.len();
+                    for stamped in &actions {
+                        crate::net::apply(&mut peer, stamped);
+                    }
+                    while peer.generation < tick {
+                        peer.step();
+                    }
+                }
+            }
+            for (coord, _) in s.world().stored() {
+                assert_eq!(
+                    peer.chunk_digest(coord),
+                    s.world().chunk_digest(coord),
+                    "chunk {coord:?} differs at tick {}",
+                    s.tick()
+                );
+            }
+        }
+        assert!(acted >= 10, "the bot acted {acted} times in 200 generations");
+    }
+
+    /// On a side it plays as the side's number, so its cells and its purse
+    /// are the team's — the same rule as a person at the team's controls.
+    #[test]
+    fn a_bot_on_a_team_plays_as_the_team() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 1000 });
+        s.make_teams(2).unwrap();
+        let me = s.join_with("me", None).unwrap();
+        s.join_team(me, PlayerId(1)).unwrap();
+        let bot = s.add_bot("hard bot", Level::Hard, Driver::Book, Some(PlayerId(2))).unwrap();
+        assert_eq!(s.plays_as(bot), PlayerId(2));
+        let why = s.add_bot("x", Level::Easy, Driver::Book, Some(PlayerId(9))).unwrap_err();
+        assert!(why.contains("teams"), "a side this match does not have: {why}");
+        assert_eq!(s.player_count(), 4, "a refused side cost a number");
+
+        s.start_match(None).unwrap();
+        s.credit(bot, 200);
+        assert_eq!(first_act_of(&mut s, bot, 3 * 4), Some(PlayerId(2)), "not the team's number");
+        assert!(s.value_of(bot).unwrap() < 200, "the team's purse did not pay");
+    }
+
+    /// **In a world a removed bot's seat stays spent**, as a person's who left
+    /// does, because its ground carries its number; so a room with fifteen
+    /// seats taken refuses a person with the words it refuses a sixteenth
+    /// person with, and one removed bot, me and thirteen more is fifteen.
+    #[test]
+    fn a_removed_bots_seat_stays_spent_in_a_world_and_a_room_of_bots_is_full() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("bot", Level::Normal, Driver::Book, None).unwrap();
+        assert!(s.remove_bot(PlayerId(9)).is_err(), "nobody is in seat 9");
+        let me = s.join("me").unwrap();
+        assert!(s.remove_bot(me).is_err(), "a person is not a bot");
+        s.remove_bot(bot).unwrap();
+        assert!(!s.is_bot(bot));
+        assert!(!s.players().find(|p| p.id == bot).unwrap().online, "the seat is still taken");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        assert!(lobby.players.iter().all(|p| p.id != bot), "a removed bot is still listed");
+
+        for i in 0..PlayerId::MAX as usize - 2 {
+            s.add_bot(format!("bot {i}"), Level::Easy, Driver::Book, None).unwrap();
+        }
+        let why = s.join("late").unwrap_err();
+        assert!(why.contains("full"), "{why}");
+        let why = s.add_bot("one more", Level::Easy, Driver::Book, None).unwrap_err();
+        assert!(why.contains("full"), "{why}");
+    }
+
+    /// **A bot taken out of a lobby gives its number back.** Nothing is laid
+    /// out before the whistle, so the number is in no cell -- and a seat that
+    /// stayed spent let anybody seated lock a room to newcomers with fifteen
+    /// presses of add-and-remove from one connection.
+    #[test]
+    fn a_bot_removed_while_gathering_gives_its_number_back() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        s.make_teams(2).unwrap();
+        let me = s.join_with("me", None).unwrap();
+        let bot = s.add_bot("bot", Level::Normal, Driver::Book, Some(PlayerId(2))).unwrap();
+        s.remove_bot(bot).unwrap();
+        assert!(!s.is_bot(bot));
+        assert!(s.players().all(|p| p.id != bot), "the row stayed behind");
+        for _ in 0..2 * PlayerId::MAX as usize {
+            let again = s.add_bot("bot", Level::Normal, Driver::Book, Some(PlayerId(2))).unwrap();
+            assert_eq!(again, bot, "the number was not given back");
+            s.remove_bot(again).unwrap();
+        }
+        assert_eq!(s.player_count(), 3, "two sides and me");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        assert_eq!(lobby.players.iter().map(|p| p.id).collect::<Vec<_>>(), [me]);
+        assert_eq!(s.join_with("late", None).unwrap(), bot, "the seat went to nobody");
+    }
+
+    /// **Never before the whistle and never after the end.** A gathering
+    /// match holds still and a decided one has stopped; a bot in either does
+    /// nothing, and neither admits or releases one once it is running.
+    #[test]
+    fn a_bot_does_nothing_before_the_whistle_or_after_the_end() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 2 });
+        s.join_with("me", None).unwrap();
+        let bot = s.add_bot("bot", Level::Hard, Driver::Book, None).unwrap();
+        for _ in 0..20 {
+            let out = s.step();
+            assert!(
+                out.iter().all(|m| !matches!(m, ServerMessage::Step { .. })),
+                "gathering stepped"
+            );
+        }
+        assert!(s.pending.is_empty() && s.announce.is_empty(), "a bot acted before the whistle");
+        assert!(s.add_bot("second", Level::Easy, Driver::Book, None).is_ok(), "gathering admits");
+
+        s.start_match(None).unwrap();
+        s.credit(bot, 500);
+        assert!(s.add_bot("late", Level::Easy, Driver::Book, None).is_err(), "late joining");
+        assert!(s.remove_bot(bot).is_err(), "a seat leaving mid-match is a forfeit");
+        for _ in 0..2 {
+            s.step();
+        }
+        assert!(matches!(s.phase(), Phase::Over { .. }));
+        s.take_announcements();
+        for _ in 0..20 {
+            let out = s.step();
+            assert!(out.iter().all(|m| !matches!(m, ServerMessage::Step { .. })), "over stepped");
+        }
+        assert!(s.announce.is_empty() && s.pending.is_empty(), "a bot acted after the end");
+    }
+
+    /// **An external seat is judged exactly as a client is**: its action goes
+    /// through `act`, is refused off its ground and beyond its purse, and is
+    /// taken otherwise. The server never moves for it.
+    #[test]
+    fn an_external_seat_is_priced_like_anybody() {
+        let mut s = Server::new(World::infinite_empty());
+        let engine = s.add_bot("engine", Level::Normal, Driver::External, None).unwrap();
+        let paint = |cells: Vec<(i32, i32)>, placement| Stamped {
+            tick: 0,
+            player: engine,
+            seat: engine,
+            action: Action::Paint { cells, placement },
+        };
+
+        let far = vec![(9_000, 9_000), (9_000, 9_001), (9_001, 9_000), (9_001, 9_001)];
+        assert_eq!(s.act(paint(far, Placement::Life)), Err("nothing of yours reaches there"));
+
+        // A pane over the whole patch: more than the purse holds.
+        let patch: Vec<(i32, i32)> = (0..crate::net::SPAWN_N)
+            .flat_map(|r| (0..crate::net::SPAWN_N).map(move |c| (r, c)))
+            .collect();
+        assert_eq!(
+            s.act(paint(mine(engine, &patch), Placement::Ice)),
+            Err("you cannot afford that")
+        );
+
+        let purse = s.value_of(engine).unwrap();
+        assert_eq!(
+            s.act(paint(mine(engine, &[(2, 2), (2, 3), (2, 4)]), Placement::Factory)),
+            Ok(())
+        );
+        assert_eq!(s.value_of(engine), Some(purse - 3 * crate::net::FACTORY_COST));
+        assert_eq!(
+            first_act_of(&mut s, engine, 1),
+            Some(engine),
+            "the posted action was not applied"
+        );
+        assert!(first_act_of(&mut s, engine, 40).is_none(), "the server moved for an engine");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        assert!(lobby.players.iter().any(|p| p.id == engine && p.bot), "an engine is a bot seat");
+    }
+
+    /// **From the wire, a bot is a seated player's to add and take away**, and
+    /// nobody else's: a spectator is dropped, a refusal is answered into the
+    /// lobby rather than closing the door, and the next lobby says who is a
+    /// bot.
+    #[test]
+    fn a_seated_player_adds_and_removes_bots_from_the_lobby() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        let me = s.join_with("me", None).unwrap();
+        let add = |team| ClientMessage::AddBot { team, level: Level::Normal };
+
+        assert!(s.handle(None, None, add(None)).is_empty(), "a spectator was answered");
+        assert_eq!(s.player_count(), 1, "a spectator seated a bot");
+
+        assert!(s.handle(Some(me), None, add(None)).is_empty(), "a good press is not answered");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        let bot = lobby.players.iter().find(|p| p.bot).expect("no bot in the lobby");
+        assert!(
+            !lobby.players.iter().find(|p| p.id == me).unwrap().bot,
+            "a person marked as a bot"
+        );
+
+        let refused = s.handle(Some(me), None, add(Some(PlayerId(3))));
+        assert!(matches!(&refused[..], [ServerMessage::NotStarted { .. }]), "{refused:?}");
+
+        let seat = bot.id;
+        s.start_match(None).unwrap();
+        let refused = s.handle(Some(me), None, ClientMessage::RemoveBot { seat });
+        assert!(matches!(&refused[..], [ServerMessage::NotStarted { .. }]), "{refused:?}");
+        assert!(s.is_bot(seat), "a running match let a bot go");
     }
 }

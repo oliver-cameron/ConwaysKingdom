@@ -180,6 +180,9 @@ struct Ui {
     /// frame, and a name half-typed would vanish between two of them — the
     /// same reason `sketch` lives here.
     naming_team: Option<(PlayerId, String)>,
+    /// How hard the next bot added from the lobby plays, held here for the
+    /// reason [`Self::naming_team`] is.
+    bot_level: crate::net::Level,
     /// What is being typed into a stamp's name box, held here for the reason
     /// [`Self::naming_team`] is.
     naming_stamp: Option<(usize, String)>,
@@ -1771,6 +1774,7 @@ impl App for GameApp {
                 screen,
                 sketch: stamp::Sketch::default(),
                 naming_team: None,
+                bot_level: crate::net::Level::default(),
                 naming_stamp: None,
                 editing_stamp: None,
                 picking_stamp: false,
@@ -2213,6 +2217,7 @@ impl App for GameApp {
                                             ui.refused_start.as_deref(),
                                         ),
                                         &mut ui.naming_team,
+                                        &mut ui.bot_level,
                                     )
                                 },
                             );
@@ -2273,6 +2278,7 @@ impl App for GameApp {
                                     ui.refused_start.as_deref(),
                                 ),
                                 &mut ui.naming_team,
+                                &mut ui.bot_level,
                             );
                             if !matches!(shown.did, lobby_view::Did::Nothing) {
                                 in_lobby = shown.did;
@@ -2504,6 +2510,14 @@ impl App for GameApp {
             }
             lobby_view::Did::NameTeam(team, name) => {
                 self.session.tell(ClientMessage::NameTeam { team, name });
+            }
+            // The same again: a bot is a seat, and the next lobby message
+            // lists it, or a `NotStarted` says why not.
+            lobby_view::Did::AddBot { team, level } => {
+                self.session.tell(ClientMessage::AddBot { team, level });
+            }
+            lobby_view::Did::RemoveBot(seat) => {
+                self.session.tell(ClientMessage::RemoveBot { seat });
             }
             // **The panel goes up on the press, not on the answer.** A server
             // that is slow, or one that never replies, would otherwise be a

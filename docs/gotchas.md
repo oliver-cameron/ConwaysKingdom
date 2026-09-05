@@ -381,3 +381,7 @@ an hour into `sim::seed`.
 to. The general shape: **`cell_at` returning `None` is a fact about storage,
 not about the ground**, and a `let Some(..) else { continue }` over it is a
 rule about the edge of the loaded world that nobody wrote down.
+
+## A world with the wrong seed disagrees about ground and never about life
+
+`examples/two` beside a hard bot showed the server correcting both peers at every checkpoint, and every chunk fetched back differed in `owner` and `level` only, never in `alive`. That is the signature of a seed. A cell's fate is decided by the rules and needs no dice, but a territory level adjusting and a birth choosing its parent both roll, so a peer rolling from seed nought against a server rolling from the room's disagrees exactly where ground is still moving — for ever, if a bot keeps it moving. The example built its world with `shape.build()`; the client goes through `net::sane_world`, which sets the seed from the room, and so must anything else that builds a world to stand beside a server's.

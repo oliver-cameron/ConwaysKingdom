@@ -53,6 +53,9 @@ pub const HELP: &[(&str, &str)] = &[
     ("match dispatch", "start the one match that is waiting"),
     ("match delete NAME", "remove it"),
     ("match", "what matches there are, and what they are doing"),
+    ("bot add ROOM [LEVEL] [TEAM]", "a player the server plays: easy|normal|hard"),
+    ("bot remove ROOM SEAT", "take it out again"),
+    ("bot", "what bots there are, and where"),
     ("rooms", "everything, worlds and matches together"),
     ("stop", "save every room and shut down"),
     ("help", "this"),
@@ -128,7 +131,105 @@ pub fn run(line: &str, rooms: &mut Rooms, default_shape: WorldKind) -> Reply {
 
         "match" | "m" => match_command(&rest, rooms),
 
+        "bot" | "b" => bot_command(&rest, rooms),
+
         other => Reply::say(format!("no command \"{other}\"; try help")),
+    }
+}
+
+/// `bot`, and everything under it.
+///
+/// The console is the other seatless way into a room, so a bot is seated from
+/// here the way it is from a lobby — the same [`Server::add_bot`], the same
+/// refusals — with the two things a lobby picks from a list typed instead: a
+/// level, and a team's number.
+///
+/// [`Server::add_bot`]: crate::server::Server::add_bot
+fn bot_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
+    use crate::net::Level;
+    use crate::server::bot::Driver;
+    use crate::sim::PlayerId;
+
+    match rest.first().copied() {
+        None | Some("ls") | Some("list") => {
+            let mut lines = Vec::new();
+            for id in rooms.ids().cloned().collect::<Vec<_>>() {
+                let server = rooms.get(&id).expect("just listed");
+                for (seat, bot) in server.bots() {
+                    let driver = match bot.driver {
+                        Driver::Book => "book",
+                        Driver::External => "api",
+                    };
+                    lines.push(format!(
+                        "  {:<24} seat {:<3} {:<7} {driver}",
+                        rooms.name_of(&id),
+                        seat.0,
+                        bot.level.name()
+                    ));
+                }
+            }
+            if lines.is_empty() {
+                return Reply::say("no bots; try bot add ROOM easy");
+            }
+            Reply::lines(lines)
+        }
+
+        Some("add") => {
+            let (room, level, team) = match &rest[1..] {
+                [room] => (*room, Ok(Level::default()), None),
+                [room, level] => (*room, Level::parse(level), None),
+                [room, level, team] => (*room, Level::parse(level), Some(*team)),
+                _ => return Reply::say("bot add ROOM [LEVEL] [TEAM] -- easy|normal|hard"),
+            };
+            let level = match level {
+                Ok(level) => level,
+                Err(e) => return Reply::say(e),
+            };
+            let team = match team.map(|t| t.parse::<u8>().map(PlayerId)) {
+                None => None,
+                Some(Ok(team)) => Some(team),
+                Some(Err(_)) => {
+                    return Reply::say(format!(
+                        "\"{}\" is not a team's number",
+                        team.unwrap_or_default()
+                    ))
+                }
+            };
+            let id = match rooms.resolve(Some(room)) {
+                Ok(id) => id,
+                Err(e) => return Reply::say(e),
+            };
+            let server = rooms.get_mut(&id).expect("resolve only returns rooms that are here");
+            match server.add_bot(format!("{} bot", level.name()), level, Driver::Book, team) {
+                Ok(seat) => Reply::say(format!(
+                    "seat {} in \"{}\" is a {} bot",
+                    seat.0,
+                    rooms.name_of(&id),
+                    level.name()
+                )),
+                Err(e) => Reply::say(e),
+            }
+        }
+
+        Some("remove" | "rm") => {
+            let [room, seat] = rest[1..] else {
+                return Reply::say("bot remove ROOM SEAT");
+            };
+            let Ok(seat) = seat.parse::<u8>().map(PlayerId) else {
+                return Reply::say(format!("\"{seat}\" is not a seat's number"));
+            };
+            let id = match rooms.resolve(Some(room)) {
+                Ok(id) => id,
+                Err(e) => return Reply::say(e),
+            };
+            let server = rooms.get_mut(&id).expect("resolve only returns rooms that are here");
+            match server.remove_bot(seat) {
+                Ok(()) => Reply::say(format!("seat {} left \"{}\"", seat.0, rooms.name_of(&id))),
+                Err(e) => Reply::say(e),
+            }
+        }
+
+        Some(other) => Reply::say(format!("no bot command \"{other}\"; try help")),
     }
 }
 
@@ -495,7 +596,7 @@ mod tests {
         // one command. Deduplicated rather than listed once, because the
         // subcommands are what somebody reading help needs to see.
         listed.dedup();
-        assert_eq!(listed, ["world", "match", "rooms", "stop", "help"]);
+        assert_eq!(listed, ["world", "match", "bot", "rooms", "stop", "help"]);
         for word in &listed {
             let reply = run(word, &mut rooms, WorldKind::Infinite);
             assert!(
@@ -566,6 +667,45 @@ mod tests {
         // And the name is the one you join by and the one `start` takes.
         assert!(rooms.get(&"arena".into()).is_some());
         assert!(out("match start arena", &mut rooms).contains("running"));
+    }
+
+    /// The whole `bot` vocabulary, as somebody would type it: seated with a
+    /// level and a side, listed, refused where a lobby would refuse, and
+    /// taken out again.
+    #[test]
+    fn a_bot_is_seated_listed_and_removed_from_the_console() {
+        let mut rooms = rooms();
+        assert!(out("bot", &mut rooms).contains("no bots"));
+
+        let added = out("bot add main hard", &mut rooms);
+        assert!(added.contains("seat 1") && added.contains("hard"), "{added}");
+        assert!(out("bot add main", &mut rooms).contains("normal"), "the level has a default");
+        assert!(out("bot add main brutal", &mut rooms).contains("no level"));
+        assert!(out("bot add nowhere", &mut rooms).contains("no room"));
+        assert!(out("bot add main easy three", &mut rooms).contains("team's number"));
+        assert!(out("bot add main easy 3", &mut rooms).contains("no teams"), "a world has none");
+
+        let listing = out("bot", &mut rooms);
+        assert!(listing.contains("main") && listing.contains("hard") && listing.contains("book"));
+        assert_eq!(listing.lines().count(), 2, "{listing}");
+
+        out("match new dawn infinite timer 100", &mut rooms);
+        rooms.get_mut(&"dawn".into()).unwrap().make_teams(2).unwrap();
+        let sided = out("bot add dawn normal 2", &mut rooms);
+        assert!(sided.contains("seat 3"), "sides took the first two numbers: {sided}");
+        assert_eq!(rooms.get(&"dawn".into()).unwrap().plays_as(crate::sim::PlayerId(3)).0, 2);
+
+        assert!(out("bot add dawn easy 1", &mut rooms).contains("seat 4"), "the other side");
+
+        assert!(out("bot remove main 9", &mut rooms).contains("not a bot"));
+        assert!(out("bot remove main one", &mut rooms).contains("seat's number"));
+        assert!(out("bot remove main 1", &mut rooms).contains("left"));
+        assert_eq!(out("bot", &mut rooms).lines().count(), 3, "one in main and two in dawn");
+
+        // Started, a match keeps its bots: a seat leaving mid-match is a forfeit.
+        assert!(out("match start dawn", &mut rooms).contains("running"));
+        assert!(out("bot remove dawn 3", &mut rooms).contains("settled"));
+        assert!(out("bot add dawn", &mut rooms).contains("under way"));
     }
 
     /// Two waiting matches make `dispatch` ambiguous, and starting the wrong

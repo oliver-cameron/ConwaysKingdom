@@ -173,6 +173,63 @@ leave: PlayerId(1) "late" from room lobby after 10 ticks (0 still on)
 
 The subscribe line is the useful one when a client sees nothing: it says whether the viewport is even pointed somewhere the server has data.
 
+## Bots
+
+A bot is a seat the server plays. `server::bot` is the whole of it, and it is smaller than it sounds because **nothing about the protocol changes for its play**: the server makes up its mind for it in `Server::step`, wraps the answer in a `Stamped` and pushes it through the same `act` a wire action goes through — the cells cap, the phase, whose influence reaches every square, the price against the purse — so it goes out in the `Step` for that generation from a seat like anybody's, and it can do nothing a client could not. The one thing the wire learns is `Seat::bot`, so a lobby can say which rows are bots.
+
+It is a `Player` row like any other, handed out by `join_with`, so a room full of bots refuses a person with the words a sixteenth person gets, and a bot on a side plays as the side's number — one purse, one patch, one colour — because a team is a player. Bot-ness lives in `Server.bots` and not on `sim::Player`, which is saved: a match never is, so after a restart a bot's seat is an offline player like any human who left, holding its ground.
+
+**Its play is a book, not a search.** `examples/balance` measured what the economy rewards — a blinker pays, a glider bleeds, sprawl bleeds badly — so a competent bot is a small book of shapes and a rule about where to put them. Easy lays oscillators of factories inside its own ground, every sixteen generations. Normal also lays a still life on the frontier, where somebody else's ground is near, every eight. Hard also walls a factory it laid with a ring of ice, every four. Where to build is **sampled round its home rather than scanned**, half the samples on its own patch and half five patches out, so an act costs the same on a full torus as on an empty plane. Half at home because a fresh seat owns nothing else, and a window five patches wide would miss the patch forty times in fifty; five patches because that is its own ground, the no-man's-land round it and the near edge of a neighbour's, which is where a frontier is. Each candidate is tested cell by cell with `may_place_under` and priced with `price_under`, which is exactly how the server will judge it. Its dice are the room's seed, the seat and the tick through `sim::mix`, and never touch the streams a cell rolls — a choice is made once, on the server, and reaches every peer as an action at a stated tick, so determinism was never in question.
+
+A bot is added and removed while the room admits anybody — from the lobby by any seated player, from the console with `bot add ROOM [LEVEL] [TEAM]` and `bot remove ROOM SEAT`, and from the API. Once a match is running neither happens: a seat arriving is the late joining `Join` refuses, and a seat leaving is a forfeit. A bot taken out of a lobby gives its number back, since nothing is laid out before the whistle and so nothing carries it; one taken out of a world leaves its seat as a person who walked away does, because its ground carries its number and the next player to arrive would inherit it — so in a world a bot's seat is spent like anybody's, and fifteen of them is a full room. Deleting a room does not count a bot as somebody standing in it.
+
+A bot that *chooses* — tries a placement on a copy of the world and scores what happened — is the second version, and `World: Clone` is there for it; see [planned.md](planned.md#bots).
+
+## The API
+
+An outside program plays through HTTP, and the one thing it needs is a token:
+
+```
+cargo run --no-default-features --features server --bin server -- --api-token hunter2
+```
+
+**Without `--api-token` the routes are not mounted**, and the startup log says so; with it, the log names `/api`. Every request carries `Authorization: Bearer TOKEN`, compared in constant time, and anything else is a 401. That is the whole of the gate — there is no second rate limit and no per-route permission, so whoever holds the token is the operator.
+
+`server::api` is the surface and `api::http` is the transport. `api::handle` takes a `Request` and the `Rooms` and returns a status and a JSON body, the way `console::run` takes a line, so every route is tested with no socket near it; only the routing needs axum, and it does one thing — build the request, hand it across to the simulation task on a oneshot, and turn what comes back into a response. Everything that touches a world still happens on the one task allowed to.
+
+| method and path | what |
+|---|---|
+| `GET /api/rooms` | the listing the menu gets |
+| `GET /api/rooms/{room}` | phase, tick, rules, victory, shape, every seat, the teams, the standings |
+| `GET /api/rooms/{room}/standings` | who holds how much, most first |
+| `GET /api/rooms/{room}/bots` | every bot here |
+| `POST /api/rooms/{room}/bots` `{name?, level?, team?}` | seat a bot the server plays; answers `{seat}` |
+| `DELETE /api/rooms/{room}/bots/{seat}` | take it out again |
+| `POST /api/rooms/{room}/seats` `{name, team?}` | a seat **you** will play; answers `{seat}` |
+| `GET /api/rooms/{room}/seats/{seat}` | its purse, what number it plays as, where its ground is, who is driving it |
+| `POST /api/rooms/{room}/seats/{seat}/act` `{action}` | an action, as `net::Action` in JSON; answers `{accepted, reason?, tick}` |
+| `DELETE /api/rooms/{room}/seats/{seat}` | leave |
+| `GET /api/rooms/{room}/chunks/{row}/{col}` | one chunk, as rows of `{player, kind, alive, ice, age}` |
+| `GET /api/rooms/{room}/cells?r0=&c0=&r1=&c1=` | a window of cells, both corners inclusive |
+
+`{room}` is resolved the way a `Join` resolves it — id, name or code — and refused in the same words. **A seat the API sits in is a bot whose driver is the API**: one seat type, one way out, one flag in the lobby. An action it posts goes through `act` the moment it arrives, so it is priced against the world as it stands and refused in the server's own words, and the reply says which; it is applied on the next step, where the cells are. An engine that wants to know where it is reads `spawn` off its seat, for the reason a `Welcome` carries one.
+
+Refusals are `{"error": "..."}`: 401 with no token, 404 for a room that is not here or a seat nobody is in, 400 for a body or a path that does not parse, 409 for what is here and will not take it — a room that is full or a match already under way, a seat that is a person's, a seat the server plays — and 413 for a window bigger than sixteen chunks' worth, which is the cap because this is JSON: a cell is an object of five fields here, so the socket's cap on chunks would be a gigabyte. An engine polls the region it plays in.
+
+```
+A='Authorization: Bearer hunter2'; J='Content-Type: application/json'; U=http://localhost:8080/api
+
+curl -H "$A" $U/rooms
+curl -H "$A" -H "$J" -X POST -d '{"level":"hard"}' $U/rooms/main/bots            # {"seat":1}
+curl -H "$A" -H "$J" -X POST -d '{"name":"engine"}' $U/rooms/main/seats          # {"seat":2}
+curl -H "$A" $U/rooms/main/seats/2                                               # ... "spawn":[0,60] ...
+curl -H "$A" -H "$J" -X POST $U/rooms/main/seats/2/act \
+     -d '{"action":{"Paint":{"cells":[[2,62],[2,63],[2,64]],"placement":"Factory"}}}'
+                                                                                 # {"accepted":true,"tick":18}
+curl -H "$A" "$U/rooms/main/cells?r0=0&c0=60&r1=11&c1=71"
+curl -H "$A" -X DELETE $U/rooms/main/seats/2
+```
+
 ## The console
 
 The server reads its own terminal. `help` lists what it takes:
@@ -188,6 +245,9 @@ The server reads its own terminal. `help` lists what it takes:
   match dispatch                           start the one match that is waiting
   match delete NAME                        remove it
   match                                    what matches there are, and what they are doing
+  bot add ROOM [LEVEL] [TEAM]              a player the server plays: easy|normal|hard
+  bot remove ROOM SEAT                     take it out again
+  bot                                      what bots there are, and where
   rooms                                    everything, worlds and matches together
   stop                                     save every room and shut down
   help                                     this

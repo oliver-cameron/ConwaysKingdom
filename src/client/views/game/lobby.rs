@@ -15,7 +15,7 @@ use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
 use crate::client::views::words::w;
-use crate::net::{MatchPhase, Team, Victory};
+use crate::net::{Level, MatchPhase, Team, Victory};
 use crate::sim::PlayerId;
 
 /// **What colour a seat draws in: its team's, or its own.**
@@ -51,6 +51,12 @@ pub enum Did {
     JoinTeam(PlayerId),
     /// Call this team something.
     NameTeam(PlayerId, String),
+    /// Seat a player the server plays, on this team or wherever the lobby
+    /// would put anybody. Any seated player may; the seat count already
+    /// shown counts it, because a bot takes one of the fifteen.
+    AddBot { team: Option<PlayerId>, level: Level },
+    /// Take one out again.
+    RemoveBot(PlayerId),
 }
 
 /// Everything the lobby draws from.
@@ -63,9 +69,10 @@ pub struct Look<'a> {
     /// place as. Everything in here is compared against seats: whose match it
     /// is, which row is yours, which side you are on.
     pub me: PlayerId,
-    /// Why the last whistle was refused, if it was. Shown beside the button
-    /// that produced it — a refusal in the HUD's corner is a refusal nobody
-    /// reads, and a button that appears to do nothing reads as a broken lobby.
+    /// Why the last press in this lobby was refused, if it was — the whistle,
+    /// a side, a bot. Shown in the lobby that produced it, to whoever pressed:
+    /// a refusal in the HUD's corner is a refusal nobody reads, and a button
+    /// that appears to do nothing reads as a broken lobby.
     pub refused: Option<&'a str>,
     pub phase: &'a MatchPhase,
     pub victory: Option<Victory>,
@@ -112,6 +119,9 @@ pub fn show(
     // client rather than here, because this panel is rebuilt every frame and
     // a name half-typed would vanish between two of them.
     naming: &mut Option<(PlayerId, String)>,
+    // How hard the next bot plays: one picker for the whole lobby, held by the
+    // client for the same reason.
+    bot_level: &mut Level,
 ) -> crate::client::views::Shown<Did> {
     let mut did = Did::Nothing;
     // An open room is not a match, and a running one is a game — neither wants
@@ -207,7 +217,14 @@ pub fn show(
                                         }
                                     });
                                 }
-                            } else if let Some(what) = team_picker(ui, theme, look, naming) {
+                                // One for the room, since there is no side
+                                // to put it on.
+                                if let Some(what) = add_bot(ui, theme, None, bot_level) {
+                                    did = what;
+                                }
+                            } else if let Some(what) =
+                                team_picker(ui, theme, look, naming, bot_level)
+                            {
                                 did = what;
                             }
                             ui.add_space(m.item_spacing);
@@ -229,17 +246,6 @@ pub fn show(
                                 {
                                     did = Did::Start;
                                 }
-                                match look.refused {
-                                    Some(why) => {
-                                        ui.colored_label(
-                                            p.warn,
-                                            egui::RichText::new(why).size(m.text_small),
-                                        );
-                                    }
-                                    None => {
-                                        ui.small(w().menu.watch.start_note);
-                                    }
-                                }
                             } else {
                                 // Said rather than left blank: a lobby that
                                 // does nothing and explains nothing is
@@ -248,6 +254,24 @@ pub fn show(
                                     Some(_) => w().menu.watch.not_yours,
                                     None => w().menu.watch.at_console,
                                 });
+                            }
+                            // **For whoever pressed, owner or not.** A side or
+                            // a bot is refused into the lobby the way the
+                            // whistle is, and anybody seated may press those;
+                            // drawn under the owner's button only, a full
+                            // room was a press that did nothing for everybody
+                            // else.
+                            match look.refused {
+                                Some(why) => {
+                                    ui.colored_label(
+                                        p.warn,
+                                        egui::RichText::new(why).size(m.text_small),
+                                    );
+                                }
+                                None if mine => {
+                                    ui.small(w().menu.watch.start_note);
+                                }
+                                None => {}
                             }
                         }
                     }
@@ -285,6 +309,7 @@ fn team_picker(
     theme: &Theme,
     look: &Look<'_>,
     naming: &mut Option<(PlayerId, String)>,
+    bot_level: &mut Level,
 ) -> Option<Did> {
     let p = theme.palette;
     let m = theme.metrics;
@@ -377,6 +402,11 @@ fn team_picker(
                 {
                     did = Some(Did::JoinTeam(if ours { me } else { team.id }));
                 }
+                // **A bot per side is how sides are balanced**, which is the
+                // reason the control is on the side rather than on the room.
+                if let Some(what) = add_bot(ui, theme, Some(team.id), bot_level) {
+                    did = Some(what);
+                }
             });
         ui.add_space(m.item_spacing);
     }
@@ -422,9 +452,46 @@ fn who_row(ui: &mut egui::Ui, seat: &crate::net::Seat, me: PlayerId) -> Option<D
         crate::client::views::social::face::show(ui.painter(), rect, who);
     }
     let pressed = ui.add(egui::Button::new(label).frame(false)).clicked();
+    // A seat the server plays says so, and anybody seated may take it away:
+    // it was added from this lobby by somebody, and a bot nobody can remove
+    // is a seat nobody can have back.
+    if seat.bot {
+        ui.weak(w().lobby.bot);
+        if ui.small_button(w().lobby.remove_bot).clicked() {
+            return Some(Did::RemoveBot(seat.id));
+        }
+    }
     // Nobody to look up: a client with no key is somebody this server will not
     // remember, so there is nothing behind the name to show.
     seat.who.clone().filter(|_| pressed).map(Did::Look)
+}
+
+/// The control that seats a bot: how hard it plays, and a button.
+///
+/// The level is one picker for the whole lobby rather than one per side,
+/// because it is a preference and not a fact about a side, and a row of three
+/// words under every team is three words too many.
+fn add_bot(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    team: Option<PlayerId>,
+    level: &mut Level,
+) -> Option<Did> {
+    let m = theme.metrics;
+    let mut did = None;
+    ui.horizontal(|ui| {
+        for (i, each) in Level::ALL.into_iter().enumerate() {
+            ui.selectable_value(
+                level,
+                each,
+                egui::RichText::new(w().lobby.levels[i]).size(m.text_small),
+            );
+        }
+        if ui.small_button(w().lobby.add_bot).clicked() {
+            did = Some(Did::AddBot { team, level: *level });
+        }
+    });
+    did
 }
 
 /// The same colour the shader gives this player's cells, so the lobby and the

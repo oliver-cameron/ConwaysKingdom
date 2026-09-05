@@ -12,6 +12,8 @@
 //!     --max-rooms N  how many rooms players may make (default 32)
 //!     --hide NAME    a screen this server asks clients not to offer;
 //!                    repeatable. Today: howto
+//!     --api-token TOKEN  mount the HTTP API at /api, for whoever sends this
+//!                    as a bearer token       (default: not mounted)
 //!
 //! With `--serve .` the browser client and the socket come from one origin, so
 //! no separate static-file server is needed.
@@ -56,6 +58,7 @@ fn main() -> std::io::Result<()> {
     let mut shape = conwayskingdom::sim::WorldKind::Infinite;
     let mut max_rooms = conwayskingdom::server::rooms::MAX_MADE_ROOMS;
     let mut hidden = conwayskingdom::net::Hidden::default();
+    let mut api_token: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -97,6 +100,16 @@ fn main() -> std::io::Result<()> {
                 hidden.hide(&what).unwrap_or_else(|e| panic!("--hide: {e}"));
             }
             "--fresh" => fresh = true,
+            // The API is absent without this, not open: a lobby anybody who
+            // can reach the port may seat bots in is not something a server
+            // should have by default.
+            "--api-token" => {
+                let token = args.next().expect("--api-token needs a token");
+                if token.trim().is_empty() {
+                    panic!("--api-token: an empty token is no token");
+                }
+                api_token = Some(token);
+            }
             // Rooms made by clients only. A `--room` on this line, or a name
             // typed at the console, is a decision somebody made and is not
             // counted against it.
@@ -227,6 +240,7 @@ fn main() -> std::io::Result<()> {
             // What `new NAME` at the console makes when it is not given a
             // size, so typing it means what --room would have meant.
             shape,
+            api_token,
         },
     ))
 }
