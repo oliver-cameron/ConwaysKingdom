@@ -2046,6 +2046,12 @@ impl Rooms {
     /// key.
     fn close(&mut self, caller: &Caller, room: &RoomId) -> Result<RoomId, String> {
         let id = self.resolve(Some(room.as_str()))?;
+        // Told what a stranger is told at the door, and no more -- see
+        // `may_enter` -- or a `Close` would say which ids name a live room
+        // after `Join` and `Watch` were made not to.
+        if !self.may_enter(&id, caller.connection, caller.person.as_ref(), Some(room.as_str())) {
+            return Err(self.not_here(room.as_str()));
+        }
         match self.owner.get(&id) {
             Some(Owner::Person(who)) if caller.person.as_ref() == Some(who) => {}
             Some(Owner::Seat(seat)) if caller.seat.as_ref() == Some(&(id.clone(), *seat)) => {}
@@ -2435,11 +2441,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A `Join` carries its own room, so it needs no seat; anything else from
-    /// a connection that has not joined names no world and is dropped rather
+    /// A `Join` carries its own room and a `Hello` names no room at all, so
+    /// neither needs a seat and both are answered; anything else from a
+    /// connection that has not joined names no world and is dropped rather
     /// than answered out of the default room.
     #[test]
-    fn a_message_from_nobody_is_answered_only_if_it_is_a_join() {
+    fn a_message_from_nobody_is_answered_only_if_it_names_no_world() {
         let mut rooms =
             Rooms::open(temp_dir("route"), &["hall".into()], WorldKind::Infinite, true).unwrap();
 
@@ -2918,6 +2925,27 @@ mod tests {
         assert_eq!(rooms.made_count().0, 0, "and it still counts against the cap");
     }
 
+    /// **A `Close` says no more about an unlisted room than a `Join` does.** A
+    /// stranger closing one by its id is told what a mistyped name is told,
+    /// word for word, so a forwarded id cannot be checked against the door.
+    #[test]
+    fn closing_a_room_you_cannot_see_is_told_it_is_not_here() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (_, a) = met(&mut rooms, 1);
+        let (_, b) = met(&mut rooms, 2);
+        let made = private_room(&mut rooms, &Caller::known(1, a));
+        let close = |room: &str| ClientMessage::Close { room: RoomId::from(room) };
+        let why = |out: Vec<ServerMessage>| match &out[..] {
+            [ServerMessage::Closed(Err(why))] => why.clone(),
+            other => panic!("{other:?}"),
+        };
+        let real = why(rooms.handle(&Caller::known(2, b.clone()), close(made.id.as_str())));
+        let nothing = why(rooms.handle(&Caller::known(2, b), close("r-zzzzzz")));
+        assert_eq!(real.replace(made.id.as_str(), "r-zzzzzz"), nothing, "the refusals differ");
+        assert!(!real.contains(made.code.as_deref().unwrap()), "the refusal leaked the code");
+        assert!(rooms.get(&made.id).is_some());
+    }
+
     /// Somebody met by hello, with the secret still in hand for a join.
     fn met(rooms: &mut Rooms, n: u64) -> (Secret, PersonId) {
         let key = Secret::new().unwrap();
@@ -3217,9 +3245,13 @@ mod tests {
             "a member refused: {out:?}"
         );
 
-        // Leaving loses the worlds, which a code could never express.
+        // Leaving loses the worlds, which a code could never express -- from
+        // the next join. The seat they hold lasts until they leave the room:
+        // nothing reaches a seat from outside its room, so unseating them
+        // would be a `Rejected` from nowhere.
         let out = rooms.handle(&them, ClientMessage::LeaveParty { party: party.clone() });
         assert!(parties_in(&out).is_empty(), "left and still listed");
+        assert!(rooms.is_online(&b), "leaving the party pulled the chair");
         let seat = (made.id.clone(), PlayerId(2));
         rooms.handle(&Caller::sitting(2, seat), ClientMessage::Leave);
         let out = rooms.handle(&them, join_as(&kb, made.id.as_str()));
@@ -3228,12 +3260,19 @@ mod tests {
             "the door stayed open: {out:?}"
         );
 
-        // The last one out takes the party; its world stays its maker's.
+        // The last one out takes the party; its world stays its maker's, and
+        // the maker's door with it -- ownership outranks membership.
         let out = rooms.handle(&me, ClientMessage::LeaveParty { party });
         assert!(parties_in(&out).is_empty());
         assert!(rooms.parties.is_empty(), "an empty party stayed");
         assert!(rooms.get(&made.id).is_some(), "the world went with the party");
         assert_eq!(rooms.owned_by(&made.id), Some(&a));
+        rooms.handle(&inside, ClientMessage::Leave);
+        let out = rooms.handle(&me, join_as(&ka, made.id.as_str()));
+        assert!(
+            matches!(&out[..], [ServerMessage::Welcome { .. }, ..]),
+            "the maker lost their own door: {out:?}"
+        );
     }
 
     /// **A party survives a restart** with its people, its standing
