@@ -245,9 +245,6 @@ fn play(args: &Args, game: usize) -> Game {
         file
     });
 
-    // Asked of a seat rather than worked out, because how often a bot acts is
-    // the bot's own first dial.
-    let cadence = server.bot(seats[0]).expect("just seated").cadence();
     let (mut acting, mut quiet) = ((Duration::ZERO, 0u32), (Duration::ZERO, 0u32));
     let mut ticks = 0;
     for tick in 0..args.generations {
@@ -264,13 +261,20 @@ fn play(args: &Args, game: usize) -> Game {
                 );
             }
         }
+        // **Watched rather than worked out from a cadence.** When a bot is due
+        // is the bot's own business, and a harness that assumes it goes
+        // silently wrong the moment that changes -- an act timed against a
+        // generation nobody acted on. A step moves the `next_at` of whichever
+        // were due on it, which is the fact rather than an inference from one.
+        let due = seats.map(|seat| server.bot(seat).map(|bot| bot.next_at));
         let started = Instant::now();
         server.step();
         let took = started.elapsed();
-        // A bot's `next_at` starts at the tick it was seated on and advances
-        // by its cadence, and both seats share one, so these are exactly the
-        // generations an act was made on.
-        let landed = if tick % cadence == 0 { &mut acting } else { &mut quiet };
+        let acted = seats
+            .iter()
+            .zip(due)
+            .any(|(&seat, was)| server.bot(seat).map(|bot| bot.next_at) != was);
+        let landed = if acted { &mut acting } else { &mut quiet };
         (landed.0, landed.1) = (landed.0 + took, landed.1 + 1);
         ticks = tick + 1;
         if let Some(target) = args.territory {
