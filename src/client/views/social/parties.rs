@@ -33,17 +33,20 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
     ui.colored_label(p.text_dim, w().menu.parties.note);
     ui.add_space(m.item_spacing);
 
-    // **The one accent on the page is making one**, which is the one thing
-    // you would do next on a page with nothing in it — and on one with
-    // something in it, joining a world is inside the selection, in a
-    // different place.
+    // **One accent to the column, on whatever the next step is.** With the
+    // listing back and nothing in it, that step is making a party; with a
+    // party to pick it is the Join inside the selection, so Make takes the
+    // surface fill and the column keeps the one accent the room list keeps.
+    // Before the listing arrives there is nothing yet to point at.
+    let nothing_yet = menu.parties.as_ref().is_some_and(Vec::is_empty);
+    let (fill, ink) = if nothing_yet { (p.accent, p.ground) } else { (p.surface, p.text) };
     ui.horizontal(|ui| {
         let go = ui.add_sized(
             [m.action_height * 1.4, m.button_height],
             egui::Button::new(
-                egui::RichText::new(w().menu.parties.make).size(m.text_small).color(p.ground),
+                egui::RichText::new(w().menu.parties.make).size(m.text_small).color(ink),
             )
-            .fill(p.accent),
+            .fill(fill),
         );
         let field = ui.add_sized(
             [ui.available_width(), m.button_height],
@@ -68,7 +71,7 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu) -> Chose {
             let parties = parties.clone();
             for party in &parties {
                 let selected = menu.selected_party.as_ref() == Some(&party.id);
-                match row(ui, theme, party, selected, &menu.name) {
+                match row(ui, theme, party, selected) {
                     Picked::Nothing => {}
                     Picked::Select => {
                         menu.selected_party = if selected { None } else { Some(party.id.clone()) };
@@ -103,7 +106,7 @@ enum Picked {
 /// selected — its people, its worlds and what can be done with it. The room
 /// list's shape, for the reason the room list has it: a row of controls on
 /// every entry is a list twice as busy to read.
-fn row(ui: &mut egui::Ui, theme: &Theme, party: &PartyInfo, selected: bool, me: &str) -> Picked {
+fn row(ui: &mut egui::Ui, theme: &Theme, party: &PartyInfo, selected: bool) -> Picked {
     let (m, p) = (theme.metrics, theme.palette);
     let mut picked = Picked::Nothing;
 
@@ -145,8 +148,12 @@ fn row(ui: &mut egui::Ui, theme: &Theme, party: &PartyInfo, selected: bool, me: 
                     let (swatch, _) =
                         ui.allocate_exact_size(egui::vec2(6.0, m.text_body), egui::Sense::hover());
                     ui.painter().rect_filled(swatch, 1.0, egui::Color32::from_rgb(r, g, b));
-                    let name = if member.name.is_empty() { me } else { member.name.as_str() };
-                    ui.label(egui::RichText::new(name).size(m.text_body).color(p.text));
+                    // The name as it was given, and nothing where there is
+                    // none: the fingerprint beside it is what tells two
+                    // people apart, here as on the people page. Standing the
+                    // reader's own name in for a missing one made every
+                    // nameless member read as the reader.
+                    ui.label(egui::RichText::new(&member.name).size(m.text_body).color(p.text));
                     ui.label(
                         egui::RichText::new(member.who.short())
                             .size(m.text_small)
