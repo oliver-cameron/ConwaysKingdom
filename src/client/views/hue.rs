@@ -51,56 +51,41 @@ pub const HELD_FLOOR: f32 = 0.85;
 /// Player zero is nobody, and nobody's ground is grey: no chroma, and the
 /// swatch lightness, which leaves the sheet's own lightness alone.
 ///
-/// Chosen by pushing fifteen colours apart in OKLCH under a distance that
-/// **weights hue above lightness and chroma** — see [`apart`], which is the
-/// same arithmetic the test holds the table to. The old table was scored with
-/// hue, lightness and chroma counting equally, and it put two olives four
-/// degrees of hue apart and called them far apart because one was darker;
-/// they read as one colour on a board. Under a hue-first reading its worst
-/// pair scored 0.097 and this one scores 0.19.
+/// **Fifteen hues, evenly spaced, and three lightnesses under them.**
 ///
-/// What comes out is two tiers — half the players bright and half dark — with
-/// the hues spread inside each, so the pairs that share a hue family are the
-/// ones a lightness apart. Four decimals because three put some swatches a
-/// byte or two off the sRGB the table was chosen as.
+/// Hue is what says *which* colour something is, so no two players are allowed
+/// to share one: the hues sit twenty-four degrees apart, which is the circle
+/// divided by fifteen and the most any fifteen can have. Two earlier tables
+/// were chosen by pushing colours apart under a distance instead, and both
+/// bought their score by putting near-hue pairs at different lightnesses —
+/// two olives four degrees apart, called distinct because one was darker. On
+/// a board that is one player's ground in two lights.
+///
+/// Lightness cycles on three against fifteen hues, so it divides exactly and
+/// no neighbour on the circle shares a tier. It is there to separate colours
+/// that are already a full hue apart, never to rescue two that are not.
+///
+/// Chroma is as much as the gamut allows up to a cap, which is why the pale
+/// rows carry less of it: at this lightness there is less to be had. Four
+/// decimals because three put some swatches a byte or two off.
 pub const PALETTE: [(f32, f32, f32); PlayerId::COUNT] = [
     (L_SWATCH, 0.0, 0.0),
-    (0.8000, 0.1030, 280.90 / 360.0),
-    (0.8000, 0.1460, 178.80 / 360.0),
-    (0.4500, 0.1840, 28.30 / 360.0),
-    (0.4500, 0.1290, 133.90 / 360.0),
-    (0.8000, 0.2460, 145.80 / 360.0),
-    (0.4500, 0.2370, 302.80 / 360.0),
-    (0.8000, 0.1380, 58.70 / 360.0),
-    (0.8000, 0.1720, 107.10 / 360.0),
-    (0.4500, 0.1910, 345.20 / 360.0),
-    (0.4500, 0.0770, 202.10 / 360.0),
-    (0.4500, 0.0940, 77.90 / 360.0),
-    (0.8000, 0.1190, 7.90 / 360.0),
-    (0.8000, 0.1310, 227.30 / 360.0),
-    (0.8000, 0.1860, 324.90 / 360.0),
-    (0.4500, 0.1770, 259.30 / 360.0),
+    (0.8200, 0.1008, 23.50 / 360.0),
+    (0.6800, 0.1500, 47.50 / 360.0),
+    (0.5500, 0.1182, 71.50 / 360.0),
+    (0.8200, 0.1500, 95.50 / 360.0),
+    (0.6800, 0.1500, 119.50 / 360.0),
+    (0.5500, 0.1500, 143.50 / 360.0),
+    (0.8200, 0.1500, 167.50 / 360.0),
+    (0.6800, 0.1169, 191.50 / 360.0),
+    (0.5500, 0.0975, 215.50 / 360.0),
+    (0.8200, 0.1012, 239.50 / 360.0),
+    (0.6800, 0.1500, 263.50 / 360.0),
+    (0.5500, 0.1500, 287.50 / 360.0),
+    (0.8200, 0.1244, 311.50 / 360.0),
+    (0.6800, 0.1500, 335.50 / 360.0),
+    (0.5500, 0.1500, 359.50 / 360.0),
 ];
-
-/// How far apart two swatches are, **hue counted first**.
-///
-/// Lightness and chroma are halved and the hue arc is doubled, against a plain
-/// OKLab distance which counts all three alike. That distance forgave two
-/// olives four degrees of hue apart because one was darker, and on a board
-/// they read as one player's ground in two lights. Hue is what says *which*
-/// colour something is; lightness and chroma say which of it.
-///
-/// The hue term is the arc scaled by chroma, so two greys are not far apart
-/// for pointing in different directions — a hue nothing is saturated enough
-/// to show is not a difference anybody sees.
-pub fn apart(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
-    const TAU: f32 = std::f32::consts::TAU;
-    let ((l1, c1, h1), (l2, c2, h2)) = (a, b);
-    let turn = (h1 - h2).abs();
-    let arc = turn.min(1.0 - turn) * TAU;
-    let hue = 2.0 * (c1 * c2).max(0.0).sqrt() * (arc / 2.0).sin();
-    (0.25 * (l1 - l2).powi(2) + 0.25 * (c1 - c2).powi(2) + 4.0 * hue * hue).sqrt()
-}
 
 /// Every player's hue, as a turn in `0..1`, indexed by [`PlayerId`].
 ///
@@ -238,57 +223,66 @@ mod tests {
         [l, c * h.cos(), c * h.sin()]
     }
 
-    /// **How far apart the closest pair is, as a number.**
+    /// **No two players are near each other in hue**, which is the one thing
+    /// the table guarantees by construction rather than by arithmetic.
     ///
-    /// Distinctness is the whole job of this module and "they look different"
-    /// is not a thing a test can check, so this measures it, with [`apart`] —
-    /// the same hue-first reading the table was chosen under. A floor rather
-    /// than an equality so a row can be retouched without rewriting it; what
-    /// must not happen is the floor quietly dropping.
+    /// Hue says which colour something is; lightness and chroma say which of
+    /// it. Two tables before this were chosen by maximising a distance, and
+    /// both spent their score the same way — a near-hue pair held apart by a
+    /// lightness, which on a board is one player's ground in two lights. The
+    /// hues are a circle divided by fifteen now, so the floor is what fifteen
+    /// can have and nothing can quietly trade it away.
     #[test]
-    fn the_closest_two_players_are_far_enough_apart() {
+    fn no_two_players_are_near_each_other_in_hue() {
         let mut worst = (f32::MAX, 0, 0);
         for a in 1..PlayerId::COUNT {
             for b in a + 1..PlayerId::COUNT {
-                let gap = apart(PALETTE[a], PALETTE[b]);
-                if gap < worst.0 {
-                    worst = (gap, a, b);
+                let turn = (PALETTE[a].2 - PALETTE[b].2).abs();
+                let degrees = turn.min(1.0 - turn) * 360.0;
+                if degrees < worst.0 {
+                    worst = (degrees, a, b);
                 }
             }
         }
-        // This table gives 0.192; the one it replaced gave 0.097 read this way.
         assert!(
-            worst.0 > 0.18,
-            "players {} and {} are only {:.3} apart, hue counted first",
+            worst.0 > 23.0,
+            "players {} and {} are {:.1} degrees apart, and fifteen hues have 24",
             worst.1,
             worst.2,
             worst.0
         );
     }
 
-    /// **No two players share a hue unless a lightness separates them.**
+    /// **And how far apart the closest pair is once everything counts.**
     ///
-    /// The failure the hue-first reading was adopted for: two olives four
-    /// degrees apart, called far apart because one was darker than the other.
-    /// A hue family may be used twice, but then the two must be a tier apart —
-    /// dark green against bright green reads, dark olive against mid olive
-    /// does not.
+    /// Distinctness is the whole job of this module and "they look different"
+    /// is not a thing a test can check, so this measures it in OKLab, which is
+    /// the space the table is built in. A floor rather than an equality so a
+    /// row can be retouched; what must not happen is the floor quietly
+    /// dropping. It is lower than a table chosen to maximise it, and
+    /// deliberately: what was bought with the difference is the hue floor
+    /// above.
     #[test]
-    fn two_players_of_one_hue_are_a_tier_apart() {
+    fn the_closest_two_players_are_far_enough_apart() {
+        let mut worst = (f32::MAX, 0, 0);
         for a in 1..PlayerId::COUNT {
             for b in a + 1..PlayerId::COUNT {
-                let turn = (PALETTE[a].2 - PALETTE[b].2).abs();
-                let degrees = turn.min(1.0 - turn) * 360.0;
-                if degrees < 25.0 {
-                    let tier = (PALETTE[a].0 - PALETTE[b].0).abs();
-                    assert!(
-                        tier > 0.3,
-                        "players {a} and {b} are {degrees:.0} degrees apart and \
-                         {tier:.2} in lightness, which is two of one colour"
-                    );
+                let (p, q) = (lab(a), lab(b));
+                let gap =
+                    ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
+                if gap < worst.0 {
+                    worst = (gap, a, b);
                 }
             }
         }
+        // The table gives 0.134; the formula this all replaced gave 0.045.
+        assert!(
+            worst.0 > 0.13,
+            "players {} and {} are only {:.3} apart in OKLab",
+            worst.1,
+            worst.2,
+            worst.0
+        );
     }
 
     /// The lobby's swatch is the board's colour: `player_colour` lands on the
@@ -301,21 +295,21 @@ mod tests {
     #[test]
     fn a_swatch_is_the_tables_colour() {
         const SRGB: [(u8, u8, u8); PlayerId::COUNT - 1] = [
-            (0xb1, 0xb6, 0xff),
-            (0x04, 0xdc, 0xbf),
-            (0xa3, 0x00, 0x06),
-            (0x35, 0x64, 0x00),
-            (0x00, 0xe4, 0x4a),
-            (0x72, 0x00, 0xbd),
-            (0xff, 0xa6, 0x5c),
-            (0xcb, 0xc4, 0x02),
-            (0x97, 0x00, 0x6c),
-            (0x00, 0x62, 0x68),
-            (0x72, 0x4d, 0x00),
-            (0xff, 0x9d, 0xaf),
-            (0x4c, 0xce, 0xff),
-            (0xf8, 0x8f, 0xff),
-            (0x00, 0x4d, 0xb5),
+            (0xff, 0xaa, 0xa5),
+            (0xe1, 0x77, 0x3c),
+            (0x9c, 0x64, 0x00),
+            (0xe2, 0xc3, 0x3c),
+            (0x8e, 0xa5, 0x21),
+            (0x2e, 0x87, 0x2f),
+            (0x41, 0xe3, 0xb0),
+            (0x00, 0xaf, 0xaa),
+            (0x00, 0x7f, 0x95),
+            (0x85, 0xcd, 0xff),
+            (0x67, 0x95, 0xf4),
+            (0x6f, 0x5f, 0xc3),
+            (0xdf, 0xad, 0xff),
+            (0xd0, 0x71, 0xbc),
+            (0xb3, 0x44, 0x6f),
         ];
         let within_a_byte = |a: Rgb, b: Rgb| {
             a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1 && a.2.abs_diff(b.2) <= 1
@@ -386,8 +380,15 @@ mod tests {
             darkest.0,
             held / dead
         );
-        // And the floor is doing something: the same player's live cell is under it.
-        assert!(player_lightness(dead, darkest, true) < dead * HELD_FLOOR);
+        // **And nobody needs it.** The darkest row sits at a multiplier above
+        // the floor, so held ground clears it on its own and the floor is a
+        // guard rather than a correction — which is where it should be. It
+        // earned its keep against a table whose darkest rows were much lower;
+        // it is kept because the table may move again.
+        assert!(
+            PALETTE[darkest.0 as usize].0 / L_SWATCH > HELD_FLOOR,
+            "the darkest row now needs the floor, which means it is too dark"
+        );
         // Everywhere below the swatch, for everybody.
         for n in 1..PlayerId::COUNT as u8 {
             for l in (1..64).map(|step| step as f32 / 64.0).filter(|l| *l < L_SWATCH) {

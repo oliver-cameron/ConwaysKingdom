@@ -454,7 +454,7 @@
     <div class="hues" id="hues"></div>
     <div class="pairs" id="pairs"></div>
     <p class="note">
-      <strong>Closest pair is 0.169 apart in OKLab, against a floor of 0.16 the test holds.</strong>
+      <strong>Closest pair is 0.134, against a floor of 0.13 the test holds, and no two hues are nearer than 24 degrees.</strong>
       The measurement is straight-line distance in OKLab, the space the table was optimised in, and
       it is what <code>the_closest_two_players_are_far_enough_apart</code> asserts; the formula this
       replaced measured 0.045 as the shader drew it. The closest pairs are now among the pale tints —
@@ -518,7 +518,7 @@
   }
 
   /* The fifteen, straight out of client::views::hue::PALETTE, as player_colour draws them. */
-  const HUES = ["#b1b6ff","#04dcbf","#a30006","#356400","#00e44a","#7200bd","#ffa65c","#cbc402","#97006c","#006268","#724d00","#ff9daf","#4cceff","#f88fff","#004db5"];
+  const HUES = ["#ffaaa5","#e1773c","#9c6400","#e2c33c","#8ea521","#2e872f","#41e3b0","#00afaa","#007f95","#85cdff","#6795f4","#6f5fc3","#dfadff","#d071bc","#b3446f"];
   const FLAGGED = new Set([5, 15, 4, 13]);
   const hues = document.getElementById("hues");
   HUES.forEach((hex, i) => {
@@ -531,11 +531,11 @@
 
   /* Straight-line distance in OKLab, from the table. */
   const PAIRS = [
-    [7, 11, 0.192, "light orange against a dark brown \u2014 the closest anything gets"],
-    [10, 13, 0.198, "a dark teal against a bright sky"],
-    [2, 10, 0.198, "bright teal against dark teal"],
-    [4, 5, 0.199, "dark green against bright green, twelve degrees of hue apart"],
-    [1, 15, 0.206, "a pale periwinkle against a deep blue"],
+    [1, 13, 0.134, "two pale ones, seventy-two degrees apart in hue"],
+    [10, 13, 0.134, "a pale blue against a pale lilac"],
+    [8, 9, 0.139, "teal against a deeper teal, a tier apart"],
+    [5, 6, 0.144, "olive against green"],
+    [11, 12, 0.144, "a blue against a violet"],
   ];
   const pairs = document.getElementById("pairs");
   PAIRS.forEach(([a, b, d, note]) => {
