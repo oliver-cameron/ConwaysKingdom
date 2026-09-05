@@ -53,7 +53,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("match dispatch", "start the one match that is waiting"),
     ("match delete NAME", "remove it"),
     ("match", "what matches there are, and what they are doing"),
-    ("bot add ROOM [LEVEL] [TEAM]", "a player the server plays: easy|normal|hard"),
+    ("bot add ROOM [LEVEL] [DRIVER] [TEAM]", "easy|normal|hard, from a book|search"),
     ("bot remove ROOM SEAT", "take it out again"),
     ("bot", "what bots there are, and where"),
     ("party delete ID", "remove it, whoever is in it; its worlds stay"),
@@ -159,15 +159,12 @@ fn bot_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
             for id in rooms.ids().cloned().collect::<Vec<_>>() {
                 let server = rooms.get(&id).expect("just listed");
                 for (seat, bot) in server.bots() {
-                    let driver = match bot.driver {
-                        Driver::Book => "book",
-                        Driver::External => "api",
-                    };
                     lines.push(format!(
-                        "  {:<24} seat {:<3} {:<7} {driver}",
+                        "  {:<24} seat {:<3} {:<7} {}",
                         rooms.name_of(&id),
                         seat.0,
-                        bot.level.name()
+                        bot.level.name(),
+                        bot.driver.name()
                     ));
                 }
             }
@@ -178,32 +175,35 @@ fn bot_command(rest: &[&str], rooms: &mut Rooms) -> Reply {
         }
 
         Some("add") => {
-            let (room, level, team) = match &rest[1..] {
-                [room] => (*room, Ok(Level::default()), None),
-                [room, level] => (*room, Level::parse(level), None),
-                [room, level, team] => (*room, Level::parse(level), Some(*team)),
-                _ => return Reply::say("bot add ROOM [LEVEL] [TEAM] -- easy|normal|hard"),
+            let [room, said @ ..] = &rest[1..] else {
+                return Reply::say(
+                    "bot add ROOM [LEVEL] [DRIVER] [TEAM] -- easy|normal|hard, book|search",
+                );
             };
-            let level = match level {
-                Ok(level) => level,
-                Err(e) => return Reply::say(e),
-            };
-            let team = match team.map(|t| t.parse::<u8>().map(PlayerId)) {
-                None => None,
-                Some(Ok(team)) => Some(team),
-                Some(Err(_)) => {
+            // Read by what each word **is** rather than by where it sits.
+            // There are three optional ones now, and a console where the
+            // second means a level or a driver depending on whether there is a
+            // fourth is one nobody can type without checking.
+            let (mut level, mut driver, mut team) = (Level::default(), Driver::Book, None);
+            for word in said {
+                if let Ok(said) = Level::parse(word) {
+                    level = said;
+                } else if let Ok(said) = Driver::parse(word) {
+                    driver = said;
+                } else if let Ok(said) = word.parse::<u8>() {
+                    team = Some(PlayerId(said));
+                } else {
                     return Reply::say(format!(
-                        "\"{}\" is not a team's number",
-                        team.unwrap_or_default()
-                    ))
+                        "\"{word}\" is not a level, a driver or a team's number"
+                    ));
                 }
-            };
+            }
             let id = match rooms.resolve(Some(room)) {
                 Ok(id) => id,
                 Err(e) => return Reply::say(e),
             };
             let server = rooms.get_mut(&id).expect("resolve only returns rooms that are here");
-            match server.add_bot(format!("{} bot", level.name()), level, Driver::Book, team) {
+            match server.add_bot(format!("{} bot", level.name()), level, driver, team) {
                 Ok(seat) => Reply::say(format!(
                     "seat {} in \"{}\" is a {} bot",
                     seat.0,
@@ -719,14 +719,21 @@ mod tests {
         let added = out("bot add main hard", &mut rooms);
         assert!(added.contains("seat 1") && added.contains("hard"), "{added}");
         assert!(out("bot add main", &mut rooms).contains("normal"), "the level has a default");
-        assert!(out("bot add main brutal", &mut rooms).contains("no level"));
         assert!(out("bot add nowhere", &mut rooms).contains("no room"));
-        assert!(out("bot add main easy three", &mut rooms).contains("team's number"));
+        // A word that is none of the three is refused by name, wherever it
+        // sits: they are read by what they are and not by where they are.
+        for said in ["bot add main brutal", "bot add main easy three"] {
+            assert!(out(said, &mut rooms).contains("is not a level"), "{said}");
+        }
         assert!(out("bot add main easy 3", &mut rooms).contains("no teams"), "a world has none");
 
+        // The driver is its own word, and the listing says which one a seat is.
+        let searching = out("bot add main hard search", &mut rooms);
+        assert!(searching.contains("seat 3"), "{searching}");
         let listing = out("bot", &mut rooms);
         assert!(listing.contains("main") && listing.contains("hard") && listing.contains("book"));
-        assert_eq!(listing.lines().count(), 2, "{listing}");
+        assert!(listing.contains("search"), "the listing does not say which is which: {listing}");
+        assert_eq!(listing.lines().count(), 3, "{listing}");
 
         out("match new dawn infinite timer 100", &mut rooms);
         rooms.get_mut(&"dawn".into()).unwrap().make_teams(2).unwrap();
@@ -739,7 +746,7 @@ mod tests {
         assert!(out("bot remove main 9", &mut rooms).contains("not a bot"));
         assert!(out("bot remove main one", &mut rooms).contains("seat's number"));
         assert!(out("bot remove main 1", &mut rooms).contains("left"));
-        assert_eq!(out("bot", &mut rooms).lines().count(), 3, "one in main and two in dawn");
+        assert_eq!(out("bot", &mut rooms).lines().count(), 4, "two in main and two in dawn");
 
         // Started, a match keeps its bots: a seat leaving mid-match is a forfeit.
         assert!(out("match start dawn", &mut rooms).contains("running"));

@@ -49,9 +49,9 @@ A save is authoritative, so the shape a `--torus` asks for only applies to rooms
 
 A room opens empty. There is no seeded pattern: the first life arrives with the first player, who is granted ground and a block on joining.
 
-The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL] [TEAM]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
+The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL] [DRIVER] [TEAM]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
 
-A bot is a seat the server plays from a small book of shapes, and an outside program can play a seat too, through the HTTP API `--api-token` mounts. Both are in [server.md](server.md#bots).
+A bot is a seat the server plays — from a small book of shapes, or by trying each of them on a copy of the board and looking — and an outside program can play a seat too, through the HTTP API `--api-token` mounts. Both are in [server.md](server.md#bots).
 
 `--span MS` is gone with it. A world's speed is **generations a minute** now — 250 milliseconds is four a second is 240 a minute, which is a number people can halve and double meaningfully, and passing the old flag says what to pass instead. It is also a *room's* rate rather than the server's: it rides on `net::Rules` beside `paused`, a laboratory's rules panel has a slider for it, and the server ticks on a fine grain while each room banks time against its own. Safe to change while a world runs, which almost nothing here is — the dice are seeded by the generation *number*, never a clock, so how fast generations arrive changes nothing any peer computes.
 
@@ -129,6 +129,7 @@ cargo run --example headless -- 400 infinite           # the simulation, no GPU
 cargo run --no-default-features --example balance      # what manufacture pays, per pattern
 cargo run --no-default-features --example territory    # what ground does, in numbers and shapes
 cargo run --no-default-features --example blast        # what a stick turns over, and what that is worth against turrets and life
+cargo run --no-default-features --example duel         # two bots on one board, and who won; --record writes what happened
 cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving the socket, over a real one
 cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```

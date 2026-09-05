@@ -417,6 +417,50 @@ impl World {
         }
     }
 
+    /// **One square of this world, on its own**: an infinite world holding the
+    /// cells within `radius` of `centre` and nothing else, at the same
+    /// coordinates, with the same dice and the same generation.
+    ///
+    /// What a rollout runs on. A whole world per placement tried is
+    /// unaffordable — `examples/frametime` puts a step of the default
+    /// twelve-by-twelve-chunk world at about 25 ms against a 250 ms tick — and
+    /// the game is local, so a crop is the affordable version of the same
+    /// question. See `server::bot`, which is what asks it.
+    ///
+    /// **It is exact for a while and then it is not.** What is outside the box
+    /// is absent, and an absent chunk reads as dead and unowned, so the edge
+    /// eats inwards at whatever rate the rules move: Conway and the territory
+    /// rule each reach the eight neighbours, a turret takes ground
+    /// [`rule::TURRET_REACH`] away and an overclocked cell moves twice a
+    /// generation, while a blast is not a cone at all and arrives once from as
+    /// far as [`rule::DYNAMITE_MOST_REACH`]. So a crop stepped `n` generations
+    /// is the world it came from inside `radius - n - DYNAMITE_MOST_REACH` of
+    /// the centre while `n * TURRET_REACH` stays under that blast, and whoever
+    /// reads one must read only that much of it.
+    ///
+    /// Absolute coordinates are kept because **a cell's dice are its
+    /// position** — [`super::seed::cell_seed`] takes the square and nothing
+    /// else — so a box moved to the origin would roll a different number for
+    /// every cell in it. On a torus that holds while the box stays off an
+    /// edge: past one, a cell's coordinates here and the canonical ones it
+    /// rolled from over there are two different numbers.
+    pub fn crop(&self, centre: (i32, i32), radius: i32) -> World {
+        let mut out = Self::infinite_empty();
+        out.seed = self.seed;
+        out.generation = self.generation;
+        for row in centre.0 - radius..=centre.0 + radius {
+            for col in centre.1 - radius..=centre.1 + radius {
+                let cell = self.cell_at(row, col).unwrap_or(Cell::DEAD);
+                // Skipped rather than written, so a crop of empty ground
+                // allocates no chunk for it -- which is most of a crop.
+                if cell != Cell::DEAD {
+                    out.set_cell_at(row, col, cell);
+                }
+            }
+        }
+        out
+    }
+
     /// Chunks that must be stepped: every non-empty chunk, plus any neighbour
     /// something on its edge can reach — life, which can cause a birth there,
     /// or ownership, which can creep there.

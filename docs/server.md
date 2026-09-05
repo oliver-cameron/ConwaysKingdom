@@ -215,11 +215,76 @@ A bot is a seat the server plays. `server::bot` is the whole of it, and it is sm
 
 It is a `Player` row like any other, handed out by `join_with`, so a room full of bots refuses a person with the words a sixteenth person gets, and a bot on a side plays as the side's number — one purse, one patch, one colour — because a team is a player. Bot-ness lives in `Server.bots` and not on `sim::Player`, which is saved: a match never is, so after a restart a bot's seat is an offline player like any human who left, holding its ground.
 
-**Its play is a book, not a search.** `examples/balance` measured what the economy rewards — a blinker pays, a glider bleeds, sprawl bleeds badly — so a competent bot is a small book of shapes and a rule about where to put them. Easy lays oscillators of factories inside its own ground, every sixteen generations. Normal also lays a still life on the frontier, where somebody else's ground is near, every eight. Hard also walls a factory it laid with a ring of ice, every four. Where to build is **sampled round its home rather than scanned**, half the samples on its own patch and half five patches out, so an act costs the same on a full torus as on an empty plane. Half at home because a fresh seat owns nothing else, and a window five patches wide would miss the patch forty times in fifty; five patches because that is its own ground, the no-man's-land round it and the near edge of a neighbour's, which is where a frontier is. Each candidate is tested cell by cell with `may_place_under` and priced with `price_under`, which is exactly how the server will judge it. Its dice are the room's seed, the seat and the tick through `sim::mix`, and never touch the streams a cell rolls — a choice is made once, on the server, and reaches every peer as an action at a stated tick, so determinism was never in question.
+**Its play is a book or a search**, and the book is the first half of it. `examples/balance` measured what the economy rewards — a blinker pays, a glider bleeds, sprawl bleeds badly — so a competent bot is a small book of shapes and a rule about where to put them. Easy lays oscillators of factories inside its own ground, every sixteen generations. Normal also lays a still life on the frontier, where somebody else's ground is near, every eight. Hard also walls a factory it laid with a ring of ice, every four. Where to build is **sampled round its home rather than scanned**, half the samples on its own patch and half five patches out, so an act costs the same on a full torus as on an empty plane. Half at home because a fresh seat owns nothing else, and a window five patches wide would miss the patch forty times in fifty; five patches because that is its own ground, the no-man's-land round it and the near edge of a neighbour's, which is where a frontier is. Each candidate is tested cell by cell with `may_place_under` and priced with `price_under`, which is exactly how the server will judge it. Its dice are the room's seed, the seat and the tick through `sim::mix`, and never touch the streams a cell rolls — a choice is made once, on the server, and reaches every peer as an action at a stated tick, so determinism was never in question.
 
-A bot is added and removed while the room admits anybody — from the lobby by any seated player, from the console with `bot add ROOM [LEVEL] [TEAM]` and `bot remove ROOM SEAT`, and from the API. Once a match is running neither happens: a seat arriving is the late joining `Join` refuses, and a seat leaving is a forfeit. A bot taken out of a lobby gives its number back, since nothing is laid out before the whistle and so nothing carries it; one taken out of a world leaves its seat as a person who walked away does, because its ground carries its number and the next player to arrive would inherit it — so in a world a bot's seat is spent like anybody's, and fifteen of them is a full room. Deleting a room does not count a bot as somebody standing in it.
+A bot is added and removed while the room admits anybody — from the lobby by any seated player, from the console with `bot add ROOM [LEVEL] [DRIVER] [TEAM]` and `bot remove ROOM SEAT`, and from the API. Once a match is running neither happens: a seat arriving is the late joining `Join` refuses, and a seat leaving is a forfeit. A bot taken out of a lobby gives its number back, since nothing is laid out before the whistle and so nothing carries it; one taken out of a world leaves its seat as a person who walked away does, because its ground carries its number and the next player to arrive would inherit it — so in a world a bot's seat is spent like anybody's, and fifteen of them is a full room. Deleting a room does not count a bot as somebody standing in it.
 
-A bot that *chooses* — tries a placement on a copy of the world and scores what happened — is the second version, and `World: Clone` is there for it; see [planned.md](planned.md#bots).
+### The search
+
+**The second version chooses by looking.** `Driver::Search` takes the placements the book would have offered, tries each on a copy of the board, steps that forward eight generations and asks what it is looking at. Nothing about the seat, the protocol or the loop changes for it — one `Bot::choose`, one `act`, one `Step` — and the level goes on saying how often it acts, with a second thing to say now: how many placements it tries, which is two at easy, five at normal and ten at hard. **The driver is picked separately from the level**, at the console and in the API, and the default is still the book, so nobody gets a searching bot without asking for one.
+
+**The candidates are the book's own.** `Ground::offers` is `Ground::place` with the loop left running — the same sampler over the same window, every square of it tested by the same `Ground::fits` a book placement has to pass, each one taken rather than only the first, and walked over every shape the intent allows so the search picks what to lay as well as where. It is the *test* that is the book's and not the squares, which are more of them and differently spread; what that buys is that a search can lay nothing the book would have refused, and everything the book refuses — a square nothing of theirs reaches, a shape with something living in its margin, a price the purse will not cover — never reaches the thing that chooses. What the search replaces is the **ordering**: the book takes the first affordable placement from the first intent the dice picked, and the search takes the best of what all of its intents offer.
+
+Two details of that generator earn their place, because both were measured to matter and neither is obvious. It samples 192 squares a shape where the book samples 48 — a book stops at the first that fits and a search wants the ones that do, and a sample costs a walk of a shape's span against a rollout's several thousand cells, so this is the cheap dial. And the budget goes **round the shapes rather than into the first**: every shape samples the same squares as every other, so a cap pooled across them is one the first shape fills every time, and a search that can only choose a square is half a search. Together they took the search from level with the book to ahead of it — see below.
+
+**A rollout runs on a crop, because a world is too big to copy per candidate.** `examples/frametime` puts one step of the default twelve-by-twelve-chunk world at about 25 ms against a 250 ms tick, so ten candidates at eight generations would be two seconds. The game is local, so `World::crop` builds an infinite world holding one square neighbourhood and nothing else, at **the same coordinates** — which is not tidiness: a cell's dice are its position and nothing else, so a box moved to the origin would roll a different number for every square in it.
+
+What a crop costs is exactness at its edge. Outside the box there is nothing, and an absent chunk reads as dead and unowned, so the edge eats inwards at whatever rate the rules move: Conway and the territory rule reach the eight neighbours, a turret takes ground `TURRET_REACH` away, an overclocked cell moves twice a generation, and a blast is not a light cone at all — it arrives once, from as far as `DYNAMITE_MOST_REACH`. So a crop stepped *n* generations is the real world's future inside `radius - n - DYNAMITE_MOST_REACH` of the centre, **and the score is read from that and from nothing else**. A compile-time assertion holds the one case that would make that sentence false: past a horizon of ten a turret's cone is longer than a blast's reach, and the constant standing in for "the furthest anything reaches" would have stopped being it.
+
+Three numbers fall out, and only the first is chosen:
+
+| | | |
+|---|---|---|
+| `SEARCH_HORIZON` | 8 | generations a rollout runs |
+| `SEARCH_SEEN` | 72 | what is scored: as far out as the book offers a placement, the shape, and what eight generations move |
+| `SEARCH_CROP` | 140 | that, plus the margin |
+
+The scored window is the interesting one, because tightening it is a mistake that reads as a preference. At the book's full reach a shape sits sixty cells from home; a window of sixty would have the ground that shape claims fall *outside* the score, so the search would prefer building at home for a reason that is arithmetic rather than play. Measured: widening it from sixty-four to seventy-two moved the search from level with the book to ahead of it.
+
+**Boundary error is common-mode, which is why this is honest and not a fudge.** One crop is taken per act and every candidate is scored on a copy of that one board, so the missing edge is wrong in the same way for all of them. What does not cancel is small, and the only thing read out of a score is the ordering.
+
+### What a judge is
+
+`Judge` is one method — what a position is worth to a player, higher being better — and it is a trait rather than a function because the hand-written one is not meant to be the last. A learned evaluator is the next piece of work here and arrives behind this signature; the search holds a `Box<dyn Judge>` on the driver and never learns which one it is. **The scale is arbitrary** and has to be: a search compares scores on one board and never across boards, so nothing may be added to a score in units of its own.
+
+`Counted` is the hand-written one, and its weights are these:
+
+| | | |
+|---|---|---|
+| `SCORE_GROUND` | 1.0 | a square of this player's at full influence |
+| `SCORE_EDGE` | 0.5 | one held below it |
+| `SCORE_THEIRS` | −1.0 | one of somebody else's |
+| `SCORE_LIFE` | 0.5 | a living cell, over the square it stands on |
+| `SCORE_FACTORY` | 2.0 | a living factory, over the life |
+| `SCORE_CORPSE` | −1.0 | a factory's corpse |
+
+Ground is the unit because **a match is won on ground**, and a square at full influence is one of it. A square held below full is one still being pushed on, or one ebbing away, so it is worth about half. Somebody else's is worth minus one rather than nothing, because taking a square moves the difference by two — that is what a contest is, and a search scoring only its own ground would have no reason to prefer a frontier to empty country.
+
+A living cell is worth half a square **on top of** the square it stands on, since a live cell is a source and has already been counted as ground at full strength; what the weight buys is the future — the halo it will project and the births it will pay for. A living factory is worth two more: it costs ten times what life costs and what it buys is income rather than ground, so it is not worth ten squares, and two is roughly the ground its income buys back over the next few dozen generations.
+
+The corpse is the weight that keeps this in step with `examples/balance`, and it is the one a first draft leaves out. A dead factory is **a bill that has not fallen due** — `FACTORY_UPKEEP` is sixteen in sixty-four — so without it the score would reward the pattern that leaves the most corpses behind, which is exactly the sprawl balance measured as the thing that bleeds. With it, a block of factories scores its ground, a blinker of them scores its ground and its manufacture, and an r-pentomino of them is punished for the mess.
+
+Nothing here is fitted; they are hand-written on the reasoning above. What they cannot see is **the purse**, and that is the known hole in them: a judge is shown a world, and a world holds cells and not money, so the search values the biggest shape it can afford and has no way to know that ten coins spent now is a placement it cannot make four generations later. See what the duel measured, below.
+
+### What it costs, and what it wins
+
+Both figures come from `examples/duel` — two seats in one `Server`, no socket and no clock, the same `add_bot` the console calls and the same `act` a client's placement goes through, so what it measures is a bot and not a harness. A run is seeded and repeats, and `--record DIR` writes the board at a cadence in exactly the window a judge is shown, which is the corpus the learned one will be trained on.
+
+**It beats the book at all three levels**, over games of six hundred generations, half of every set with the search in the first seat and half in the second:
+
+| level | games | search | book | drawn | of the decided | mean score |
+|---|---|---|---|---|---|---|
+| easy | 200 | 122 | 75 | 3 | 62% | 896 against 666 |
+| normal | 400 | 229 | 169 | 2 | 57% | 908 against 791 |
+| hard | 200 | 122 | 78 | 0 | 61% | 963 against 722 |
+
+The seats are swapped because a seat might be worth something, and the control says it is worth little: a book bot against a book bot over the same two hundred seeds is 104 to 95 with one drawn. Normal is the weakest of the three and it is also the one with four times the games behind it, so read easy and hard as the wider intervals they are.
+
+**One act costs two to four milliseconds against a tick of 250.** A book's act is 0.3 ms of that, measured the same way, and two searching seats put four to seven milliseconds on the generation they share — one to two per cent of a tick each, which is what leaves room for several rooms of them. The crop is why: a rollout steps only the chunks the crop actually holds something in, so an act is priced by how much country is near the bot rather than by how large the world is.
+
+Which is the caveat as much as the reason. **The budget is a count of rollouts and not a bound on time**, and the same measurement over longer games says so — two searching seats at normal cost 4.0 ms of a generation over six hundred, 5.0 over two thousand and 9.3 over six thousand, so an act roughly doubles as the board fills. The ceiling above that is arithmetic rather than measurement, and it is a long way past anything a game here has reached: a crop is 281 cells across, which is eight chunks a side once the ring of neighbours a step touches is counted, and 262,144 cells at `frametime`'s 41.5 nanoseconds each is 11 ms a step, 87 ms for a rollout of eight and 435 ms for the five a normal bot may run. No measured game has come near a neighbourhood that full, and nothing in the code stops one.
+
+**What decides how many rollouts an act runs is usually the purse and not the budget.** Every candidate is priced before it is rolled out and a bot at any level ends a game with nothing in hand, so doubling the cap from five to ten at hard bought a quarter to a half more work per act rather than twice as much. That is the hole in the weights seen from the other side: the judge cannot see money, and money is what binds.
 
 **A bot that runs dry mines, one cell at a time.** A match hands out no value — an opening bought while the tick stands still would be bought in wall-clock time — so everybody starts a match broke, standing on a granted block. What makes nought recoverable rather than stuck is that a block *heals*: take one corner out and the three that are left give the empty corner exactly three neighbours, so it is born again on the next generation. One cell an act is therefore a coin that never runs out, and taking the whole block instead leaves nothing to heal and no way back.
 
@@ -243,7 +308,7 @@ cargo run --no-default-features --features server --bin server -- --api-token hu
 | `GET /api/rooms/{room}` | phase, tick, rules, victory, shape, every seat, the teams, the standings |
 | `GET /api/rooms/{room}/standings` | who holds how much, most first |
 | `GET /api/rooms/{room}/bots` | every bot here |
-| `POST /api/rooms/{room}/bots` `{name?, level?, team?}` | seat a bot the server plays; answers `{seat}` |
+| `POST /api/rooms/{room}/bots` `{name?, level?, driver?, team?}` | seat a bot the server plays, from a `book` or a `search`; answers `{seat}` |
 | `DELETE /api/rooms/{room}/bots/{seat}` | take it out again |
 | `POST /api/rooms/{room}/seats` `{name, team?}` | a seat **you** will play; answers `{seat}` |
 | `GET /api/rooms/{room}/seats/{seat}` | its purse, what number it plays as, where its ground is, who is driving it |
@@ -285,7 +350,7 @@ The server reads its own terminal. `help` lists what it takes:
   match dispatch                           start the one match that is waiting
   match delete NAME                        remove it
   match                                    what matches there are, and what they are doing
-  bot add ROOM [LEVEL] [TEAM]              a player the server plays: easy|normal|hard
+  bot add ROOM [LEVEL] [DRIVER] [TEAM]     easy|normal|hard, from a book|search
   bot remove ROOM SEAT                     take it out again
   bot                                      what bots there are, and where
   party delete ID                          remove it, whoever is in it; its worlds stay

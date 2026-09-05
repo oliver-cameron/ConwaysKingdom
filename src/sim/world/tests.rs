@@ -1652,3 +1652,60 @@ fn a_clone_steps_without_moving_the_original() {
     assert_eq!(world.digest(), copy.digest(), "the copy is not the original's future");
     assert_eq!(copy.generation, 8);
 }
+
+/// **A crop steps like the world it came from, inside its margin.** The
+/// edge is missing ground and eats inwards at the rate the rules move, so
+/// what is exact after `n` generations is what sits inside
+/// `radius - n - DYNAMITE_MOST_REACH` — and nothing outside the box came
+/// along, which is the whole reason a rollout can afford one.
+#[test]
+fn a_crop_steps_with_the_world_it_came_from_inside_its_margin() {
+    let (me, them) = (PlayerId(1), PlayerId(2));
+    let mut world = World::infinite_empty();
+    world.set_seed(0x00C0_FFEE);
+    let centre = (100, 100);
+    // Something that sprawls, so ground and life are both moving, with a
+    // turret standing in it to move ground further than a cell a
+    // generation.
+    for &(r, c) in &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)] {
+        let at = (centre.0 + r, centre.1 + c);
+        world.set_cell_at(at.0, at.1, Cell::alive(me).with_kind(Kind::FACTORY));
+    }
+    for (dr, dc) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        world.set_cell_at(
+            centre.0 + 6 + dr,
+            centre.1 + dc,
+            Cell::alive(me).with_kind(Kind::TURRET),
+        );
+    }
+    // And a country well outside the box, which the crop must not hold.
+    for c in 400..410 {
+        world.set_cell_at(centre.0, c, Cell::alive(them));
+    }
+
+    let radius = 80;
+    let generations = 8;
+    let mut crop = world.crop(centre, radius);
+    assert_eq!(crop.cell_at(centre.0, 404), None, "the crop brought the far country along");
+
+    let mut whole = world.clone();
+    for _ in 0..generations {
+        crop.step();
+        whole.step();
+    }
+
+    let inner = radius - generations - rule::DYNAMITE_MOST_REACH;
+    let mut alive = 0;
+    for row in centre.0 - inner..=centre.0 + inner {
+        for col in centre.1 - inner..=centre.1 + inner {
+            let (here, there) = (crop.cell_at(row, col), whole.cell_at(row, col));
+            assert_eq!(
+                here.unwrap_or(Cell::DEAD),
+                there.unwrap_or(Cell::DEAD),
+                "the crop and the world disagree at ({row}, {col})"
+            );
+            alive += here.is_some_and(|c| c.is_alive()) as i32;
+        }
+    }
+    assert!(alive > 0, "nothing was alive inside the margin, so nothing was compared");
+}
