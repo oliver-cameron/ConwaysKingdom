@@ -26,12 +26,13 @@ use crate::sim::{Cell, PlayerId};
 /// them. Two lists that have to agree, which `a_face_for_every_rule` is what
 /// makes checkable — the alternative is a placement in the string table, and
 /// `words` holds strings.
-const FACES: [Option<Placement>; 5] = [
+const FACES: [Option<Placement>; 6] = [
     None,
     Some(Placement::Factory),
     Some(Placement::Turret),
     Some(Placement::Ice),
     Some(Placement::Dynamite),
+    Some(Placement::Overclock),
 ];
 
 /// The cell for a rule, or the player's own live cell where the rule is about
@@ -112,8 +113,8 @@ pub(super) fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where)
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (i, (heading, body)) in w().menu.howto.rules.iter().enumerate() {
-            // **A card each**, because these are five separate things somebody
-            // has to hold on to rather than five paragraphs of one argument.
+            // **A card each**, because these are six separate things somebody
+            // has to hold on to rather than six paragraphs of one argument.
             // Run together they read as a wall and get skipped, which is the
             // one outcome a page like this cannot afford.
             card(ui, theme, false, |ui| {

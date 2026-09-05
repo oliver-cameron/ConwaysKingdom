@@ -76,7 +76,7 @@ pub static WORDS: super::Words = super::Words {
         },
         howto: super::MenuHowto {
             title: "How to play",
-            note: "Conway's Game of Life, with owners. Five things the board does not tell you.",
+            note: "Conway's Game of Life, with owners. Six things the board does not tell you.",
             rules: &[
             (
                 "You can only build where your influence already reaches.",
@@ -97,6 +97,10 @@ pub static WORDS: super::Words = super::Words {
             (
                 "A dynamite takes ground; it does not just make a mess.",
                 "It burns down on a fuse you can watch — the last warning sprite is on screen for exactly one generation — and then scrambles a disc. What comes up alive is yours and what does not belongs to nobody, so a bomb breaks a country apart and leaves you some of the pieces. Ice stops the fuse, and a dynamite has to stay alive to go off at all.",
+            ),
+            (
+                "An overclocker runs a disc at twice the clock, and the edge of it tears.",
+                "Everything within six cells of a live one steps twice for every step the world takes: a blinker inside is back where it started every generation, and a gun fires twice as often. The outside only ever sees every other state of the inside, so a pattern crossing the edge comes apart there. Place it in fours, like a turret, and keep what you care about wholly in or wholly out.",
             ),
         ],
             tip_title: "Other people's patterns work here.",
@@ -255,6 +259,7 @@ pub static WORDS: super::Words = super::Words {
         turret: "Turret",
         ice: "Ice",
         dynamite: "Dynamite",
+        overclock: "Overclock",
         draw: "Draw",
         pane: "Pane",
         pattern: "Stamp",

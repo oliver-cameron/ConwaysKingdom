@@ -63,6 +63,7 @@ const ICED: Cell = Cell::DEAD.with_ice(true);
 /// Age nought, which is a fuse that has not started. The bar shows what a
 /// square puts down, and what it puts down is unlit.
 const DYNAMITED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::DYNAMITE);
+const OVERCLOCKED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::OVERCLOCK);
 
 /// The left segment: what you draw with.
 /// The kinds, in the order they sit on the bar.
@@ -75,8 +76,8 @@ const DYNAMITED: Cell = Cell::DEAD.with_alive(true).with_kind(Kind::DYNAMITE);
 /// This was a `const`, which it could be while every string was a `const` too.
 /// A language is picked rather than compiled in now — see
 /// [`crate::client::views::words`] — so the table is built when it is asked
-/// for. It is five structs of pointers and it is asked for once a frame.
-pub fn kinds() -> [Tool; 5] {
+/// for. It is six structs of pointers and it is asked for once a frame.
+pub fn kinds() -> [Tool; 6] {
     [
         Tool {
             name: w().hotbar.life,
@@ -106,6 +107,14 @@ pub fn kinds() -> [Tool; 5] {
             name: w().hotbar.dynamite,
             shows: DYNAMITED,
             placement: Placement::Dynamite,
+            usually: Shape::Draw,
+            apart: false,
+        },
+        // A pencil, and placed in fours the way a turret is.
+        Tool {
+            name: w().hotbar.overclock,
+            shows: OVERCLOCKED,
+            placement: Placement::Overclock,
             usually: Shape::Draw,
             apart: false,
         },
@@ -918,6 +927,10 @@ mod tests {
             kinds().iter().any(|t| t.placement == crate::net::Placement::Dynamite),
             "the dynamite is not among the kinds the bar offers"
         );
+        assert!(
+            kinds().iter().any(|t| t.placement == crate::net::Placement::Overclock),
+            "the overclocker is not among the kinds the bar offers"
+        );
     }
 
     /// **The clock is there when it is yours**, and gone when it is not. A
@@ -1268,6 +1281,7 @@ mod tests {
             (Placement::Life, Shape::Draw),
             (Placement::Factory, Shape::Draw),
             (Placement::Turret, Shape::Draw),
+            (Placement::Overclock, Shape::Draw),
             (Placement::Ice, Shape::Rect),
         ] {
             let held = Held { shape: Shape::Capture, kind: kind(what), turn: Default::default() };
