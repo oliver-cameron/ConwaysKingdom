@@ -25,8 +25,15 @@ use super::{ClientMessage, ServerMessage};
 /// So: bump this whenever the vocabulary moves, and a stale client is told it
 /// is stale instead of being quietly wrong.
 ///
+/// **2**: [`Seat`] gained `bot`, which changes the shape of every `Match`
+/// a lobby is built from — a page from before it would read the flag as the
+/// start of the next seat. `AddBot` and `RemoveBot` joined the end of
+/// [`ClientMessage`] at the same time, which is the safe kind of change and
+/// would not have needed this on its own.
+///
 /// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
-pub const PROTOCOL: u8 = 1;
+/// [`Seat`]: crate::net::Seat
+pub const PROTOCOL: u8 = 2;
 
 #[derive(Debug)]
 pub enum CodecError {
@@ -219,6 +226,9 @@ mod tests {
             ClientMessage::People { like: "ali".into() },
             // The leaderboard, which is this with nothing asked.
             ClientMessage::People { like: String::new() },
+            ClientMessage::AddBot { team: Some(PlayerId(2)), level: crate::net::Level::Hard },
+            ClientMessage::AddBot { team: None, level: crate::net::Level::Easy },
+            ClientMessage::RemoveBot { seat: PlayerId(5) },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -247,10 +257,18 @@ mod tests {
                         id: PlayerId(1),
                         name: "alice".into(),
                         who: Some(crate::net::PersonId("3f2a91c4".into())),
+                        bot: false,
                     },
                     // Somebody with no key: a person this server will not
                     // remember, and so has nothing to say about.
-                    crate::net::Seat { id: PlayerId(4), name: "bob".into(), who: None },
+                    crate::net::Seat { id: PlayerId(4), name: "bob".into(), who: None, bot: false },
+                    // And a seat the server plays, which has no key either.
+                    crate::net::Seat {
+                        id: PlayerId(5),
+                        name: "hard bot".into(),
+                        who: None,
+                        bot: true,
+                    },
                 ],
             }),
             ServerMessage::Match(crate::net::Lobby {

@@ -800,6 +800,10 @@ pub struct Seat {
     /// Who they are on this server. `None` for a client with no key, which is
     /// somebody the server will not remember and so has nothing to say about.
     pub who: Option<PersonId>,
+    /// Whether the server is playing this seat — see `server::bot`. The one
+    /// thing a client is told about a bot and all it needs: which rows get a
+    /// word after the name and a control to take the seat away.
+    pub bot: bool,
 }
 
 impl Seat {
@@ -1125,9 +1129,11 @@ pub enum ClientMessage {
     Answer { from: PersonId, yes: bool },
     /// **Here is my locker; keep it.**
     ///
-    /// Last in the list on purpose. Postcard writes a variant as its index, so
-    /// appending is the one change that leaves every other message where it
-    /// was — see [`codec::PROTOCOL`], which is what says so when it does not. The patterns and the diary this client
+    /// After everything that was here before it, on purpose, and the two bot
+    /// messages after it for the same reason. Postcard writes a variant as its
+    /// index, so appending is the one change that leaves every other message
+    /// where it was — see [`codec::PROTOCOL`], which is what says so when it
+    /// does not. The patterns and the diary this client
     /// now holds, replacing whatever the server had — see [`kept`].
     ///
     /// Whole rather than a change, because both are small and replacing is one
@@ -1138,6 +1144,17 @@ pub enum ClientMessage {
     /// Answerable **without a seat**. A library is edited between games and the
     /// screen that edits it is not inside a room.
     Keep(kept::Kept),
+    /// **Seat a player the server plays**, on this side or on whichever the
+    /// lobby would put anybody — see `server::bot`.
+    ///
+    /// Any **seated** player may, while the room admits anybody: a spectator
+    /// has no standing in a lobby, and once a match is running a seat arriving
+    /// is the late joining `Join` refuses. The answer is the next `Match`, or
+    /// a [`ServerMessage::NotStarted`] with the reason, because a press in a
+    /// lobby that does nothing and explains nothing reads as a broken lobby.
+    AddBot { team: Option<PlayerId>, level: Level },
+    /// Take one out again, by seat, under the same rules.
+    RemoveBot { seat: PlayerId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

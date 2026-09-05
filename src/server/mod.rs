@@ -507,6 +507,7 @@ impl Server {
                 id: p.id,
                 name: p.name.clone(),
                 who: p.person.clone().map(crate::net::PersonId),
+                bot: self.bots.contains_key(&p.id),
             })
             .collect();
         // By number, which is the order they arrived, so the list does not
@@ -1278,6 +1279,30 @@ impl Server {
                 Ok(()) => Vec::new(),
                 Err(reason) => vec![ServerMessage::NotStarted { reason }],
             },
+            // A seat the server plays. **Seated players only**: a spectator
+            // has no standing in a lobby, and is dropped the way anything
+            // from nobody is. Refused the way a side is, into the lobby it
+            // was pressed in, for the reason `JoinTeam` is.
+            ClientMessage::AddBot { team, level } => {
+                let Some(by) = from else { return Vec::new() };
+                match self.add_bot(format!("{} bot", level.name()), level, Driver::Book, team) {
+                    Ok(seat) => {
+                        log::info!("{by:?} seated {seat:?}, a {} bot", level.name());
+                        Vec::new()
+                    }
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
+            ClientMessage::RemoveBot { seat } => {
+                let Some(by) = from else { return Vec::new() };
+                match self.remove_bot(seat) {
+                    Ok(()) => {
+                        log::info!("{by:?} removed bot {seat:?}");
+                        Vec::new()
+                    }
+                    Err(reason) => vec![ServerMessage::NotStarted { reason }],
+                }
+            }
             // A laboratory's clock and its two switches. Broadcast rather than
             // answered to whoever asked: a laboratory is a room several people
             // are in, and a clock that stopped for one of them would be two
@@ -3586,5 +3611,39 @@ mod tests {
             "the posted action was not applied"
         );
         assert!(first_act_of(&mut s, engine, 40).is_none(), "the server moved for an engine");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        assert!(lobby.players.iter().any(|p| p.id == engine && p.bot), "an engine is a bot seat");
+    }
+
+    /// **From the wire, a bot is a seated player's to add and take away**, and
+    /// nobody else's: a spectator is dropped, a refusal is answered into the
+    /// lobby rather than closing the door, and the next lobby says who is a
+    /// bot.
+    #[test]
+    fn a_seated_player_adds_and_removes_bots_from_the_lobby() {
+        let mut s = Server::named("arena", World::infinite_empty());
+        s.make_match(Victory::Timer { generations: 100 });
+        let me = s.join_with("me", None).unwrap();
+        let add = |team| ClientMessage::AddBot { team, level: Level::Normal };
+
+        assert!(s.handle(None, None, add(None)).is_empty(), "a spectator was answered");
+        assert_eq!(s.player_count(), 1, "a spectator seated a bot");
+
+        assert!(s.handle(Some(me), None, add(None)).is_empty(), "a good press is not answered");
+        let ServerMessage::Match(lobby) = s.lobby() else { panic!("not a lobby") };
+        let bot = lobby.players.iter().find(|p| p.bot).expect("no bot in the lobby");
+        assert!(
+            !lobby.players.iter().find(|p| p.id == me).unwrap().bot,
+            "a person marked as a bot"
+        );
+
+        let refused = s.handle(Some(me), None, add(Some(PlayerId(3))));
+        assert!(matches!(&refused[..], [ServerMessage::NotStarted { .. }]), "{refused:?}");
+
+        let seat = bot.id;
+        s.start_match(None).unwrap();
+        let refused = s.handle(Some(me), None, ClientMessage::RemoveBot { seat });
+        assert!(matches!(&refused[..], [ServerMessage::NotStarted { .. }]), "{refused:?}");
+        assert!(s.is_bot(seat), "a running match let a bot go");
     }
 }

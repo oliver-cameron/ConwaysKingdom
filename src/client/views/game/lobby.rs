@@ -15,7 +15,7 @@ use crate::client::views::theme::Theme;
 use crate::client::views::words::lobby as words;
 use crate::client::views::words::menu::watch as whistle;
 use crate::client::views::words::w;
-use crate::net::{MatchPhase, Team, Victory};
+use crate::net::{Level, MatchPhase, Team, Victory};
 use crate::sim::PlayerId;
 
 /// **What colour a seat draws in: its team's, or its own.**
@@ -51,6 +51,12 @@ pub enum Did {
     JoinTeam(PlayerId),
     /// Call this team something.
     NameTeam(PlayerId, String),
+    /// Seat a player the server plays, on this team or wherever the lobby
+    /// would put anybody. Any seated player may; the seat count already
+    /// shown counts it, because a bot takes one of the fifteen.
+    AddBot { team: Option<PlayerId>, level: Level },
+    /// Take one out again.
+    RemoveBot(PlayerId),
 }
 
 /// Everything the lobby draws from.
@@ -109,6 +115,9 @@ pub fn show(
     // client rather than here, because this panel is rebuilt every frame and
     // a name half-typed would vanish between two of them.
     naming: &mut Option<(PlayerId, String)>,
+    // How hard the next bot plays: one picker for the whole lobby, held by the
+    // client for the same reason.
+    bot_level: &mut Level,
 ) -> crate::client::views::Shown<Did> {
     let mut did = Did::Nothing;
     // An open room is not a match, and a running one is a game — neither wants
@@ -204,7 +213,14 @@ pub fn show(
                                         }
                                     });
                                 }
-                            } else if let Some(what) = team_picker(ui, theme, look, naming) {
+                                // One for the room, since there is no side
+                                // to put it on.
+                                if let Some(what) = add_bot(ui, theme, None, bot_level) {
+                                    did = what;
+                                }
+                            } else if let Some(what) =
+                                team_picker(ui, theme, look, naming, bot_level)
+                            {
                                 did = what;
                             }
                             ui.add_space(m.item_spacing);
@@ -282,6 +298,7 @@ fn team_picker(
     theme: &Theme,
     look: &Look<'_>,
     naming: &mut Option<(PlayerId, String)>,
+    bot_level: &mut Level,
 ) -> Option<Did> {
     let p = theme.palette;
     let m = theme.metrics;
@@ -374,6 +391,11 @@ fn team_picker(
                 {
                     did = Some(Did::JoinTeam(if ours { me } else { team.id }));
                 }
+                // **A bot per side is how sides are balanced**, which is the
+                // reason the control is on the side rather than on the room.
+                if let Some(what) = add_bot(ui, theme, Some(team.id), bot_level) {
+                    did = Some(what);
+                }
             });
         ui.add_space(m.item_spacing);
     }
@@ -419,9 +441,46 @@ fn who_row(ui: &mut egui::Ui, seat: &crate::net::Seat, me: PlayerId) -> Option<D
         crate::client::views::social::face::show(ui.painter(), rect, who);
     }
     let pressed = ui.add(egui::Button::new(label).frame(false)).clicked();
+    // A seat the server plays says so, and anybody seated may take it away:
+    // it was added from this lobby by somebody, and a bot nobody can remove
+    // is a seat nobody can have back.
+    if seat.bot {
+        ui.weak(w().lobby.bot);
+        if ui.small_button(w().lobby.remove_bot).clicked() {
+            return Some(Did::RemoveBot(seat.id));
+        }
+    }
     // Nobody to look up: a client with no key is somebody this server will not
     // remember, so there is nothing behind the name to show.
     seat.who.clone().filter(|_| pressed).map(Did::Look)
+}
+
+/// The control that seats a bot: how hard it plays, and a button.
+///
+/// The level is one picker for the whole lobby rather than one per side,
+/// because it is a preference and not a fact about a side, and a row of three
+/// words under every team is three words too many.
+fn add_bot(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    team: Option<PlayerId>,
+    level: &mut Level,
+) -> Option<Did> {
+    let m = theme.metrics;
+    let mut did = None;
+    ui.horizontal(|ui| {
+        for (i, each) in Level::ALL.into_iter().enumerate() {
+            ui.selectable_value(
+                level,
+                each,
+                egui::RichText::new(w().lobby.levels[i]).size(m.text_small),
+            );
+        }
+        if ui.small_button(w().lobby.add_bot).clicked() {
+            did = Some(Did::AddBot { team, level: *level });
+        }
+    });
+    did
 }
 
 /// The same colour the shader gives this player's cells, so the lobby and the

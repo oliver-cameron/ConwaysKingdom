@@ -1504,7 +1504,12 @@ impl Session {
         self.lobby = victory.map(|victory| crate::net::Lobby {
             phase: crate::net::MatchPhase::Running { from: 0 },
             victory: Some(victory),
-            players: vec![crate::net::Seat { id: PlayerId(1), name: String::new(), who: None }],
+            players: vec![crate::net::Seat {
+                id: PlayerId(1),
+                name: String::new(),
+                who: None,
+                bot: false,
+            }],
             teams: Vec::new(),
             owner: None,
             started_by: None,

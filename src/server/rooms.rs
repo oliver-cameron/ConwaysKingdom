@@ -1355,7 +1355,8 @@ impl Rooms {
     /// **Refused while anybody is in it.** Deleting a world somebody is
     /// standing in is the one thing here that cannot be taken back, and the
     /// difference between "nobody is in it" and "nobody was in it a moment
-    /// ago" is a question the person typing can answer and this cannot.
+    /// ago" is a question the person typing can answer and this cannot. A bot
+    /// is not anybody: it goes with the room.
     ///
     /// The default room is refused too: `resolve(None)` sends every client
     /// that names no room to it, so a server without one has nowhere to put
@@ -1369,7 +1370,7 @@ impl Rooms {
             ));
         }
         let server = self.rooms.get(&id).expect("resolve only returns rooms that are here");
-        let here = server.players().filter(|p| p.online).count();
+        let here = server.players().filter(|p| p.online && !server.is_bot(p.id)).count();
         if here > 0 {
             return Err(format!("{here} still in \"{name}\""));
         }

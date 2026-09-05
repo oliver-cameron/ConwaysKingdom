@@ -333,6 +333,10 @@ pub static WORDS: super::Words = super::Words {
         you: "you",
         you_won: "You won",
         how: "Nothing moves until whoever made the match starts it.",
+        bot: "(bot)",
+        add_bot: "Add a bot",
+        remove_bot: "remove",
+        levels: ["easy", "normal", "hard"],
     },
     hud: super::Hud {
         connected: "connected",

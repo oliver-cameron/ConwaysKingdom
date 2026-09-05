@@ -554,6 +554,12 @@ pub struct Lobby {
     pub you: &'static str,
     pub you_won: &'static str,
     pub how: &'static str,
+    /// After the name of a seat the server plays.
+    pub bot: &'static str,
+    pub add_bot: &'static str,
+    pub remove_bot: &'static str,
+    /// The three levels a bot plays at, in `net::Level::ALL`'s order.
+    pub levels: [&'static str; 3],
 }
 
 /// The panel in the corner.
