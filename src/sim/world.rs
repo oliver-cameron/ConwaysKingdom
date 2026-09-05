@@ -432,6 +432,50 @@ impl World {
         }
     }
 
+    /// **One square of this world, on its own**: an infinite world holding the
+    /// cells within `radius` of `centre` and nothing else, at the same
+    /// coordinates, with the same dice and the same generation.
+    ///
+    /// What a rollout runs on. A whole world per placement tried is
+    /// unaffordable — `examples/frametime` puts a step of the default
+    /// twelve-by-twelve-chunk world at about 25 ms against a 250 ms tick — and
+    /// the game is local, so a crop is the affordable version of the same
+    /// question. See `server::bot`, which is what asks it.
+    ///
+    /// **It is exact for a while and then it is not.** What is outside the box
+    /// is absent, and an absent chunk reads as dead and unowned, so the edge
+    /// eats inwards at whatever rate the rules move: Conway and the territory
+    /// rule each reach the eight neighbours, a turret takes ground
+    /// [`rule::TURRET_REACH`] away and an overclocked cell moves twice a
+    /// generation, while a blast is not a cone at all and arrives once from as
+    /// far as [`rule::DYNAMITE_MOST_REACH`]. So a crop stepped `n` generations
+    /// is the world it came from inside `radius - n - DYNAMITE_MOST_REACH` of
+    /// the centre while `n * TURRET_REACH` stays under that blast, and whoever
+    /// reads one must read only that much of it.
+    ///
+    /// Absolute coordinates are kept because **a cell's dice are its
+    /// position** — [`super::seed::cell_seed`] takes the square and nothing
+    /// else — so a box moved to the origin would roll a different number for
+    /// every cell in it. On a torus that holds while the box stays off an
+    /// edge: past one, a cell's coordinates here and the canonical ones it
+    /// rolled from over there are two different numbers.
+    pub fn crop(&self, centre: (i32, i32), radius: i32) -> World {
+        let mut out = Self::infinite_empty();
+        out.seed = self.seed;
+        out.generation = self.generation;
+        for row in centre.0 - radius..=centre.0 + radius {
+            for col in centre.1 - radius..=centre.1 + radius {
+                let cell = self.cell_at(row, col).unwrap_or(Cell::DEAD);
+                // Skipped rather than written, so a crop of empty ground
+                // allocates no chunk for it -- which is most of a crop.
+                if cell != Cell::DEAD {
+                    out.set_cell_at(row, col, cell);
+                }
+            }
+        }
+        out
+    }
+
     /// Chunks that must be stepped: every non-empty chunk, plus any neighbour
     /// something on its edge can reach — life, which can cause a birth there,
     /// or ownership, which can creep there.
@@ -3347,5 +3391,62 @@ mod tests {
         }
         assert_eq!(world.digest(), copy.digest(), "the copy is not the original's future");
         assert_eq!(copy.generation, 8);
+    }
+
+    /// **A crop steps like the world it came from, inside its margin.** The
+    /// edge is missing ground and eats inwards at the rate the rules move, so
+    /// what is exact after `n` generations is what sits inside
+    /// `radius - n - DYNAMITE_MOST_REACH` — and nothing outside the box came
+    /// along, which is the whole reason a rollout can afford one.
+    #[test]
+    fn a_crop_steps_with_the_world_it_came_from_inside_its_margin() {
+        let (me, them) = (PlayerId(1), PlayerId(2));
+        let mut world = World::infinite_empty();
+        world.set_seed(0x00C0_FFEE);
+        let centre = (100, 100);
+        // Something that sprawls, so ground and life are both moving, with a
+        // turret standing in it to move ground further than a cell a
+        // generation.
+        for &(r, c) in &[(0, 1), (0, 2), (1, 0), (1, 1), (2, 1)] {
+            let at = (centre.0 + r, centre.1 + c);
+            world.set_cell_at(at.0, at.1, Cell::alive(me).with_kind(Kind::FACTORY));
+        }
+        for (dr, dc) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            world.set_cell_at(
+                centre.0 + 6 + dr,
+                centre.1 + dc,
+                Cell::alive(me).with_kind(Kind::TURRET),
+            );
+        }
+        // And a country well outside the box, which the crop must not hold.
+        for c in 400..410 {
+            world.set_cell_at(centre.0, c, Cell::alive(them));
+        }
+
+        let radius = 80;
+        let generations = 8;
+        let mut crop = world.crop(centre, radius);
+        assert_eq!(crop.cell_at(centre.0, 404), None, "the crop brought the far country along");
+
+        let mut whole = world.clone();
+        for _ in 0..generations {
+            crop.step();
+            whole.step();
+        }
+
+        let inner = radius - generations - rule::DYNAMITE_MOST_REACH;
+        let mut alive = 0;
+        for row in centre.0 - inner..=centre.0 + inner {
+            for col in centre.1 - inner..=centre.1 + inner {
+                let (here, there) = (crop.cell_at(row, col), whole.cell_at(row, col));
+                assert_eq!(
+                    here.unwrap_or(Cell::DEAD),
+                    there.unwrap_or(Cell::DEAD),
+                    "the crop and the world disagree at ({row}, {col})"
+                );
+                alive += here.is_some_and(|c| c.is_alive()) as i32;
+            }
+        }
+        assert!(alive > 0, "nothing was alive inside the margin, so nothing was compared");
     }
 }
