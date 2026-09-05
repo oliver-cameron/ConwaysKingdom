@@ -3518,6 +3518,41 @@ mod tests {
         );
     }
 
+    /// **A peer built from nothing but the `Step`s is the server's world**,
+    /// generation for generation, with a bot in the room: what it chose
+    /// reaches a client as ordinary actions and nothing else, so nothing a
+    /// client does not hear can move the server's copy.
+    #[test]
+    fn a_peer_built_from_steps_agrees_with_the_server_with_a_bot_in_the_room() {
+        let mut s = Server::new(World::infinite_empty());
+        let bot = s.add_bot("hard bot", Level::Hard, Driver::Book, None).unwrap();
+        s.credit(bot, 5_000);
+        let mut peer = s.world().clone();
+        let mut acted = 0;
+        for _ in 0..200 {
+            for out in s.step() {
+                if let ServerMessage::Step { tick, actions } = out {
+                    acted += actions.len();
+                    for stamped in &actions {
+                        crate::net::apply(&mut peer, stamped);
+                    }
+                    while peer.generation < tick {
+                        peer.step();
+                    }
+                }
+            }
+            for (coord, _) in s.world().stored() {
+                assert_eq!(
+                    peer.chunk_digest(coord),
+                    s.world().chunk_digest(coord),
+                    "chunk {coord:?} differs at tick {}",
+                    s.tick()
+                );
+            }
+        }
+        assert!(acted >= 10, "the bot acted {acted} times in 200 generations");
+    }
+
     /// On a side it plays as the side's number, so its cells and its purse
     /// are the team's — the same rule as a person at the team's controls.
     #[test]
