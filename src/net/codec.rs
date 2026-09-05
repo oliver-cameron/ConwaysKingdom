@@ -26,7 +26,7 @@ use super::{ClientMessage, ServerMessage};
 /// is stale instead of being quietly wrong.
 ///
 /// [gotchas.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/gotchas.md
-pub const PROTOCOL: u8 = 1;
+pub const PROTOCOL: u8 = 2;
 
 #[derive(Debug)]
 pub enum CodecError {
@@ -219,6 +219,11 @@ mod tests {
             ClientMessage::People { like: "ali".into() },
             // The leaderboard, which is this with nothing asked.
             ClientMessage::People { like: String::new() },
+            // Who I am, before any room is named.
+            ClientMessage::Hello {
+                name: "alice".into(),
+                person: crate::net::Secret::read(&"a1".repeat(16)).expect("a secret"),
+            },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -416,6 +421,16 @@ mod tests {
                 ],
                 hidden: crate::net::Hidden { howto: true },
             },
+            // The answer to a `Hello`, which the socket reads as well as the client.
+            ServerMessage::You(crate::net::Profile {
+                who: crate::net::PersonId("3f2a91c4".into()),
+                name: "alice".into(),
+                rating: 1200,
+                provisional: true,
+                games: 0,
+                history: Vec::new(),
+                best: 0,
+            }),
         ];
         for msg in cases {
             let bytes = encode_server(&msg).unwrap();

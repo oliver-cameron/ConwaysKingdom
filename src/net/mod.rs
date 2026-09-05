@@ -1090,11 +1090,7 @@ pub enum ClientMessage {
     /// point of asking somebody is finding out, and silence is the one answer
     /// that cannot be told from not having seen it.
     Answer { from: PersonId, yes: bool },
-    /// **Here is my locker; keep it.**
-    ///
-    /// Last in the list on purpose. Postcard writes a variant as its index, so
-    /// appending is the one change that leaves every other message where it
-    /// was — see [`codec::PROTOCOL`], which is what says so when it does not. The patterns and the diary this client
+    /// **Here is my locker; keep it.** The patterns and the diary this client
     /// now holds, replacing whatever the server had — see [`kept`].
     ///
     /// Whole rather than a change, because both are small and replacing is one
@@ -1105,6 +1101,21 @@ pub enum ClientMessage {
     /// Answerable **without a seat**. A library is edited between games and the
     /// screen that edits it is not inside a room.
     Keep(kept::Kept),
+    /// **This is who I am**, said before any room is named.
+    ///
+    /// A `Join` carries the secret and so a seat has always come with a person;
+    /// nothing else did, so a client sitting on the menu was nobody — it heard
+    /// no challenge queued for it, and could not be answered anything filed
+    /// against a person. This presents the secret on its own, and the answer is
+    /// [`ServerMessage::You`]. The name rides with it for the reason it rides on
+    /// a `Join`: it is the one thing a profile takes a client's word for, and a
+    /// person met here and nowhere else would otherwise have none.
+    ///
+    /// Everything from here down is **appended**. Postcard writes a variant as
+    /// its index, so appending is the one change that leaves every other message
+    /// where it was — see [`codec::PROTOCOL`], which is what says so when it
+    /// does not.
+    Hello { name: String, person: Secret },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1316,6 +1327,13 @@ pub enum ServerMessage {
     /// because "empty" and "emptied" look the same from here. A tombstone would
     /// tell them apart and is more machinery than the mistake is worth.
     Yours(kept::Kept),
+    /// **Who this server says you are**, in answer to [`ClientMessage::Hello`].
+    ///
+    /// Its own message rather than a [`Self::Profile`], because the socket
+    /// reads it: this is the one reply that tells a connection which person it
+    /// carries before a `Welcome` has, and a profile you *looked up* must not
+    /// be mistaken for that. Anything queued for this person rides out with it.
+    You(Profile),
 }
 
 /// Screens this server asks a client not to offer.

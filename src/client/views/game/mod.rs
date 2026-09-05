@@ -1413,7 +1413,7 @@ impl GameApp {
                 self.ui.editing_stamp = None;
                 self.ui.naming_stamp = None;
             }
-            Effect::Rated => {
+            Effect::Rated | Effect::Recognised => {
                 let now = self.session.rating();
                 if let Screen::Menu(m) = &mut self.ui.screen {
                     m.rating = now;
@@ -1512,7 +1512,8 @@ impl GameApp {
                 }
                 crate::net::keep::remember_server(&address);
                 log::info!("asking {address} what rooms it has");
-                if self.session.connect(dial(&address), self.elapsed) {
+                let name = self.my_name();
+                if self.session.connect(dial(&address), &name, self.elapsed) {
                     self.show_menu(menu::Stage::Asking);
                 } else {
                     self.show_menu(menu::Stage::Failed(words::menu::not_an_address(&address)));

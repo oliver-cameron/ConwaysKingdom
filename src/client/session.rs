@@ -100,6 +100,10 @@ pub enum Effect {
     LookAt((i32, i32)),
     /// This client's rating moved, and a home screen showing one should say so.
     Rated,
+    /// **A server said who we are**, before any join — the answer to a
+    /// `Hello`, into [`Session::profile`]. The same screens read it as read a
+    /// rating, because a rating is part of it.
+    Recognised,
     /// Somebody's profile arrived, into whatever asked for it.
     LookedUp,
     /// **The locker this server holds for us arrived**, into
@@ -842,6 +846,15 @@ impl Session {
                         log::info!("{who} is now rated {rating} ({change:+})");
                     }
                 }
+                // **Who this server says we are**, with no room named yet.
+                // Written down for the reason a `Welcome`'s profile is: the
+                // server issues the id, and this is the earliest it can.
+                ServerMessage::You(profile) => {
+                    log::info!("this server knows us as {}", profile.label());
+                    crate::net::keep::remember_person(&profile.who);
+                    self.profile = Some(profile);
+                    effects.push(Effect::Recognised);
+                }
                 // What this server says about somebody else, asked for from a
                 // lobby or a standings bar.
                 ServerMessage::Profile(found) => {
@@ -1283,16 +1296,30 @@ impl Session {
 
     // ---- going places ------------------------------------------------------
 
-    /// Reach a server and ask what rooms it has.
+    /// Reach a server, say who we are, and ask what rooms it has.
     ///
     /// Any previous socket goes first. Two links would both be draining into
     /// one client, and the second `Welcome` would arrive into a world built
     /// for the first. `false` is an address a socket cannot be built for,
     /// which in a browser is the one way dialling fails.
-    pub fn connect(&mut self, link: Option<Link>, now: f64) -> bool {
+    pub fn connect(&mut self, link: Option<Link>, name: &str, now: f64) -> bool {
         self.link = link;
+        self.hello(name);
         self.ask_for_rooms(now);
         self.link.is_some()
+    }
+
+    /// **Say who we are before saying anything else.**
+    ///
+    /// A `Join` carries the secret, so a seat always came with a person; a
+    /// client on the menu had sent no `Join` and was nobody — a challenge
+    /// queued for it waited until it joined something, and a listing filed
+    /// against a person had nobody to be answered to. A client with no secret
+    /// sends nothing, and is somebody new wherever it goes.
+    fn hello(&mut self, name: &str) {
+        if let Some(person) = crate::net::keep::secret_or_new() {
+            self.tell(ClientMessage::Hello { name: name.to_string(), person });
+        }
     }
 
     /// **Where the client was told to go**, before the first frame.
@@ -1320,6 +1347,9 @@ impl Session {
         if self.link.is_none() {
             return false;
         }
+        // Who first, so a watcher is somebody too: a `Watch` carries no key,
+        // and a spectator who had been challenged would otherwise never hear.
+        self.hello(&name);
         // A link that says watch is answered by `Watch`, which takes no name
         // and no key: there is no player to be remembered as.
         match (room, watch) {

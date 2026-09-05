@@ -1248,7 +1248,9 @@ impl Server {
             // of no others — both are `Rooms`' business, like everything else
             // that outlives one world.
             | ClientMessage::Challenge { .. }
-            | ClientMessage::Answer { .. } => Vec::new(),
+            | ClientMessage::Answer { .. }
+            // And who somebody is, which is the first of those.
+            | ClientMessage::Hello { .. } => Vec::new(),
             // The lobby, which is a place rather than a world: both of these
             // change who is on whose side and neither touches a cell.
             ClientMessage::JoinTeam { team } => {

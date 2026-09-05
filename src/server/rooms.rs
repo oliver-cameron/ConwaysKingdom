@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::net::{
-    ClientMessage, Made, PersonId, RoomId, RoomInfo, RoomName, ServerMessage, DEFAULT_ROOM,
+    ClientMessage, Made, PersonId, RoomId, RoomInfo, RoomName, Secret, ServerMessage, DEFAULT_ROOM,
 };
 use crate::server::matches::{Phase, Victory};
 use crate::server::Server;
@@ -524,6 +524,20 @@ impl Rooms {
         if let ClientMessage::Rooms = msg {
             return vec![ServerMessage::Rooms { rooms: self.listing(), hidden: self.hidden }];
         }
+        // **Who, with no where.** The same meeting a `Join` does, without the
+        // room: a client on the menu is somebody, and until it could say so
+        // nothing filed against a person could reach it there. What was
+        // waiting rides out with the answer rather than with the next thing
+        // said, because `deliver` above ran before this connection had a name.
+        if let ClientMessage::Hello { name, person } = &msg {
+            let who = self.meet(person);
+            self.profiles.met(&who, name);
+            let mut out = self.deliver(&Caller::known(caller.connection, who.clone()));
+            if let Some(profile) = self.profile_of(&who) {
+                out.insert(0, ServerMessage::You(profile));
+            }
+            return out;
+        }
         // Answered without a seat for a sharper version of the same reason: it
         // names a room that does not exist, so there is nowhere to have been
         // standing when it was sent.
@@ -688,20 +702,7 @@ impl Rooms {
             // somebody is. A refusal is a refusal to join at all: a client
             // that offered a key meant to be somebody, and putting them in as
             // a stranger instead would be answering a different question.
-            // **Looked up, and written down if it is new.** A secret this
-            // server has not seen is a person it has not met, not an impostor:
-            // the client made it, nothing was issued, and the answer is to
-            // issue an id and remember the pairing. There is nothing here that
-            // can fail to check out, which is what a signature bought and what
-            // a single server does not need — see `net::auth`.
-            let who = person.as_ref().map(|secret| self.people.meet(secret));
-            if let Some((_, true)) = &who {
-                // A person met for the first time reaches disk before they
-                // rely on having been here: a rating earned by somebody this
-                // server forgets on a restart is worse than none.
-                self.save_people();
-            }
-            let who = who.map(|(id, _)| id);
+            let who = person.as_ref().map(|secret| self.meet(secret));
             return match self.resolve(asked.as_ref().map(RoomId::as_str)) {
                 Ok(name) => {
                     if let Some(seat) = seat {
@@ -990,7 +991,23 @@ impl Rooms {
         }
     }
 
-    /// What is waiting for somebody, without taking it.
+    /// **Who this secret is, written down if it is new.**
+    ///
+    /// A secret this server has not seen is a person it has not met, not an
+    /// impostor: the client made it, nothing was issued, and the answer is to
+    /// issue an id and remember the pairing. There is nothing here that can
+    /// fail to check out, which is what a signature bought and what a single
+    /// server does not need — see `net::auth`. A person met for the first
+    /// time reaches disk at once, because a rating earned by somebody this
+    /// server forgets on a restart is worse than none.
+    fn meet(&mut self, secret: &Secret) -> PersonId {
+        let (who, new) = self.people.meet(secret);
+        if new {
+            self.save_people();
+        }
+        who
+    }
+
     /// **Everything held for this caller**, taken as it is handed over.
     ///
     /// Appended to whatever they asked for, because there is no channel to a
@@ -1649,7 +1666,6 @@ mod tests {
     fn a_generation() -> std::time::Duration {
         std::time::Duration::from_secs_f32(crate::net::Rules::default().generation_span())
     }
-    use crate::net::Secret;
     use crate::sim::World;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1796,6 +1812,58 @@ mod tests {
                 .is_empty(),
             "an unjoined connection may not read a world"
         );
+
+        // And a `Hello`, which names no world either: it says who is asking,
+        // and is answered with who this server takes them to be.
+        let replies = rooms.handle(
+            &Caller::nobody(),
+            ClientMessage::Hello { name: "alice".into(), person: Secret::new().unwrap() },
+        );
+        let [ServerMessage::You(profile)] = &replies[..] else {
+            panic!("expected to be told who we are, got {replies:?}");
+        };
+        assert_eq!(profile.name, "alice", "the name rode with the hello");
+        assert!(rooms.people.knows(&profile.who), "a hello is a meeting");
+    }
+
+    /// **A person on the menu is somebody.** A `Hello` names a person with no
+    /// seat, and whatever was waiting for them rides out with the answer rather
+    /// than with the next room list — so a challenge reaches a client that has
+    /// opened the page and joined nothing.
+    #[test]
+    fn a_hello_names_a_person_and_hands_over_what_is_waiting() {
+        let mut rooms = Rooms::just(Server::named("hall", World::infinite_empty()));
+        let (a, b) = (Secret::new().unwrap(), Secret::new().unwrap());
+        let hello =
+            |s: &Secret| ClientMessage::Hello { name: "somebody".into(), person: s.clone() };
+
+        // Both met by saying hello and nothing else: no room was ever joined.
+        let out = rooms.handle(&Caller::new(1), hello(&a));
+        let [ServerMessage::You(a_profile)] = &out[..] else { panic!("{out:?}") };
+        let out = rooms.handle(&Caller::new(2), hello(&b));
+        let [ServerMessage::You(b_profile)] = &out[..] else { panic!("{out:?}") };
+        let (a_id, b_id) = (a_profile.who.clone(), b_profile.who.clone());
+        assert_ne!(a_id, b_id);
+
+        // The same secret is the same person, said twice.
+        let out = rooms.handle(&Caller::new(3), hello(&a));
+        let [ServerMessage::You(again)] = &out[..] else { panic!("{out:?}") };
+        assert_eq!(again.who, a_id, "a second hello renamed somebody");
+
+        rooms.handle(
+            &Caller::known(1, a_id.clone()),
+            ClientMessage::Challenge { who: b_id.clone() },
+        );
+
+        // A fresh socket for b, which has said nothing yet: the hello is the
+        // first word, and the challenge comes back with it.
+        let out = rooms.handle(&Caller::new(4), hello(&b));
+        assert!(matches!(&out[..], [ServerMessage::You(_), ..]), "{out:?}");
+        let told = out.iter().find_map(|m| match m {
+            ServerMessage::Challenged { from, .. } => Some(from.who.clone()),
+            _ => None,
+        });
+        assert_eq!(told, Some(a_id), "the challenge did not ride out with the hello: {out:?}");
     }
 
     /// The menu's whole reason for being able to show anything. Asked before
