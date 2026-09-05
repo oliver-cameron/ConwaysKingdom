@@ -35,6 +35,14 @@ At 16×16 chunks a 4K screen at one pixel per cell wants 160 layers. The floor o
 
 `Queue::write_texture` is exempt from the 256-byte `bytes_per_row` alignment that `copy_buffer_to_texture` imposes, which is what makes a 64-byte chunk row a legal upload.
 
+## The halo
+
+An overclocker's disc runs the rule twice a generation and mostly does not look it. The shapes worth building are period one or two, and stepping a period-two pattern twice lands it on the phase it started from — so the fastest ground on the board reads as the stillest, which is what ice looks like. Two mechanics with one appearance is worse than either.
+
+So the edge of the disc is drawn, faintly, in its owner's colour, as the cells on it: everything on this board is a square on a grid and a smooth circle over it belongs to a different game — the same argument [a blast's fire](#a-blast) is made of. The **union per player**, not a ring per machine, so two overclockers side by side are one patch of fast ground with one border rather than two circles with a line drawn through ground that has no line in it.
+
+It is asked of `World::overclockers`, which is the list the pass itself acts on, so the mark and the rule cannot come apart; and it is skipped below two points a cell, where an edge is a stain. What it does not draw is the interior, which is still ordinary ground with ordinary cells on it.
+
 ## A wrapping world is folded, not tiled
 
 Every chunk position the viewport covers is asked which chunk actually fills it. On an infinite world that is the identity; on a torus it is many-to-one, so **the world repeats for as far as anyone can pan** and the work is proportional to the screen rather than to the world.

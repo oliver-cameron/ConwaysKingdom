@@ -31,7 +31,39 @@ pub struct Marks {
     pub selection: Option<Selection>,
     /// **Fireballs**, in screen points, newest last — see [`Fireball`].
     pub blasts: Vec<Fireball>,
+    /// **Where a generation happens twice**, one per player — see [`Halo`].
+    pub halos: Vec<Halo>,
 }
+
+/// The edge of the ground an overclocker runs the rule twice over.
+///
+/// **Drawn because nothing else says it is there.** A disc runs at double rate
+/// and the cells in it mostly do not look it: the shapes worth building are
+/// period one or two, and stepping a period-two pattern twice lands it on the
+/// phase it started from, so the fastest ground on the board reads as the
+/// stillest. The edge is the one honest mark — it says where the rule changes,
+/// which is the thing a player has to know and cannot infer.
+///
+/// **The edge of the union, per player, not a ring per machine.** Two
+/// overclockers side by side make one patch of fast ground with one border;
+/// drawing a circle round each would say there are two regions and draw a line
+/// through the middle of ground that has no line in it.
+///
+/// Cells rather than a curve, for the reason [`Fireball`] gives: everything on
+/// this board is a square on a grid.
+pub struct Halo {
+    /// One rectangle per cell on the border, already in screen points.
+    pub tiles: Vec<egui::Rect>,
+    /// Whose clock it is. A halo is drawn in its owner's colour and not in the
+    /// viewer's, because whose ground runs fast is the whole of what it says.
+    pub tint: egui::Color32,
+}
+
+/// How strongly a halo's edge is drawn, out of 255.
+///
+/// Faint on purpose: it is a boundary on ground that is still ground, and the
+/// cells inside it are what somebody is looking at.
+const HALO_ALPHA: u8 = 90;
 
 /// A detonation, part way through burning out.
 ///
@@ -87,12 +119,25 @@ pub struct Selection {
 }
 
 pub fn show(ctx: &egui::Context, theme: &Theme, marks: &Marks) {
-    if marks.hover.is_none() && marks.selection.is_none() && marks.blasts.is_empty() {
+    if marks.hover.is_none()
+        && marks.selection.is_none()
+        && marks.blasts.is_empty()
+        && marks.halos.is_empty()
+    {
         return;
     }
     let p = theme.palette;
     let painter = ctx
         .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("world-marks")));
+
+    // Under everything, and under the fire especially: a halo is a standing
+    // fact about the ground and a blast is something that just happened to it.
+    for halo in &marks.halos {
+        let edge = halo.tint.gamma_multiply(HALO_ALPHA as f32 / 255.0);
+        for tile in &halo.tiles {
+            painter.rect_filled(*tile, 0.0, edge);
+        }
+    }
 
     // Under the pointer's marks, because what you are about to do matters more
     // than what just happened.

@@ -584,7 +584,8 @@ impl World {
     ///
     /// [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md#overclockers
     fn overclock_pass(&mut self, generation: u64, pass: u64, earned: &mut Takings) {
-        let masks = self.overclock_masks(&self.overclockers());
+        let at: Vec<(i32, i32)> = self.overclockers().into_iter().map(|(at, _)| at).collect();
+        let masks = self.overclock_masks(&at);
         if masks.is_empty() {
             return;
         }
@@ -637,10 +638,16 @@ impl World {
         masks
     }
 
-    /// Every live, ice-free overclocker, in absolute coordinates. Unsorted,
-    /// unlike [`Self::turrets`]: a disc is a set of bits, so nothing about
-    /// the pass depends on which was found first.
-    fn overclockers(&self) -> Vec<(i32, i32)> {
+    /// Every live, ice-free overclocker, in absolute coordinates, with the
+    /// player whose clock it is. Unsorted, unlike [`Self::turrets`]: a disc is
+    /// a set of bits, so nothing about the pass depends on which was found
+    /// first.
+    ///
+    /// **Public because the interface draws the same list.** A halo that found
+    /// its own machines would be a second answer to "what runs twice", and the
+    /// two would disagree the first time either changed — see
+    /// [`Self::overclock_pass`], which is the only thing that acts on it.
+    pub fn overclockers(&self) -> Vec<((i32, i32), PlayerId)> {
         let mut out = Vec::new();
         for ((crow, ccol), chunk) in self.stored() {
             for row in 0..CHUNK_N {
@@ -655,8 +662,8 @@ impl World {
                         continue;
                     }
                     out.push((
-                        crow * CHUNK_N as i32 + row as i32,
-                        ccol * CHUNK_N as i32 + col as i32,
+                        (crow * CHUNK_N as i32 + row as i32, ccol * CHUNK_N as i32 + col as i32),
+                        cell.player(),
                     ));
                 }
             }
