@@ -66,9 +66,10 @@ pub enum Did {
 /// every one of these is read by name at the other end anyway.
 pub struct Look<'a> {
     pub me: PlayerId,
-    /// Why the last whistle was refused, if it was. Shown beside the button
-    /// that produced it — a refusal in the HUD's corner is a refusal nobody
-    /// reads, and a button that appears to do nothing reads as a broken lobby.
+    /// Why the last press in this lobby was refused, if it was — the whistle,
+    /// a side, a bot. Shown in the lobby that produced it, to whoever pressed:
+    /// a refusal in the HUD's corner is a refusal nobody reads, and a button
+    /// that appears to do nothing reads as a broken lobby.
     pub refused: Option<&'a str>,
     pub phase: &'a MatchPhase,
     pub victory: Option<Victory>,
@@ -242,17 +243,6 @@ pub fn show(
                                 {
                                     did = Did::Start;
                                 }
-                                match look.refused {
-                                    Some(why) => {
-                                        ui.colored_label(
-                                            p.warn,
-                                            egui::RichText::new(why).size(m.text_small),
-                                        );
-                                    }
-                                    None => {
-                                        ui.small(w().menu.watch.start_note);
-                                    }
-                                }
                             } else {
                                 // Said rather than left blank: a lobby that
                                 // does nothing and explains nothing is
@@ -261,6 +251,24 @@ pub fn show(
                                     Some(_) => w().menu.watch.not_yours,
                                     None => w().menu.watch.at_console,
                                 });
+                            }
+                            // **For whoever pressed, owner or not.** A side or
+                            // a bot is refused into the lobby the way the
+                            // whistle is, and anybody seated may press those;
+                            // drawn under the owner's button only, a full
+                            // room was a press that did nothing for everybody
+                            // else.
+                            match look.refused {
+                                Some(why) => {
+                                    ui.colored_label(
+                                        p.warn,
+                                        egui::RichText::new(why).size(m.text_small),
+                                    );
+                                }
+                                None if mine => {
+                                    ui.small(w().menu.watch.start_note);
+                                }
+                                None => {}
                             }
                         }
                     }
