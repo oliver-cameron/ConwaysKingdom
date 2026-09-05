@@ -468,8 +468,8 @@ macro_rules! kinds {
 ///
 /// One thing or nothing, never two, because there is one field. Which is why
 /// what a kind spends it on is worth writing in the table rather than
-/// discovering: a factory's is **reserved** for [depleted factories], and a dead
-/// factory's clearing is a roll partly so that nothing else takes it.
+/// discovering: a factory's is its **wear** — see [depleted factories] — and a
+/// dead factory's clearing is a roll partly so that nothing else takes it.
 ///
 /// [depleted factories]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#depleted-factories
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

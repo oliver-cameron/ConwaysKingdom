@@ -18,7 +18,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 |---|---|---|
 | [What to do next](#what-to-do-next) | — | a reading of this list, in order |
 | [Cloudflare, and which half of this fits](#cloudflare-and-which-half-of-this-fits) | Thought about | the page fits Pages; the server is not a Worker |
-| [A minimap](#a-minimap) | Noted | marching squares over the world, probably in a compute |
+| [A minimap](#a-minimap) | Noted | a picture of where the territory is, drawn on the server, not from a client's own screen |
 | [Parties](#parties) | Thought about | a private set of worlds for one group of players |
 | [Buttons on a narrow screen](#buttons-on-a-screen-narrower-than-the-hotbar) | Thought about | shrink, wrap, or stop being full width |
 | [Better interfaces](#better-interfaces) | Part built | the home screen is three buttons; the in-game views are still a desktop |
@@ -28,7 +28,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
 | [Dynamite](#dynamite) | Built | the art is a placeholder; the numbers are measured, and stand |
 | [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
-| [Depleted factories](#depleted-factories) | Decided | a factory that stops paying, so income does not scale with size |
+| [Depleted factories](#depleted-factories) | Built | a factory's age is its wear; the numbers have not been through `balance` |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
 | [Spectating](#spectating) | Built | a room with no seat in it |
@@ -41,7 +41,6 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [The menu draws nothing on some machines](#the-menu-draws-nothing-on-some-machines) | **Open** | a bug, not reproduced; what is ruled out and what is not |
 | [Experiments](#experiments) | Part built | a kind of **room**: the clock and the placing rules are the room's, and shared; RLE and reset are not |
 | [Keys the player chooses](#keys-the-player-chooses) | Decided | defaults cannot be right; three faults have come out of that |
-| [Better interfaces](#better-interfaces) | Decided | the menu had two passes; everything else had none |
 | [How to play](#how-to-play) | Designed | the rules nobody can infer, the four tips that matter, and who wrote the rule underneath |
 | [A profile screen worth visiting](#a-profile-screen-worth-visiting) | Designed | stamps edited out of play, a face, and finding somebody |
 | [Antialias always](#antialias-always) | Built | one rule at every zoom, a box filter one pixel wide |
@@ -59,7 +58,6 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Fifteen slots, and more than fifteen clients](#fifteen-slots-and-more-than-fifteen-clients) | **Open** | a room that has met fifteen people is full for ever |
 | [Matches](#matches) | Built | |
 | [Type, and the numbers that jitter](#type-and-the-numbers-that-jitter) | Decided | |
-| [A minimap](#a-minimap) | Decided | |
 | [Mobile](#mobile) | Designed | |
 | [Known, and left alone](#known-and-left-alone) | — | |
 
@@ -69,7 +67,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 
 Three things came out of building it that the design did not say.
 
-**A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Rot` once it is dead. A dynamite's fuse and a factory's rot are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
+**A kind's rules live on the kind.** `Kind::ages` is a table: `Ages::Never`, `Ages::Fuse(chance)` while it lives, `Ages::Depletes` for a factory's wear. A dynamite's fuse and a factory's wear are the same field and the same step, and saying so once is what stops them being two spellings of one thing.
 
 **A factory's age is not for this, and the table is where that is written down.** A dead factory still clears on `FACTORY_UPKEEP`, a roll of sixteen in sixty-four a generation, and it stays a roll for two reasons. The scatter does work: a corpse reborn before the charge falls due escapes it, so a chance means *some* of a pattern's corpses escape rather than all or none, which is what grades the cost by how much a pattern leaves lying about. And the field is spent on [depleted factories](#depleted-factories) — `Ages::Depletes` on that row is the wear on the square a factory was born on, a fade where a flag would be a cliff — so nothing else may count on it.
 
@@ -245,15 +243,15 @@ A reading of the rest of this file, in the order the things depend on each other
 
 **1. [An identity a server cannot take](#identity-is-a-keypair-and-today-it-is-not).** `people.jsonl` holds a plaintext secret per person, and a secret is a bearer credential — so every server that has met you can be you on every other server that has met you, and that file is the thing on the machine worth stealing. `net::auth::person` says so itself and says it has to change before there are two servers. It is first not because anything is broken today but because it is the only item here that gets **worse** the more the project succeeds, and because everything social — a directory, friends, inviting somebody in particular, a leaderboard that means anything — is built on top of who somebody is.
 
-**2. [A level of detail](#zooming-out-without-lying).** Low zoom does not work and it is not the sampling: one chunk is one texture array layer against a guaranteed floor of 256, so a 1080p screen is mostly backdrop below about zoom five and an island in a sea of nothing at the floor. The answer is the cell without its art — one texel a cell, one quad, no sheet lookup — and it is **one piece of work with four uses**: zooming out, a minimap, a world overview, and a spectator following a player. Three of those are separate entries in this file.
+**2. ~~[A level of detail](#zooming-out-without-lying).~~** Done — `render::chunks::CoarseTexture` is the cell without its art, one texel a cell, and the entry says what it changed. What is left of it is the two things the entry lists: the coarse window re-fills rather than scrolls on a boundless world, and there is no second coarse level below a quarter of a pixel a cell. The other three uses it was meant to serve — a minimap, a world overview, a spectator following a player — are still their own entries.
 
 **3. ~~`World: Clone`.~~** Done — `World` and its `Storage` derive `Clone`, and `a_clone_steps_without_moving_the_original` in `sim::world` pins the two things that has to mean: a copy steps without moving the original, and it is the original's own future. What the derive was for is still to build: [a match prediction](#predicting-a-match-and-what-it-shares-with-bots-and-experiments), a bot that chooses rather than follows a book, and an [experiment's](#experiments) pause-step-reset.
 
 **4. ~~The session comes out of the game view.~~** Done — `client::session` holds the link, the seat and the purse, and nothing in it needs a GPU. What is left of that entry is `lay`, `click` and `stamp_at`, which is smaller and is about wording rather than structure.
 
-**5. [Depleted factories](#depleted-factories).** The economy has no ceiling that is not the blunt one, `Player::MAX_VALUE`, which stops a purse growing and does nothing about why it was growing. Small, needs nothing first, and `Kind::inherits` already makes it a row in a table rather than a rule.
+**5. ~~[Depleted factories](#depleted-factories).~~** Done — a factory's age is its wear, `Ages::Depletes` on the kind's row and `rule::factory_chance` a parabola over it, so a lineage pays best in its prime and almost nothing when spent. What is left is the numbers: `FACTORY_PRIME`, `FACTORY_BEST` and `FACTORY_SPENT` have not been through `examples/balance.rs`, which does not yet run a pattern long enough to show the fall.
 
-Worth saying what is **closer than this file implies**. [A leaderboard](#a-leaderboard) says it waits on a person being a keypair; per server it does not, because `server::ratings` is already keyed by `PersonId` and already saved — what is left is a message answerable without a seat and a screen. Only a leaderboard that spans servers needs item 1.
+Worth saying what is **closer than this file implies**, and what has since arrived. [A leaderboard](#a-leaderboard) per server is built — `ClientMessage::People` with an empty search is the leaderboard, answered without a seat, and the home screen shows it — because `server::ratings` was already keyed by `PersonId` and saved. Only a leaderboard that spans servers needs item 1. The same reading applies to [parties](#parties): a membership keyed by today's per-server person is buildable on the pattern a challenge already uses, at the price that the rows reset when a person becomes a key, which is the price the leaderboard already pays.
 
 And what is not next. [The simulation on the GPU](#the-simulation-on-the-gpu) is a large piece of work whose benefit begins at a world size nobody has run, and the level of detail above removes the one argument that was pulling it forward. [Mobile](#mobile) is a layout problem that wants the interface to stop moving first.
 
@@ -431,6 +429,8 @@ The decision it records is still worth keeping, because it is the one that makes
 
 ## Depleted factories
 
+**Built**, as the age field: `Ages::Depletes` on the factory's row in `kinds!`, and `rule::factory_chance` a parabola over it — a lineage pays best in its prime and almost nothing when spent, with `FACTORY_PRIME`, `FACTORY_BEST` and `FACTORY_SPENT` the three numbers. The roll is gated where the birth is counted, in the rule's tally, so `net::earnings` reads nothing new. What is left is the numbers, which have not been through `examples/balance.rs`. The argument that got here is kept below.
+
 **The problem is that factory income scales faster than size.** A factory pays when one of its kind is *born*, and births scale with the perimeter of a growing pattern — so a player with four times the territory does not earn four times as much, they earn more than that, and they can spend it on more territory. Nothing in the rules pushes back.
 
 A **depleted** factory is the push-back: past some point it stops paying and is an ordinary cell that happens to have cost more. What that buys is a ceiling on what any one lineage is worth, so income comes from *building new things* rather than from having built a big one.
@@ -443,7 +443,7 @@ Byte 1 is full — alive, ice, kind, age; see [simulation.md](simulation.md#the-
 
 **The age field.** A factory's age *is* its depletion: `net::earnings` scales down with it and a factory at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that factories can no longer use age for anything else, and it collides with dynamite if a dynamite is ever also a factory.
 
-**This is the one to do, and the field is now held for it.** `Kind::ages` says `Ages::Never` for a factory, which is a reservation: a dead factory's clearing was tried as an age count and put back to a roll precisely so nothing else spends the field. What is left is `net::earnings` reading the age, and something to advance it — a count of births is the honest one, since it is what a factory is paid for.
+**This is the one that was done.** `Kind::ages` said `Ages::Never` for a factory while it was a reservation: a dead factory's clearing was tried as an age count and put back to a roll precisely so nothing else spends the field. What is left is `net::earnings` reading the age, and something to advance it — a count of births is the honest one, since it is what a factory is paid for.
 
 **A bit off age.** Three bits become two, four ages instead of eight. Cheapest to write and the worst of the three: it takes resolution away from the one field that has a use lined up, to buy a flag that a kind gives away.
 
@@ -971,7 +971,7 @@ seen.
 
 ## Better interfaces
 
-**Decided.** The menu has had two passes and everything else has had none, so the client now reads as two different products depending on which screen you are on.
+**Part built.** The menu has had two passes and everything else has had none, so the client now reads as two different products depending on which screen you are on.
 
 What is actually wrong, in the order it bites:
 
@@ -1638,16 +1638,6 @@ Worth doing after the level shading lands rather than before, because that chang
 
 [theme.rs]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/src/client/views/theme.rs
 
-## A minimap
-
-**Not yet**, and the reason is not effort. A client holds the chunks it subscribed to, which is its own screen and a margin — so a minimap drawn from what the client has is a picture of where you already are, which is the one place you do not need a map for.
-
-A real one needs a **coarse summary from the server**: something like a byte per chunk, saying which player holds most of it and how strongly, broadcast on a cadence the way `Standing` is. That is a small message and a straightforward pass over the world.
-
-What it runs into is the boundless world. "The whole map" has no edge, so a minimap of one is either a window around the action or the bounding box of everything anybody holds, and both change size as people play. On a **torus** there is no such question: the world is a fixed rectangle and a minimap is exactly that rectangle.
-
-Which suggests the order. Do it for wrapping worlds first, where it is nearly free, and let matches be where it lands — a match wants a fixed arena anyway, and a match is where knowing who holds what without panning across the world actually decides something.
-
 ## Mobile
 
 The page lays out at device width now and the canvas no longer asks for three device pixels a point, which were the two things making it unusable. What is left is the interface rather than the plumbing.
@@ -1840,3 +1830,13 @@ What it runs into: a server has no GPU in most of the places one would deploy
 it — see [Cloudflare](#cloudflare-and-which-half-of-this-fits) — so "in a
 compute" and "on the server" pull against each other, and the CPU version wants
 costing before the GPU one is assumed.
+
+### Not from the client
+
+**Not yet**, and the reason is not effort. A client holds the chunks it subscribed to, which is its own screen and a margin — so a minimap drawn from what the client has is a picture of where you already are, which is the one place you do not need a map for.
+
+A real one needs a **coarse summary from the server**: something like a byte per chunk, saying which player holds most of it and how strongly, broadcast on a cadence the way `Standing` is. That is a small message and a straightforward pass over the world.
+
+What it runs into is the boundless world. "The whole map" has no edge, so a minimap of one is either a window around the action or the bounding box of everything anybody holds, and both change size as people play. On a **torus** there is no such question: the world is a fixed rectangle and a minimap is exactly that rectangle.
+
+Which suggests the order. Do it for wrapping worlds first, where it is nearly free, and let matches be where it lands — a match wants a fixed arena anyway, and a match is where knowing who holds what without panning across the world actually decides something.
