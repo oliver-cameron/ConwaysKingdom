@@ -11,6 +11,7 @@ Every player has a `value`, on `sim::Player`. It is what they have to spend.
 | place life | −1 each |
 | place a factory | −10 each |
 | place a turret | −15 each, and four is the smallest one that works |
+| place an overclocker | −15 each, and four is the smallest one that works |
 | place ice | −5 each |
 | **anywhere but your own ground** | **×10**, whatever is being placed |
 | **a factory of yours is born** | **+1** |
@@ -82,6 +83,14 @@ So a failed emplacement fires on the ground behind it, including the other three
 Granted ground is exempt, for the same reason it never decays: it is the ground you can always build on at the ordinary price, and a machine of yours that failed must not be what takes that away.
 
 A turret is not inherited. A factory's children are factories, but a birth beside a turret is ordinary life owned by the turret's owner — the ground changes hands and the machine does not copy itself. Without that a gun would be a turret factory, and whoever built one first would own the map.
+
+## Overclockers
+
+An **overclocker** makes everything within six cells of it step twice for every step the world takes. It is a machine like a turret and priced like one: fifteen a cell, not inherited, and one on its own dies of loneliness in a generation, so the smallest one that works is the block of four — sixty, the same opening a turret is.
+
+What it buys is a disc at twice the clock. A blinker inside is back where it started every time you look; a gun inside fires twice as often and, made of factories, earns twice as often; a stick of dynamite inside burns down twice as fast. The disc is `rule::OVERCLOCK_REACH`, six cells, which is the turret's reach and for the turret's reason.
+
+**The edge is the cost.** The outside of the disc only ever sees every other state of the inside, so a pattern that crosses the ring comes apart where it crosses — a glider leaving the disc is torn. That is a hazard of the piece the way a pane's edge is, and the answer is the same: keep what you care about wholly in or wholly out. How the ring works is in [simulation.md](simulation.md#overclockers).
 
 ## Placing and taking
 
@@ -221,7 +230,7 @@ A gesture that began on the world keeps the pointer until it ends, even if it st
 Two segments, and one thing selected across both:
 
 ```
-    [ Life  Factory  Turret  Ice ]   [ Draw │ Grab  stamps … +7 ]
+    [ Life  Factory  Turret  Dynamite  Overclock  Ice ]   [ Draw │ Grab  stamps … +7 ]
 ```
 
 **Two axes: what a cell is, and how the cells are chosen.** It was one — a row

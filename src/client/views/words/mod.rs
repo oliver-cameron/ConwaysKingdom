@@ -422,6 +422,7 @@ pub struct Hotbar {
     pub turret: &'static str,
     pub ice: &'static str,
     pub dynamite: &'static str,
+    pub overclock: &'static str,
     /// The square that takes a stamp. Short, because it sits in a 44px box.
     /// The shape axis. Verbs, because they are how the cells get chosen
     /// rather than what ends up in them.
@@ -805,6 +806,6 @@ mod tests {
     #[test]
     fn a_language_is_a_whole_set() {
         let _: &'static super::Words = &super::eng::WORDS;
-        assert_eq!(w().menu.howto.rules.len(), 5, "the how-to page lost a rule");
+        assert_eq!(w().menu.howto.rules.len(), 6, "the how-to page lost a rule");
     }
 }

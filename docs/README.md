@@ -121,6 +121,7 @@ cargo run --no-default-features --example balance      # what manufacture pays, 
 cargo run --no-default-features --example territory    # what ground does, in numbers and shapes
 cargo run --no-default-features --example blast        # what a stick turns over, and what that is worth against turrets and life
 cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving the socket, over a real one
+cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```
 
 `server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, everything else under `src/server/` compiles by default, and there is no test that opens a socket. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it.

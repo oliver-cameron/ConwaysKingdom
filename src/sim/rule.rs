@@ -168,6 +168,14 @@ pub const DYNAMITE_THROW: i32 = 12;
 /// by walking past ground that qualifies less.
 pub const DYNAMITE_FOREIGN: u64 = 16;
 
+// --- overclockers ----------------------------------------------------------------
+
+/// How far an overclocker's disc reaches, in cells. At or under [`super::CHUNK_N`].
+pub const OVERCLOCK_REACH: i32 = 6;
+const _: () = assert!(OVERCLOCK_REACH <= super::CHUNK_N as i32, "a disc reaches one chunk");
+/// How many times a generation the disc runs the rule.
+pub const OVERCLOCK_RATE: u32 = 2;
+
 // --- what a new world defaults to ---------------------------------------------
 
 /// A wrapping world's size in chunks, when whoever made it named none.
@@ -230,6 +238,8 @@ pub const TURRET_COST: i32 = 15;
 /// `examples/blast` and argued in planned.md: dearer a square than a turret
 /// where a turret works, and the only tool that works where one does not.
 pub const DYNAMITE_COST: i32 = 153;
+/// One overclocker. Read per emplacement, as a turret is.
+pub const OVERCLOCK_COST: i32 = 15;
 /// One cell of a pane.
 pub const ICE_COST: i32 = 5;
 /// Taking back your own, and taking somebody else's.

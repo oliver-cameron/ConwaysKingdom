@@ -69,6 +69,22 @@ fn a_turret_is_not_inherited() {
     }
 }
 
+/// An overclocker is a machine for the same reason: a birth that copied it
+/// would let any gun claim the map's clock.
+#[test]
+fn an_overclocker_is_not_inherited() {
+    let mut n = [Cell::DEAD; 8];
+    for i in [0, 3, 6] {
+        n[i] = Cell::alive(PlayerId(4)).with_kind(Kind::OVERCLOCK);
+    }
+    for seed in 0..64 {
+        let born = next_cell(Cell::DEAD, &n, seed);
+        assert!(born.is_alive(), "seed {seed}");
+        assert_eq!(born.player(), PlayerId(4), "the ground still changes hands");
+        assert_eq!(born.kind(), Kind::NORMAL, "seed {seed} bred an overclocker");
+    }
+}
+
 /// And a factory still is, because that is the whole of what a factory is: what was
 /// bought is a lineage, and it travels by being copied.
 #[test]
@@ -91,14 +107,22 @@ fn not_inheriting_does_not_move_the_roll() {
     for seed in 0..64 {
         let mut plain = [Cell::DEAD; 8];
         let mut turrets = [Cell::DEAD; 8];
+        let mut overclockers = [Cell::DEAD; 8];
         for (i, &p) in [0usize, 3, 6].iter().zip(&owners) {
             plain[*i] = Cell::alive(p);
             turrets[*i] = Cell::alive(p).with_kind(Kind::TURRET);
+            overclockers[*i] = Cell::alive(p).with_kind(Kind::OVERCLOCK);
         }
+        let chosen = next_cell(Cell::DEAD, &plain, seed).player();
         assert_eq!(
-            next_cell(Cell::DEAD, &plain, seed).player(),
             next_cell(Cell::DEAD, &turrets, seed).player(),
+            chosen,
             "seed {seed} picked a different parent once the kind changed"
+        );
+        assert_eq!(
+            next_cell(Cell::DEAD, &overclockers, seed).player(),
+            chosen,
+            "seed {seed} picked a different parent among overclockers"
         );
     }
 }

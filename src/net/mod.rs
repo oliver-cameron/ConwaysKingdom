@@ -361,6 +361,13 @@ pub enum Placement {
     /// its own dies of loneliness before its fuse burns. What it really costs
     /// is the pattern you have to build to keep it alive that long.
     Dynamite,
+    /// A living cell that makes the ground round it step twice a generation.
+    ///
+    /// Priced by the **emplacement**, as a turret is and for the same two
+    /// reasons: it is not inherited, so it is bought once per cell, and one on
+    /// its own dies of loneliness in a generation. What it buys is a disc at
+    /// twice the clock, with a ring at its edge that sees every other step.
+    Overclock,
 }
 
 impl Placement {
@@ -416,6 +423,13 @@ impl Placement {
                 .with_level(crate::sim::bits::MAX_LEVEL)
                 .with_kind(Kind::DYNAMITE)
                 .with_age(0),
+            // `Ages::Never`, as a turret is.
+            Self::Overclock => existing
+                .with_alive(true)
+                .with_player(player)
+                .with_level(crate::sim::bits::MAX_LEVEL)
+                .with_kind(Kind::OVERCLOCK)
+                .with_age(0),
             // The pane belongs to whoever laid it. There is one owner field
             // per cell, so icing another player's living cell takes the
             // cell with it -- deliberate, and the reason a pane costs what it
@@ -438,6 +452,7 @@ impl Placement {
             Self::Factory => existing.is_alive() && existing.kind() == Kind::FACTORY,
             Self::Turret => existing.is_alive() && existing.kind() == Kind::TURRET,
             Self::Dynamite => existing.is_alive() && existing.kind() == Kind::DYNAMITE,
+            Self::Overclock => existing.is_alive() && existing.kind() == Kind::OVERCLOCK,
             Self::Ice => existing.is_ice(),
         }
     }
@@ -455,6 +470,7 @@ impl Placement {
             Self::Factory => FACTORY_COST,
             Self::Turret => TURRET_COST,
             Self::Dynamite => DYNAMITE_COST,
+            Self::Overclock => OVERCLOCK_COST,
         }
     }
 
@@ -481,6 +497,9 @@ impl Placement {
             // you have already lit, so being unable to put one out would make
             // a misplaced one a countdown you can only watch.
             Self::Dynamite => true,
+            // A turret's case again: dear, and a live cell, so taking one
+            // back is taking back the life.
+            Self::Overclock => true,
             Self::Ice => false,
         }
     }
@@ -493,7 +512,9 @@ impl Placement {
         match self {
             // The kind stays on the corpse, as it does when a cell dies of the
             // rule: what is being taken back is the life.
-            Self::Life | Self::Factory | Self::Turret => existing.with_alive(false),
+            Self::Life | Self::Factory | Self::Turret | Self::Overclock => {
+                existing.with_alive(false)
+            }
             // And the fuse goes out with it. A corpse that kept its age would
             // be a bomb somebody could bring back to life at one generation
             // from going off.
@@ -1648,8 +1669,8 @@ pub fn sane_world(kind: crate::sim::WorldKind, room: &RoomId) -> World {
 /// Every chunk a grant at this position touches, folded onto the chunks the
 /// world actually has.
 ///
-/// A patch is [`SPAWN_N`] cells and a chunk is sixteen, so a grant spans one
-/// chunk at best and four at worst — and on a torus it may span four that are
+/// A patch is [`SPAWN_N`] cells and a chunk is [`CHUNK_N`], so a grant spans
+/// one chunk at best and four at worst — and on a torus it may span four that are
 /// nowhere near each other, which is why the folding is not optional.
 pub fn grant_chunks(world: &World, (row, col): (i32, i32)) -> Vec<ChunkId> {
     let mut out: Vec<ChunkId> =
@@ -1759,8 +1780,8 @@ fn block_site(world: &World, player: PlayerId, row: i32, col: i32) -> Option<(i3
 /// or three", and somebody balancing the game should not have to look in two
 /// files. This module names the actions and reads the numbers.
 pub use crate::sim::{
-    DYNAMITE_COST, FACTORY_COST, FACTORY_DRAIN, FACTORY_YIELD, ICE_COST, LIFE_COST, RECLAIM,
-    TURRET_COST,
+    DYNAMITE_COST, FACTORY_COST, FACTORY_DRAIN, FACTORY_YIELD, ICE_COST, LIFE_COST, OVERCLOCK_COST,
+    RECLAIM, TURRET_COST,
 };
 
 /// What a generation's tally is worth to one player.
@@ -2036,6 +2057,31 @@ mod tests {
         apply(&mut world, &paint(vec![(0, 0)], Placement::Factory));
         assert_eq!(world.cell_at(0, 0).unwrap().kind(), Kind::FACTORY);
         assert!(world.cell_at(0, 0).unwrap().is_alive(), "and leaves the cell living");
+    }
+
+    /// An overclocker is a machine placed in fours for a turret's reasons, and
+    /// it is put down, recognised and taken back the way a turret is.
+    #[test]
+    fn an_overclocker_is_placed_and_taken_back_like_a_turret() {
+        assert!(OVERCLOCK_COST > FACTORY_COST, "an overclocker does not inherit, so it costs more");
+
+        let mut world = World::infinite_empty();
+        let block = vec![(0, 0), (0, 1), (1, 0), (1, 1)];
+        hold(&mut world, &block, PlayerId(1));
+        assert_eq!(
+            value_delta(&world, &paint(block.clone(), Placement::Overclock)),
+            -4 * OVERCLOCK_COST,
+            "an emplacement is four of them"
+        );
+        apply(&mut world, &paint(block.clone(), Placement::Overclock));
+        for &(row, col) in &block {
+            let cell = world.cell_at(row, col).unwrap();
+            assert!(cell.is_alive() && cell.kind() == Kind::OVERCLOCK);
+            assert!(Placement::Overclock.is_on(cell), "the square holds what was placed");
+            assert!(!Placement::Turret.is_on(cell), "and not the other machine");
+            let taken = Placement::Overclock.remove_from(cell);
+            assert!(!taken.is_alive() && taken.player() == PlayerId(1));
+        }
     }
 
     /// A turret is bought once per cell forever, where a factory is bought once

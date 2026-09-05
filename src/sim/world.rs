@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::cell::{Cell, Chunk, Halo, Kind, Takings, CHUNK_N};
+use super::cell::{Cell, Chunk, ChunkMask, Halo, Kind, Takings, CHUNK_N};
 use super::dir::Dir;
 use super::player::PlayerId;
 use super::rule;
@@ -543,6 +543,14 @@ impl World {
             }
         }
 
+        // **Then the discs again, before the generation is called done.** Every
+        // overclocked cell runs the rule once more, reading the world as the
+        // pass above left it and rolling dice of its own — see
+        // [`Self::overclock_pass`].
+        for pass in 1..rule::OVERCLOCK_RATE as u64 {
+            self.overclock_pass(generation, pass, &mut earned);
+        }
+
         self.active = active;
         self.generation += 1;
         self.break_ice_from(seeds);
@@ -550,6 +558,110 @@ impl World {
         self.dirty = true;
         self.prune();
         earned
+    }
+
+    /// Run the rule again over every overclocked disc.
+    ///
+    /// **A pass and not a rule**, for the reason the turret's is one: a disc
+    /// is not a question eight neighbours can answer. It runs after the whole
+    /// world has stepped and before the generation is called done, so the
+    /// generation stays the unit on the wire, in the save and in the digest —
+    /// every peer runs the same passes and there is nothing new to agree
+    /// about.
+    ///
+    /// The discs are found from the world **as the pass before left it**, so
+    /// a machine that died this generation does not run again; and every halo
+    /// is gathered before any cell is written, which is the discipline the
+    /// first pass keeps and for the same reason. At the edge of a disc a
+    /// masked cell reads neighbours the pass before left and this pass will
+    /// not move, and an unmasked cell sees the disc's second state next
+    /// generation: the inside runs twice as fast and the outside sees every
+    /// other step of it. That is the whole of the border, and it is a hazard
+    /// the way a pane's edge is rather than a bug — see [docs/simulation.md].
+    ///
+    /// The dice are [`super::seed::pass_seed`]'s. Handed the generation's own
+    /// seed, a pass would roll every cell the identical dice twice.
+    ///
+    /// [docs/simulation.md]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/simulation.md#overclockers
+    fn overclock_pass(&mut self, generation: u64, pass: u64, earned: &mut Takings) {
+        let masks = self.overclock_masks(&self.overclockers());
+        if masks.is_empty() {
+            return;
+        }
+        for &coord in masks.keys() {
+            self.ensure(coord);
+        }
+        // The whole-world pass is done with its halos by now, so the scratch
+        // is free and this allocates nothing either.
+        self.scratch.clear();
+        for &coord in masks.keys() {
+            let halo = self.gather_halo(coord);
+            self.scratch.push(halo);
+        }
+        let seed = super::seed::pass_seed(generation, pass);
+        for (i, (&coord, mask)) in masks.iter().enumerate() {
+            let halo = self.scratch[i];
+            let at = (coord.0 * CHUNK_N as i32, coord.1 * CHUNK_N as i32);
+            if let Some(chunk) = self.chunk_at_mut(coord) {
+                halo.step_into_where(chunk, seed, at, earned, mask);
+            }
+        }
+    }
+
+    /// The cells every overclocker's disc covers, as a mask per chunk it
+    /// touches.
+    ///
+    /// A `BTreeMap`, so the chunks come out sorted without a second pass, and
+    /// a set of bits, so a cell two discs cover — or one a disc wraps onto on
+    /// a small torus — is stepped once. Folded onto the chunks the world has
+    /// as it goes, the way every absolute coordinate is.
+    fn overclock_masks(&self, at: &[(i32, i32)]) -> BTreeMap<Coord, ChunkMask> {
+        let n = CHUNK_N as i32;
+        let reach = rule::OVERCLOCK_REACH;
+        let mut masks = BTreeMap::new();
+        for &(row, col) in at {
+            for dr in -reach..=reach {
+                for dc in -reach..=reach {
+                    if dr * dr + dc * dc > reach * reach {
+                        continue;
+                    }
+                    let (r, c) = (row + dr, col + dc);
+                    let coord = self.canonical((r.div_euclid(n), c.div_euclid(n)));
+                    masks
+                        .entry(coord)
+                        .or_insert(ChunkMask::NONE)
+                        .set(r.rem_euclid(n) as usize, c.rem_euclid(n) as usize);
+                }
+            }
+        }
+        masks
+    }
+
+    /// Every live, ice-free overclocker, in absolute coordinates. Unsorted,
+    /// unlike [`Self::turrets`]: a disc is a set of bits, so nothing about
+    /// the pass depends on which was found first.
+    fn overclockers(&self) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        for ((crow, ccol), chunk) in self.stored() {
+            for row in 0..CHUNK_N {
+                for col in 0..CHUNK_N {
+                    let cell = chunk[(row, col)];
+                    // A frozen one runs nothing: a pane stops time over
+                    // whatever it covers, and that is every rule.
+                    if cell.kind() != Kind::OVERCLOCK || cell.is_ice() || !cell.is_alive() {
+                        continue;
+                    }
+                    if !cell.player().is_owned() {
+                        continue;
+                    }
+                    out.push((
+                        crow * CHUNK_N as i32 + row as i32,
+                        ccol * CHUNK_N as i32 + col as i32,
+                    ));
+                }
+            }
+        }
+        out
     }
 
     /// Copy a chunk and the facing strip of each neighbour into a flat padded
@@ -3042,6 +3154,173 @@ mod tests {
         assert!(parse_torus("0x4").is_err());
         assert!(parse_torus("100000x100000").is_err());
         assert_eq!(parse_torus("18x18"), Ok(WorldKind::Toroidal { rows: 18, cols: 18 }));
+    }
+
+    fn overclocker(player: PlayerId) -> Cell {
+        Cell::alive(player).with_kind(Kind::OVERCLOCK)
+    }
+
+    /// A block of four overclockers at the origin, and a flat blinker a few
+    /// rows under it: inside the disc, and far enough that neither pattern
+    /// feeds the other a birth.
+    const NEAR: [(i32, i32); 3] = [(5, -1), (5, 0), (5, 1)];
+
+    fn overclocked_blinker(machine: Cell, blinker: &[(i32, i32)]) -> World {
+        let me = PlayerId(1);
+        let mut w = World::infinite_empty();
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            w.set_cell_at(r, c, machine);
+        }
+        for &(r, c) in blinker {
+            w.set_cell_at(r, c, Cell::alive(me));
+        }
+        w
+    }
+
+    /// Everything alive below the machine, which is the blinker.
+    fn under(w: &World) -> Vec<(i32, i32)> {
+        w.live_cells().into_iter().filter(|&(r, _)| r >= 3).collect()
+    }
+
+    /// **Inside a disc a blinker has period one in generations.** The rule
+    /// runs twice before the generation is called done, so it is back where
+    /// it started every time anybody looks — and the machine, inside its own
+    /// disc, is a block and does not care.
+    #[test]
+    fn a_blinker_inside_a_disc_is_flat_again_every_generation() {
+        let mut w = overclocked_blinker(overclocker(PlayerId(1)), &NEAR);
+        for g in 1..=12 {
+            w.step();
+            assert_eq!(under(&w), NEAR.to_vec(), "generation {g}: the blinker should be flat");
+            assert_eq!(w.live_cells().len(), 7, "generation {g}: the block should stand");
+        }
+    }
+
+    /// Outside every disc the world is what it always was: a blinker past
+    /// the reach has period two, and so does one whose machine is dead or
+    /// under a pane, because a corpse and a frozen cell run no pass.
+    #[test]
+    fn a_blinker_outside_a_disc_or_beside_a_dead_or_frozen_machine_keeps_period_two() {
+        let me = PlayerId(1);
+        let far = [(20, -1), (20, 0), (20, 1)];
+        let upright = vec![(19, 0), (20, 0), (21, 0)];
+        let mut w = overclocked_blinker(overclocker(me), &far);
+        w.step();
+        assert_eq!(under(&w), upright, "past the reach it should be upright");
+        w.step();
+        assert_eq!(under(&w), far.to_vec());
+
+        for (machine, why) in [
+            (overclocker(me).with_alive(false), "a corpse"),
+            (overclocker(me).with_ice(true), "a frozen one"),
+        ] {
+            let mut w = overclocked_blinker(machine, &NEAR);
+            w.step();
+            assert_eq!(under(&w), vec![(4, 0), (5, 0), (6, 0)], "{why} ran a pass");
+            w.step();
+            assert_eq!(under(&w), NEAR.to_vec(), "{why} ran a pass");
+        }
+    }
+
+    /// The pass is under the same contract as the rest of the step: two
+    /// worlds given the same start stay byte-identical, with a pattern
+    /// straddling the disc's edge and being torn by it. And the tearing is
+    /// real — the same world with no machine goes somewhere else.
+    #[test]
+    fn a_pattern_straddling_a_disc_is_deterministic_and_is_torn() {
+        let build = |machine: Cell| {
+            let (me, them) = (PlayerId(1), PlayerId(2));
+            let mut w = World::infinite_empty();
+            for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                w.set_cell_at(r, c, machine);
+            }
+            // A glider inside the disc heading out of it, and somebody
+            // else's r-pentomino at the edge, so births are contested and
+            // there is something for the dice to decide.
+            for (r, c) in [(3, 3), (4, 4), (5, 2), (5, 3), (5, 4)] {
+                w.set_cell_at(r, c, Cell::alive(me));
+            }
+            for (r, c) in [(-6, 1), (-6, 2), (-7, 0), (-7, 1), (-5, 1)] {
+                w.set_cell_at(r, c, Cell::alive(them));
+            }
+            w
+        };
+        let (mut a, mut b) = (build(overclocker(PlayerId(1))), build(overclocker(PlayerId(1))));
+        let mut plain = build(Cell::alive(PlayerId(1)));
+        for g in 0..60 {
+            a.step();
+            b.step();
+            plain.step();
+            assert_eq!(a.digest(), b.digest(), "diverged at generation {g}");
+        }
+        assert_ne!(a.live_cells(), plain.live_cells(), "the disc changed nothing");
+    }
+
+    /// **A cell is stepped once however many discs cover it**, and however
+    /// many times a disc wraps onto one chunk of a small torus: the masks
+    /// are sets, and their bits add up to exactly the disc.
+    #[test]
+    fn a_disc_is_masked_once_per_cell_wherever_it_folds() {
+        let reach = rule::OVERCLOCK_REACH;
+        let disc = (-reach..=reach)
+            .flat_map(|dr| (-reach..=reach).map(move |dc| (dr, dc)))
+            .filter(|(dr, dc)| dr * dr + dc * dc <= reach * reach)
+            .count();
+        for (w, chunks) in [
+            (World::infinite_empty(), 4),
+            (World::toroidal_empty(2, 2), 4),
+            (World::toroidal_empty(1, 1), 1),
+        ] {
+            let masks = w.overclock_masks(&[(0, 0)]);
+            assert_eq!(masks.len(), chunks, "{:?}", w.kind());
+            let cells: usize = masks.values().map(ChunkMask::count).sum();
+            assert_eq!(cells, disc, "{:?}: a disc at the origin", w.kind());
+        }
+        // Two overlapping discs are their union, not their sum.
+        let w = World::infinite_empty();
+        let both: usize = w.overclock_masks(&[(0, 0), (0, 1)]).values().map(ChunkMask::count).sum();
+        assert!(both > disc && both < 2 * disc, "{both} cells for two discs a cell apart");
+
+        // And the smallest torus there is steps a disc that is its own
+        // neighbour on every side without a cell being run twice.
+        let me = PlayerId(1);
+        let mut w = World::toroidal_empty(1, 1);
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            w.set_cell_at(r, c, overclocker(me));
+        }
+        for (r, c) in NEAR {
+            w.set_cell_at(r, c, Cell::alive(me));
+        }
+        let n = CHUNK_N as i32;
+        let mut flat: Vec<(i32, i32)> =
+            NEAR.iter().map(|&(r, c)| (r.rem_euclid(n), c.rem_euclid(n))).collect();
+        flat.sort_unstable();
+        for _ in 0..8 {
+            w.step();
+            assert_eq!(under(&w), flat, "on a 1x1 torus the blinker should still be flat");
+        }
+    }
+
+    /// **The second pass is the same rule, and it pays.** A blinker of
+    /// factories inside a disc is born twice a generation, so over a few
+    /// generations it earns more than the one outside — which is the price of
+    /// an overclocked gun, said as a number.
+    #[test]
+    fn manufacture_inside_a_disc_pays_twice_as_often() {
+        let earn = |blinker: &[(i32, i32)]| {
+            let mut w = overclocked_blinker(overclocker(PlayerId(1)), blinker);
+            for &(r, c) in blinker {
+                w.set_cell_at(r, c, Cell::alive(PlayerId(1)).with_kind(Kind::FACTORY));
+            }
+            let mut earned = Takings::default();
+            for _ in 0..4 {
+                earned.add(&w.step());
+            }
+            earned.born[1]
+        };
+        let inside = earn(&NEAR);
+        let outside = earn(&[(20, -1), (20, 0), (20, 1)]);
+        assert!(inside > outside, "inside the disc paid {inside}, outside {outside}");
     }
 
     /// **A copy steps on its own.** One derive is what a prediction, a bot

@@ -27,7 +27,7 @@ The system as it actually stands is [the rest of docs/](README.md). Everything h
 | [Zooming out without lying](#zooming-out-without-lying) | Built | antialiasing, a coarse level, and a floor low enough to use them |
 | [A torus repeats, so its textures can](#a-torus-repeats-so-its-textures-can) | Built | one copy of a wrapping world, drawn many times |
 | [Dynamite](#dynamite) | Built | the art is a placeholder; the numbers are measured, and stand |
-| [Overclockers](#overclockers) | Decided | a cell that steps more than once a generation |
+| [Overclockers](#overclockers) | Built | the art is a placeholder; the price is a turret's until somebody measures |
 | [Depleted factories](#depleted-factories) | Built | a factory's age is its wear; the numbers have not been through `balance` |
 | [The simulation on the GPU](#the-simulation-on-the-gpu) | Costed | a compute shader, and the one thing that makes it hard |
 | [Making rooms from the client](#making-rooms-from-the-client) | Built | a world, a match or a private game, from the menu |
@@ -195,7 +195,7 @@ It needs no new placement rule. `net::may_place` confines you to your own influe
 
 ### What it is made of
 
-`Kind::DYNAMITE`, which is a row in `kinds!` and costs one of eight kind indices — four are used, and four are spare, since [depleted factories](#depleted-factories) went into the age field rather than a kind. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
+`Kind::DYNAMITE`, which is a row in `kinds!` and costs one of eight kind indices — five are used, and three are spare, since [depleted factories](#depleted-factories) went into the age field rather than a kind and the [overclocker](#overclockers) took the fifth. Sprites at tiles 12–15, which is the last group in the sheet's first row, so the art that exists does not move.
 
 **It inherits**, which is the decision that makes it a weapon rather than a factory you cannot eat. A birth copies its parent, so a glider that picks one up carries it — a pattern that crosses a border and goes off inside somebody's country, which is the piece the rest of this entry was missing. The cost is real and worth stating: a gun that catches one is a factory. What limits it is that the **fuse travels too**, so a factory's output goes off near the factory, and that a dynamite is a live cell like any other — kill the pattern and there is nothing left to inherit.
 
@@ -338,17 +338,17 @@ The four figures on the hotbar are labelled with a word each — `purse`, `groun
 
 ## Overclockers
 
-**A cell that steps more than once a generation.** Twice, or more. Not designed yet; this is here to say what it will run into, because that is the part that is already decidable.
+**Built.** `Kind::OVERCLOCK` is a machine placed in fours, and `World::overclock_pass` runs the rule again over the union of its discs after the whole-world pass and before the generation is called done — so the generation stays the unit on the wire, in the save and in the digest, and the checkpoint covers it with no new message. The design is in [simulation.md](simulation.md#overclockers): why sub-steps rather than a faster tick, what the second pass reads at a disc's edge, and why it rolls dice of its own. The price is in [game.md](game.md#overclockers), and `examples/two` runs it over the real protocol behind `OVERCLOCK=1`.
 
-**A generation is the unit everything else is keyed to.** The seeded dice are derived from it, so a birth's owner is a function of the generation — see [simulation.md](simulation.md#determinism). The server broadcasts one `Step` per generation and a client that finds itself at a different tick throws its world away and asks again. Manufacture pays per birth and the standings go out every eight generations. So "twice a generation" is not a rule about a cell so much as a question about what a generation *is*, and the answer has to be one of two shapes:
+What is left:
 
-**Sub-steps inside one generation.** The generation stays the unit on the wire and in the save; inside `World::step`, a region containing an overclocker runs the rule twice before the generation is called done. Everything outside the sim is untouched — one `Step`, one tick, one digest. What it needs is a rule for what a sub-step reads: the second pass sees the first pass's output, which means overclocked regions and ordinary ones are being stepped against different states at their border, and the border is where it will look wrong.
+**The art** is a placeholder in the manner of the others — a double chevron over the plain kind's four tiles, at row 8 of the sheet, which is the first art in its bottom half.
 
-**A faster tick with slower cells.** The opposite: the generation gets shorter and ordinary cells step every *n*th one. Nothing about the rule changes and everything about the cost does — the server steps four times as often for the same simulation, and the tick is already the thing the [latency work](networking.md#messages) was about.
+**The numbers want playing.** `OVERCLOCK_COST` starts where a turret's does and nothing has measured what an overclocked gun is worth; `examples/balance.rs` wants a row for a blinker and a gun inside a disc, and the price read off it. A factory inside a disc is born twice a generation, so it pays twice as often and depletes twice as fast, and which of those wins is the number to look at.
 
-The first is almost certainly right and the second is worth writing down because it is the one that does not need a new concept.
+**A rate other than two** is a loop that is already generic and art and pricing that are not: `OVERCLOCK_RATE` is one constant for every overclocker, and if a kind ever wants its own it belongs as a column on the `kinds!` row rather than a constant beside it.
 
-**What it must not become** is a cell whose speed depends on anything a client can see and the server cannot, or two peers stepping the same region a different number of times. Whatever the design turns out to be, the test is the one `examples/two` already runs: two peers, the real protocol, digests compared every shared generation.
+**Ice seeds between passes.** They are taken once, at the top, so a cell born beside a pane in the second pass breaks it a generation later — the same one-beat lag the first pass has. Retaking them between passes would break it in the same generation, and is a line if that turns out to be wanted.
 
 ## Zooming out without lying
 
@@ -439,7 +439,7 @@ A **depleted** factory is the push-back: past some point it stops paying and is 
 
 Byte 1 is full — alive, ice, kind, age; see [simulation.md](simulation.md#the-cell). There is no spare bit, so this is a choice between three, and they are not equally good.
 
-**A kind.** `Kind::DEPLETED_FACTORY` beside `Kind::FACTORY`, costing one of eight kind indices and no bits at all — four of the eight are spent now, on normal, factory, turret and dynamite. It gets art of its own for free, which a flag would not — a depleted factory has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted factory's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
+**A kind.** `Kind::DEPLETED_FACTORY` beside `Kind::FACTORY`, costing one of eight kind indices and no bits at all — five of the eight are spent now, on normal, factory, turret, dynamite and the overclocker. It gets art of its own for free, which a flag would not — a depleted factory has to *look* spent or nobody can tell which of their cells still earns. `Kind::inherits` already decides whether a birth copies a kind, so "a depleted factory's children are ordinary" or "are also depleted" is a row in the table rather than a rule. This is the one to do.
 
 **The age field.** A factory's age *is* its depletion: `net::earnings` scales down with it and a factory at [`bits::MAX_AGE`] pays nothing. No new state anywhere, and the eight steps are a fade rather than a cliff, which is likely to play better. What it costs is that factories can no longer use age for anything else, and it collides with dynamite if a dynamite is ever also a factory.
 

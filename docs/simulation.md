@@ -106,7 +106,7 @@ The drain is bounded by territory decay rather than by a timer: a corpse with no
 
 ## Chunks
 
-A chunk is 16×16 cells. Neighbours are **computed** from a coordinate, never stored:
+A chunk is 64×64 cells, `CHUNK_N` a side. Neighbours are **computed** from a coordinate, never stored:
 
 - infinite: coordinate arithmetic, and an absent chunk reads as dead;
 - toroidal: `rem_euclid`, so global coordinates fold onto chunks many-to-one.
@@ -115,7 +115,7 @@ Computing rather than storing is what lets a chunk be its own neighbour, which h
 
 ### The halo
 
-Stepping copies a chunk and the facing strip of each of its eight neighbours into a flat padded grid, `(16+2)²`. That gives the inner loop one array with no bounds checks and no knowledge of topology, and an absent or empty neighbour simply contributes nothing.
+Stepping copies a chunk and the facing strip of each of its eight neighbours into a flat padded grid, `(64+2)²`. That gives the inner loop one array with no bounds checks and no knowledge of topology, and an absent or empty neighbour simply contributes nothing.
 
 It also solves a borrow problem: stepping chunk *i* needs `&mut` on it while reading `&` from its neighbours in the same collection. The halo is owned data built from shared borrows before anything is mutated.
 
@@ -201,7 +201,7 @@ A turret claims ground at range. Every generation it takes the nearest square th
 
 ### Why it is a pass and not a rule
 
-Every rule in `sim::rule` is a pure function of a cell and its eight neighbours. That is what lets a generation run out of a `Halo` — one flat 18×18 grid per chunk, no bounds checks and no knowledge of topology — and "the nearest square that is not mine" is a search no halo can answer.
+Every rule in `sim::rule` is a pure function of a cell and its eight neighbours. That is what lets a generation run out of a `Halo` — one flat 66×66 grid per chunk, no bounds checks and no knowledge of topology — and "the nearest square that is not mine" is a search no halo can answer.
 
 So `World::fire_turrets` runs after the rules in absolute coordinates, beside `break_ice_from` and for the same reason: a pane spans chunks, so shattering cannot happen inside `next_cell` either. Turrets fire after the ice and before the prune.
 
@@ -256,6 +256,32 @@ It also means the inheritance split rarely fires for a turret in its natural for
 Nothing is tallied for it. What a dead turret costs its owner is the ground it hands back and the life it takes with it, and that is applied rather than priced — which is why `Earned` says nothing about turrets and `Halo::step_into` only decays them.
 
 Note what that means read literally: the mirror of "the nearest square that is not the owner's" is "the nearest that is", so a dead turret eats its owner's ground and shoots its owner's life, including the other three cells of its own block. A failing emplacement dismantles itself.
+
+## Overclockers
+
+An **overclocker** makes the ground around it step twice a generation. Every live, ice-free one owns a disc of `rule::OVERCLOCK_REACH` cells, and the union of those discs runs the rule a second time after the whole world has run it once — `rule::OVERCLOCK_RATE` is how many times in all, and two is one extra pass. The machine itself is placed like a turret, in fours, and for the turret's reasons: it does not inherit, because a birth that copied it would let any gun claim the map's clock, and one on its own dies of loneliness in a generation.
+
+### Sub-steps, not a faster tick
+
+A generation is the unit everything else is keyed to — the dice, the `Step` on the wire, the checkpoint, the standings, the save — so "twice a generation" is a question about what a generation *is*, and there were two answers. The other one is a tick half as long with ordinary cells stepping every second one. It has exactly these semantics — on the odd tick only overclocked cells move and they read frozen ordinary neighbours, which is the border rule below — and it costs twice the `Step` broadcasts, a tick doubled in every save and checkpoint, a parity guard in every rule and pass, and every per-generation chance in `rule.rs` halved unless rescaled. So the passes run **inside** `World::step`, and the order there is now: ice seeds, detonation, the whole-world pass, the overclock passes, `generation += 1`, shattering, turrets, prune. Nothing outside `sim` knows: one `Step`, one tick, one digest — and because a pass writes cell bytes, the checkpoint already covers it with no new message.
+
+### What the second pass reads
+
+`World::overclock_pass` finds the discs from the world **as the first pass left it**, so a machine that died this generation does not run again, and one under a pane runs nothing, since a pane stops time over what it covers and that is every rule. It gathers a fresh halo for every chunk a disc touches, all before any cell is written — the discipline the first pass keeps, and for the same reason — and then steps only the masked cells through `Halo::step_into_where`. The mask is a bit per cell, so a disc of a hundred and thirteen cells costs a hundred and thirteen evaluations and a few halo copies rather than a chunk's four thousand per overclocker, and two discs that overlap, or one that wraps onto itself on a small torus, step each cell once.
+
+### The edge
+
+A masked cell reads all eight neighbours from the halo whether they are in the disc or not, and the ones outside are as the first pass left them and this pass will not move. An unmasked cell is neither evaluated nor written, so next generation it sees the disc's *second* state. That is the whole of the border: **the inside runs at twice the clock and the outside sees every other state of it.** A blinker wholly inside is flat again every generation; a gun inside fires twice as often; a glider crossing the ring is torn where it crosses, because the cells it needs on the far side are a state behind. That is a hazard of the piece the way a pane's edge is, and the answer is the same — keep what you care about wholly in or wholly out. `a_pattern_straddling_a_disc_is_deterministic_and_is_torn` pins both halves.
+
+### Dice of its own
+
+A pass rolls from `seed::pass_seed(generation_seed, pass)`, and pass nought is the generation's own seed, so nothing that runs once changed its dice for this existing. A second pass handed the same seed would give every cell the identical roll twice — territory's `LEVEL_ADJUST` would fire on the same squares, a birth would pick the same parent, a factory would pay or not exactly as it just had — which is a correlation nothing would think to look for, and the one fact about running the rule again that is not obvious from the rule.
+
+### What it pays, and what it burns
+
+The second pass is the same rule, so it counts what the rule counts: a factory inside a disc is born twice a generation and pays twice as often, a corpse is charged twice as often, and a dynamite inside burns down twice as fast. Those are prices rather than determinism questions, and they are what an overclocked gun is *for*. Ice seeds are taken once, at the top of the generation, so a cell born beside a pane in the second pass breaks it next generation — the same one-beat lag `life_born_beside_a_pane_breaks_it` pins for the first.
+
+`rule::OVERCLOCK_REACH` is at or under `CHUNK_N`, asserted at compile time, for the turret's reason: a disc that reached further could write two chunks away, past anything `compute_active` has a way to know about. Within it a pass makes the chunk it writes into, so life born at the edge of a disc wakes its chunk next generation without being told.
 
 ## Ice
 
