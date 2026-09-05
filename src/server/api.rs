@@ -173,11 +173,16 @@ pub fn handle(rooms: &mut Rooms, req: Request) -> Reply {
                     "a window's far corner is below and right of its near one",
                 );
             }
-            let area = (r1 as i64 - r0 as i64 + 1) * (c1 as i64 - c0 as i64 + 1);
-            if area > MOST_CELLS_IN_A_WINDOW as i64 {
+            let (rows, cols) = (r1 as i64 - r0 as i64 + 1, c1 as i64 - c0 as i64 + 1);
+            let most = MOST_CELLS_IN_A_WINDOW as i64;
+            // Each side against the cap before they are multiplied: the
+            // corners are i32, so a window over the whole of that is 2^64
+            // cells, and the product overflowed and took the simulation task
+            // down with it.
+            if rows > most || cols > most || rows * cols > most {
                 return Reply::error(
                     413,
-                    format!("a window may hold {MOST_CELLS_IN_A_WINDOW} cells; that is {area}"),
+                    format!("a window may hold {most} cells; that is {rows} by {cols}"),
                 );
             }
             let world = s.world();
@@ -443,6 +448,17 @@ mod tests {
         let backwards =
             handle(&mut rooms, Request::Cells { room: "main".into(), r0: 5, c0: 0, r1: 0, c1: 5 });
         assert_eq!(backwards.status, 400);
+        // The corners of i32, which is 2^64 cells and does not fit the number
+        // that used to hold the area; the task answering this panicked, and
+        // every later request found nobody to answer it. Then rows over the
+        // whole range and columns over half, which wrapped to i64::MIN and
+        // passed.
+        for (r0, r1, c0, c1) in
+            [(i32::MIN, i32::MAX, i32::MIN, i32::MAX), (i32::MIN, i32::MAX, 0, i32::MAX / 2)]
+        {
+            let whole = handle(&mut rooms, Request::Cells { room: "main".into(), r0, c0, r1, c1 });
+            assert_eq!(whole.status, 413, "{whole:?}");
+        }
         let just = handle(
             &mut rooms,
             Request::Cells { room: "main".into(), r0: 0, c0: 0, r1: 255, c1: 255 },
