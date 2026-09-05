@@ -52,6 +52,21 @@ pub static WORDS: super::Words = super::Words {
             nobody: "Nobody here by that name.",
             nobody_yet: "Nobody has played enough matches here to be rated yet.",
         },
+        parties: super::MenuParties {
+            title: "Parties",
+            note: "A group with worlds only it can see or join. To ask somebody in, open \
+                 their profile.",
+            asking: "Asking the server…",
+            none_yet: "You are in no party here. Make one, or wait to be asked into one.",
+            name_hint: "a name for a new party",
+            make: "Make",
+            members: "People",
+            worlds: "Worlds",
+            no_worlds: "No worlds yet.",
+            new_world: "New world here",
+            leave: "Leave",
+            online: "here now",
+        },
         account: super::MenuAccount {
             title: "Your account",
             rated: "Rated here",
@@ -148,6 +163,7 @@ pub static WORDS: super::Words = super::Words {
             record: "So far",
             profile: "Your profile",
             people: "Who else plays here",
+            parties: "Parties",
             account: "Your account",
             howto: "How to play",
             settings_label: "Settings",
@@ -241,6 +257,7 @@ pub static WORDS: super::Words = super::Words {
             clear: "Reset",
             making: "creating…",
             match_waits: "A match gathers until the server starts it.",
+            not_for_party: "not for the party",
         },
     },
     hotbar: super::Hotbar {
@@ -516,6 +533,19 @@ pub mod menu {
         let p = if players == 1 { "player" } else { "players" };
         format!("{rooms} {w}, {players} {p} online")
     }
+    pub mod parties {
+        /// Under a party's name, so the list says how much is in each before
+        /// anybody opens one.
+        pub fn summary(members: usize, worlds: usize) -> String {
+            let p = if members == 1 { "person" } else { "people" };
+            let w = if worlds == 1 { "world" } else { "worlds" };
+            format!("{members} {p}, {worlds} {w}")
+        }
+        /// On the make-a-world form, where the toggles would be.
+        pub fn for_party(party: &str) -> String {
+            format!("For the party {party}.")
+        }
+    }
     pub mod people {
         /// A provisional rating is marked rather than hidden: the number is
         /// real and the server is not yet sure of it.
@@ -631,6 +661,21 @@ pub mod invite {
     /// into: an invitation is into somewhere, and the somewhere is the point.
     pub fn ask_into(room: &str) -> String {
         format!("Invite into {room}")
+    }
+
+    /// The same, for a party.
+    pub fn ask_into_party(party: &str) -> String {
+        format!("Ask into {party}")
+    }
+
+    /// What a party invitation opens onto, said once on the panel.
+    pub fn into_party(party: &str) -> String {
+        format!("The party \u{201c}{party}\u{201d}, and every world it keeps.")
+    }
+
+    /// Said out loud when one arrives.
+    pub fn party_asked(who: &str, party: &str) -> String {
+        format!("{who} asks you into {party}")
     }
 
     /// What the door opens onto, said once on the panel.

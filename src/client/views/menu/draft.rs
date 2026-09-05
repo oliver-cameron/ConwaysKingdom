@@ -11,7 +11,7 @@
 
 use super::words;
 use crate::client::views::words::w;
-use crate::net::Victory;
+use crate::net::{PartyId, Victory};
 use crate::sim::WorldKind;
 
 /// **What kind of room this describes**, which is the first question because
@@ -118,6 +118,11 @@ pub struct Draft {
     /// the same form. It is not a different errand; it is this one with a
     /// different answer to who else is in it.
     pub access: Access,
+    /// **Whose the world will be**, when it is a party's: the party and what
+    /// it is called. Set by the parties page rather than by a toggle, because
+    /// which party is not a question this form can ask — it does not know
+    /// which you are in. When set, [`Self::access`] is not asked.
+    pub party: Option<(PartyId, String)>,
 }
 
 impl Default for Draft {
@@ -136,6 +141,7 @@ impl Default for Draft {
             note: None,
             asking: false,
             access: Access::Listed,
+            party: None,
         }
     }
 }
@@ -154,9 +160,9 @@ impl Draft {
     /// somebody changing their mind — refusing on it would be refusing a
     /// number nobody is asking to use.
     pub fn parse(&self) -> Result<super::Chose, String> {
-        // A private room's name is the code the server generates, so there is
-        // nothing here to check and nothing to refuse.
-        let name = if self.access == Access::ByCode {
+        // A private room may go unnamed; nobody browses for it. A party's
+        // world is browsed for, by its members, and so is named.
+        let name = if self.access == Access::ByCode && self.party.is_none() {
             String::new()
         } else {
             crate::net::room_name(&self.name)?
@@ -173,8 +179,9 @@ impl Draft {
             shape,
             victory,
             teams,
-            private: self.access == Access::ByCode,
+            private: self.access == Access::ByCode && self.party.is_none(),
             laboratory: self.kind == Kind::Experiment,
+            party: self.party.as_ref().map(|(id, _)| id.clone()),
         })
     }
 

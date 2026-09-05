@@ -1411,6 +1411,13 @@ impl GameApp {
                 }
             }
             Effect::NotDone(why) => self.say(why),
+            Effect::PartyInvited => {
+                if let Some((from, _, name)) = &self.session.party_invite {
+                    self.say(words::invite::party_asked(&from.label(), name));
+                }
+            }
+            // Lands on `session`, which the menu is handed each frame.
+            Effect::Parties => {}
             // **The server's copy is the copy, except when there isn't one.**
             // A locker with anything in it replaces what this client was
             // carrying; an empty one from a server that has met us is the
@@ -1596,7 +1603,7 @@ impl GameApp {
             // Made, then joined -- in two steps, because `Made` only names the
             // room. Joining is the same message the room list sends, so there
             // is one way into a world rather than two.
-            menu::Chose::Create { name, shape, victory, teams, private, laboratory } => {
+            menu::Chose::Create { name, shape, victory, teams, private, laboratory, party } => {
                 log::info!("asking for a room called \"{name}\"");
                 let asked = self.session.create(ClientMessage::Create {
                     name,
@@ -1605,6 +1612,7 @@ impl GameApp {
                     teams,
                     private,
                     laboratory,
+                    party,
                 });
                 if !asked {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
@@ -1645,6 +1653,10 @@ impl GameApp {
                 log::info!("closing room \"{room}\"");
                 self.session.close(room);
             }
+            menu::Chose::Parties => self.session.ask_for_parties(),
+            menu::Chose::MakeParty(name) => self.session.make_party(name),
+            menu::Chose::JoinParty(party) => self.session.join_party(party),
+            menu::Chose::LeaveParty(party) => self.session.leave_party(party),
             menu::Chose::Join(room) => {
                 if !self.session.connected() {
                     self.show_menu(menu::Stage::Failed(w().menu.lost_connection.into()));
@@ -2136,6 +2148,9 @@ impl App for GameApp {
         let invited = self.session.invited.clone();
         let mut inviting = invited.is_some();
         let mut answered_invite = social::invite::Did::Nothing;
+        let party_invite = self.session.party_invite.clone();
+        let mut party_inviting = party_invite.is_some();
+        let mut answered_party_invite = social::invite::Did::Nothing;
         let mut asked_for_a_game = profile::Did::Nothing;
         // **The door this client could hold open**: the private room it is
         // sitting in, by name. A code is what makes a room private and the
@@ -2181,6 +2196,16 @@ impl App for GameApp {
                     yours: (self.session.profile.as_ref().map(|p| &p.who) == Some(who))
                         .then_some(&self.record),
                     into: inviting_into,
+                    // The parties this client is in that they are not: one
+                    // button each, because this is where a person is named.
+                    parties: self
+                        .session
+                        .parties
+                        .iter()
+                        .flatten()
+                        .filter(|party| !party.members.iter().any(|m| m.who == *who))
+                        .map(|party| (party.id.clone(), party.name.clone()))
+                        .collect(),
                     it,
                 },
             }
@@ -2208,6 +2233,7 @@ impl App for GameApp {
         // the room list does.
         if let Screen::Menu(m) = &mut self.ui.screen {
             m.people = self.session.people.clone();
+            m.parties = self.session.parties.clone();
             // **Kept when there is nothing newer**, rather than cleared. This
             // read the live session's profile and nothing else, so on the menu
             // — before any join this launch — it was `None`, and the home
@@ -2381,6 +2407,12 @@ impl App for GameApp {
                 answered_invite = shown.did;
                 rects.extend(shown.rect);
             }
+            if let Some((from, _, name)) = &party_invite {
+                let terms = words::invite::into_party(name);
+                let shown = social::invite::show(ctx, &theme, from, &terms, &mut party_inviting);
+                answered_party_invite = shown.did;
+                rects.extend(shown.rect);
+            }
             rects
         });
 
@@ -2400,6 +2432,27 @@ impl App for GameApp {
                 self.session.invite(who);
                 self.ui.showing_profile = None;
                 self.notice = Some(w().invite.asked_them.into());
+            }
+            profile::Did::InviteToParty(party, who) => {
+                self.session.invite_to_party(party, who);
+                self.ui.showing_profile = None;
+                self.say(w().invite.asked_them.into());
+            }
+        }
+
+        // **Taking a party invitation is joining the party**, which the
+        // server answers with the listing; the panel is otherwise the room
+        // invitation's, and so is the shutting.
+        if let Some((_, party, _)) = party_invite {
+            match answered_party_invite {
+                social::invite::Did::Nothing if party_inviting => {}
+                social::invite::Did::Nothing | social::invite::Did::Decline => {
+                    self.session.party_invite = None;
+                }
+                social::invite::Did::Accept => {
+                    self.session.party_invite = None;
+                    self.session.join_party(party);
+                }
             }
         }
 

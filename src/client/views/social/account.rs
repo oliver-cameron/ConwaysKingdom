@@ -136,6 +136,12 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, menu: &mut Menu, at: Where) -> Cho
         // empty query is the leaderboard.
         chose = Chose::FindPeople(String::new());
     }
+    // And the groups you are in, which are yours and so are here rather than
+    // on the play screen. Asked for on the way in, like the board.
+    if at.reached && flat(ui, w().menu.home.parties) {
+        menu.page = Page::Parties;
+        chose = Chose::Parties;
+    }
     ui.add_space(m.item_spacing);
 
     ui.label(egui::RichText::new(w().menu.home.record).size(m.text_small));

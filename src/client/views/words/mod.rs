@@ -94,6 +94,29 @@ pub struct MenuPeople {
     pub nobody_yet: &'static str,
 }
 
+/// The groups you are in, and their worlds.
+pub struct MenuParties {
+    pub title: &'static str,
+    /// What a party is, in a sentence, and where inviting lives: on a
+    /// person's profile, because it names a person.
+    pub note: &'static str,
+    /// Before a server has answered.
+    pub asking: &'static str,
+    /// A real answer: you are in none.
+    pub none_yet: &'static str,
+    pub name_hint: &'static str,
+    pub make: &'static str,
+    pub members: &'static str,
+    pub worlds: &'static str,
+    /// A party with people and no world yet.
+    pub no_worlds: &'static str,
+    /// Into the make-a-world form, with this party as the answer to who.
+    pub new_world: &'static str,
+    pub leave: &'static str,
+    /// Beside a member who is in a room here now.
+    pub online: &'static str,
+}
+
 /// You, as a page: the name, the rating, the record and the key.
 pub struct MenuAccount {
     pub title: &'static str,
@@ -180,6 +203,8 @@ pub struct MenuHome {
     pub record: &'static str,
     pub profile: &'static str,
     pub people: &'static str,
+    /// The groups you are in, from the account page.
+    pub parties: &'static str,
     pub account: &'static str,
     pub howto: &'static str,
     pub settings_label: &'static str,
@@ -307,6 +332,9 @@ pub struct MenuMake {
     /// A match does not start on its own, so somebody about to make one
     /// should know that before they make it rather than after.
     pub match_waits: &'static str,
+    /// On the row that would ask who can reach a world, when a party has
+    /// already answered: the way back to the toggles.
+    pub not_for_party: &'static str,
 }
 
 /// The screen before the game.
@@ -357,6 +385,8 @@ pub struct Menu {
     /// Who else plays here, and the leaderboard, which is the same list with
     /// nothing typed into the box.
     pub people: MenuPeople,
+    /// The groups you are in, and their worlds.
+    pub parties: MenuParties,
     /// You, as a page: the name, the rating, the record and the key.
     pub account: MenuAccount,
     /// What somebody who has just arrived cannot work out by clicking. Every

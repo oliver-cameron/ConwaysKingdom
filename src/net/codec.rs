@@ -183,6 +183,7 @@ mod tests {
                 teams: None,
                 private: false,
                 laboratory: false,
+                party: None,
             },
             ClientMessage::Create {
                 name: "cup".into(),
@@ -191,6 +192,7 @@ mod tests {
                 teams: Some(2),
                 private: true,
                 laboratory: false,
+                party: None,
             },
             // A laboratory, which is the third thing the form can ask for.
             ClientMessage::Create {
@@ -200,6 +202,17 @@ mod tests {
                 teams: None,
                 private: false,
                 laboratory: true,
+                party: None,
+            },
+            // A party's world, which is the fourth.
+            ClientMessage::Create {
+                name: "den".into(),
+                shape: crate::sim::WorldKind::Infinite,
+                victory: None,
+                teams: None,
+                private: false,
+                laboratory: false,
+                party: Some(crate::net::PartyId("p-3f2a91c4".into())),
             },
             ClientMessage::Leave,
             ClientMessage::Start,
@@ -229,6 +242,14 @@ mod tests {
                 who: crate::net::PersonId("3f2a91c4".into()),
                 room: "r-abc234".into(),
             },
+            ClientMessage::Parties,
+            ClientMessage::MakeParty { name: "friday".into() },
+            ClientMessage::InviteToParty {
+                party: crate::net::PartyId("p-3f2a91c4".into()),
+                who: crate::net::PersonId("3f2a91c4".into()),
+            },
+            ClientMessage::JoinParty { party: crate::net::PartyId("p-3f2a91c4".into()) },
+            ClientMessage::LeaveParty { party: crate::net::PartyId("p-3f2a91c4".into()) },
         ];
         for msg in cases {
             let bytes = encode_client(&msg).unwrap();
@@ -458,6 +479,57 @@ mod tests {
                 name: "den".into(),
             },
             ServerMessage::NotDone { reason: "this server has never met them".into() },
+            // A party with a world in it, and one with nothing but people.
+            ServerMessage::Parties {
+                parties: vec![
+                    crate::net::PartyInfo {
+                        id: crate::net::PartyId("p-3f2a91c4".into()),
+                        name: "friday".into(),
+                        members: vec![
+                            crate::net::Member {
+                                who: crate::net::PersonId("3f2a91c4".into()),
+                                name: "alice".into(),
+                                online: true,
+                            },
+                            crate::net::Member {
+                                who: crate::net::PersonId("9b1c0d2e".into()),
+                                name: "bob".into(),
+                                online: false,
+                            },
+                        ],
+                        rooms: vec![crate::net::RoomInfo {
+                            id: "r-den123".into(),
+                            name: "den".into(),
+                            players: 1,
+                            phase: crate::net::MatchPhase::Open,
+                            victory: None,
+                            world: crate::sim::WorldKind::Infinite,
+                            rules: crate::net::Rules::default(),
+                            owner: Some(crate::net::PersonId("3f2a91c4".into())),
+                        }],
+                    },
+                    crate::net::PartyInfo {
+                        id: crate::net::PartyId("p-77777777".into()),
+                        name: "the others".into(),
+                        members: Vec::new(),
+                        rooms: Vec::new(),
+                    },
+                ],
+            },
+            ServerMessage::Parties { parties: Vec::new() },
+            ServerMessage::PartyInvite {
+                from: crate::net::Profile {
+                    who: crate::net::PersonId("3f2a91c4".into()),
+                    name: "alice".into(),
+                    rating: 1240,
+                    provisional: false,
+                    games: 9,
+                    history: vec![1200, 1220, 1240],
+                    best: 512,
+                },
+                party: crate::net::PartyId("p-3f2a91c4".into()),
+                name: "friday".into(),
+            },
         ];
         for msg in cases {
             let bytes = encode_server(&msg).unwrap();

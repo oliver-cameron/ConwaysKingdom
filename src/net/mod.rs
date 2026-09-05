@@ -111,6 +111,23 @@ pub fn world_seed(room: &RoomId) -> u64 {
 /// what anything durable keys off — see [`RoomId`].
 pub type RoomName = String;
 
+/// **A party**, for as long as anybody is in it. Issued by the server like a
+/// [`RoomId`] and never shown; the name beside it is what people read.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PartyId(pub String);
+
+impl PartyId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PartyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The room a client that names none is put in.
 pub const DEFAULT_ROOM: &str = "main";
 
@@ -929,6 +946,34 @@ pub struct RoomInfo {
     pub owner: Option<PersonId>,
 }
 
+/// One person in a party, as its other members are told.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub who: PersonId,
+    /// What they last joined under here.
+    pub name: String,
+    /// Whether they are in a room on this server right now. One server
+    /// answering its own members about each other; nothing is reported
+    /// anywhere else, which is the line [presence] draws.
+    ///
+    /// [presence]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/planned.md#friends-searching-and-inviting-somebody-in-particular
+    pub online: bool,
+}
+
+/// **A party, as one of its members sees it**: who is in it, and which worlds
+/// are its own. Answered only to a member, which is the first thing on the
+/// wire whose answer depends on who is asking — and why it is not the room
+/// list, which stays one answer for everybody.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartyInfo {
+    pub id: PartyId,
+    pub name: String,
+    pub members: Vec<Member>,
+    /// Its worlds, in the shape the room list uses, so a row here joins the
+    /// way a row there does. Unlisted everywhere else.
+    pub rooms: Vec<RoomInfo>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Asking to play. See [docs/networking.md].
@@ -1056,6 +1101,12 @@ pub enum ClientMessage {
         /// [`RoomKind`] the form asked for — a match has a way to win, an
         /// experiment has this, and a world has neither.
         laboratory: bool,
+        /// **A party's world.** Unlisted, with no code, and open to that
+        /// party's members and nobody else; it appears in their
+        /// [`ServerMessage::Parties`] and nowhere else. Refused from anybody
+        /// not in the party, and `private` is beside the point when this is
+        /// set.
+        party: Option<PartyId>,
     },
     /// Change what the game is doing in this room. Refused unless the room is
     /// a laboratory, because everywhere else these are the rules of the game.
@@ -1139,6 +1190,29 @@ pub enum ClientMessage {
     /// what would carry an "until" is a signed invitation, which is not
     /// built.
     Invite { who: PersonId, room: RoomId },
+    /// **Which parties am I in**, and what is in them. Answered with
+    /// [`ServerMessage::Parties`], and answered empty to a connection that has
+    /// presented no key: a party is a list of people, and nobody is on no
+    /// list.
+    ///
+    /// A second message beside [`Self::Rooms`] rather than a filter on it,
+    /// because a party listing wants different *contents* — who is in it, who
+    /// is online, which of its worlds are running — and because the room list
+    /// is the one message a client sends before it is anybody, and stays so.
+    Parties,
+    /// Make a party, with the asker as its first member.
+    MakeParty { name: String },
+    /// Ask somebody into a party this connection is in. Delivered as
+    /// [`ServerMessage::PartyInvite`], the way a challenge is, and stands until
+    /// they take it or the party is gone.
+    InviteToParty { party: PartyId, who: PersonId },
+    /// Take a standing invitation. Refused without one: a party is not a room
+    /// with a code, and its id admits nobody.
+    JoinParty { party: PartyId },
+    /// Leave, and with it lose the way into its worlds — which is the thing a
+    /// code could never express and the reason a party is a list of people.
+    /// The last one out takes the party with them.
+    LeaveParty { party: PartyId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1376,6 +1450,19 @@ pub enum ServerMessage {
     /// to read, the way [`Self::NotStarted`] does for a whistle.
     NotDone {
         reason: String,
+    },
+    /// The parties this connection's person is in, each with its people and
+    /// its worlds. The answer to [`ClientMessage::Parties`], and to making,
+    /// joining or leaving one, since what changed is the listing.
+    Parties {
+        parties: Vec<PartyInfo>,
+    },
+    /// **Somebody asks you into their party.** Who, the party, and what it is
+    /// called, since a party you are not in is one you have never been shown.
+    PartyInvite {
+        from: Profile,
+        party: PartyId,
+        name: String,
     },
 }
 

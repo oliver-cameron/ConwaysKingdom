@@ -115,6 +115,12 @@ pub enum Effect {
     Challenged,
     /// **Somebody holds a door open** — into [`Session::invited`].
     Invited,
+    /// **Somebody asks you into their party** — into
+    /// [`Session::party_invite`].
+    PartyInvited,
+    /// The parties this client is in arrived, into [`Session::parties`], which
+    /// is what the menu reads them from.
+    Parties,
     /// The server would not do what was asked of it, and this is why. Left
     /// where the player is looking rather than sending them to the menu.
     NotDone(String),
@@ -292,6 +298,12 @@ pub struct Session {
     /// which the listing never said, the room being private. Held the way a
     /// challenge is, and taken by the answer.
     pub invited: Option<(crate::net::Profile, RoomId, String)>,
+    /// **An invitation into a party**, and what it is called. Held and taken
+    /// the way a room's is.
+    pub party_invite: Option<(crate::net::Profile, crate::net::PartyId, String)>,
+    /// The parties this client is in, as the server last said. `None` until
+    /// asked; empty is a real answer.
+    pub parties: Option<Vec<crate::net::PartyInfo>>,
     /// What somebody said to one of ours. `None` in the second half is a
     /// decline.
     pub answered: Option<(crate::net::Profile, Option<RoomId>)>,
@@ -390,6 +402,8 @@ impl Session {
             blasts: Vec::new(),
             challenge: None,
             invited: None,
+            party_invite: None,
+            parties: None,
             answered: None,
             filed_a_game: false,
             people: None,
@@ -925,6 +939,16 @@ impl Session {
                 ServerMessage::NotDone { reason } => {
                     log::info!("the server would not: {reason}");
                     effects.push(Effect::NotDone(reason));
+                }
+                ServerMessage::Parties { parties } => {
+                    log::debug!("in {} part(ies) here", parties.len());
+                    self.parties = Some(parties);
+                    effects.push(Effect::Parties);
+                }
+                ServerMessage::PartyInvite { from, party, name } => {
+                    log::info!("{} asked us into party \"{name}\" ({party})", from.label());
+                    self.party_invite = Some((from, party, name));
+                    effects.push(Effect::PartyInvited);
                 }
                 // And the answer, either way. A decline reaches the person who
                 // asked instead of looking like a server that lost it.
@@ -1506,6 +1530,28 @@ impl Session {
         if let Some(room) = self.room.clone() {
             self.tell(ClientMessage::Invite { who, room });
         }
+    }
+
+    /// Which parties am I in. The answer is an [`Effect::Parties`], as is the
+    /// answer to making, joining or leaving one.
+    pub fn ask_for_parties(&mut self) {
+        self.tell(ClientMessage::Parties);
+    }
+
+    pub fn make_party(&mut self, name: String) {
+        self.tell(ClientMessage::MakeParty { name });
+    }
+
+    pub fn invite_to_party(&mut self, party: crate::net::PartyId, who: crate::net::PersonId) {
+        self.tell(ClientMessage::InviteToParty { party, who });
+    }
+
+    pub fn join_party(&mut self, party: crate::net::PartyId) {
+        self.tell(ClientMessage::JoinParty { party });
+    }
+
+    pub fn leave_party(&mut self, party: crate::net::PartyId) {
+        self.tell(ClientMessage::LeaveParty { party });
     }
 
     /// Yes or no, to whoever asked.

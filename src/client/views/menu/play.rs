@@ -431,7 +431,7 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // sides: there is one player. Hidden rather than disabled, because
             // a field that cannot be wrong is a field that should not be
             // asked about.
-            if reached && draft.access == Access::Listed {
+            if reached && (draft.access == Access::Listed || draft.party.is_some()) {
                 ui.label(egui::RichText::new(w().menu.make.name).size(m.text_small));
                 ui.add(
                     egui::TextEdit::singleline(&mut draft.name)
@@ -535,23 +535,39 @@ fn make_form(ui: &mut egui::Ui, theme: &Theme, draft: &mut Draft, reached: bool)
             // "Just me" for exactly that reason.
             ui.add_space(m.item_spacing);
             ui.label(egui::RichText::new(w().menu.make.private).size(m.text_small));
-            let mut access = draft.access;
-            let listed = [
-                (Access::Listed, w().menu.make.listed),
-                (Access::ByCode, w().menu.make.unlisted),
-                (Access::Solo, w().menu.make.solo_access),
-            ];
-            toggles(ui, theme, &mut access, if reached { &listed } else { &listed[2..] });
-            draft.access = if reached { access } else { Access::Solo };
-            ui.colored_label(
-                p.text_dim,
-                egui::RichText::new(match draft.access {
-                    Access::Listed => w().menu.make.listed_note,
-                    Access::ByCode => w().menu.make.unlisted_note,
-                    Access::Solo => w().menu.make.solo_note,
-                })
-                .size(m.text_small),
-            );
+            // **A party's world answers this question itself.** Which party is
+            // not something the form can ask -- it does not know which you are
+            // in -- so the parties page answers it on the way here, and the
+            // row says so and offers the way back to the toggles.
+            if let Some((_, party)) = draft.party.clone() {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        p.text_dim,
+                        egui::RichText::new(words::parties::for_party(&party)).size(m.text_small),
+                    );
+                    if ui.small_button(w().menu.make.not_for_party).clicked() {
+                        draft.party = None;
+                    }
+                });
+            } else {
+                let mut access = draft.access;
+                let listed = [
+                    (Access::Listed, w().menu.make.listed),
+                    (Access::ByCode, w().menu.make.unlisted),
+                    (Access::Solo, w().menu.make.solo_access),
+                ];
+                toggles(ui, theme, &mut access, if reached { &listed } else { &listed[2..] });
+                draft.access = if reached { access } else { Access::Solo };
+                ui.colored_label(
+                    p.text_dim,
+                    egui::RichText::new(match draft.access {
+                        Access::Listed => w().menu.make.listed_note,
+                        Access::ByCode => w().menu.make.unlisted_note,
+                        Access::Solo => w().menu.make.solo_note,
+                    })
+                    .size(m.text_small),
+                );
+            }
 
             if draft.kind == Kind::Match {
                 ui.add_space(m.item_spacing);
