@@ -258,6 +258,24 @@ pub fn show(ui: &mut egui::Ui, theme: &Theme, patch: &mut Patch, sheet: Option<e
     });
 }
 
+/// The patches the how-to page shows, in order, one per entry in
+/// [`w().menu.tutorial.lessons`].
+///
+/// **Nine cells a side.** Five is too small for a glider to be a glider — it
+/// meets itself before it has travelled — and anything much larger stops being
+/// something you can trace in a paragraph. Nine holds a blinker, a block, a
+/// glider and a couple of generations of room around them.
+pub fn lessons() -> Vec<Patch> {
+    vec![
+        // A blinker of factories: three in a row, which turn over every
+        // generation and so pay every generation.
+        Patch::new(9, Placement::Factory, &[(0, -1), (0, 0), (0, 1)]),
+        // And the same four cells that never move: a block, which is a still
+        // life and earns nothing at all.
+        Patch::new(9, Placement::Factory, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,22 +334,4 @@ mod tests {
         }
         assert!(turning.purse > 0, "a blinker of factories paid nothing");
     }
-}
-
-/// The patches the how-to page shows, in order, one per entry in
-/// [`w().menu.tutorial.lessons`].
-///
-/// **Nine cells a side.** Five is too small for a glider to be a glider — it
-/// meets itself before it has travelled — and anything much larger stops being
-/// something you can trace in a paragraph. Nine holds a blinker, a block, a
-/// glider and a couple of generations of room around them.
-pub fn lessons() -> Vec<Patch> {
-    vec![
-        // A blinker of factories: three in a row, which turn over every
-        // generation and so pay every generation.
-        Patch::new(9, Placement::Factory, &[(0, -1), (0, 0), (0, 1)]),
-        // And the same four cells that never move: a block, which is a still
-        // life and earns nothing at all.
-        Patch::new(9, Placement::Factory, &[(0, 0), (0, 1), (1, 0), (1, 1)]),
-    ]
 }

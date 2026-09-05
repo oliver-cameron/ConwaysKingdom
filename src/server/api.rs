@@ -251,7 +251,11 @@ fn seat_json(server: &crate::server::Server, seat: PlayerId) -> Value {
         "spawn": crate::net::spawn_for(plays_as, server.world()),
         "purse": server.value_of(seat),
         "bot": bot.is_some(),
-        "level": bot.map(|b| b.level),
+        // **No level for a seat something outside plays.** A `Level` is how
+        // often the server moves a seat and out of which book, and it moves
+        // this one never -- so a number here was a claim about whatever is
+        // driving it, which this server knows nothing about.
+        "level": bot.filter(|b| matches!(b.driver, Driver::Book)).map(|b| b.level),
         "driver": bot.map(|b| match b.driver {
             Driver::Book => "book",
             Driver::External => "api",
@@ -380,6 +384,10 @@ mod tests {
         let seat = seat_of(&sat);
         let me = handle(&mut rooms, Request::Seat { room: "main".into(), seat });
         assert_eq!(me.body["driver"], "api");
+        // A level says how often the server moves a seat, and it never moves
+        // this one -- so reporting one was a claim about somebody else's
+        // program.
+        assert!(me.body["level"].is_null(), "an external seat has no level");
         assert_eq!(me.body["purse"], crate::sim::Player::STARTING_VALUE);
 
         let (row, col) = crate::net::spawn_for(seat, rooms.get(&"main".into()).unwrap().world());

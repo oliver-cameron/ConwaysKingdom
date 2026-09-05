@@ -145,7 +145,7 @@ mod tests {
     fn the_soup_is_somewhere_between_empty_and_solid() {
         let it = Attract::new();
         let alive = it.world.live_cells().len();
-        let side = CHUNKS as usize * crate::sim::CHUNK_N as usize;
+        let side = CHUNKS as usize * crate::sim::CHUNK_N;
         let squares = side * side;
         assert!(alive > squares / 8, "the backdrop is nearly empty: {alive} of {squares}");
         assert!(alive < squares / 2, "the backdrop is nearly solid: {alive} of {squares}");

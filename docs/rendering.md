@@ -81,12 +81,11 @@ The PNGs are the source, and `cnvt` converts between what you draw and what the 
 ```
 cargo run --bin cnvt -- art.png assets/sprites/sheet.png            # forward
 cargo run --bin cnvt -- --back assets/sprites/sheet.png art.png     # and back
-cargo run --bin cnvt -- --back --player 3 sheet.png as-p3.png       # as the game draws it
 ```
 
 The reverse exists because a sheet cannot be opened: three of its channels are numbers fed to a colour model, so a paint program shows something that looks nothing like the art. Converting back gives a picture you can look at, edit, and convert forward again — a round trip is exact to within a step of rounding, and a test in the tool pins that, because the pair silently stops being a pair if its `shade` and the shader's ever drift.
 
-`--player N` reverses it the way the game will draw it, taking hue and saturation tier from player N rather than from the sheet. `--player 0` is unowned, which is grey.
+There is no "as player N sees it" any more. It existed while a player's colour was a formula the tool could mirror; a colour is a row of `views::hue::PALETTE` now, that table is the client's and so behind the `render` feature, and `cnvt` needs only `png` and builds under any feature set. A copy of the table in the tool would be the second derivation the table was made to abolish — and a stale copy of the old formula is exactly what the option had become. `tools/typefaces.html` shows the fifteen.
 
 `strip` clears a channel:
 

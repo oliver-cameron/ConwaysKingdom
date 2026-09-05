@@ -5,9 +5,12 @@ The crate is divided by **who needs the code**, not by what it does.
 ```
 src/
   sim/      the rules                 client AND server
+    world/    the three passes a generation runs outside the rule
   net/      wire types and transport  client AND server
+    spawn.rs  where a player starts, and the ground they are granted
   server/   the authoritative side    server only
     rooms.rs  several worlds behind one address
+    matches.rs  the sides, the whistle, and how a match is decided
   render/   GPU and windowing         client only
   client/   what a player sees        client only
     views/  screens, and the egui they are drawn with
@@ -23,6 +26,8 @@ It runs one way, and the build enforces it rather than trusting convention.
 `sim::Player` is the one player type, and **a team is one of them**. It has a number, a purse and a patch of granted ground like anybody else; `plays_as` says which player a client is driving, and it is the client's own number unless they have joined a team. Nothing below `server` learns that teams exist — every rule takes a `PlayerId` and compares it — which is what makes a team cost no new code rather than a comparison threaded through placement, pricing, spawning, manufacture, scoring and colour. See [server.md](server.md#teams).
 
 Inside `sim`, `rule.rs` is deliberately thin. **Every tunable number in the game is a constant there** — the survival counts, how fast ground changes hands, what everything costs, what manufacture pays — and every rule is one named entry in an ordered list. Nothing else is: the seeded dice are `sim::seed`, the tests are `sim/rule/tests.rs`, and the list-to-chain macro is `sim/rule/order.rs`. The point is that the rules of the game can be read on one screen and changed by editing a number.
+
+That split is the convention for **a file whose tests outgrew it**: `#[cfg(test)] mod tests;` beside the code, the body in a sibling `tests.rs`. `server/mod.rs`, `server/rooms.rs`, `net/mod.rs` and `sim/world.rs` are now what the code does, and `server/tests.rs`, `server/rooms/tests.rs`, `net/tests.rs` and `sim/world/tests.rs` are what it is asked to prove. A module path is unchanged by it, so `use super::*` and the private items reached through it work exactly as they did inline.
 
 A **room** carries `net::Rules` beside its world: `paused`, `place_anywhere`, `place_free`, and `laboratory`, which says whether the first three are anybody's to change. They are the room's rather than the client's for the reason everything authoritative is — a client that answered "may I place here" for itself would predict placements the server refuses and resync every time it drew, which is what kept a laboratory offline for as long as it was a mode rather than a kind of room. `net::RoomKind` reads a room's kind off those and its victory condition, and is what the make-a-world form asks first.
 

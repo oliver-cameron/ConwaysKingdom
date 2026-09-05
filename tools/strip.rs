@@ -38,7 +38,7 @@ const CHANNELS: [(&str, &str); 4] = [
 
 fn index_of(name: &str) -> Option<usize> {
     let name = name.trim_start_matches("--").to_ascii_lowercase();
-    CHANNELS.iter().position(|(short, _)| *short == name).or_else(|| match name.as_str() {
+    CHANNELS.iter().position(|(short, _)| *short == name).or(match name.as_str() {
         "red" => Some(0),
         "green" => Some(1),
         "blue" => Some(2),

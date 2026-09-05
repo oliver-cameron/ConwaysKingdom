@@ -41,13 +41,15 @@ That is the command for a machine somebody is sitting at. A host answering on a 
 
 A room is a whole separate world — see [server.md](server.md#rooms). `--room` declares one, and every `<name>.ckw` already in the rooms directory is one too, so a restart keeps what a previous run was asked for. The first `--room` is where a client that names no room is put; with no `--room` at all that is `main`, which is created if it is not there.
 
-A torus is at most **128 chunks a side and 1024 in total**. It is allocated whole, so the ceiling is what a server can step four times a second rather than what it can hold — about four million cells, which `examples/frametime` measures at roughly 41 nanoseconds each, and a chunk is 64 cells a side — and the same limit answers a room a *client* asks for, which is the path that used to take the process down: a shape arrives over the wire and `rows: 0` reached an `assert!` while `100000x100000` overflowed the multiply that sizes the allocation. `WorldKind::checked` is the one answer, and the command line and the socket both go through it.
+A torus is at most **128 chunks a side and 1024 in total**. It is allocated whole, so the ceiling is what a server can step four times a second rather than what it can hold — about four million cells, which `examples/frametime` measures at roughly 41 nanoseconds each, and a chunk is 64 cells a side — and the same limit answers a room a *client* asks for, which is the path that used to take the process down: a shape arrives over the wire and `rows: 0` reached an `assert!` while `100000x100000` overflowed the multiply that sizes the allocation. `WorldKind::checked` is the one answer, and the command line and the socket both go through it. The release profile is `panic = "abort"`, so neither crash even unwound.
+
+The two figures are **one budget divided two ways**, which is why they move when a chunk's size does: at sixteen cells to a chunk edge the total was 16384 chunks, and at sixty-four it is 1024, because a chunk holds sixteen times as many cells and a quarter of a second did not get longer. The per-side cap is the same division doing a second job — refusing a 1x1024 world that fits the budget and is a corridor nobody can play in.
 
 A save is authoritative, so the shape a `--torus` asks for only applies to rooms that do not exist yet — the shape of a world is not something a flag can change after cells have been written into it. Restarting against an old world is the usual reason a change seems not to have taken; `--fresh` skips it, for every room at once. The startup log lists the rooms, their shapes and what is in them.
 
 A room opens empty. There is no seeded pattern: the first life arrives with the first player, who is granted ground and a block on joining.
 
-The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
+The server also reads its own terminal — `help` for the list, `new NAME [ROWSxCOLS]` to make a room without restarting, `bot add ROOM [LEVEL] [TEAM]` to seat a player the server plays, `stop` to save every room and shut down. So does SIGINT, and so does **SIGTERM**, which is what `kill`, `systemctl stop` and `docker stop` send. See [server.md](server.md#the-console).
 
 A bot is a seat the server plays from a small book of shapes, and an outside program can play a seat too, through the HTTP API `--api-token` mounts. Both are in [server.md](server.md#bots).
 
@@ -130,6 +132,19 @@ cargo run --no-default-features --example blast        # what a stick turns over
 cargo run --example locker -- ws://127.0.0.1:8080/ws    # a library surviving the socket, over a real one
 cargo run --example two -- ws://127.0.0.1:8080/ws       # two peers agreeing over a real one; LIE=1, OVERCLOCK=1
 ```
+
+### Where the time goes
+
+`cargo test` is about a minute and a half and two thirds of that is in two places, measured with `--test-threads=1`:
+
+| | |
+|---|---|
+| `client::views::menu::tests` | 29 tests, over half the total |
+| `sim::world::tests::a_torus_wraps_in_both_axes` | the single slowest test there is |
+
+Both are **expensive for a reason that is written down where they are**, so neither is a sweep to trim. The menu tests go through `probe`, which presses a lane every 24 points across the whole screen rather than a fixed number of them; the comment on it names the three separate times a fixed count silently stopped finding the button it was meant to press. And a glider laps a torus in `4 * lcm(height, width)` generations, so a test that a glider *does* lap one has to run that many — the four shapes it sweeps are the degenerate one-chunk case, two square ones and a rectangular one, and only the rectangle proves the two axes wrap independently.
+
+Next after those are `stepping_is_deterministic`, `a_peer_built_from_steps_agrees_with_the_server_with_a_bot_in_the_room` and `territory_creeps_across_a_chunk_boundary`, each a few seconds and each stepping a world a few hundred times in a debug build.
 
 `server::ws` is the whole of what `cargo test` cannot reach: it is the only module behind `#[cfg(feature = "server")]`, and everything else under `src/server/` compiles by default. So a green run says nothing about that one file, and a rename that broke it once sat in the tree behind four hundred passing tests. The `cargo check` line above is the cheapest thing that would have caught it. The one test the file does have — `/healthz` answering over a real socket, with and without a page to serve — runs only under `cargo test --features server`, because there is no `tower` in the tree to drive a router without a socket.
 

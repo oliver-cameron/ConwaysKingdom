@@ -468,7 +468,12 @@ pub struct Frame {
 pub enum FrameAcquire {
     /// Got a texture to draw into (present-worthy, though `Suboptimal`
     /// means you should reconfigure soon).
-    Ready(Frame),
+    ///
+    /// **Boxed**, because a `Frame` carries a surface texture, a view and an
+    /// encoder, and the other two answers here carry nothing — so the size of
+    /// a frame was the size of *not* getting one, returned every time a
+    /// compositor blinked.
+    Ready(Box<Frame>),
     /// Nothing to draw this frame (timeout, occluded, or a validation
     /// hiccup) — just skip it, nothing is wrong.
     Skip,
@@ -499,7 +504,7 @@ impl Frame {
             label: Some("frame encoder"),
         });
 
-        FrameAcquire::Ready(Self { output, view, encoder })
+        FrameAcquire::Ready(Box::new(Self { output, view, encoder }))
     }
 
     /// Records every draw call into a single render pass, then submits and

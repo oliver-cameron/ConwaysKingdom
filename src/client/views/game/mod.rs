@@ -108,7 +108,12 @@ enum Whose {
 
 enum Screen {
     /// Choosing a server and a room, or choosing to play alone.
-    Menu(menu::Menu),
+    ///
+    /// **Boxed**, because a `Menu` is most of a kilobyte and this enum is
+    /// moved on every screen change and matched every frame — so the size of
+    /// the menu was the size of being in a world, which is the screen that
+    /// cannot afford it.
+    Menu(Box<menu::Menu>),
     /// In a world. The only screen that takes input from the world.
     Playing,
 }
@@ -143,6 +148,18 @@ fn look_at<'a>(
         code: lobby.code.as_deref(),
         hues,
     }
+}
+
+/// What the keyboard prints on the digit row, which only the keyboard knows.
+///
+/// Two lists rather than one, because the shifted row is nine long and the
+/// plain row is ten: a hotbar has nine tools and ten stamp slots.
+#[derive(Clone, Default)]
+struct Keycaps {
+    /// What shift and 1 to 9 type, in order.
+    shifted: Vec<Option<String>>,
+    /// What 0 to 9 type on their own, in order.
+    bare: Vec<Option<String>>,
 }
 
 /// A finished gesture waiting to be resolved to cells. Input callbacks are not
@@ -280,10 +297,10 @@ pub struct GameApp {
     /// this a click that lands on empty ground is indistinguishable from a
     /// click that never arrived.
     last_action: Option<String>,
-    /// What each digit key prints, plain and with shift, as the hotbar wants
-    /// it. Cached because it is nineteen strings that change once a session —
-    /// see where it is filled in `update`.
-    typed_digits: Option<(Vec<Option<String>>, Vec<Option<String>>)>,
+    /// What each digit key prints, as the hotbar wants it. Cached because it
+    /// is nineteen strings that change once a session — see where it is
+    /// filled in `update`.
+    typed_digits: Option<Keycaps>,
     /// A finished gesture waiting to be resolved to cells.
     pending: Option<Pending>,
     /// What the hotbar is holding.
@@ -526,6 +543,25 @@ impl GameApp {
         self.session.quote(&self.world, cells, taking, placement)
     }
 
+    /// Whether this client has no seat to act from, saying so in the corner.
+    ///
+    /// **The one place the two silences are told apart.** Watching and waiting
+    /// for the whistle mean the same thing to everything that lays anything —
+    /// there is nobody to lay it as — and differ only in the words, so the
+    /// words are here rather than at each of the three places something goes
+    /// down.
+    fn refused_to_act(&mut self) -> bool {
+        if self.session.may_act() {
+            return false;
+        }
+        self.notice = Some(if self.session.watching {
+            w().menu.watch.no_seat.into()
+        } else {
+            words::refused::not_started().to_string()
+        });
+        true
+    }
+
     /// Lay what a drag drew, whatever shape it is.
     ///
     /// Always places, never takes: a drag across occupied ground is far more
@@ -533,12 +569,7 @@ impl GameApp {
     /// and an accidental sweep that wiped a structure would be unforgiving.
     /// Taking stays a deliberate single click.
     fn lay(&mut self, cells: Vec<(i32, i32)>, shape: String) {
-        if !self.session.may_act() {
-            self.notice = Some(if self.session.watching {
-                w().menu.watch.no_seat.into()
-            } else {
-                words::refused::not_started().to_string()
-            });
+        if self.refused_to_act() {
             return;
         }
         let count = cells.len();
@@ -791,12 +822,7 @@ impl GameApp {
         let player = self.session.player();
         let name = self.holding().to_string();
 
-        if !self.session.may_act() {
-            self.notice = Some(if self.session.watching {
-                w().menu.watch.no_seat.into()
-            } else {
-                words::refused::not_started().to_string()
-            });
+        if self.refused_to_act() {
             return;
         }
         let existing = self.world.cell_at(row, col).unwrap_or(crate::sim::Cell::DEAD);
@@ -962,16 +988,12 @@ impl GameApp {
 
     /// Lay a stamp with its middle under the pointer.
     ///
-    /// One action per placement it holds, because a `Paint` lays one kind and
-    /// a stamp may have caught two. All or nothing across both: half a pattern
-    /// is not the pattern, so it is priced whole before any of it is sent.
+    /// One action for the whole of it, and all or nothing: half a pattern is
+    /// not the pattern, so it is priced whole before any of it is sent. What
+    /// it is made of comes off the hotbar rather than out of the stamp, which
+    /// is why one quote covers a pattern of any size.
     fn stamp_at(&mut self, index: usize, at: (i32, i32)) {
-        if !self.session.may_act() {
-            self.notice = Some(if self.session.watching {
-                w().menu.watch.no_seat.into()
-            } else {
-                words::refused::not_started().to_string()
-            });
+        if self.refused_to_act() {
             return;
         }
         let Some(stamp) = self.stamps.get(index).map(|s| s.turned(self.held.turn)) else {
@@ -980,12 +1002,9 @@ impl GameApp {
         };
         let corner = stamp.centred_on(at);
 
-        // **One kind, so one quote.** A stamp used to carry a placement per
-        // cell and went down as several actions; it is a shape now and what it
-        // is made of comes off the hotbar, so it is one.
         let Some(what) = self.held.placement() else { return };
         let laid = stamp.at(corner);
-        let quotes = [self.quote_as(laid.clone(), false, what)];
+        let (stamped, delta) = self.quote_as(laid.clone(), false, what);
 
         let cells: usize = stamp.cells.len();
         let stray =
@@ -995,7 +1014,6 @@ impl GameApp {
             return;
         }
 
-        let delta: i32 = quotes.iter().map(|(_, d)| d).sum();
         if self.session.value + delta < 0 {
             self.notice = Some(words::refused::cannot_afford(cells, -delta, self.session.value));
             return;
@@ -1003,9 +1021,7 @@ impl GameApp {
 
         self.notice = None;
         self.session.spend(delta);
-        for (stamped, _) in &quotes {
-            self.session.commit(&mut self.world, stamped);
-        }
+        self.session.commit(&mut self.world, &stamped);
         self.last_action = Some(words::stamps::placed(&stamp.name, cells, delta));
     }
 
@@ -1244,9 +1260,10 @@ impl GameApp {
     /// already says why you are looking at a list rather than at a world.
     fn say(&mut self, what: String) {
         match &mut self.ui.screen {
-            Screen::Menu(menu::Menu { stage: menu::Stage::Choosing { note, .. }, .. }) => {
-                *note = Some(what);
-            }
+            Screen::Menu(m) => match &mut m.stage {
+                menu::Stage::Choosing { note, .. } => *note = Some(what),
+                _ => self.notice = Some(what),
+            },
             _ => self.notice = Some(what),
         }
     }
@@ -1275,7 +1292,7 @@ impl GameApp {
                 // the app is the only thing that has been told one. A match
                 // that has just ended is the commonest way to arrive here.
                 m.rating = self.session.rating();
-                self.ui.screen = Screen::Menu(m);
+                self.ui.screen = Screen::Menu(Box::new(m));
             }
         }
     }
@@ -1472,9 +1489,11 @@ impl GameApp {
                 self.chose(menu::Chose::Join(id));
             }
             Effect::NotMade(why) => {
-                if let Screen::Menu(menu::Menu { draft: Some(draft), .. }) = &mut self.ui.screen {
-                    draft.asking = false;
-                    draft.note = Some(why);
+                if let Screen::Menu(m) = &mut self.ui.screen {
+                    if let Some(draft) = &mut m.draft {
+                        draft.asking = false;
+                        draft.note = Some(why);
+                    }
                 }
             }
             // Gone from the list, or still in it with the reason beside it.
@@ -1591,10 +1610,10 @@ impl GameApp {
             // twice before it gets here.
             menu::Chose::ResetEverything => {
                 self.session.forget_everything();
-                self.ui.screen = Screen::Menu(menu::Menu::new(
+                self.ui.screen = Screen::Menu(Box::new(menu::Menu::new(
                     self.address_hint(),
                     cfg!(target_arch = "wasm32"),
-                ));
+                )));
             }
             // The form is a column now rather than something opened, so there
             // is nothing to shut: a press here puts it back to its defaults.
@@ -1707,15 +1726,14 @@ impl App for GameApp {
                     // The address is unusable — a browser refusing to build a
                     // socket for it, which is the one way `dial` fails here.
                     // Said now rather than waited out.
-                    Screen::Menu(menu::Menu::failed(
+                    Screen::Menu(Box::new(menu::Menu::failed(
                         url.clone(),
                         cfg!(target_arch = "wasm32"),
                         words::menu::not_an_address(&url),
-                    ))
+                    )))
                 }
             }
             Start::Menu { address, page, describing, access } => {
-                #[allow(clippy::let_and_return)]
                 let mut m = menu::Menu::new(address, cfg!(target_arch = "wasm32"));
                 // **The page the address named, whichever it is.** This
                 // honoured `Play` alone, so `/alone` and `/experiments` were
@@ -1733,7 +1751,7 @@ impl App for GameApp {
                 if let Some(access) = access {
                     m.describe_access(access);
                 }
-                Screen::Menu(m)
+                Screen::Menu(Box::new(m))
             }
         };
         // Always start with something on screen. Holding an empty world until
@@ -2041,10 +2059,10 @@ impl App for GameApp {
         let relearned = self.views.borrow_mut().take_what_the_browser_said();
         if relearned || self.typed_digits.is_none() {
             let views = self.views.borrow();
-            self.typed_digits = Some((
-                (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect(),
-                (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect(),
-            ));
+            self.typed_digits = Some(Keycaps {
+                shifted: (1..=9).map(|d| views.shifted_digit(d).map(str::to_string)).collect(),
+                bare: (0..=9).map(|d| views.plain_digit(d).map(str::to_string)).collect(),
+            });
         }
         let help_keys = {
             use winit::keyboard::KeyCode as K;
@@ -2081,7 +2099,7 @@ impl App for GameApp {
                 tools: row(&DIGITS[..tools], true),
             }
         };
-        let (shifted, bare) = self.typed_digits.clone().unwrap_or_default();
+        let Keycaps { shifted, bare } = self.typed_digits.clone().unwrap_or_default();
         let (held, theme) = (self.held, self.views.borrow().theme);
         // Registered before the frame rather than inside it: loading a texture
         // needs the context, and the context is borrowed for the whole build.
@@ -2162,7 +2180,7 @@ impl App for GameApp {
         // invited into; a watcher holds no door, being in no seat.
         let inviting_into = (!self.session.watching
             && self.session.lobby.as_ref().is_some_and(|l| l.code.is_some()))
-        .then(|| self.session.room_name.as_deref())
+        .then_some(self.session.room_name.as_deref())
         .flatten();
         // **Three states, not two**: asked-for-and-waiting, never-met, and an
         // answer. A panel that showed nothing for the first two would make a
@@ -2283,7 +2301,7 @@ impl App for GameApp {
                                         &look_at(
                                             l,
                                             &self.session,
-                                            &crate::client::views::hue::table(),
+                                            crate::client::views::hue::table(),
                                             ui.refused_start.as_deref(),
                                         ),
                                         &mut ui.naming_team,
@@ -2303,8 +2321,16 @@ impl App for GameApp {
                         // screen that is about the room rather than about a player.
                         let clock_rect = lobby.as_ref().and_then(|l| {
                             clock::show(
-                                ctx, &theme, generation, &l.phase, l.victory, &standing, paused,
-                                rules.bpm,
+                                ctx,
+                                &theme,
+                                &clock::Look {
+                                    generation,
+                                    phase: &l.phase,
+                                    victory: l.victory,
+                                    standing,
+                                    paused,
+                                    bpm: rules.bpm,
+                                },
                             )
                             .rect
                         });
@@ -2344,7 +2370,7 @@ impl App for GameApp {
                                 &look_at(
                                     l,
                                     &self.session,
-                                    &crate::client::views::hue::table(),
+                                    crate::client::views::hue::table(),
                                     ui.refused_start.as_deref(),
                                 ),
                                 &mut ui.naming_team,
@@ -2359,12 +2385,9 @@ impl App for GameApp {
                             let shown = stamp::show(
                                 ctx,
                                 &theme,
-                                &self.stamps,
+                                &stamp::Look { library: &self.stamps, player: me, sheet, editing },
                                 &mut ui.sketch,
-                                me,
-                                sheet,
                                 &mut ui.naming_stamp,
-                                editing,
                             );
                             from_library = shown.did;
                             return [

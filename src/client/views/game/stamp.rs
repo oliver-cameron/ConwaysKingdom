@@ -652,19 +652,31 @@ pub type Editing = Option<usize>;
 /// `what` is the material the hotbar is holding, and everything here is drawn
 /// in it: a stamp is a shape, so a thumbnail shows that shape in what it would
 /// come out as rather than a fixed picture of how it was captured.
+/// What the panel draws from, which is everything about it that does not
+/// change while it is drawn.
+///
+/// A struct for the reason [`super::lobby::Look`] is one: the argument list
+/// had reached eight. The two things the panel *writes* stay arguments, so
+/// what it reads and what it edits are told apart by their position rather
+/// than by remembering.
+pub struct Look<'a> {
+    pub library: &'a Library,
+    pub player: PlayerId,
+    pub sheet: Option<egui::TextureId>,
+    pub editing: Editing,
+}
+
 pub fn show(
     ctx: &egui::Context,
     theme: &Theme,
-    library: &Library,
+    look: &Look<'_>,
     sketch: &mut Sketch,
-    player: PlayerId,
-    sheet: Option<egui::TextureId>,
     // What is being typed into a name box. Held by the client because this
     // panel is rebuilt every frame and a half-typed name would vanish between
     // two of them — the same reason a team's name is.
     naming: &mut Option<(usize, String)>,
-    editing: Editing,
 ) -> crate::client::views::Shown<Picked> {
+    let &Look { library, player, sheet, editing } = look;
     let p = theme.palette;
     let m = theme.metrics;
     let mut picked = Picked::Nothing;

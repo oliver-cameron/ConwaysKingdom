@@ -1,5 +1,6 @@
 target/
 pkg/
-rooms/
+# Anchored, or it hides src/server/rooms/ too, which is source.
+/rooms/
 world.ckw
 .DS_Store

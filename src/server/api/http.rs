@@ -66,14 +66,21 @@ async fn bearer(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let given = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+    let given = bearer_token(headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
     if given.is_some_and(|given| same(given.as_bytes(), api.token.as_bytes())) {
         return next.run(request).await;
     }
     refuse(StatusCode::UNAUTHORIZED, "a bearer token is needed; the server was started with one")
+}
+
+/// The token out of an `Authorization` header, whatever case the scheme is in.
+///
+/// **A scheme is case-insensitive** — RFC 7235 — and a client sending `bearer`
+/// is sending this scheme, not a different one. The token itself is not: it is
+/// compared byte for byte by [`same`].
+fn bearer_token(header: Option<&str>) -> Option<&str> {
+    let (scheme, token) = header?.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("Bearer").then_some(token)
 }
 
 /// Equal, in time that does not depend on where they differ.
@@ -102,21 +109,22 @@ async fn answer(api: &Api, req: Request) -> Response {
 }
 
 /// A seat off the path, or a 400 that says what was there instead.
-fn seat_number(text: &str) -> Result<PlayerId, Response> {
-    text.parse::<u8>()
-        .map(PlayerId)
-        .map_err(|_| refuse(StatusCode::BAD_REQUEST, format!("\"{text}\" is not a seat's number")))
+fn seat_number(text: &str) -> Result<PlayerId, Box<Response>> {
+    text.parse::<u8>().map(PlayerId).map_err(|_| {
+        Box::new(refuse(StatusCode::BAD_REQUEST, format!("\"{text}\" is not a seat's number")))
+    })
 }
 
-fn number(what: &str, text: &str) -> Result<i32, Response> {
-    text.parse::<i32>()
-        .map_err(|_| refuse(StatusCode::BAD_REQUEST, format!("\"{text}\" is not a {what}")))
+fn number(what: &str, text: &str) -> Result<i32, Box<Response>> {
+    text.parse::<i32>().map_err(|_| {
+        Box::new(refuse(StatusCode::BAD_REQUEST, format!("\"{text}\" is not a {what}")))
+    })
 }
 
 /// A body that did not parse is a 400 in the same shape as every other
 /// refusal, rather than axum's plain text.
-fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, Response> {
-    parsed.map(|Json(t)| t).map_err(|e| refuse(StatusCode::BAD_REQUEST, e.body_text()))
+fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, Box<Response>> {
+    parsed.map(|Json(t)| t).map_err(|e| Box::new(refuse(StatusCode::BAD_REQUEST, e.body_text())))
 }
 
 #[derive(Deserialize)]
@@ -164,7 +172,7 @@ async fn add_bot(
 ) -> Response {
     let AddBotBody { name, level, team } = match body(parsed) {
         Ok(b) => b,
-        Err(why) => return why,
+        Err(why) => return *why,
     };
     answer(&api, Request::AddBot { room, name, level, team: team.map(PlayerId) }).await
 }
@@ -175,7 +183,7 @@ async fn remove_bot(
 ) -> Response {
     match seat_number(&seat) {
         Ok(seat) => answer(&api, Request::RemoveBot { room, seat }).await,
-        Err(why) => why,
+        Err(why) => *why,
     }
 }
 
@@ -186,7 +194,7 @@ async fn sit(
 ) -> Response {
     let SitBody { name, team } = match body(parsed) {
         Ok(b) => b,
-        Err(why) => return why,
+        Err(why) => return *why,
     };
     answer(&api, Request::Sit { room, name, team: team.map(PlayerId) }).await
 }
@@ -194,7 +202,7 @@ async fn sit(
 async fn seat(State(api): State<Api>, Path((room, seat)): Path<(String, String)>) -> Response {
     match seat_number(&seat) {
         Ok(seat) => answer(&api, Request::Seat { room, seat }).await,
-        Err(why) => why,
+        Err(why) => *why,
     }
 }
 
@@ -205,11 +213,11 @@ async fn act(
 ) -> Response {
     let seat = match seat_number(&seat) {
         Ok(seat) => seat,
-        Err(why) => return why,
+        Err(why) => return *why,
     };
     let ActBody { action } = match body(parsed) {
         Ok(b) => b,
-        Err(why) => return why,
+        Err(why) => return *why,
     };
     answer(&api, Request::Act { room, seat, action }).await
 }
@@ -220,7 +228,7 @@ async fn chunk(
 ) -> Response {
     let (row, col) = match (number("row", &row), number("column", &col)) {
         (Ok(row), Ok(col)) => (row, col),
-        (Err(why), _) | (_, Err(why)) => return why,
+        (Err(why), _) | (_, Err(why)) => return *why,
     };
     answer(&api, Request::Chunk { room, row, col }).await
 }
@@ -239,4 +247,23 @@ async fn cells(
 
 async fn standings(State(api): State<Api>, Path(room): Path<String>) -> Response {
     answer(&api, Request::Standings { room }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scheme is the only part that is case-insensitive, and it has to be:
+    /// a client sending `bearer` was refused with "a bearer token is needed",
+    /// which reads as the token being wrong rather than its spelling.
+    #[test]
+    fn the_bearer_scheme_is_read_in_any_case() {
+        assert_eq!(bearer_token(Some("Bearer sesame")), Some("sesame"));
+        assert_eq!(bearer_token(Some("bearer sesame")), Some("sesame"));
+        assert_eq!(bearer_token(Some("BEARER sesame")), Some("sesame"));
+        assert_eq!(bearer_token(Some("Basic sesame")), None, "another scheme is another scheme");
+        assert_eq!(bearer_token(Some("Bearer")), None, "a scheme with no token is no token");
+        assert_eq!(bearer_token(None), None);
+        assert_eq!(bearer_token(Some("Bearer SESAME")), Some("SESAME"), "the token is not folded");
+    }
 }

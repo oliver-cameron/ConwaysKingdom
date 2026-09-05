@@ -27,18 +27,29 @@ fn seconds(generations: u64, bpm: u16) -> u64 {
 }
 
 /// Draw it, if there is a match running. Returns what it covered.
+/// Everything the clock draws from.
+///
+/// A struct for the reason [`super::lobby::Look`] is one: the argument list
+/// had reached eight, which is the point at which their order is the thing
+/// most likely to be got wrong, and every one of these is read by name at the
+/// other end anyway.
+pub struct Look<'a> {
+    pub generation: u64,
+    pub phase: &'a MatchPhase,
+    pub victory: Option<Victory>,
+    pub standing: &'a [crate::net::Holding],
+    pub paused: bool,
+    /// This room's rate, for turning a count of generations into a time — see
+    /// [`crate::net::Rules::bpm`].
+    pub bpm: u16,
+}
+
 pub fn show(
     ctx: &egui::Context,
     theme: &Theme,
-    generation: u64,
-    phase: &MatchPhase,
-    victory: Option<Victory>,
-    standing: &[crate::net::Holding],
-    paused: bool,
-    // This room's rate, for turning a count of generations into a time -- see
-    // `net::Rules::bpm`.
-    bpm: u16,
+    look: &Look<'_>,
 ) -> crate::client::views::Shown<()> {
+    let &Look { generation, phase, victory, standing, paused, bpm } = look;
     // **A stopped world says so, and nothing else has to.** A board that is
     // not moving is indistinguishable from one that has settled, and settling
     // is a thing patterns actually do — so without this the first minute of an

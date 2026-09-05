@@ -213,6 +213,11 @@ pub const FINE_ABOVE: f32 = 2.0;
 /// makes the handover look the same going down as coming back up. **Kept in
 /// step by hand**: lowering either of these under `FLAT_BY` puts the pop back.
 pub const FLAT_BY_IN_SHADER: f32 = 1.5;
+const _: () = assert!(COARSE_BELOW < FINE_ABOVE, "one threshold is not hysteresis");
+const _: () = assert!(
+    FLAT_BY_IN_SHADER <= COARSE_BELOW,
+    "the swap happens while the fine path still has art on it"
+);
 
 /// The world as one texel a cell: the cell without its art.
 ///
@@ -702,7 +707,7 @@ impl ChunkStore {
     /// from — which the camera uniform has to carry so the shader can map a
     /// world position onto a texel.
     pub fn coarse_window(&self) -> Option<((i32, i32), (i32, i32))> {
-        self.was_coarse.then(|| self.coarse.window).flatten()
+        self.was_coarse.then_some(self.coarse.window).flatten()
     }
 
     /// Whether that window is the whole world, and so wraps.
@@ -1100,13 +1105,6 @@ mod tests {
     /// the fine path has already faded into what the coarse one draws.
     #[test]
     fn the_two_paths_do_not_flicker_at_the_boundary() {
-        assert!(COARSE_BELOW < FINE_ABOVE, "one threshold is not hysteresis");
-        // The shader has finished fading the art out by the time either side
-        // of that hysteresis is crossed, so neither crossing is a visible one.
-        assert!(
-            FLAT_BY_IN_SHADER <= COARSE_BELOW,
-            "the swap happens while the fine path still has art on it"
-        );
         // Coming down: fine until below COARSE_BELOW. Written against the two
         // thresholds rather than as a list of numbers, which is what went
         // stale when they moved with the chunk size.
@@ -1282,7 +1280,7 @@ mod tests {
     fn a_chunk_becomes_four_bytes_a_cell_with_the_cell_first() {
         let mut world = World::infinite_empty();
         alive(&mut world, &[(0, 0), (0, 1)], 3);
-        let chunk = world.chunk_at((0, 0)).unwrap().clone();
+        let chunk = *world.chunk_at((0, 0)).unwrap();
         let texels = texels(&world, (0, 0), &chunk);
 
         assert_eq!(texels.len(), CHUNK_CELLS * ChunkTexture::STRIDE);

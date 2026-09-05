@@ -646,7 +646,16 @@ pub fn show(
                                     let key = hint(slot.press, look);
                                     let drawn = slot.press == Press::Space;
                                     let price = price_of(slot.key, look);
-                                    if square(ui, look, size, face, name, key, drawn, price, on) {
+                                    let cap = Cap {
+                                        size,
+                                        face,
+                                        name,
+                                        key,
+                                        space: drawn,
+                                        price,
+                                        selected: on,
+                                    };
+                                    if square(ui, look, cap) {
                                         picked = Some(slot.key);
                                     }
                                 }
@@ -760,20 +769,26 @@ enum Face<'a> {
 ///
 /// Returns whether it was clicked. `key` is shown only while there is a key
 /// left to show it with.
-fn square(
-    ui: &mut egui::Ui,
-    look: &Look<'_>,
+/// One square of the bar, as the bar describes it.
+///
+/// Beside [`Look`], which is what the *bar* draws from: this is what one
+/// square is, and the two were one argument list of nine until the order of
+/// them was the thing most likely to be got wrong.
+struct Cap<'a> {
     size: f32,
-    face: Face<'_>,
-    name: &str,
+    face: Face<'a>,
+    name: &'a str,
     key: Option<String>,
-    // Whether the key in the corner is a space bar, which has no spelling and
-    // is drawn -- see `views::icons::space_bar`.
+    /// Whether the key in the corner is a space bar, which has no spelling and
+    /// is drawn — see [`crate::client::views::icons::space_bar`].
     space: bool,
-    // What it costs to lay one, if it costs anything -- see `price_of`.
+    /// What it costs to lay one, if it costs anything — see `price_of`.
     price: Option<i32>,
     selected: bool,
-) -> bool {
+}
+
+fn square(ui: &mut egui::Ui, look: &Look<'_>, cap: Cap<'_>) -> bool {
+    let Cap { size, face, name, key, space, price, selected } = cap;
     let p = look.theme.palette;
     let m = look.theme.metrics;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
@@ -850,7 +865,7 @@ fn square(
             painter,
             rect.right_bottom() + egui::vec2(-4.0, -2.0),
             egui::Align2::RIGHT_BOTTOM,
-            &price.to_string(),
+            price.to_string(),
             11.0,
             p.text_dim,
         );
@@ -879,7 +894,6 @@ fn shadowed(
 
 /// The same, in a named family — which is how an icon is drawn, since an icon
 /// is only ever asked of the font that has icons.
-#[allow(clippy::too_many_arguments)]
 fn shadowed_in(
     painter: &egui::Painter,
     at: egui::Pos2,

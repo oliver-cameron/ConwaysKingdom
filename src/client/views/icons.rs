@@ -53,60 +53,6 @@ impl Icons {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// **A tile is square in texels, so its patch of the sheet is not square in
-    /// fractions.** This divided both axes by the width, which was right while
-    /// the sheet was square and squashed every icon to two thirds of its height
-    /// the moment the levels of detail moved in below the grid.
-    #[test]
-    fn a_tile_covers_one_tile_of_the_sheet_on_both_axes() {
-        for tile in [0u8, 5, 16, 255] {
-            let uv = Icons::uv(tile);
-            assert!(
-                (uv.width() * SHEET_W as f32 - TILE_N as f32).abs() < 0.001,
-                "tile {tile} is {} texels wide",
-                uv.width() * SHEET_W as f32
-            );
-            assert!(
-                (uv.height() * SHEET_H as f32 - TILE_N as f32).abs() < 0.001,
-                "tile {tile} is {} texels tall",
-                uv.height() * SHEET_H as f32
-            );
-        }
-        // And the last tile of the grid still ends inside the grid rather than
-        // in the strip of reduced art below it.
-        let last = Icons::uv(255);
-        assert!(last.max.x <= 1.0 && last.max.y <= (SHEET_W as f32 / SHEET_H as f32) + 0.001);
-    }
-
-    /// The column says whose tile a texel is in at every level, against
-    /// `Cell::sprite`, which is the arithmetic it has to agree with.
-    #[test]
-    fn a_texels_column_says_whether_its_cell_is_alive() {
-        use crate::sim::{Cell, Kind};
-        for kind in Kind::ALL {
-            for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
-                let tile = Cell::DEAD.with_kind(kind).with_alive(alive).with_ice(ice).sprite();
-                let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
-                for level in 0..LEVELS {
-                    let (ox, oy) = LEVEL_ORIGIN[level];
-                    let side = LEVEL_TILE_N[level];
-                    for (dx, dy) in [(0, 0), (side - 1, side - 1)] {
-                        assert_eq!(
-                            alive_at(ox + tx * side + dx, oy + ty * side + dy),
-                            alive,
-                            "tile {tile} at level {level}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// The whole sheet, converted from saturation-lightness-coverage into this
 /// player's colours.
 fn tint(player: PlayerId) -> Option<egui::ColorImage> {
@@ -254,4 +200,58 @@ pub fn camera(painter: &egui::Painter, rect: egui::Rect, colour: egui::Color32) 
     painter.rect_filled(hump, 1.0, colour);
 
     painter.circle_stroke(body.center(), body.height() * 0.28, stroke);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A tile is square in texels, so its patch of the sheet is not square in
+    /// fractions.** This divided both axes by the width, which was right while
+    /// the sheet was square and squashed every icon to two thirds of its height
+    /// the moment the levels of detail moved in below the grid.
+    #[test]
+    fn a_tile_covers_one_tile_of_the_sheet_on_both_axes() {
+        for tile in [0u8, 5, 16, 255] {
+            let uv = Icons::uv(tile);
+            assert!(
+                (uv.width() * SHEET_W as f32 - TILE_N as f32).abs() < 0.001,
+                "tile {tile} is {} texels wide",
+                uv.width() * SHEET_W as f32
+            );
+            assert!(
+                (uv.height() * SHEET_H as f32 - TILE_N as f32).abs() < 0.001,
+                "tile {tile} is {} texels tall",
+                uv.height() * SHEET_H as f32
+            );
+        }
+        // And the last tile of the grid still ends inside the grid rather than
+        // in the strip of reduced art below it.
+        let last = Icons::uv(255);
+        assert!(last.max.x <= 1.0 && last.max.y <= (SHEET_W as f32 / SHEET_H as f32) + 0.001);
+    }
+
+    /// The column says whose tile a texel is in at every level, against
+    /// `Cell::sprite`, which is the arithmetic it has to agree with.
+    #[test]
+    fn a_texels_column_says_whether_its_cell_is_alive() {
+        use crate::sim::{Cell, Kind};
+        for kind in Kind::ALL {
+            for (alive, ice) in [(false, false), (true, false), (false, true), (true, true)] {
+                let tile = Cell::DEAD.with_kind(kind).with_alive(alive).with_ice(ice).sprite();
+                let (tx, ty) = ((tile % 16) as u32, (tile / 16) as u32);
+                for level in 0..LEVELS {
+                    let (ox, oy) = LEVEL_ORIGIN[level];
+                    let side = LEVEL_TILE_N[level];
+                    for (dx, dy) in [(0, 0), (side - 1, side - 1)] {
+                        assert_eq!(
+                            alive_at(ox + tx * side + dx, oy + ty * side + dy),
+                            alive,
+                            "tile {tile} at level {level}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

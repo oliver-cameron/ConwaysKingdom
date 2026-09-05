@@ -4,19 +4,12 @@
 //! ```text
 //! cargo run --bin cnvt -- art.png assets/sprites/sheet.png
 //! cargo run --bin cnvt -- --back assets/sprites/sheet.png art.png
-//! cargo run --bin cnvt -- --back --player 3 assets/sprites/sheet.png as-p3.png
 //! ```
 //!
 //! The reverse exists so a sheet can be opened. In the atlas format a sheet is
 //! unreadable — three of its channels are numbers fed to a colour model, so a
 //! paint program shows something that looks nothing like the art. Converting
 //! back gives you a picture you can look at, edit, and convert forward again.
-//!
-//! `--player N` reverses it the way the *game* will draw it: taking the hue
-//! and saturation tier from player N rather than from the sheet, since that is
-//! what the shader does. `--player 0` is unowned, which is grey. Without it
-//! the sheet's own hue is used, which is the true inverse of the forward pass
-//! and so is what a round trip should reproduce.
 //!
 //! The atlas is not a picture. Its channels are the arguments to `shade()` in
 //! `render/shaders/grid.wgsl`, which builds a colour in OKLab so that one sheet
@@ -133,27 +126,6 @@ fn shade(lightness: f32, saturation: f32, hue: f32) -> [f32; 3] {
     oklab_to_linear([lightness, c * dx, c * dy]).map(|v| v.clamp(0.0, 1.0))
 }
 
-/// Golden ratio: consecutive player numbers land far apart on the hue circle.
-/// Mirrors `player_hue` in the shader.
-const HUE_STEP: f32 = 0.618_033_99;
-
-/// What the shader will draw a sheet's pixel as, for a given player.
-///
-/// Mirrors `player_hue` and `player_saturation` in `grid.wgsl`. Player zero is
-/// nobody: unclaimed ground has no colour of its own, so it is grey however
-/// much saturation the art asks for.
-fn player_shade(sheet: [u8; 4], player: u8) -> [f32; 3] {
-    let hue = (player as f32 * HUE_STEP).fract() * TAU;
-    let tier = if player == 0 {
-        0.0
-    } else if player % 2 == 1 {
-        1.0
-    } else {
-        0.55
-    };
-    shade(sheet[1] as f32 / 255.0, sheet[0] as f32 / 255.0 * tier, hue)
-}
-
 /// One pixel, from sRGB bytes to the sheet's four channels.
 ///
 /// Saturation is the pixel's chroma as a fraction of what `shade()` would ask
@@ -191,18 +163,19 @@ fn back(sheet: [u8; 4]) -> [u8; 3] {
     rgb.map(|v| (linear_to_srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// A whole sheet back to something you can look at. `player` picks whose hue
-/// to draw it in; `None` uses the hue the sheet carries.
-fn reverse(pixels: &[u8], player: Option<u8>) -> Vec<u8> {
+/// A whole sheet back to something you can look at, in the hue it carries.
+///
+/// Not in a *player's* hue, which this used to offer: a player's colour is a
+/// row of `views::hue::PALETTE` now rather than a formula, and that table is
+/// the client's, which is behind the `render` feature — while this tool needs
+/// only `png` and builds under any feature set. A copy of the table here would
+/// be the second derivation the table exists to abolish, and a stale copy is
+/// what it was. `tools/typefaces.html` shows the fifteen.
+fn reverse(pixels: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixels.len());
     for px in pixels.chunks_exact(4) {
         let sheet = [px[0], px[1], px[2], px[3]];
-        let rgb = match player {
-            Some(p) => player_shade(sheet, p)
-                .map(|v| (linear_to_srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8),
-            None => back(sheet),
-        };
-        out.extend_from_slice(&rgb);
+        out.extend_from_slice(&back(sheet));
         // Coverage is kept rather than composited, so the result can be edited
         // and converted forward again without a background baked into it.
         out.push(sheet[3]);
@@ -213,46 +186,26 @@ fn reverse(pixels: &[u8], player: Option<u8>) -> Vec<u8> {
 fn main() {
     let mut back_wards = false;
     let mut hsl = false;
-    let mut player: Option<u8> = None;
     let mut paths: Vec<String> = Vec::new();
 
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--back" => back_wards = true,
             "--hsl" => hsl = true,
-            "--player" => match args.next().and_then(|v| v.parse::<u8>().ok()) {
-                Some(p) if p <= 31 => player = Some(p),
-                _ => {
-                    eprintln!("cnvt: --player takes a number from 0 to 31");
-                    std::process::exit(2);
-                }
-            },
             other => paths.push(other.to_string()),
         }
     }
 
     let [input, output] = paths.as_slice() else {
-        eprintln!("usage: cnvt [--back [--player N]] [--hsl] <in.png> <out.png>");
+        eprintln!("usage: cnvt [--back] [--hsl] <in.png> <out.png>");
         eprintln!("  Forward: an RGBA sheet into the atlas format -- R saturation,");
         eprintln!("  G lightness, B hue, A coverage.");
         eprintln!("  --back:  the atlas format into something you can look at.");
-        eprintln!("  --player N: draw it the way the game will, in player N's");
-        eprintln!("  colour. 0 is unowned, which is grey.");
         eprintln!("  --hsl:   the sheet's three bytes AS an HSL colour, so a");
         eprintln!("  colour wheel drives them directly. Not a preview -- it is");
         eprintln!("  what to draw in. Use it both ways round.");
         std::process::exit(2);
     };
-    if player.is_some() && !back_wards {
-        eprintln!("cnvt: --player only means anything with --back");
-        std::process::exit(2);
-    }
-    if hsl && player.is_some() {
-        eprintln!("cnvt: --hsl and --player are two different views; pick one");
-        std::process::exit(2);
-    }
-
     let (width, height, pixels) = match read_rgba(Path::new(input)) {
         Ok(v) => v,
         Err(e) => {
@@ -275,13 +228,7 @@ fn main() {
             pixels.chunks_exact(4).flat_map(|p| from_hsl_view([p[0], p[1], p[2], p[3]])).collect(),
             "read back as HSL".to_string(),
         ),
-        (true, false) => {
-            let what = match player {
-                Some(p) => format!("as player {p} sees it"),
-                None => "in the sheet's own hue".to_string(),
-            };
-            (reverse(&pixels, player), format!("reversed {what}"))
-        }
+        (true, false) => (reverse(&pixels), "reversed in the sheet's own hue".to_string()),
         (false, false) => forward(&pixels, width),
     };
 
@@ -599,22 +546,6 @@ mod tests {
         assert!(error > 8, "this one is meant to be lossy, got {error}");
     }
 
-    /// Player zero is nobody, and nobody's ground is grey. Mirrors the rule in
-    /// the shader, so `--back --player 0` shows what unclaimed ground looks
-    /// like rather than a hue nobody has.
-    #[test]
-    fn player_zero_reverses_to_grey() {
-        let sheet = convert([150, 90, 60, 255]);
-        let rgb = player_shade(sheet, 0);
-        assert!(
-            (rgb[0] - rgb[1]).abs() < 1e-4 && (rgb[1] - rgb[2]).abs() < 1e-4,
-            "unowned should have no colour, got {rgb:?}"
-        );
-        // And a real player does have one.
-        let owned = player_shade(sheet, 1);
-        assert!((owned[0] - owned[2]).abs() > 1e-3, "player one should be coloured");
-    }
-
     /// Coverage is carried through untouched in both directions, so a sheet
     /// can be reversed, edited and converted forward without a background
     /// being baked into it.
@@ -622,7 +553,7 @@ mod tests {
     fn coverage_is_carried_not_composited() {
         for alpha in [0u8, 1, 128, 255] {
             assert_eq!(convert([10, 20, 30, alpha])[3], alpha);
-            let reversed = reverse(&[10, 20, 30, alpha], None);
+            let reversed = reverse(&[10, 20, 30, alpha]);
             assert_eq!(reversed[3], alpha);
         }
     }

@@ -116,6 +116,8 @@ For an unlisted room, `Close` first asks `may_enter`, the door below, and somebo
 
 A client with **no key** that came in by the code is refused on a refresh and types the code again: nothing identifies it across sockets, so there is nothing for `admitted` to hold. That is the one regression the door cost, and the smallest one available. The client already has the code from the lobby stamp, so carrying it in the address — `?code=`, left in [planned.md](planned.md#games-and-matches-by-code) — is what removes it.
 
+A code is six characters from thirty-one — the digits and lowercase letters less `0`, `o`, `1`, `i` and `l`, which are the whole of why a code gets mistyped when it is read off one screen and typed into another, or said out loud. Dropping those five costs 1.3 bits: 31⁶ = 887,503,681 codes, or **29.7 bits**, against 36⁶ = 2,176,782,336 and 31.0 bits for the full alphanumeric set. It is a good trade, because the keyspace is not what protects a private room. With `MAX_MADE_ROOMS` rooms in play a random guess finds one in about twenty-eight million, so the defence is that guessing is not worth anybody's time; if it ever became worth somebody's time the answer is a limit on how fast a connection may guess, not a longer code. A code is a **latch rather than a lock**. Case-insensitivity comes free, because `net::room_name` folds case for every identifier here.
+
 `admitted` is who may walk in by the id: whoever was **invited**, whoever was **challenged**, and whoever once came in **by the code** — because the address bar says the id after a join by code and a refresh rejoins by it, so a door that shut behind them would make a refresh a refusal. It is written to `rooms.jsonl` beside the code, so an invitation given before a restart stands after it.
 
 ### Invitations
@@ -198,6 +200,14 @@ leave: PlayerId(1) "late" from room lobby after 10 ticks (0 still on)
 ```
 
 The subscribe line is the useful one when a client sees nothing: it says whether the viewport is even pointed somewhere the server has data.
+
+### What an action is allowed to say
+
+**An action belongs to the connection that sent it, not to the player it names.** `ClientMessage::Act` carries a `seat` and a `player`, and `Server::handle` checks both against the connection it arrived on. Without that the `player` field is a claim rather than an identity: any connection in the room could act as anybody in it, spending their value and placing their cells, and a connection with no seat at all — a spectator — could act as everybody.
+
+The number is checked against the sender's **side** rather than their seat, because in a match the cells carry the side's number and that is what the client stamps. `Server::plays_as` is the seat's own number outside a match, so a free-for-all asks exactly what it always did, and somebody on no side cannot borrow a side's number because then the two do not agree.
+
+Both halves are **checked rather than rewritten**. A client that could lie about either could act as somebody else or put its cells under their number, and the two disagreeing is a client that is wrong or lying — neither of which should be quietly obeyed under a corrected name. A mismatched action is dropped with a log line; the next `Checkpoint` puts the client's world and purse back.
 
 ## Bots
 

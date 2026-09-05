@@ -233,9 +233,7 @@ fn ice_and_alive_are_independent() {
 fn a_birth_is_a_copy_of_a_parent_not_of_the_corpse() {
     let corpse = Cell::DEAD.with_kind(Kind(37)).with_player(PlayerId(6));
     let mut n = [Cell::DEAD; 8];
-    for i in 0..3 {
-        n[i] = Cell::alive(PlayerId(2)).with_kind(Kind::FACTORY);
-    }
+    n[..3].fill(Cell::alive(PlayerId(2)).with_kind(Kind::FACTORY));
     let born = next_cell(corpse, &n, 1);
     assert!(born.is_alive());
     assert_eq!(born.player(), PlayerId(2), "a parent's number");
@@ -284,9 +282,7 @@ fn influence_comes_from_the_sum_of_what_pushes() {
     // **Mass buys reach.** The same square with more of the same pushing on it
     // takes a stronger claim, which is the whole of why this is a sum.
     let mut crowd = [Cell::DEAD; 8];
-    for i in 0..5 {
-        crowd[i] = source;
-    }
+    crowd[..5].fill(source);
     let pressed = settled(Cell::DEAD, &crowd);
     assert!(
         pressed.level() > alone.level(),
@@ -321,18 +317,14 @@ fn the_heaviest_net_takes_the_square() {
     let mut n = [Cell::DEAD; 8];
     n[0] = Cell::DEAD.with_player(me).with_level(6);
     n[1] = Cell::DEAD.with_player(me).with_level(6);
-    for i in 3..6 {
-        n[i] = Cell::DEAD.with_player(them).with_level(6);
-    }
+    n[3..6].fill(Cell::DEAD.with_player(them).with_level(6));
     assert_eq!(settled(Cell::DEAD, &n).player(), them, "weight of numbers");
 
     // And what they take is what is *left* after factory is counted against it,
     // which is less than they would hold unopposed.
     let contested = settled(Cell::DEAD, &n).level();
     let mut alone = [Cell::DEAD; 8];
-    for i in 3..6 {
-        alone[i] = Cell::DEAD.with_player(them).with_level(6);
-    }
+    alone[3..6].fill(Cell::DEAD.with_player(them).with_level(6));
     assert!(settled(Cell::DEAD, &alone).level() > contested, "being pushed back should cost them");
 
     // Evenly matched is nobody's: the nets cancel.
@@ -375,9 +367,7 @@ fn granted_ground_is_a_source_and_is_never_argued_away() {
 fn the_roll_decides_the_rate_and_not_the_outcome() {
     let me = PlayerId(1);
     let mut n = [Cell::DEAD; 8];
-    for i in 0..4 {
-        n[i] = Cell::alive(me);
-    }
+    n[..4].fill(Cell::alive(me));
 
     let mut moved = 0usize;
     let mut seen = None;

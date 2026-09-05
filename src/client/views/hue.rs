@@ -245,9 +245,9 @@ mod tests {
     #[test]
     fn no_two_players_are_near_each_other_in_hue() {
         let mut worst = (f32::MAX, 0, 0);
-        for a in 1..PlayerId::COUNT {
-            for b in a + 1..PlayerId::COUNT {
-                let turn = (PALETTE[a].2 - PALETTE[b].2).abs();
+        for (a, one) in PALETTE.iter().enumerate().skip(1) {
+            for (b, other) in PALETTE.iter().enumerate().skip(a + 1) {
+                let turn = (one.2 - other.2).abs();
                 let degrees = turn.min(1.0 - turn) * 360.0;
                 if degrees < worst.0 {
                     worst = (degrees, a, b);

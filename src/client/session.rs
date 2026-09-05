@@ -1142,7 +1142,7 @@ impl Session {
                     // Every so often, ask whether we still agree. Cheap enough
                     // to do often, and the sooner a divergence is found the
                     // less of the world has been built on top of it.
-                    if world.generation % CHECKPOINT_EVERY == 0 {
+                    if world.generation.is_multiple_of(CHECKPOINT_EVERY) {
                         self.send_checkpoint(world);
                     }
                 }
