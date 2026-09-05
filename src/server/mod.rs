@@ -815,26 +815,16 @@ impl Server {
                 }
             }
             ClientMessage::Act(stamped) => {
-                // **An action belongs to the connection that sent it**, not to
-                // the player it names. Without this the `player` field is a
-                // claim rather than an identity: any connection in the room
-                // could act as anybody in it, spending their value and placing
-                // their cells, and a connection with no seat at all — a
-                // spectator — could act as everybody.
-                //
-                // **Against the sender's side, not their seat**, because in a
-                // match the cells carry the side's number and that is what the
-                // client stamps. `plays_as` is the seat's own number outside a
-                // match, so a free-for-all asks exactly what it always did —
-                // and somebody on no side cannot borrow a side's number,
-                // because then the two do not match.
-                //
-                // **Both halves.** `seat` says who sent it and `player` says
-                // what number its cells carry, and a client that could lie
-                // about either could act as somebody else or put its cells
-                // under their number. Checked rather than rewritten, because
-                // the two disagreeing is a client that is wrong or lying and
-                // neither should be quietly obeyed under a corrected name.
+                // **An action belongs to the connection that sent it**, not
+                // to the player it names, and both halves are asked: `seat`
+                // says who sent it, `player` says what number its cells carry,
+                // and the number is the sender's *side*, because in a match
+                // that is what a client stamps. Without it any connection in
+                // the room could act as anybody in it and a spectator as
+                // everybody. Checked rather than rewritten: the two
+                // disagreeing is a client that is wrong or lying, and neither
+                // should be quietly obeyed under a corrected name. See
+                // docs/server.md#players.
                 let acting_as = from.map(|seat| self.plays_as(seat));
                 if from != Some(stamped.seat) || acting_as != Some(stamped.player) {
                     log::warn!(

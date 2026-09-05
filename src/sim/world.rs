@@ -64,27 +64,17 @@ pub enum WorldKind {
 
 /// The largest torus this will build, per side and in total.
 ///
-/// **Because a shape arrives over the wire.** `ClientMessage::Create` carries
-/// a `WorldKind` straight off a socket, and a torus is allocated whole -- so
-/// `rows: 0` reached an `assert!` and killed the process, and `100000x100000`
-/// overflowed the `i32` multiply that sizes the allocation. Either one was a
-/// whole server, every room in it, from one message on a connection that had
-/// not joined anything. The release profile is `panic = "abort"`, so it did
-/// not even unwind.
+/// **Because a shape arrives over the wire**, and a torus is allocated whole:
+/// unchecked, `rows: 0` and `100000x100000` each killed a whole server, every
+/// room in it, from one message on a connection that had joined nothing.
+/// Everything that builds one goes through [`WorldKind::checked`].
 ///
-/// **The numbers are what a server can actually step four times a second**,
-/// rather than what it can hold — so they are a count of *cells* wearing a
-/// count of chunks, and they moved when a chunk did.
+/// A budget and not a capacity — what a server can *step* four times a second
+/// rather than what it can hold — so both numbers move when a chunk's size
+/// does, and the per-side cap also refuses a corridor that fits the total.
+/// The measurement and the arithmetic are in [docs/README.md#running-it].
 ///
-/// `examples/frametime` measures about 41 nanoseconds a cell, near enough flat
-/// across every size, so a quarter-second budget is a little over four million
-/// cells with nothing left for the sockets. At sixteen cells to a chunk edge
-/// that was 16384 chunks; at sixty-four it is **1024**, because a chunk holds
-/// sixteen times as many cells and the budget did not change.
-///
-/// The per-side cap is the same division, and it is doing a different job:
-/// stopping a 1x1024 world that fits the budget and is a corridor nobody can
-/// play in.
+/// [docs/README.md#running-it]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/README.md#running-it
 pub const MAX_TORUS_SIDE: i32 = 128;
 pub const MAX_TORUS_CHUNKS: i64 = 1_024;
 

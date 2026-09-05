@@ -199,20 +199,17 @@ pub type Code = String;
 /// How long a code is, and what it is spelled from.
 ///
 /// Six characters, case-insensitive — which comes free, because
-/// [`crate::net::room_name`] already folds case for every identifier here.
+/// [`crate::net::room_name`] already folds case for every identifier here. The
+/// alphabet leaves out `0`, `o`, `1`, `i` and `l`, which are the whole of why
+/// a code gets mistyped when it is read off one screen and typed into another.
 ///
-/// The alphabet leaves out `0`, `o`, `1`, `i` and `l`: those five are the
-/// whole of why a code gets mistyped when it is read off one screen and typed
-/// into another, or said out loud. That costs 1.3 bits — 31⁶ = 887,503,681
-/// codes, or **29.7 bits**, against 36⁶ = 2,176,782,336 and 31.0 bits for the
-/// full alphanumeric set — and it is a good trade, because the keyspace is not
-/// what protects a private room.
+/// That costs 1.3 bits, 29.7 against 31.0, and **the keyspace is not what
+/// protects a private room** anyway: a code is a latch rather than a lock, and
+/// the answer to guessing becoming worth somebody's time is a limit on how
+/// fast a connection may guess, not a longer code. The arithmetic is in
+/// [docs/server.md#a-private-rooms-door].
 ///
-/// It is worth being clear about what does. With [`MAX_MADE_ROOMS`] rooms in
-/// play, a random guess finds one in about twenty-eight million, so the
-/// defence is that guessing is not worth anybody's time; if it ever became
-/// worth somebody's time the answer would be a limit on how fast a connection
-/// may guess, not a longer code. A code is a **latch rather than a lock**.
+/// [docs/server.md#a-private-rooms-door]: https://github.com/oliver-cameron/ConwaysKingdom/blob/main/docs/server.md#a-private-rooms-door
 pub const CODE_LEN: usize = 6;
 
 /// What a code is spelled from: thirty-one characters, being the digits and
